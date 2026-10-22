@@ -284,7 +284,7 @@ invocation values in Effect projects use TypeScript casing and syntax, for examp
 
 ## Default and Constraints
 
-Without a matching user policy, Golem uses the built-in default: up to 3 retries, exponential
+Without a matching user policy, Golem uses the built-in default: 3 total attempts (the initial attempt and up to 2 retries), exponential
 factor 3, delays clamped to 100ms–1s, and 15% jitter.
 
 - Retry policy definitions are environment-specific; runtime installations are active for the

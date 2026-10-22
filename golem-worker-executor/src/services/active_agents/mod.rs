@@ -65,7 +65,7 @@ use crate::services::golem_config::{
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::entity_invocation::{
-    EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
+    EntityBodyOutcome, EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
     start_native_entity_invocation, start_pre_acquired_entity_invocation,
     start_registered_entity_invocation, start_registered_native_entity_invocation,
 };

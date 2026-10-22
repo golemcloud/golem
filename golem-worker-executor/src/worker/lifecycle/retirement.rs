@@ -280,6 +280,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
         let entry = match pending.kind {
+            InterruptKind::EntityCancellation => {
+                unreachable!("entity cancellation cannot interrupt the owner")
+            }
             InterruptKind::Suspend(_) => OplogEntry::suspend(),
             InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
             InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => {

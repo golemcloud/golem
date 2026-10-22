@@ -8,7 +8,7 @@ To message itself an agent needs a client for its **own** instance. `Agent.Bind(
 
 ## Steps
 
-1. **Capture the agent's own `ID` in state** in the `Implement` constructor.
+1. **Build the self client** from `ctx.AgentID()` inside each handler with `Agent.Bind`.
 2. **Add a tick method** that does the work and then `Schedule`s itself for the next run.
 3. **Start the loop** — a `Start` method (or an external trigger) schedules the first tick.
 
@@ -69,6 +69,13 @@ func init() {
 ```
 
 Kick off the loop by invoking `start` once (from the CLI, an HTTP endpoint, or another agent).
+
+This minimal recipe requires one `start` call per agent identity; call `tick` only
+through the scheduled chain. Repeating either call creates another chain.
+Executor restarts recover the existing chain: do not call `start` again after a
+restart. The example has no stop or application-level restart method. To add
+cancellation, retain the pending schedule handle and use a state flag in `tick`
+so an already queued tick exits without doing work or scheduling another tick.
 
 ## Scheduling vs immediate self-messaging
 

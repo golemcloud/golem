@@ -203,8 +203,8 @@ impl OwnerToolOperation {
     }
 
     /// Atomically elects this operation's guest trap as the owner-generation failure and fences
-    /// every sibling that is still open. An ordinary/cancellation terminal selection already in
-    /// progress must resolve before trap election is attempted.
+    /// every sibling that is still open. Sibling terminal selections must resolve first. This
+    /// operation's uncommitted cancellation cannot hide its body failure or wait for itself.
     pub(crate) async fn select_trap(&self, trap: TrapType) -> bool {
         loop {
             let wait = self.owner.changed.notified();
@@ -213,12 +213,11 @@ impl OwnerToolOperation {
                 if state.admission_closed {
                     return false;
                 }
-                if matches!(
-                    state.operations[&self.id].winner,
-                    ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled
-                ) {
-                    return false;
-                }
+                state
+                    .operations
+                    .get_mut(&self.id)
+                    .unwrap()
+                    .withdraw_uncommitted_cancellation(&self.owner.changed);
                 if state
                     .operations
                     .values()

@@ -68,7 +68,7 @@ retryPolicyDefaults:
 ```
 
 Policies are evaluated in **descending priority order**; the first matching
-predicate's policy wins. If none match, the built-in `default` (3 retries,
+predicate's policy wins. If none match, the built-in `default` (3 total attempts: the initial attempt and up to 2 retries,
 exponential backoff, clamped to [100ms, 1s], 15% jitter) applies.
 
 ## 2. Build and Apply Policies in Code
@@ -322,7 +322,7 @@ body, err := sched.RetryValue(func() (string, error) { return fetchQuote(id) })
 ## 6. Default Retry Policy
 
 When no user-defined policy matches, Golem uses the built-in `default`: priority
-`0`, predicate `true`, up to 3 retries, exponential backoff (factor 3.0), delays
+`0`, predicate `true`, 3 total attempts (the initial attempt and up to 2 retries), exponential backoff (factor 3.0), delays
 clamped to [100ms, 1s], 15% jitter.
 
 ## Key Constraints

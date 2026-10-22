@@ -10,11 +10,11 @@ Snapshots solve two related problems:
 
 1. **Manual component updates** — carry durable state across revisions whose API changes are not
    compatible with automatic oplog replay.
-2. **Faster recovery and oplog compaction** — restore a long-running agent from a recent snapshot,
-   then replay only newer oplog entries.
+2. **Faster recovery and reduced replay work** — restore a long-running agent from a recent
+   snapshot, then replay only newer oplog entries.
 
-Durable agents always write the oplog. Do not try to avoid oplog growth by making persistence calls
-non-durable; keep the agent durable and choose an explicit snapshot policy instead.
+Durable agents always write the oplog. Snapshots reduce recovery replay work; they do not reduce
+oplog writes or stored oplog volume. Do not make persistence calls non-durable to avoid oplog growth.
 
 ## Add Schema-Driven Snapshot State
 

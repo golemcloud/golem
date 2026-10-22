@@ -92,6 +92,12 @@ const result = await withReservation(token, 1n, async (reservation) => {
   const response = await callSimpleApi();
   return { used: BigInt(1), value: response };
 });
+if (result.isErr()) {
+  console.warn('Quota unavailable:', result.unwrapErr());
+} else {
+  const response = result.unwrap();
+  // Use the response.
+}
 ```
 
 The callback returns `{ used, value }`. If `used` < reserved, unused capacity returns to the pool.
@@ -124,32 +130,33 @@ if (reservationResult.isOk()) {
 }
 ```
 
-## 6. Splitting Tokens for Agent-to-Agent RPC
+## 6. Splitting a Local Budget
 
-Split a portion of your quota to pass to a child agent. Call the other agent through its definition client (see `golem-call-another-agent-ts`), passing the child token as an input:
-
-```typescript
-import { QuotaToken } from '@golemcloud/golem-ts-sdk';
-
-const childToken: QuotaToken = this.token.split(200n);
-const summarizer = SummarizerAgent.client.get({ name: 'sum-1' });
-const summary = await summarizer.summarize({ text, token: childToken });
-```
-
-The child agent declares the token input with the `s.quotaToken()` schema marker and uses it for its own reservations:
+Use a separate parent with sufficient expected-use; the `1n` token above cannot
+split off `200n`:
 
 ```typescript
-import { z } from 'zod';
-import { method, s } from '@golemcloud/golem-ts-sdk';
+import { acquireQuotaToken, withReservation } from '@golemcloud/golem-ts-sdk';
 
-summarize: method({ input: { text: z.string(), token: s.quotaToken() }, returns: z.string() }),
+async function useLocalBudget(): Promise<void> {
+  const parent = acquireQuotaToken('api-calls', 500n);
+  const child = parent.split(200n);
+  try {
+    const result = await withReservation(child, 1n, async () => {
+      return { used: 1n, value: 'done' };
+    });
+    if (result.isErr()) throw new Error('Quota unavailable');
+  } finally {
+    parent.merge(child);
+  }
+}
 ```
 
-Merge returned tokens back:
-
-```typescript
-token.merge(returnedToken);
-```
+Current RPC limitation: `s.quotaToken()` encodes and decodes the raw WIT quota-token
+handle, not the SDK `QuotaToken` wrapper returned by `acquireQuotaToken` or `split`.
+Do not pass these wrappers to that marker or assume the receiver gets SDK methods
+such as `reserve`, `split`, or `merge`. There is no public wrapper conversion shown
+here; keep this budget local rather than casting the wrapper into a raw handle.
 
 ## 7. Dynamic Resource Updates via CLI
 
@@ -165,5 +172,5 @@ golem resource update api-calls --limit '{"type":"Rate","value":200,"period":"mi
 - All quota amounts are `bigint` values (use `1n`, `200n`, etc.)
 - `split` traps if `childExpectedUse` exceeds the parent's current expected-use
 - `merge` traps if the tokens refer to different resources
-- `withReservation` throws only for `reject` enforcement — `throttle` suspends transparently
+- `withReservation` returns `Result.err` when a reservation is refused; check the result. `throttle` suspends transparently. Callback exceptions or rejections propagate after committing zero usage; handle these separately with `try` / `catch`.
 - Resource names in code must match the names in `golem.yaml` `resourceDefaults`

@@ -31,15 +31,23 @@ pub(crate) fn open<Adapter: SandboxFilesystemAdapter>(
         target.require_mutable()?;
     }
     let opened_access = open_access(options);
-    let lease = generation
-        .registry
-        .lease_call(if open_changes_filesystem(options) {
+    let lease = generation_handle.lease_call(
+        &generation.registry,
+        if open_changes_filesystem(options) {
             CallEffect::Changes
         } else {
             CallEffect::Read
-        })?;
+        },
+    )?;
+    let invocation = lease.invocation.as_ref().map(InvocationLease::retain);
     Ok(FilesystemCall::new(lease, async move {
-        execute_coordinated_open(generation, target.sandbox, options, opened_access).await
+        let mut opened =
+            execute_coordinated_open(generation, target.sandbox, options, opened_access).await?;
+        match &mut opened.node {
+            OpenNode::File(file) => file.ownership.invocation = invocation,
+            OpenNode::Directory(directory) => directory.ownership.invocation = invocation,
+        }
+        Ok(opened)
     }))
 }
 
@@ -57,7 +65,7 @@ pub(crate) fn read_file<Adapter: SandboxFilesystemAdapter>(
     if !file.ownership.access.can_read() {
         return Err(AccessError::NotPermitted);
     }
-    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Read)?;
     let SandboxNode::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
@@ -89,7 +97,7 @@ pub(crate) fn attributes<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<Attributes>, AccessError> {
     let generation = admit(generation_handle)?;
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Read)?;
     Ok(FilesystemCall::new(lease, async move {
         let sandbox = generation.sandbox.read().await;
         let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
@@ -116,7 +124,7 @@ pub(crate) fn is_same_object<Adapter: SandboxFilesystemAdapter>(
     if right_ownership.generation_id != left_ownership.generation_id {
         return Err(AccessError::WrongGeneration);
     }
-    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Read)?;
     let left = left_ownership.sandbox().clone();
     let right = right_ownership.sandbox().clone();
     Ok(FilesystemCall::new(lease, async move {
@@ -142,7 +150,7 @@ pub(crate) fn list_directory<Adapter: SandboxFilesystemAdapter>(
     if !directory.ownership.access.can_read() {
         return Err(AccessError::NotPermitted);
     }
-    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Read)?;
     let SandboxNode::Directory(directory) = directory.ownership.sandbox() else {
         unreachable!("directory wrapper must contain a sandbox directory")
     };
@@ -174,7 +182,7 @@ pub(crate) fn symlink_target<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<SymlinkTarget>, AccessError> {
     let generation = admit(generation_handle)?;
     validate_path_generation(&generation, &target)?;
-    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Read)?;
     let path = target.sandbox.clone();
     Ok(FilesystemCall::new(lease, async move {
         let sandbox = generation.sandbox.read().await;
@@ -202,7 +210,7 @@ pub(crate) fn write<Adapter: SandboxFilesystemAdapter>(
     if !file.ownership.access.can_write() {
         return Err(AccessError::NotPermitted);
     }
-    let lease = generation.registry.lease_call(CallEffect::Changes)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Changes)?;
     let SandboxNode::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
@@ -224,7 +232,7 @@ pub(crate) fn flush<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<()>, AccessError> {
     let ownership = node_ownership(node);
     let generation = admit_node(generation_handle, ownership.generation_id)?;
-    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let lease = generation_handle.lease_call(&generation.registry, CallEffect::Read)?;
     let node = ownership.sandbox().clone();
     Ok(FilesystemCall::new(lease, async move {
         execute_flush(generation, node, level).await

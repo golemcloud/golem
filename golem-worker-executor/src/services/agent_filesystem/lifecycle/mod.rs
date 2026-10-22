@@ -301,7 +301,26 @@ pub(crate) struct FilesystemGenerationHandle<Adapter: SandboxFilesystemAdapter =
 {
     generation: Weak<FilesystemGeneration<Adapter>>,
     phase: GenerationHandlePhase,
+    invocation: Option<FilesystemInvocation>,
 }
+
+/// Tracks backend work, including calls and descriptor closes whose observer was dropped.
+#[derive(Clone)]
+pub(crate) struct FilesystemInvocation {
+    activity: Arc<InvocationActivity>,
+}
+
+struct InvocationActivity {
+    state: Mutex<InvocationActivityState>,
+    changed: tokio::sync::Notify,
+}
+
+struct InvocationActivityState {
+    closed: bool,
+    active: usize,
+}
+
+struct InvocationLease(FilesystemInvocation);
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentFilesystemActivity {
@@ -713,6 +732,7 @@ struct RegistryState {
 
 struct CallLease {
     registry: Arc<GenerationRegistry>,
+    invocation: Option<InvocationLease>,
 }
 
 struct NodeLease {
@@ -802,6 +822,7 @@ struct NodeOwnership {
     generation_id: usize,
     access: AccessMode,
     node_lease: Option<NodeLease>,
+    invocation: Option<InvocationLease>,
     close: Option<Box<dyn FnOnce(SandboxNode, NodeLease) -> FilesystemClose + Send>>,
 }
 
@@ -819,6 +840,7 @@ impl NodeOwnership {
             .take()
             .expect("filesystem node lease missing");
         self.close.take().expect("filesystem node close missing")(sandbox, node_lease)
+            .retain_invocation(self.invocation.take())
     }
 }
 

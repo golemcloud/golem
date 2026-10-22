@@ -11,17 +11,17 @@ Both `golem` and `golem-cli` can be used — all commands below work with either
 
 When `golem new` is run inside an existing application directory (one that already has a `golem.yaml`), it operates in **existing application mode**. There are two use cases:
 
-### 1. Add a new component (with `--component-name`)
+### 1. Select a component explicitly (with `--component-name`)
 
-Creates a new component in the application. The component gets its own directory, source files, and entry in `golem.yaml`.
+An existing name extends that component with the template (the language must match). A new name creates a component with its own directory, source files, and entry in `golem.yaml`.
 
 ```shell
 golem new --template <TEMPLATE> --component-name <NAMESPACE:NAME> --yes .
 ```
 
-### 2. Add agent templates to an existing component (without `--component-name`)
+### 2. Select by template language (without `--component-name`)
 
-Adds new agent template files to an existing component. The CLI automatically detects which component to target based on the template's language. If there are multiple components using the same language, specify `--component-name` to disambiguate.
+With no matching component, the CLI creates `<application>:<lang>-main`. With one matching component, it adds the template there. With multiple matches, interactive mode asks you to choose; with `--yes`, specify `--component-name` to disambiguate.
 
 ```shell
 golem new --template <TEMPLATE> --yes .
@@ -45,7 +45,7 @@ For example, use `effect/json` for an Effect task manager or `go/human-in-the-lo
 
 Rust, TypeScript, Effect, Scala, and MoonBit also provide `<language>/snapshotting`.
 This template defines `CounterWithSnapshotAgent`, which snapshots its state every five invocations.
-**Go snapshotting is not supported, so there is no `go/snapshotting` template.**
+There is no `go/snapshotting` template. Go supports custom snapshot recovery through `Snapshotter`, but default JSON recovery and manual snapshot-based updates have separate limitations. See `golem-custom-snapshot-go` before enabling snapshots.
 
 TypeScript also provides `ts/counter-arktype` and `ts/counter-valibot` to demonstrate alternative schema libraries.
 
@@ -66,7 +66,7 @@ Use `golem templates` to list the available templates.
 
 | Flag | Description |
 |------|-------------|
-| `--component-name <NAMESPACE:NAME>` | Target component. Required when adding a new component. Also required when there are multiple existing components using the same language as the template. |
+| `--component-name <NAMESPACE:NAME>` | Existing name extends that component; new name creates one. Required with `--yes` when multiple components match the template language. |
 
 ## Examples
 
@@ -126,7 +126,9 @@ After adding a new component with a default template, **rename the generated age
 
 2. **Deploy** to make it available:
    ```shell
-   golem deploy --reset --yes
+   golem deploy --yes
    ```
+
+   Only add `--reset` for explicitly disposable instances: it deletes all existing durable agents across the deployed components and loses their state, not just agents of the new component.
 
 3. For cross-component communication, load the relevant RPC skill (`golem-call-another-agent-rust`, `golem-call-another-agent-ts`, or `golem-call-another-agent-scala`).

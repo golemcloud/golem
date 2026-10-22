@@ -63,6 +63,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// the caller falls through to policy-based resolution.
     pub(crate) fn fixed_decision_for_trap_type(trap_type: &TrapType) -> Option<RetryDecision> {
         match trap_type {
+            TrapType::Interrupt(InterruptKind::EntityCancellation) => {
+                unreachable!("entity cancellation must settle at its invocation boundary")
+            }
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(RetryDecision::None),
             TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Restart) => Some(RetryDecision::Immediate),
@@ -431,7 +434,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             .as_ref()
             .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
         {
-            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+            return Some(InterruptKind::EntityCancellation);
         }
         // An exceeded invocation or tail-work deadline surfaces as a synthetic interrupt so work
         // traps at the next epoch check. The corresponding invocation boundary converts the
@@ -823,6 +826,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         };
 
         let oplog_entry = match trap_type {
+            TrapType::Interrupt(InterruptKind::EntityCancellation) => {
+                unreachable!("entity cancellation must settle at its invocation boundary")
+            }
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(OplogEntry::interrupted()),
             TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
             TrapType::Interrupt(InterruptKind::Jump) => None,
@@ -877,7 +883,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 self.public_state.event_service().emit_invocation_finished(
                     full_function_name,
                     &idempotency_key,
-                    self.is_live() || self.state.authoritative_replay_failure,
+                    self.is_live()
+                        || self
+                            .state
+                            .authoritative_replay_failure
+                            .load(Ordering::Acquire),
                 );
             }
         }

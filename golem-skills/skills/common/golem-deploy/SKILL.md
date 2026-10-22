@@ -28,7 +28,7 @@ Existing running agents are **not affected** by default — they continue runnin
 
 | Option | Description |
 |--------|-------------|
-| `--plan` | Only plan deployment, apply no changes |
+| `--plan` | Plan without applying deployment changes or post-deploy actions; builds, local fixes, and creation of a missing application or environment can still run |
 | `--full-diff` | Show the full deployment and environment setup diff instead of only changed entries |
 | `--version <VERSION>` | Roll the environment back to the deployment with this version label (see `golem-rollback`) |
 | `--revision <REVISION>` | Roll the environment back to the deployment with this revision (see `golem-rollback`) |
@@ -82,7 +82,7 @@ Updates existing agents to the new component version automatically. Suspended ag
 golem deploy --yes --plan
 ```
 
-Shows what would be deployed without making any changes.
+Shows what would be deployed without applying deployment changes or post-deploy actions. This is not read-only: builds and local dependency/configuration fixes can still run, and `--yes` accepts those fixes. Target resolution runs before the plan guard and can create a missing application or environment on the server. Account for these setup writes before previewing against a new target.
 
 ## Common Deployment Errors
 

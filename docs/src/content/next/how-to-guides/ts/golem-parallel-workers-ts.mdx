@@ -2,9 +2,9 @@
 
 ## Overview
 
-Golem agents process invocations **sequentially** — a single agent cannot run work in parallel. To execute work concurrently, distribute it across **multiple agent instances**. This skill covers two approaches:
+Golem agents process invocations **sequentially**. Async I/O can overlap cooperatively within one invocation, but it does not provide CPU-thread parallelism. Distribute work across **multiple agent instances** for parallel invocation execution. This skill covers two approaches:
 
-1. **Child agents via `AgentDef.client.get(id)`** — spawn separate agent instances, dispatch work, and collect results
+1. **Child agents via `AgentDef.client.newPhantom(id).client`** — create separate agent instances, dispatch work, and collect results
 2. **`fork()`** — clone the current agent at the current execution point for lightweight parallel execution
 
 ## Approach 1: Child Agent Fan-Out
@@ -46,8 +46,8 @@ export const CoordinatorImpl = Coordinator.implement({
     init: () => ({}),
     methods: {
         async fanOut({ items }) {
-            // Spawn one child per item and call concurrently.
-            const promises = items.map((item, i) => Worker.client.get({ id: i }).process({ data: item }));
+            // Use a fresh phantom identity for each child, even across coordinators.
+            const promises = items.map((item, i) => Worker.client.newPhantom({ id: i }).client.process({ data: item }));
             // Wait for all children to finish.
             return await Promise.all(promises);
         },
@@ -60,12 +60,12 @@ export const CoordinatorImpl = Coordinator.implement({
 When spawning many children, batch them to limit concurrency:
 
 ```typescript
-async fanOutChunked({ ids }) {
-    const chunks = arrayChunks(ids, 5); // Process 5 at a time
-    const results: number[] = [];
+async fanOutChunked({ items }) {
+    const chunks = arrayChunks(items, 5); // Process 5 at a time
+    const results: string[] = [];
 
     for (const chunk of chunks) {
-        const promises = chunk.map((id) => Worker.client.get({ id }).compute({ n: id }));
+        const promises = chunk.map((item, i) => Worker.client.newPhantom({ id: i }).client.process({ data: item }));
         results.push(...await Promise.all(promises));
     }
     return results;
@@ -127,7 +127,7 @@ async dispatchAndCollect({ regions }) {
 
     // Fire-and-forget: trigger each child with its (encoded) promise ID.
     regions.forEach((region, i) => {
-        RegionWorker.client.get({ region }).runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
+        RegionWorker.client.newPhantom({ region }).client.runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
     });
 
     // Collect all results (the agent suspends until each promise completes).
@@ -143,7 +143,7 @@ Use `Promise.allSettled` to handle partial failures:
 
 ```typescript
 async fanOutWithErrors({ items }) {
-    const promises = items.map((item, i) => Worker.client.get({ id: i }).process({ data: item }));
+    const promises = items.map((item, i) => Worker.client.newPhantom({ id: i }).client.process({ data: item }));
     const settled = await Promise.allSettled(promises);
 
     const successes: string[] = [];
@@ -239,7 +239,7 @@ async multiFork({ n }) {
 |----------|-------------|----------|
 | Work is **independent** and stateless | ✅ Best fit | Works but overkill |
 | Need to **share current state** with workers | ❌ Must pass via args | ✅ Forked copy inherits state |
-| Workers need **persistent identity** | ✅ Each has own ID | ❌ Each forked agent gets a generated phantom ID |
+| Need a **caller-selected identity** | ✅ Use `client.get(id)` with a coordinator/job namespace | Generated phantom ID; durable and addressable with `client.getPhantom(id, phantomId)` |
 | Number of parallel tasks is **dynamic** | ✅ Spawn as many as needed | ✅ Fork in a loop |
 | Need **simple error isolation** | ✅ Child failure doesn't crash parent | ⚠️ Forked agent shares oplog lineage |
 
@@ -248,4 +248,5 @@ async multiFork({ n }) {
 - **No threads**: Golem is single-threaded per agent — parallelism is achieved by distributing across agent instances
 - **Durability**: All RPC calls, promises, and fork operations are durably recorded — work survives crashes
 - **Deadlock avoidance**: Never have two agents awaiting each other synchronously — use `.trigger()` to break cycles
-- **Cleanup**: Child agents persist after the coordinator finishes; delete them explicitly if they hold unwanted state
+- **Identity**: These examples create fresh durable phantoms with `newPhantom(...).client`. Retain the returned phantom ID to address one later with `getPhantom`. If using `get(id)` instead, namespace IDs by coordinator and job to avoid sharing children unintentionally.
+- **Cleanup**: Durable children and forks persist after the coordinator finishes. Delete only instances the coordinator owns and no caller still needs; never delete shared workers merely because one job finished.

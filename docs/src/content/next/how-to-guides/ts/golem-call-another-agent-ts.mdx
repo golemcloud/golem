@@ -6,6 +6,11 @@ component (including a component written in another language).
 
 ## Same Component: Definition Client
 
+The `.get` examples below target durable agents. Ephemeral definitions have no `.get`:
+use `const client = EphemeralAgent.client.newPhantom(id)` directly (not `.client` on
+the returned value). Awaited ephemeral calls return `{ metadata, value }`; for a
+declared result inspect `response.value.isErr()`, not `response.isErr()`.
+
 Use the `.client` attached to the agent's **definition** (the value returned by
 `defineAgent`), then call `.get` with the target agent's **id record**:
 
@@ -30,12 +35,14 @@ const next = await c1.add({ by: 5 });        // input: { by: z.number() }
 ```
 
 The calling agent **blocks** until the target agent processes the request and
-returns. This is the standard RPC pattern. On failure (or an error result) the
-call throws a `RemoteCallError`.
+returns. This is the standard RPC pattern. Invocation or transport failures can
+throw a `RemoteCallError`. A declared `s.result(ok, err)` is instead decoded as an
+ordinary `Result` return value, including `Result.err`; inspect it with `.isErr()`
+and `.unwrapErr()` rather than catching it as an RPC failure.
 
 ## Phantom Agents
 
-Call `Def.client.getPhantom(id, phantomId)` to address a specific phantom
+For durable agents, call `Def.client.getPhantom(id, phantomId)` to address a specific phantom
 instance that shares the same id record. To create a fresh phantom, call
 `Def.client.newPhantom(id)`; the returned details contain the typed client, full
 `agentId`, and generated `phantomId`, which can be saved and reused. See the
@@ -82,7 +89,7 @@ The generated package is
 ```
 
 Import that alias. Generated constructors flatten the target's id fields into
-parameters rather than taking an id record:
+parameters rather than taking an id record. This example targets a durable agent:
 
 ```typescript
 import { CounterAgent } from 'counter-agent-guest-client';

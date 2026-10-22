@@ -32,12 +32,12 @@ val message =
     row    <- result.rows.headOption.toRight(DbError.Other("query returned no rows"))
     value  <- row.values.headOption.toRight(DbError.Other("query returned no columns"))
     text   <- value match {
-                case MysqlDbValue.VarChar(value)
-                    | MysqlDbValue.Text(value)
-                    | MysqlDbValue.TinyText(value)
-                    | MysqlDbValue.MediumText(value)
-                    | MysqlDbValue.LongText(value)
-                    | MysqlDbValue.FixChar(value) => Right(value)
+                case MysqlDbValue.VarChar(value)    => Right(value)
+                case MysqlDbValue.Text(value)       => Right(value)
+                case MysqlDbValue.TinyText(value)   => Right(value)
+                case MysqlDbValue.MediumText(value) => Right(value)
+                case MysqlDbValue.LongText(value)   => Right(value)
+                case MysqlDbValue.FixChar(value)    => Right(value)
                 case other => Left(DbError.Other(s"Unexpected MySQL value: $other"))
               }
   } yield text

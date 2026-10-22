@@ -3865,7 +3865,10 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         .join()
         .await
         .expect_err("owner deletion must cancel active entity bodies");
-    assert!(deletion_error.to_string().contains("cancelled"));
+    assert!(matches!(
+        deletion_error,
+        golem_service_base::error::worker_executor::WorkerExecutorError::Interrupted { .. }
+    ));
     assert!(!active_agent.entity_metadata().accepting_entities);
     let rejected_scope = invocation_scope(
         &owner_id,

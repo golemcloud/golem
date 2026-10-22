@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::drop_events::AccessDropEventDrainGuard;
 use super::*;
 use crate::durable_host::LiveAuthorizationPermit;
 use crate::durable_host::durability::reserve_invocation_id;
@@ -60,6 +61,10 @@ use terminal::response_has_bounded_encoding_stack;
 /// Compile-time policy describing what happens when a [`DurableCallSession`] is dropped without being
 /// explicitly finished or cancelled.
 pub trait DropPolicy: Send + 'static {
+    /// Store-local calls may settle by cancellation when their tool body permanently traps.
+    /// Independently supervised calls retain their own terminal selection.
+    const CANCEL_ON_TOOL_TRAP: bool = false;
+
     fn unfinished_drop(call: DroppedCall, sink: Option<&UnboundedSender<DropEvent>>);
 
     fn production_drop_sink(
@@ -135,6 +140,9 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// cancellation or a host-call programming error.
     pub(super) executor_shutdown: tokio_util::sync::CancellationToken,
     pub(super) runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+    pub(super) tool_trap_disposal: Arc<AtomicBool>,
+    /// An accepted entity Start whose body has not transferred to an independent supervisor.
+    pub(super) entity_admission: bool,
     /// Whether switching this call to live execution requires a recovered, synchronized agent
     /// permission-card authority boundary.
     pub(super) requires_agent_authority: bool,
@@ -484,6 +492,38 @@ struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
     /// first oplog append until its terminal is recorded.
     live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
+}
+
+/// Owns the accepted Start across both sides of the metadata oneshot handoff.
+struct AcceptedAccessStart<P: DropPolicy> {
+    result: Option<(OplogIndex, PendingUpload)>,
+    call: Option<DroppedCall>,
+    marker: Arc<AtomicBool>,
+    sink: Option<UnboundedSender<DropEvent>>,
+    cleanup_sink: Option<UnboundedSender<DropEvent>>,
+    teardown: TeardownProbe,
+    _policy: PhantomData<P>,
+}
+
+impl<P: DropPolicy> AcceptedAccessStart<P> {
+    fn take(mut self) -> (OplogIndex, PendingUpload) {
+        self.call = None;
+        self.result.take().expect("accepted Start result")
+    }
+}
+
+impl<P: DropPolicy> Drop for AcceptedAccessStart<P> {
+    fn drop(&mut self) {
+        if let Some(call) = self.call.take() {
+            if (P::CANCEL_ON_TOOL_TRAP || call.entity_admission)
+                && self.marker.load(Ordering::Acquire)
+            {
+                Cancellable::unfinished_drop(call, self.cleanup_sink.as_ref());
+            } else if !self.teardown.is_tearing_down() {
+                P::unfinished_drop(call, self.sink.as_ref());
+            }
+        }
+    }
 }
 
 /// Context handed to the request builder of [`DurableCallSession::start_access_with`], before the

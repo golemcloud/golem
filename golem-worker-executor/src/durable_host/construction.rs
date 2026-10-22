@@ -357,6 +357,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             entity_invocation_scope: None,
             entity_tool_operation: None,
             entity_cancellation: None,
+            entity_body_finalization: Default::default(),
+            tool_trap_disposal: Arc::new(AtomicBool::new(false)),
             producer_disposal_tasks: Some(crate::worker::tasks::NativeReconstructionTasks::new(
                 &worker.tasks,
             )?),
@@ -376,7 +378,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             },
             state,
             filesystem_generation_handle,
-            filesystem_preopen: AgentDescriptor::new(filesystem_preopen, PathBuf::new()),
+            filesystem_preopen: Some(AgentDescriptor::new(filesystem_preopen, PathBuf::new())),
             execution_status,
             stream_runtime_teardown: Arc::new(AtomicBool::new(false)),
             resource_limits,
@@ -634,7 +636,7 @@ impl PrivateDurableWorkerState {
             last_snapshot_index,
             baseline_role,
             snapshot_replay_purpose,
-            authoritative_replay_failure: false,
+            authoritative_replay_failure: Arc::new(AtomicBool::new(false)),
             resource_limit_entry,
         })
     }

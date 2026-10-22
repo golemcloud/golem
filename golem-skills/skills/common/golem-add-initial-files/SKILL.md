@@ -29,10 +29,14 @@ files:
 ## Cascade Hierarchy (Most General → Most Specific)
 
 ```
-componentTemplates → components → agents → presets
+componentTemplates (including their selected presets)
+  → components (including their selected presets)
+  → agents (including their selected presets)
 ```
 
 Each level can define `files` (a list of file entries) and `filesMergeMode` (how to combine with the parent level). More specific levels are applied on top of less specific ones.
+
+Presets apply within their owning layer. Golem resolves the base component, including its template and component presets, before applying agent overrides and agent presets.
 
 ## 1. Component Template Level
 
@@ -90,7 +94,7 @@ components:
         targetPath: /etc/app/config.json
     presets:
       debug:
-        default: {}
+        default: true
         files:
           - sourcePath: ./data/debug-config.json
             targetPath: /etc/app/debug.json
@@ -106,7 +110,7 @@ agents:
         targetPath: /etc/agent/env
     presets:
       debug:
-        default: {}
+        default: true
         filesMergeMode: replace
         files:
           - sourcePath: ./agent-data/debug.env
@@ -130,7 +134,7 @@ components:
         targetPath: /data/schema.sql
     presets:
       debug:
-        default: {}
+        default: true
         files:
           - sourcePath: ./data/debug-seed.sql
             targetPath: /data/seed.sql
@@ -143,7 +147,7 @@ agents:
         permissions: read-write
     presets:
       debug:
-        default: {}
+        default: true
         files:
           - sourcePath: ./agent-config/debug-overrides.toml
             targetPath: /etc/agent/config/overrides.toml
@@ -180,7 +184,9 @@ agents:
         targetPath: /data/only-this.txt
 ```
 
-### Example: Prepend files (higher priority positioning)
+`prepend` changes list order, not target priority. Duplicate target paths fail validation; use `replace` to discard inherited entries rather than adding another entry at the same target.
+
+### Example: Prepend files
 
 ```yaml
 agents:
@@ -247,9 +253,9 @@ When a directory source is used, the permission setting applies to all files wit
 ## Important Notes
 
 - **Target paths must be unique** — if two file entries resolve to the same target path, deployment fails with a validation error.
-- Files are content-addressed — identical files across agent types are stored only once in the registry and shared via hardlinks on the executor node.
-- Files are downloaded lazily by the worker executor when the agent is first started, then cached locally for subsequent starts.
-- There is a configurable disk space limit for cached initial files on each executor node.
+- Files are content-addressed. The executor populates agent filesystems by copying, cloning, or reflinking files as supported by the filesystem, not by sharing hardlinks.
+- The worker executor downloads initial files when needed. Its weak-reference cache can reuse a file while a live cache entry retains it; it does not guarantee reuse across subsequent starts.
+- The initial-file cache has no dedicated configurable disk-space cap.
 - Initial files are **not** passed per agent instance at creation time via `golem agent new`. They are defined at the agent type level in the manifest and applied to all instances of that type.
 
 ## Initial Files, Updates and Snapshots

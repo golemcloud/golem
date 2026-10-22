@@ -316,8 +316,10 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         ) -> Pin<
             Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
         >,
-        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+        Finalize:
+            FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized:
+            Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
     {
         if !self.accepting_entities.load(Ordering::Acquire) {
             return Err(WorkerExecutorError::runtime(
@@ -361,15 +363,11 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
     where
         R: Send + 'static,
-        F: Send + 'static,
-        F: for<'a> FnOnce(
-            &'a Instance,
-            &'a mut Store<Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
-        >,
-        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+        F: EntityInvocationBody<Ctx, R>,
+        Finalize:
+            FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized:
+            Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
     {
         let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
         let host = InstanceHost::new_entity(
@@ -405,8 +403,10 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     where
         R: Send + 'static,
         F: EntityInvocationBody<Ctx, R>,
-        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+        Finalize:
+            FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized:
+            Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
     {
         if !self.accepting_entities.load(Ordering::Acquire) {
             return Err(WorkerExecutorError::runtime(
@@ -457,15 +457,17 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             Box<
                 dyn Future<
                         Output = (
-                            Result<R, WorkerExecutorError>,
+                            Result<EntityBodyOutcome<R>, WorkerExecutorError>,
                             Option<Box<dyn RetainedEntityStore>>,
                         ),
                     > + Send
                     + 'a,
             >,
         >,
-        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+        Finalize:
+            FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized:
+            Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
     {
         if !self.accepting_entities.load(Ordering::Acquire) {
             return Err(WorkerExecutorError::runtime(
@@ -510,15 +512,17 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             Box<
                 dyn Future<
                         Output = (
-                            Result<R, WorkerExecutorError>,
+                            Result<EntityBodyOutcome<R>, WorkerExecutorError>,
                             Option<Box<dyn RetainedEntityStore>>,
                         ),
                     > + Send
                     + 'a,
             >,
         >,
-        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
-        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+        Finalize:
+            FnOnce(Result<EntityBodyOutcome<R>, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized:
+            Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>> + Send + 'static,
     {
         let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
         start_registered_native_entity_invocation(
