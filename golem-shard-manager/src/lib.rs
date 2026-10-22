@@ -1609,7 +1609,7 @@ pub async fn run(
     let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
     let mut server = Server::builder();
     if let GrpcServerTlsConfig::Enabled(tls) = &shard_manager_config.grpc.tls {
-        server = server.tls_config(tls.to_tonic())?;
+        server = server.tls_config(tls.to_tonic()?)?;
     }
     // Its own task, outside the task set: the set is stopped before the leadership is released,
     // and the server must still be answering for the gate then. It closes when the stop says so,

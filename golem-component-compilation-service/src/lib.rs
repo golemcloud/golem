@@ -145,7 +145,7 @@ async fn start_grpc_server(
         let mut server = tonic::transport::Server::builder();
 
         if let GrpcServerTlsConfig::Enabled(tls) = &config.tls {
-            server = server.tls_config(tls.to_tonic())?;
+            server = server.tls_config(tls.to_tonic()?)?;
         };
 
         server

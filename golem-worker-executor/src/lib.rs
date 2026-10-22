@@ -1419,7 +1419,7 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
         let mut server = Server::builder();
 
         if let GrpcServerTlsConfig::Enabled(tls) = &golem_config.grpc.tls {
-            server = server.tls_config(tls.to_tonic())?;
+            server = server.tls_config(tls.to_tonic()?)?;
         };
 
         server

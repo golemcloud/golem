@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tls::material::TlsSources;
+use crate::tls::pem::{PemSource, TlsError};
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::SafeDisplay;
@@ -24,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::future::Future;
 use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -40,12 +43,11 @@ use crate::metrics::grpc::{
     record_internal_grpc_failure, record_internal_grpc_retry, record_internal_grpc_success,
 };
 
-fn build_endpoint(
-    uri: Uri,
-    config: &GrpcClientConfig,
-) -> Result<Endpoint, tonic::transport::Error> {
+fn build_endpoint(uri: Uri, config: &GrpcClientConfig) -> Result<Endpoint, Status> {
     let ip_literal_host = ip_literal_tls_server_name(&uri);
-    let mut endpoint = Endpoint::new(uri)?.connect_timeout(config.connect_timeout);
+    let mut endpoint = Endpoint::new(uri)
+        .map_err(|err| Status::from_error(Box::new(err)))?
+        .connect_timeout(config.connect_timeout);
 
     if let Some(request_timeout) = config.request_timeout {
         endpoint = endpoint.timeout(request_timeout);
@@ -64,13 +66,17 @@ fn build_endpoint(
     }
 
     if let GrpcClientTlsConfig::Enabled(tls) = &config.tls {
-        let mut tls_config = tls.to_tonic();
+        let mut tls_config = tls
+            .to_tonic()
+            .map_err(|err| Status::failed_precondition(format!("TLS configuration: {err}")))?;
         if tls.server_domain_name.is_none()
             && let Some(server_name) = ip_literal_host
         {
             tls_config = tls_config.domain_name(server_name);
         }
-        endpoint = endpoint.tls_config(tls_config)?;
+        endpoint = endpoint
+            .tls_config(tls_config)
+            .map_err(|err| Status::from_error(Box::new(err)))?;
     }
 
     Ok(endpoint)
@@ -467,8 +473,7 @@ where
         // Built outside the entry lock, so a rejected URI cannot leave an entry
         // behind and unrelated targets sharing a bucket do not serialise behind
         // this work.
-        let endpoint = build_endpoint(target.clone(), config)
-            .map_err(|err| Status::from_error(Box::new(err)))?;
+        let endpoint = build_endpoint(target.clone(), config)?;
 
         let attempt = match self.by_target.entry_async(target.clone()).await {
             Entry::Occupied(mut entry) => match entry.get().peek() {
@@ -1028,17 +1033,30 @@ impl SafeDisplay for GrpcClientTlsConfig {
     }
 }
 
+/// Each item comes from a PEM file or an inline value (the PEM, Base64 on one line), not both.
+/// Files are polled and a renewed certificate is used for new connections; an inline value
+/// changes only with a restart.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnabledGrpcClientTlsConfig {
     /// client-specific certificate  — issued by cluster CA
-    pub client_cert: Base64,
+    #[serde(default)]
+    pub client_cert: Option<Base64>,
+    #[serde(default)]
+    pub client_cert_file: Option<PathBuf>,
     /// private key for client_cert
-    pub client_key: Base64,
+    #[serde(default)]
+    pub client_key: Option<Base64>,
+    #[serde(default)]
+    pub client_key_file: Option<PathBuf>,
     /// CA certificate used to validate server certificates (PEM)
-    pub server_ca_cert: Base64,
+    #[serde(default)]
+    pub server_ca_cert: Option<Base64>,
+    #[serde(default)]
+    pub server_ca_cert_file: Option<PathBuf>,
     /// The name the server's certificate must carry. Without it, the certificate is checked
     /// against the host of the address the client connects to (an IPv6 literal without its
     /// brackets).
+    #[serde(default)]
     pub server_domain_name: Option<String>,
 }
 
@@ -1046,22 +1064,49 @@ impl SafeDisplay for EnabledGrpcClientTlsConfig {
     fn to_safe_string(&self) -> String {
         use sha2::{Digest, Sha256};
 
-        fn fingerprint(data: &[u8]) -> String {
-            let hash = Sha256::digest(data);
-            hex::encode(hash)
+        fn item(
+            result: &mut String,
+            name: &str,
+            value: Option<&Base64>,
+            file: Option<&Path>,
+            show_fingerprint: bool,
+        ) {
+            if let Some(file) = file {
+                let _ = writeln!(result, "{name}_file: {}", file.display());
+            } else if let (true, Some(value)) = (show_fingerprint, value) {
+                let _ = writeln!(
+                    result,
+                    "{name}_sha256: {}",
+                    hex::encode(Sha256::digest(&value.0))
+                );
+            } else if value.is_some() {
+                let _ = writeln!(result, "{name}: *******");
+            } else {
+                let _ = writeln!(result, "{name}: <not set>");
+            }
         }
 
         let mut result = String::new();
-        let _ = writeln!(
+        item(
             &mut result,
-            "client_cert_sha256: {}",
-            fingerprint(&self.client_cert.0)
+            "client_cert",
+            self.client_cert.as_ref(),
+            self.client_cert_file.as_deref(),
+            true,
         );
-        let _ = writeln!(&mut result, "client_key: *******");
-        let _ = writeln!(
+        item(
             &mut result,
-            "server_ca_cert_sha256: {}",
-            fingerprint(&self.server_ca_cert.0)
+            "client_key",
+            self.client_key.as_ref(),
+            self.client_key_file.as_deref(),
+            false,
+        );
+        item(
+            &mut result,
+            "server_ca_cert",
+            self.server_ca_cert.as_ref(),
+            self.server_ca_cert_file.as_deref(),
+            true,
         );
 
         let _ = writeln!(
@@ -1074,11 +1119,32 @@ impl SafeDisplay for EnabledGrpcClientTlsConfig {
 }
 
 impl EnabledGrpcClientTlsConfig {
-    pub fn to_tonic(&self) -> ClientTlsConfig {
+    pub fn sources(&self) -> Result<TlsSources, TlsError> {
+        Ok(TlsSources {
+            cert: PemSource::from_config(
+                "client_cert",
+                self.client_cert.as_ref(),
+                self.client_cert_file.as_deref(),
+            )?,
+            key: PemSource::from_config(
+                "client_key",
+                self.client_key.as_ref(),
+                self.client_key_file.as_deref(),
+            )?,
+            ca: PemSource::from_config(
+                "server_ca_cert",
+                self.server_ca_cert.as_ref(),
+                self.server_ca_cert_file.as_deref(),
+            )?,
+        })
+    }
+
+    pub fn to_tonic(&self) -> Result<ClientTlsConfig, TlsError> {
         use tonic::transport::{Certificate, Identity};
 
-        let ca = Certificate::from_pem(&self.server_ca_cert.0);
-        let identity = Identity::from_pem(&self.client_cert.0, &self.client_key.0);
+        let sources = self.sources()?;
+        let ca = Certificate::from_pem(sources.ca.read()?);
+        let identity = Identity::from_pem(sources.cert.read()?, sources.key.read()?);
 
         let mut config = ClientTlsConfig::new().ca_certificate(ca).identity(identity);
 
@@ -1086,7 +1152,7 @@ impl EnabledGrpcClientTlsConfig {
             config = config.domain_name(domain_name);
         }
 
-        config
+        Ok(config)
     }
 }
 
@@ -2710,5 +2776,48 @@ mod test {
         );
         assert_eq!(name("https://10.0.0.1:9000/"), None);
         assert_eq!(name("https://golem-shard-manager:9000/"), None);
+    }
+
+    fn parse_enabled(value: serde_json::Value) -> EnabledGrpcClientTlsConfig {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn client_tls_settings_accept_inline_values_as_before() {
+        let config = parse_enabled(serde_json::json!({
+            "client_cert": "",
+            "client_key": "",
+            "server_ca_cert": "",
+        }));
+        let sources = config.sources().unwrap();
+        assert!(!sources.cert.is_file());
+        assert!(!sources.key.is_file());
+        assert!(!sources.ca.is_file());
+    }
+
+    #[test]
+    fn client_tls_settings_accept_files_and_refuse_both() {
+        let files = parse_enabled(serde_json::json!({
+            "client_cert_file": "/x/tls.crt",
+            "client_key_file": "/x/tls.key",
+            "server_ca_cert_file": "/x/ca.crt",
+        }));
+        assert!(files.sources().unwrap().key.is_file());
+        assert!(
+            files
+                .to_safe_string()
+                .contains("client_key_file: /x/tls.key")
+        );
+
+        let both = parse_enabled(serde_json::json!({
+            "client_cert": "",
+            "client_key": "",
+            "client_key_file": "/x/tls.key",
+            "server_ca_cert": "",
+        }));
+        assert!(matches!(
+            both.sources(),
+            Err(crate::tls::pem::TlsError::BothSet { name }) if name == "client_key"
+        ));
     }
 }
