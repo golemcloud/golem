@@ -30,6 +30,10 @@ misuse. No `.wasm` is produced (see "Known limits").
 | agents/stream | `website/snippets/agents/stream/effect/writer-agent.ts` |
 | artifacts/login | `website/snippets/artifacts/login/effect/private-chart-agent.ts` |
 | agents/readonly | `website/snippets/agents/readonly/effect/stock-agent.ts` |
+| tools/middleware | `website/snippets/tools/middleware/effect/refund-policy.ts` |
+| artifacts/peruser | `website/snippets/artifacts/peruser/effect/dashboard-agent.ts` |
+| artifacts/routers | `website/snippets/artifacts/routers/effect/export-router.ts` |
+| artifacts/signin | `website/snippets/artifacts/signin/effect/billing-agent.ts` |
 
 `tools/publish` is a per-language code snippet (the shared `golem.yaml` is gone). `tools/secrets` is a per-language snippet
 (`SupportAgent`, secret config field `stripeKey`, tool `refund`, method `issueRefund`).
@@ -128,7 +132,7 @@ that stripped copy.
    `Output<B>` fix applied by `sed` (the run fails if the line no longer matches), maps
    `@golemcloud/effect-golem` to it with `compilerOptions.paths`, and prints a `SHIM:` line:
    `node sdks/effect/node_modules/typescript/bin/tsc -p .amp/in/snippets/effect/gen/tsconfig.<f>.json --pretty false`
-5. Prints `ALL_OK` only if every style check and all 17 tsc runs passed; otherwise
+5. Prints `ALL_OK` only if every style check and all 21 tsc runs passed; otherwise
    `CHECK FAILED` and exit 1.
 
 ## Preludes (omitted supporting code)
@@ -145,13 +149,17 @@ that stripped copy.
 | tools-requests (+ .post) | `Refund`; after the snippet, the refund tool calling the displayed `stripeRefund` |
 | tools-permissions | `AgentId`, `Card = Permissions.PersistentCard` |
 | tools-custom | `Headings`, `fs`, `BashClient` stub import |
-| tools-secrets | `defineConfig` import, `Refund`, the `refund` tool definition (charge, amount, secret apiKey; body only, no implementation) |
+| tools-secrets | `defineConfig` import, `Refund` (`id`, `status`, `customerEmail`), the `refund` tool definition (charge, amount, secret apiKey; body only, no implementation) |
 | artifacts-overview | `fs`, `openai` client layer, `Quarter` (`Schema.Struct({ quarter })` with `Schema.isPattern(/^Q[1-4]-\d{4}$/)`), `chartPng(q): Promise<Uint8Array>` (declared), `pageFor(q)`; labelled PRELUDE HELPER `answer(question, toolkit)`: the model tool loop (Effect AI `Chat.fromPrompt` + `chat.generateText({ prompt: [], toolkit })` repeated while `finishReason === "tool-calls"`, at most 5 steps, OpenAI `gpt-4.1`), returning `res.text` and still requiring the toolkit's handlers |
 | artifacts-routes | `fs`, `Name` (slug `Schema.isPattern(/^[a-z0-9-]{1,40}$/)`), `Row`, `querySales(region): Effect<Row[]>` (declared) |
 | artifacts-files | `SaleRow`, `querySales(team, quarter): Effect<SaleRow[]>`, `drawChart(rows): Uint8Array` (declared) |
 | agents-stream | `openai` client layer |
 | artifacts-login | imports; `Chart = { askedBy, png }`; `answerWithChart(question): Effect<Uint8Array>` (declared); `userKey(caller)` = JSON of OIDC `[issuer, sub]` (traps on a non-OIDC principal, like TS) |
 | agents-readonly | imports only |
+| tools-middleware | `Refund` and the same `refund` tool definition as tools-secrets; `askFinance(approval, charge, amount)`, `approved(verdict)` (JSON `approved === true`), `checkRateLimit(principal)` (fails with `MiddlewareError`), `audit(charge, amount, refundId)`; labelled SHIM re-typing `Middleware.typed` (see Differences) |
+| artifacts-peruser | imports; `dashboardFor(user, request): Effect<string>` (declared) |
+| artifacts-routers | `HttpServerResponse` import; the user's `AnalystAgent` spec (`id: { chat }`, `exportCsv({ id })` returning `WitTypes.AgentStream(WitTypes.Uint8ArraySchema)`, no implementation); `header(name, value): HttpRouter.HttpHeader` (byte value) |
+| artifacts-signin | `Invoice`; `invoicesOf(org, issuer, sub)`, `pageFor(question, invoices)` (declared Effects) |
 
 Prelude helpers return `Effect<_, never>` (failures become defects), matching the TypeScript
 helpers that throw.
@@ -169,7 +177,17 @@ Nothing was invented for Effect; every library is real.
   `Permissions.deriveFromWallet/derive/install/revoke`, `Lifespan.fromIso8601`, `Holder.agent`;
   `Principal.PrincipalSchema`; `Unstructured.UnstructuredBinary` + `Unstructured.Option` (an
   optional unstructured result: `none` is a 404); `WitTypes.AgentStream`; `readOnly: true`;
-  method `description` (`src/internal/method.ts:104`); generated MCP tool clients' `StartedToolInvocation.collect`).
+  method `description` (`src/internal/method.ts:104`); generated MCP tool clients' `StartedToolInvocation.collect`;
+  typed middleware `Middleware.typed({ name, presented, parameters: Middleware.NoParameters, handler })`
+  from `@golemcloud/effect-golem/middleware` (`src/internal/tool/middleware.ts:263-332`; handler context
+  `principal`/`underlying` at `:111-122`; callable root `underlying(input)` at `:70-91`;
+  `MiddlewareError` with a `constraint-violation` `ToolError` at `:30-36`, exported unchanged at `:925-939`);
+  promises `Agents.Promises.create` / `Agents.Promises.await(id)` (`src/Agents.ts:563-596`,
+  docs `develop/promises.mdx`, Effect tab); raw routers `HttpRouter.define(name, { mount }).implement(
+  Effect.succeed(app))` (`src/HttpRouter.ts:96-171`), the canonical request `HttpRouter.request`
+  (`:32`) and byte-valued response headers `HttpRouter.withRawHeaders` (`:43`); router-to-agent calls
+  through the agent spec's `client.get` (the router's application runs with `HostServices | Scope`,
+  `:64-69`)).
 - SQLite: `SqliteClient` from `@golemcloud/effect-golem/sqlite` (Effect SQL over Golem's
   embedded SQLite, per `golem-add-sqlite-effect`).
 - Models: Effect AI (`LanguageModel.generateText`, `generateObject`; for tool calling
@@ -227,6 +245,10 @@ and prints `NEG_OK`.
 | stream-endpoint-not-array | `http: [Http.post(…)]` → `http: Http.post(…)` (TS SDK shape) | TS2769 |
 | login-ts-undefined-none | `return Option.none()` → `return undefined` (TS SDK shape) | TS2322 |
 | readonly-bad-flag | `readOnly: true` → `readOnly: "yes"` | TS2769 |
+| middleware-ts-create-promise | `Agents.Promises.create` → `Agents.Promises.createPromise` (TS SDK name) | TS2339 |
+| peruser-ts-returns | method `success:` → `returns:` (TS SDK name) | TS2769 |
+| routers-ts-implement-raw | `Exports.implement(` → `Exports.implementRaw(` (TS SDK name) | TS2551 |
+| signin-ts-flat-principal | `const { issuer, sub } = caller.val` → `= caller` (TS SDK shape) | TS2339 |
 | secrets-reveal-not-borrow | `config.stripeKey.borrow` → `.get` (a revealed `Redacted<string>`, not a handle) | TS2741 |
 
 `tools/requests` uses no Golem API itself; its control breaks the displayed function's contract
@@ -303,6 +325,40 @@ with the Golem refund tool spliced after it.
   `this.charts.length` on a separate line; the comment sits directly above `ask:` instead of
   inside the body.
 
+- `agents/overview`, `tools/publish`, `artifacts/overview`, `artifacts/routes`, `artifacts/login`:
+  same edits as the TypeScript (comment wording, highlight moved; login's `auth` mount comment is
+  gone and a comment sits above the owner check).
+- `tools/middleware`: `throw refuse(...)` becomes `yield* refuse(...)`, where `refuse` is
+  `Effect.fail(new Middleware.MiddlewareError({ tag: "constraint-violation", val }))` (three lines);
+  the handler context is `ctx` (`ctx.principal`, `ctx.underlying(args)`) instead of a destructured
+  `{ underlying, principal }`, to fit 68 columns. `createPromise()` / `awaitPromise` are
+  `yield* Agents.Promises.create` / `yield* Agents.Promises.await(approval)`; their host errors become
+  defects with `Effect.catchTag("AgentsHostError", Effect.die)` (a TS throw), while the policy's own
+  rejections stay typed `MiddlewareError`s. Middleware is passed `presented: refund` and
+  `parameters: Middleware.NoParameters` (required by the Effect API).
+  SDK GAP (SHIM in `prelude/tools-middleware.ts`): `Middleware.typed` infers `R = never` and runs the
+  handler with only its optional `layer` (`src/internal/tool/middleware.ts:263-288`, `:848-853`), but
+  `Agents.Promises.*` requires the `PromiseClient` host service (`src/Agents.ts:571,580`), whose live
+  layer is in `src/host/PromiseClient.ts:31`, blocked by the package exports (`"./host/*": null`).
+  Against the real declarations the snippet fails with TS2322 "Type 'PromiseClient' is not
+  assignable to type 'never'" (verified); no public layer exists to pass as `layer`. The shim
+  re-types `typed` so the handler may require that service (types only). Fix: have
+  `invokeToolMiddleware` build `HostLive` into the middleware context (as the agent dispatcher
+  does, `src/internal/agent.ts:107`) and widen the handler `R` of `typed`/`universal` to
+  `HostServices`, or export a public promise-host layer.
+- `artifacts/peruser`: `++this.made` is `++self.made` on the state object returned by `init`
+  (`methods: (self) => ...`); `await dashboardFor(...)` is `yield* dashboardFor(...)`.
+- `artifacts/routers`: `defineHttpRouter(...).mount(...).implementRaw(handler)` is
+  `HttpRouter.define(name, { mount: Http.mount("/exports") })` then `Exports.implement(Effect.succeed(app))`
+  (two statements, because `implement` returns `void`). The canonical request comes from
+  `yield* HttpRouter.request`; the 404 is `HttpServerResponse.empty({ status: 404 })`; the 200 is
+  `HttpRouter.withRawHeaders(HttpServerResponse.stream(csv, { status: 200 }), [header(...), ...])`
+  with the same byte-valued `header` helper as TS (the body highlight sits on the `stream(csv, ...)`
+  line). The agent call takes two lines (`yield* Analyst.client.get(...)`, then
+  `yield* analyst.exportCsv(...)`); the first is highlighted.
+- `artifacts/signin`: `s.principal()` is `Principal.PrincipalSchema` on its own line (highlighted;
+  the `input:` line holds the comment); OIDC fields are `caller.val.issuer` / `caller.val.sub`.
+
 ## Known limits (compiles, not proven at runtime)
 
 - Type-check only: no Rollup bundle, no WASM, no deployment. A real component needs
@@ -310,6 +366,9 @@ with the Golem refund tool spliced after it.
   providers added to that app, and `golem build` (for `tools/publish`, an MCP import in the
   manifest and a reachable MCP server so the real client can be generated).
 - `tools/overview` compiles only with the `gen/sdk-fixed` SHIM until the SDK fix lands.
+- `tools/middleware` compiles only with the `Middleware.typed` SHIM; at runtime, today's SDK would
+  fail the promise calls (missing `PromiseClient` service) until the middleware host-layer fix lands.
+  Middleware attachment to a tool binding is not exercised.
 - Runtime-only validations are not exercised: `Http.mount` / endpoint path parsing fallbacks,
   `exposeFiles` mapping compilation (`/*` → `/out/$1`), and agent registration happen at module
   import inside the guest. The Effect AI tool loop in `prelude/artifacts-overview.ts` is not run

@@ -6,7 +6,7 @@ export const Analyst = defineAgent({
   name: "AnalystAgent",
   id: { chat: Schema.String },
   http: Http.mount("/chats/{chat}", {
-    // Golem serves the files this agent creates, once written:
+    // Golem serves files this agent writes, never half-written:
     exposeFiles: [{ route: "/*", path: "/out/$1" }], //@
   }),
   methods: { ask: method({ input: { question: Schema.String },

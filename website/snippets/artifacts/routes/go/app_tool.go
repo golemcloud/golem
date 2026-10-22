@@ -11,11 +11,10 @@ var Present = tool.DefineTool[Presenter]("present", tool.Spec{
 var _ = Present.Handle(
     func(_ *tool.Context, a Args) (string, error) {
         // the app is saved in the calling agent's own files:
-        name := string(a.Name)
         golem.Must0(os.MkdirAll("/out", 0o755))
-        golem.Must0(os.WriteFile("/out/"+name+".html", //@
+        golem.Must0(os.WriteFile("/out/"+string(a.Name)+".html", //@
             []byte(a.HTML), 0o644))
-        return name + ".html", nil
+        return string(a.Name) + ".html", nil
     })
 var Apps = golem.DefineAgent[AppID](golem.Spec{
     Name: "AppAgent",
@@ -26,6 +25,7 @@ var Sales = Apps.Method[SalesIn, []Row]("sales",
     // the app's buttons fetch('sales?region=...') from here:
     golem.HTTP(golem.GET("/sales?region={region}"))) //@
 var _ = Apps.Implement(func(id AppID) *AppID { return &id }).Handle(
-    Sales, golem.Adapt(func(_ *AppID, in SalesIn) []Row {
-        return querySales(in.Region)
+    // each click runs this as durable code in the agent's own VM:
+    Sales, golem.Adapt(func(_ *AppID, in SalesIn) []Row { //@
+        return querySales(in.Region) //@
     }))

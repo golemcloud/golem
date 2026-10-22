@@ -1,6 +1,6 @@
 #derive.agent
 #derive.mount("/chats/{chat}")
-// Golem serves the files this agent creates, once written:
+// Golem serves files this agent writes, never half-written:
 #derive.expose_files("/*", "/out/$1") //@
 struct AnalystAgent {
   chat : String

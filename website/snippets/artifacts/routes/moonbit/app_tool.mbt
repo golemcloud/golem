@@ -12,7 +12,6 @@ pub async fn Present::present(
   @fs.write_string(root, "/out/\{name}.html", html).unwrap() //@
   "\{name}.html"
 }
-
 #derive.agent
 #derive.mount("/apps/{chat}")
 #derive.expose_files("/*", "/out/$1")
@@ -27,5 +26,6 @@ fn AppAgent::new(chat : String) -> AppAgent {
 pub async fn AppAgent::sales(
   self : Self, region : String,
 ) -> Array[Row] {
-  query_sales(region)
+  // each click runs this as durable code in the agent's own VM:
+  query_sales(region) //@
 }

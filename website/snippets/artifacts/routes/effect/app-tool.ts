@@ -11,7 +11,6 @@ present.implement({
     return Tool.ok(`${name}.html`)
   }),
 })
-
 export const Apps = defineAgent({
   name: "AppAgent",
   id: { chat: Schema.String },
@@ -27,5 +26,6 @@ export const Apps = defineAgent({
   },
 }).implement({
   init: () => Effect.void,
-  methods: () => ({ sales: ({ region }) => querySales(region) }),
+  // each click runs this as durable code in the agent's own VM:
+  methods: () => ({ sales: ({ region }) => querySales(region) }), //@
 })

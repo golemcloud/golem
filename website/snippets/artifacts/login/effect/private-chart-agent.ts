@@ -5,8 +5,7 @@ const User = Principal.PrincipalSchema
 export const PrivateCharts = defineAgent({
   name: "PrivateChartsAgent",
   id: { team: Schema.String },
-  // Golem checks sign-in before the HTTP call reaches the agent:
-  http: Http.mount("/private/{team}", { auth: true }), //@
+  http: Http.mount("/private/{team}", { auth: true }),
   methods: {
     ask: method({ input: { question: Schema.String, caller: User },
       success: Schema.Number, http: [Http.post("/ask")] }),
@@ -23,6 +22,7 @@ export const PrivateCharts = defineAgent({
       (png) => charts.push({ askedBy: userKey(caller), png })), //@
     open: ({ n, caller }) => Effect.sync(() => {
       const made = charts[n - 1]
+      // anyone else, even signed in, gets a 404:
       if (made?.askedBy !== userKey(caller)) return Option.none() //@
       return Option.some({ _tag: "inline", val: made.png,
         mimeType: "image/png" } as const)

@@ -185,7 +185,7 @@ export const agentsChapter = {
     {
       id: "overview",
       title: "Overview",
-      body: "Agents are typed code in TypeScript, Effect, Rust, Scala, MoonBit or Go, each in its own WebAssembly VM. After a crash or restart, execution resumes mid-function.",
+      body: "Typed code in TypeScript, Effect, Rust, Scala, MoonBit or Go, same guarantees and primitives in each. Crashed or restarted, it resumes mid-function with memory and files.",
     },
     {
       id: "sqlite",
@@ -246,6 +246,11 @@ export const toolsChapter = {
       body: "Share a narrow slice of an agent's access, such as the orders API only for one hour, with another agent and the tools it calls. Revoking it revokes every derived copy.",
     },
     {
+      id: "middleware",
+      title: "Middleware",
+      body: "Hooks you configure wrap every tool call, beyond agent code's reach. Reject calls by argument, make refunds wait for a person across restarts, redact, audit, rate-limit.",
+    },
+    {
       id: "secrets",
       title: "Secrets",
       body: "Agents pass API keys to tools as opaque handles. Revealing a value takes a grant and is recorded, and a binding can forbid a tool to reveal any.",
@@ -253,7 +258,7 @@ export const toolsChapter = {
     {
       id: "publish",
       title: "MCP and tool releases",
-      body: "Call existing MCP servers through generated clients typed by their schemas. Expose agents and tools over MCP, and publish tools as versioned releases others can use.",
+      body: "Typed clients call MCP servers with Golem's tool-call guarantees. Serve agents and tools over MCP. Grant other environments and accounts immutable tool releases.",
     },
   ] as ChapterItem[],
 };
@@ -266,12 +271,17 @@ export const artifactsChapter = {
     {
       id: "overview",
       title: "Overview",
-      body: "When a user asks for last quarter's sales as a graph, the model calls a tool that writes a PNG and an HTML page into the agent's files. Golem serves them; no deploy.",
+      body: "A user asks for last quarter's sales as a graph: a tool the model calls writes a PNG and HTML page to the agent's files. Golem serves them, never half-written; no deploy.",
     },
     {
       id: "routes",
       title: "Apps made for one request",
-      body: "For one user's request, the agent's model writes a small app and calls a Golem tool that saves it in the agent's files. The app's buttons call the agent's own endpoints.",
+      body: "For one user's request, the model writes a small app and calls a Golem tool to save it in the agent's files. Buttons call endpoints: durable code in the agent's own VM.",
+    },
+    {
+      id: "peruser",
+      title: "One agent per user, from the URL",
+      body: "The URL picks the agent: /dashboards/ana reaches Ana's own agent, created on her first request. Pages and files it makes for her appear under her path.",
     },
     {
       id: "files",
@@ -279,9 +289,19 @@ export const artifactsChapter = {
       body: "An agent can answer a user's request with a PNG or PDF it just made. Golem sends the bytes over HTTP with their MIME type, and as binary content over MCP.",
     },
     {
+      id: "routers",
+      title: "Downloads through a router",
+      body: "Asked to export a CSV, the agent links to a router that matches path and method, sets status, content type and download headers, and streams the CSV the agent builds.",
+    },
+    {
+      id: "signin",
+      title: "Sign-in",
+      body: "Users sign in with Google, GitLab or any OpenID Connect provider via OAuth2 with PKCE. Golem checks the short-lived token it issues before agent code builds them a page.",
+    },
+    {
       id: "login",
       title: "Only for the person who asked",
-      body: "Golem checks each viewer's sign-in before agent code runs. The agent records who asked for each chart and returns it only to that person; others get a 404.",
+      body: "Sign-in says who is asking, not what they may see. The agent records who asked for each chart and returns it only to that person; anyone else gets a 404.",
     },
   ] as ChapterItem[],
 };

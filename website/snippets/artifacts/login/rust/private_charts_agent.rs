@@ -1,9 +1,7 @@
 #[derive(AllowedMimeTypes, Clone, Debug)]
 pub enum PngType { #[mime_type("image/png")] Png }
 type Png = UnstructuredBinary<PngType>;
-#[agent_definition(mount = "/private/{team}",
-  // Golem checks sign-in before the HTTP call reaches the agent:
-  auth = true)] //@
+#[agent_definition(mount = "/private/{team}", auth = true)]
 pub trait PrivateChartsAgent {
   fn new(team: String) -> Self;
   #[endpoint(post = "/ask")]
@@ -25,6 +23,7 @@ impl PrivateChartsAgent for PrivateChartsAgentImpl {
   }
   fn open(&self, n: u32, caller: Principal) -> Option<Png> {
     let made = self.charts.get(n.checked_sub(1)? as usize)?;
+    // anyone else, even signed in, gets a 404:
     if made.asked_by != user_key(&caller).ok()? { return None; } //@
     Some(Png::from_inline(made.png.clone(), PngType::Png))
   }
