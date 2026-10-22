@@ -1,14 +1,12 @@
 type UserID struct{ User string }
 type AskIn struct{ Request string }
-type dashboards struct {
-    User string
-    Made int
-}
+type dashboards struct{ User string }
 
 var Dashboards = golem.DefineAgent[UserID](golem.Spec{
     Name: "DashboardAgent",
     // the path names the agent: /dashboards/ana is Ana's own agent:
     HTTP: &golem.Mount{Path: "/dashboards/{user}", //@
+        Auth: true,
         ExposeFiles: []golem.FileMapping{
             {Route: "/*", Path: "/out/$1"}}}})
 var Ask = Dashboards.Method[AskIn, string]("ask",
@@ -20,12 +18,11 @@ var _ = Dashboards.Implement(func(id UserID) *dashboards { //@
 }).Handle(Ask, golem.Adapt((*dashboards).ask))
 
 func (d *dashboards) ask(in AskIn) string {
-    d.Made++
-    n := strconv.Itoa(d.Made)
+    name := uuid.NewString()
     golem.Must0(os.MkdirAll("/out", 0o755))
     // the model builds this dashboard for her one request:
-    golem.Must0(os.WriteFile("/out/"+n+".html",
+    golem.Must0(os.WriteFile("/out/"+name+".html",
         []byte(dashboardFor(d.User, in.Request)), 0o644))
     // what it made for her is served under her path:
-    return "/dashboards/" + d.User + "/" + n + ".html" //@
+    return "/dashboards/" + d.User + "/" + name + ".html" //@
 }

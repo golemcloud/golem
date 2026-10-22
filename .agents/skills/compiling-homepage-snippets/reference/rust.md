@@ -260,7 +260,7 @@ functions that can fail return `Result` and propagate with `?`:
 | `tools_permissions` | `AgentId`, `permissions::{self, Bounds, Holder, Lifespan, PatternGrant, PersistentCard}` |
 | `tools_secrets` | `Config`, `Secret` (`golem_rust::agentic::Secret<T>`), `ConfigSchema`; the real `refund` tool (`#[tool_definition(version = "1.0.0")] trait Refund`, `api_key: GuestSecretHandle`, an auto-injected `caller: golem_rust::tool::Principal` that is not tool input and that `RefundClient` does not take, reveals the key and POSTs to Stripe with `expand[]=charge`), its `Receipt { id, status, customer_email }` result (pub fields; `customer_email` is the charge's billing email) and so the real macro-generated `RefundClient`, `RefundMiddleware` and `RefundUnderlying` |
 | `tools_middleware` | `use crate::tools_secrets::{Receipt, RefundMiddleware, RefundUnderlying}` (the same tool, not a second `refund`); `GuestSecretHandle`, `tool::{Principal, ToolInvokeError}`, `PromiseId`, `create_promise`, `await_promise`, `tool_middleware`; the unit struct `RefundPolicy` with `new()` (height); `ask_finance` (TS `askFinance`: POSTs the promise id, charge and amount to finance), `approved` (TS `approved`: JSON `approved === true`), `check_rate_limit` (TS `checkRateLimit`, returns `ToolInvokeError::ConstraintViolation` over the limit), `audit` |
-| `artifacts_peruser` | agent macros, `fs`; `dashboard_for` (TS `dashboardFor`) |
+| `artifacts_peruser` | agent macros, `Uuid` (`golem_rust::Uuid`), `fs`; `dashboard_for` (TS `dashboardFor`) |
 | `artifacts_routers` | `AgentStream`, `Config`, `Header`, `HttpRequest`, `HttpResponse`, `HttpRouter`, `http_router`, `agent_client`, `Regex`; the caller-owned client `#[agent_client(type_name = "AnalystAgent")] trait AnalystAgent { fn new(chat: String) -> Self; fn export_csv(&self, id: String) -> AgentStream<Vec<u8>>; }` (TS prelude `Analyst`; generates the real `AnalystAgentClient` without defining a second `AnalystAgent` in this component); `header` and `empty` (TS helpers); `failed` (an error becomes a 500 with an empty body) |
 | `artifacts_signin` | `Principal`, agent macros; `Invoice`, `invoices_of`, `page_for` (TS helpers) |
 | `tools_publish` | `agent_definition`/`agent_implementation`, `description`; `use crate::stubs::crm_find_customer_tool_guest_client;` so the displayed `use crm_find_customer_tool_guest_client::CrmFindCustomerClient;` resolves to the stand-in |
@@ -446,8 +446,14 @@ description in the descriptor.
   `charge` is reused by `audit`). TS `{ ...receipt, customerEmail }` is
   struct update syntax. `ask_finance`/`audit` errors (`AppError`) become
   `ToolInvokeError::Tool` through `?`.
-- artifacts/peruser: TS `++this.made` is `self.made += 1; let n =
-  self.made;` (two lines). TS `init` is `fn new(user)` (marked).
+- artifacts/peruser: TS `crypto.randomUUID()` is `Uuid::new_v4()`
+  (`golem_rust::Uuid`, the `uuid` crate re-exported at
+  `sdks/rust/golem-rust/src/lib.rs:18`, `v4` feature enabled in
+  `sdks/rust/golem-rust/Cargo.toml:90`; the SDK's own `new_phantom` uses
+  it, `docs/src/content/v1.6/how-to-guides/rust/golem-multi-instance-agent-rust.mdx:96`).
+  TS `auth: true` is the unmarked `auth = true,` line of the mount, as in
+  artifacts/login and artifacts/signin. TS `init` is `fn new(user)`
+  (marked). `ask` keeps `&mut self` though it no longer mutates state.
 - artifacts/routers: TS `defineHttpRouter('ExportsRouter').mount('/exports')
   .implementRaw(...)` is `#[http_router(name = "ExportsRouter", mount =
   "/exports")] impl HttpRouter for ExportsRouter` with `type Config = ()`

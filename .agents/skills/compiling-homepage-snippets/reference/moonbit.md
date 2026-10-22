@@ -322,8 +322,14 @@ message, so those six controls are identified by the failing
   the generated client"), and returns the stream as the response body.
 - Per-user agents (`artifacts/peruser`): the mount variable `{user}` is the
   constructor parameter (the generator rejects a mount variable that is
-  not one); `#derive.expose_files("/*", "/out/$1")` as below; a `mut made`
-  counter on the agent struct.
+  not one); `#derive.mount_auth(true)` as in `signin`;
+  `#derive.expose_files("/*", "/out/$1")` as below; each dashboard file
+  is named by a fresh UUID from `@api.generate_idempotency_key_string()`
+  (`golem_sdk/api/idempotency.mbt:11`, a host-generated UUID that is
+  persisted and never replayed, as `@types.uuid_to_string`; the MoonBit
+  tab of `docs/src/content/v1.6/develop/additional.mdx:48` shows
+  `@api.generate_idempotency_key()`). `harness/artifacts_peruser/moon.pkg.in`
+  imports `golemcloud/golem_sdk/api` for it.
 - Sign-in (`artifacts/signin`): `#derive.mount_auth(true)`
   (`golem_sdk_tools/lib/agents.mbt:798`) and a host-injected `caller :
   @common.Principal` parameter; `guard caller is Oidc(oidc)` then `let {
@@ -613,12 +619,15 @@ parameter.
   `{ ...receipt, customerEmail: '[redacted]' }` is `Ok({ ..receipt,
   customer_email: "[redacted]" })`. The handler signature takes 5 lines
   (parameters and a wrapped return type) to stay within 68 characters.
-- `artifacts/peruser`: `http.mount('/dashboards/{user}', { exposeFiles })`
-  is `#derive.mount(...)` (highlighted, its comment above) +
-  `#derive.expose_files("/*", "/out/$1")`. `init: ({ id }) => ({ user,
-  made: 0 })` is the highlighted constructor `fn DashboardAgent::new(user)`
-  with its comment above. `++this.made` is `self.made += 1` + `let n =
-  self.made`. The write wraps over two lines.
+- `artifacts/peruser`: `http.mount('/dashboards/{user}', { auth: true,
+  exposeFiles })` is `#derive.mount(...)` (highlighted, its comment
+  above), `#derive.mount_auth(true)` (no comment or highlight, as in TS)
+  and `#derive.expose_files("/*", "/out/$1")`. `init: ({ id }) => ({ user:
+  id.user })` is the highlighted constructor `fn DashboardAgent::new(user)`
+  with its comment above. `const name = crypto.randomUUID()` is `let name
+  = @api.generate_idempotency_key_string()` (no comment, as in TS); the
+  file is `/out/<name>.html` and the result
+  `/dashboards/<user>/<name>.html`. The write wraps over two lines.
 - `artifacts/routers`: `defineHttpRouter('ExportsRouter').mount('/exports')
   .implementRaw(...)` is `#derive.http_router` + `#derive.mount` + struct +
   `fn new()` + `#derive.http_handler pub async fn serve`. The regex match

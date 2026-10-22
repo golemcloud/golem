@@ -75,7 +75,8 @@ marked TS comment is the same comment, marked, in Go.
 - **Network on the first run:** the toolchains, componentize-go, and modules:
   `github.com/firebase/genkit/go v1.14.0` (pulls
   `github.com/anthropics/anthropic-sdk-go v1.23.0`, `openai-go v1.8.2` and
-  others), `github.com/openai/openai-go/v3 v3.84.0`, the SDK's
+  others), `github.com/openai/openai-go/v3 v3.84.0`,
+  `github.com/google/uuid v1.6.0`, the SDK's
   `github.com/golemcloud/go-pkg v0.2.3-golem.1` fork and
   `github.com/coder/websocket`. `go.sum` is kept in the harness.
 - **sed -E** for marker stripping (`sed -E 's,[ ]+(//|#)@$,,'`), mktemp.
@@ -88,7 +89,7 @@ marked TS comment is the same comment, marked, in Go.
 ```
 <repo>/.amp/in/snippets/go/
   go.mod, go.sum   module example.com/snippets. Requires the SDK, genkit,
-                   openai-go/v3 and the five bridge stubs. replace:
+                   openai-go/v3, google/uuid and the five bridge stubs. replace:
                      sdks/go/core, sdks/go/golem => <repo>/sdks/go/...
                      go.bytecodealliance.org/pkg =>
                        github.com/golemcloud/go-pkg v0.2.3-golem.1
@@ -216,6 +217,8 @@ No library had to be invented for Go.
 |---|---|---|
 | `github.com/openai/openai-go/v3` v3.84.0 (real) | agents/stream (Responses API, `OutputText()`) | The official OpenAI Go SDK, the counterpart of the TS `openai` client; compiles for wasip1 and sends through `net/http`, which the Golem SDK routes via the host. |
 | `github.com/firebase/genkit/go` v1.14.0 (real): `genkit`, `ai`, `plugins/compat_oai/openai`, `plugins/anthropic` | agents/models, artifacts/overview | The Go counterpart of the Vercel AI SDK call: one API over two providers (`genkit.GenerateText` with `openai/gpt-4.1`, `genkit.GenerateData[Review]` typed structured output with `anthropic/claude-sonnet-4-5`). Chosen over langchaingo (its Anthropic provider ignores JSON mode) and over the two official SDKs directly (over 31 lines). Compiles into a component (~41 MB). **artifacts/overview** uses its tool calling, the counterpart of the TS `tool`/`generateText`/`stepCountIs`: `ai.NewTool(name, description, fn)` (`ai/tools.go:472`; "can be passed directly to Generate", no registry), `fn` of type `ai.ToolFunc[In, Out] = func(*ai.ToolContext, In) (Out, error)` (`ai/tools.go:36`), `genkit.GenerateText` (`genkit/genkit.go:1624`) with `ai.WithModelName`, `ai.WithPrompt`, `ai.WithTools` (`ai/option.go:294`) and `ai.WithMaxTurns(5)` (`ai/option.go:341`; max tool round trips, an error beyond, where `stepCountIs(5)` stops quietly). The tool's input schema is inferred from `Quarter` (its `jsonschema:"pattern=..."` tag included) and every action run validates the input against it before the function runs (`core/action.go:273`); a scratch test on 2026-10-22 showed `Q3-2026` accepted and `../etc/x`, `Q5-2026` rejected ("Does not match pattern"). Paths are relative to the module root in `$(go env GOMODCACHE)/github.com/firebase/genkit/go@v1.14.0`. |
+| `github.com/google/uuid` v1.6.0 (real) | artifacts/peruser (`uuid.NewString()`) | The Go standard library has no UUID generator and neither does the Golem Go SDK (`golem.UUID` = `values.UUID`, `sdks/go/core/values/values.go:468`, is a value type with `String`/`ParseUUID` only). `NewString` (`version4.go:21`, a version-4 UUID via `NewRandom`, `version4.go:39`) reads `crypto/rand.Reader` (`uuid.go:40`), which on the WASI target is the host's random source; Golem records random numbers in the oplog (`docs/src/content/v1.6/concepts/durable-execution.mdx:13`), so a replay reuses the same name. Already in `go.sum` (a genkit dependency); now a direct requirement in `go.mod`. Paths relative to `$(go env GOMODCACHE)/github.com/google/uuid@v1.6.0`. |
+| `github.com/google/uuid` v1.6.0 (real) | artifacts/peruser (`uuid.NewString()`) | The Go standard library has no UUID generator and neither does the Golem Go SDK (`golem.UUID` = `values.UUID`, `sdks/go/core/values/values.go:468`, is a value type with `String`/`ParseUUID` only). `NewString` (`version4.go:21`, a version-4 UUID via `NewRandom`, `version4.go:39`) reads `crypto/rand.Reader` (`uuid.go:40`), which on the WASI target is the host's random source; Golem records random numbers in the oplog (`docs/src/content/v1.6/concepts/durable-execution.mdx:13`), so a replay reuses the same name. Already in `go.sum` (a genkit dependency); now a direct requirement in `go.mod`. Paths relative to `$(go env GOMODCACHE)/github.com/google/uuid@v1.6.0`. |
 | `golem.local/bridge/research-agent-guest-client` (stub, `bridge/`) | agents/team | Hand-written stand-in for the client `golem build` generates for a ResearchAgent in another component, shaped after `cli/golem-cli/src/bridge_gen/go/mod.rs`: `DefineFullAgentClient`, `ResearchAgentID{Topic}`, `Facts{Summary, Sources}`, `MustGetResearchAgent`, `MustGather` (plus `Gather`, `TriggerRefresh`, `ScheduleRefresh`, no longer shown). Real SDK calls underneath. |
 | `golem.local/bridge/slack-agent-guest-client` (stub) | agents/team | Same, for `SlackAgent{Channel}` with `post(text)`: `MustGetSlackAgent`, `TriggerPost`/`MustTriggerPost`. |
 | `golem.local/bridge/refund-tool-guest-client` (stub) | tools/secrets, tools/middleware | Stand-in for the client generated for a `refund` tool with a root body, named as `bridge_gen/go/tool.rs` names it: identity type `RefundTool`, `Tool = tool.DefineToolClient[RefundTool]("refund")`, command `Root` with `RootArgs{Charge string, Amount int32, APIKey golem.Secret[string]}` (`to_field_ident("apiKey")` = `APIKey`; a secret parameter is `golem.Secret[inner]`, `bridge_gen/go/type_ref.rs:235`), error `ErrHTTP`, result `Refund{ID, Status, CustomerEmail}` (the TS preludes' `Refund`). Shared by tools/secrets and tools/middleware. |
@@ -455,14 +458,17 @@ config secret, `take` mints a fresh host handle with `get-config-value`
   `if made.AskedBy != userKey(o.Caller) {` (marked) `return nil`, then the
   inline PNG.
 - **artifacts/peruser** (`dashboard_agent.go`): the id is `UserID{User}`
-  and the state `dashboards{User string, Made int}` (exported for the
-  JSON snapshot; TS `{ user, made: 0 }`). Marked: the `Mount{Path:
+  and the state `dashboards{User string}` (exported for the JSON
+  snapshot; TS `{ user }`). The mount has `Auth: true` on its own,
+  unmarked line (TS `auth: true`). Marked: the `Mount{Path:
   "/dashboards/{user}",` line (TS marks `http.mount(...`), both lines of
   the constructor (`Implement(func(id UserID) *dashboards {` and `return
   &dashboards{User: id.User}`; TS marks the one-line `init`), and the
   returned path. `ask` is a method registered with
-  `golem.Adapt((*dashboards).ask)`; TS `++this.made` is `d.Made++` then
-  `strconv.Itoa`.
+  `golem.Adapt((*dashboards).ask)`; each file is named by a random UUID,
+  `name := uuid.NewString()` (TS `crypto.randomUUID()`), written to
+  `/out/<name>.html` and returned as `/dashboards/<user>/<name>.html`.
+  No comment explains the UUID (as in TS).
 - **artifacts/routers** (`exports_router.go`): `golem.DefineHTTPRouter`
   + `HandleRaw` (TS `defineHttpRouter(...).mount(...).implementRaw`). The
   regexp is a package-level `regexp.MustCompile` (two lines, for width)
