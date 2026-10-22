@@ -392,3 +392,7 @@ cd <repo>
 .amp/in/snippets/effect/check.sh               # expect ALL_OK
 .amp/in/snippets/effect/neg.sh                 # expect NEG_OK
 ```
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `const name = crypto.randomUUID()`, the same global as TS. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

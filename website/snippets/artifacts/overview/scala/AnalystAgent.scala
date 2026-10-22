@@ -12,16 +12,17 @@ trait AnalystAgent extends BaseAgent:
 final class AnalystAgentImpl(chat: String) extends AnalystAgent:
   def ask(question: String): Future[String] =
     // the model calls this tool when a user asks for a graph:
-    val chart = FunctionTool( //@
-      name = "chart",
+    val chart = FunctionTool(name = "chart", //@
       description = "Chart sales for a quarter and link to it",
       parameters = Quarter.schema, parse = Quarter.parse,
       function = q =>
+        val key = HostApi.generateIdempotencyKey()
+        val name = Uuid.toStandardString(key)
         fs.mkdirSync("/out", literal(recursive = true))
         chartPng(q).map: png =>
-          fs.writeFileSync(s"/out/$q.png", png) //@
-          fs.writeFileSync(s"/out/$q.html", pageFor(q)) //@
-          s"/chats/$chat/$q.html"
+          fs.writeFileSync(s"/out/$name.png", png) //@
+          fs.writeFileSync(s"/out/$name.html", pageFor(q, name)) //@
+          s"/chats/$chat/$name.html"
     )
     val run = openai.chat.completions.runTools(ToolRunParams(
       model = "gpt-4.1", tools = Seq(chart),

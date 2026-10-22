@@ -677,3 +677,7 @@ parameter.
 - Compiler warnings (unused fields such as `ticket`/`project`, unused
   `self`, structs never constructed for tool structs, and warnings in
   generated code) are expected and do not fail the build.
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `let name = @api.generate_idempotency_key_string()`; `harness/artifacts_overview/moon.pkg.in` imports `golemcloud/golem_sdk/api`. The HTML write is wrapped onto two highlighted lines to fit 68 columns. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

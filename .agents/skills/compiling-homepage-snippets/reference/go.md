@@ -527,3 +527,7 @@ config secret, `take` mints a fresh host handle with `get-config-value`
   and `out/`: do not run two of them at once.
 - The bridge stubs approximate generated code; regenerate against real
   callee schemas before relying on exact names or types.
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `q, name := args.Quarter, uuid.NewString()` (one line, so the snippet stays within 31 lines); `pkg/artifacts-overview/prefix.txt` imports `github.com/google/uuid`, already a direct requirement in `go.mod`. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

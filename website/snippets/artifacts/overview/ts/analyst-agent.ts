@@ -5,10 +5,8 @@ export const Analyst = defineAgent({
     // Golem serves files this agent writes, never half-written:
     exposeFiles: [{ route: '/*', path: '/out/$1' }], //@
   }),
-  methods: {
-    ask: method({ input: { question: z.string() },
-      returns: z.string(), http: http.post('/ask') }),
-  },
+  methods: { ask: method({ input: { question: z.string() },
+    returns: z.string(), http: http.post('/ask') }) },
 }).implement({
   init: ({ id }) => ({ chat: id.chat }),
   methods: {
@@ -18,10 +16,11 @@ export const Analyst = defineAgent({
         description: 'Chart sales for a quarter and link to it',
         inputSchema: Quarter,
         execute: async ({ quarter: q }) => {
+          const name = crypto.randomUUID()
           fs.mkdirSync('/out', { recursive: true })
-          fs.writeFileSync(`/out/${q}.png`, await chartPng(q)) //@
-          fs.writeFileSync(`/out/${q}.html`, pageFor(q)) //@
-          return `/chats/${this.chat}/${q}.html`
+          fs.writeFileSync(`/out/${name}.png`, await chartPng(q)) //@
+          fs.writeFileSync(`/out/${name}.html`, pageFor(q, name)) //@
+          return `/chats/${this.chat}/${name}.html`
         },
       })
       return (await generateText({ model, prompt: question,

@@ -608,3 +608,7 @@ schema taken from `T`.
 
 No SDK gap was found for these four features: every call compiles against
 the in-tree SDK without a shim.
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `let name = Uuid::new_v4();` (`golem_rust::Uuid`, imported in `prelude/artifacts_overview.rs`; `page_for` takes the `Uuid`). The PNG write is wrapped onto two highlighted lines to fit 68 columns. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

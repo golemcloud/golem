@@ -174,7 +174,7 @@ function snippets(chapter: string): ChapterSnippets {
 
 export const agentsChapter = {
   eyebrow: "Agents",
-  heading: "Agents are your own arbitrary code, not prompts",
+  heading: "Agents are your own typed code, not prompts",
   snippets: snippets("agents"),
   // Shown instead of a snippet in languages that lack the feature.
   missing: {
@@ -184,38 +184,38 @@ export const agentsChapter = {
   items: [
     {
       id: "overview",
-      title: "Overview",
-      body: "Typed code in TypeScript, Effect, Rust, Scala, MoonBit or Go, same guarantees and primitives in each. Crashed or restarted, it resumes mid-function with memory and files.",
+      title: "Same guarantees and primitives",
+      body: "Code in TypeScript, Effect, Rust, Scala, MoonBit or Go resumes mid-function with memory and files after a crash.",
     },
     {
       id: "sqlite",
       title: "Per-agent databases",
-      body: "Each agent has its own durable file system, so an embedded database such as SQLite keeps its file there, beside the agent: no database server to run or connect to.",
+      body: "Each agent's durable file system can hold an embedded database such as SQLite: no server to run or connect to.",
     },
     {
       id: "models",
       title: "Any model, with your libraries",
-      body: "Call any model with the libraries you already use, such as the OpenAI and Anthropic SDKs, Vercel AI SDK, TanStack AI or Effect AI, or a provider's own HTTP API.",
+      body: "Model calls can use OpenAI or Anthropic SDKs, Vercel AI SDK, TanStack AI, Effect AI or a provider's own HTTP API.",
     },
     {
       id: "team",
       title: "Agents working together",
-      body: "Typed calls between agents, across languages: wait for the result or send and move on. Agents can also discover which other agents and tools exist and what they offer.",
+      body: "Agents make typed cross-language calls, wait or move on, and discover what other agents and tools offer.",
     },
     {
       id: "waits",
-      title: "Awaitable webhooks, timers and schedules",
-      body: "Approvals and payment callbacks become promises your code awaits. Sleeps, timers and scheduled calls fire on time across restarts, with no idle cost.",
+      title: "Awaitable webhooks, timers, schedules",
+      body: "Approval and payment webhooks are promises. Sleeps and scheduled calls fire on time across restarts, at no idle cost.",
     },
     {
       id: "stream",
-      title: "Durable streaming",
-      body: "Streaming endpoints become resumable streams: clients that reload or reconnect pick up an agent's output where it left off, even after a crash.",
+      title: "Resumable streaming endpoints",
+      body: "Clients that reload or reconnect pick up an agent's streamed output where they left off, even after a crash.",
     },
     {
       id: "readonly",
-      title: "Read-only methods",
-      body: "Golem caches the results of methods marked read-only and answers repeat calls without loading the agent, until a regular method succeeds. Outgoing calls in them fail.",
+      title: "Cached read-only methods",
+      body: "Repeat calls skip loading the agent until a regular method succeeds. Outgoing HTTP and agent calls fail.",
     },
   ] as ChapterItem[],
 };
@@ -228,37 +228,37 @@ export const toolsChapter = {
     {
       id: "overview",
       title: "Overview",
-      body: "Golem runs each tool call in a fresh VM that can't read the agent's memory. An interrupted call replays with recorded results, without repeating completed effects.",
+      body: "Each call's fresh VM can't read agent memory. Recovery reuses recorded results rather than repeating those calls.",
     },
     {
       id: "custom",
-      title: "Bundled and custom tools",
-      body: "Shell, Git, Node.js, npm and TypeScript come bundled, and can work on the agent's own files. Build your own tools with any Golem SDK; no separate sandbox service needed.",
+      title: "Tools without a sandbox service",
+      body: "Shell, Git, Node.js, npm and TypeScript are bundled and can use the agent's files. Custom tools use any Golem SDK.",
     },
     {
       id: "requests",
-      title: "Retries that take effect once",
-      body: "Golem retries interrupted HTTP requests from agents and tools with an idempotency key it adds, so they take effect once where the API honors such keys, as Stripe does.",
+      title: "HTTP retries from agents and tools",
+      body: "Golem retries interrupted requests with an idempotency key it adds; APIs that honor it, like Stripe, act once.",
     },
     {
       id: "permissions",
       title: "Delegated, revocable permissions",
-      body: "Share a narrow slice of an agent's access, such as the orders API only for one hour, with another agent and the tools it calls. Revoking it revokes every derived copy.",
+      body: "One agent lends another and its tools only the orders API for an hour. Revoking it revokes every derived copy.",
     },
     {
       id: "middleware",
-      title: "Middleware",
-      body: "Hooks you configure wrap every tool call, beyond agent code's reach. Reject calls by argument, make refunds wait for a person across restarts, redact, audit, rate-limit.",
+      title: "Middleware agent code can't bypass",
+      body: "Hooks can wrap every tool call to reject by argument, hold refunds for human approval, redact, audit and rate-limit.",
     },
     {
       id: "secrets",
       title: "Secrets",
-      body: "Agents pass API keys to tools as opaque handles. Revealing a value takes a grant and is recorded, and a binding can forbid a tool to reveal any.",
+      body: "Agents pass API keys to tools as opaque handles. Reveals need a grant and are recorded; bindings can forbid them.",
     },
     {
       id: "publish",
-      title: "MCP and tool releases",
-      body: "Typed clients call MCP servers with Golem's tool-call guarantees. Serve agents and tools over MCP. Grant other environments and accounts immutable tool releases.",
+      title: "Serve agents and tools over MCP",
+      body: "Typed MCP clients get tool-call guarantees. Grant opt-in immutable releases across environments and accounts.",
     },
   ] as ChapterItem[],
 };
@@ -271,37 +271,37 @@ export const artifactsChapter = {
     {
       id: "overview",
       title: "Overview",
-      body: "A user asks for last quarter's sales as a graph: a tool the model calls writes a PNG and HTML page to the agent's files. Golem serves them, never half-written; no deploy.",
+      body: "Asked for a sales graph, a tool writes a PNG and HTML page in agent files. Golem serves both, never half-written.",
     },
     {
       id: "routes",
-      title: "Apps made for one request",
-      body: "For one user's request, the model writes a small app and calls a Golem tool to save it in the agent's files. Buttons call endpoints: durable code in the agent's own VM.",
+      title: "Apps for one user's request, no deploy",
+      body: "A tool saves the model's small app in agent files. Buttons call endpoints running durable code in the agent's own VM.",
     },
     {
       id: "peruser",
       title: "One agent per user, from the URL",
-      body: "The URL picks the agent: /dashboards/ana reaches Ana's own agent, created on her first request. Pages and files it makes for her appear under her path.",
+      body: "Ana's first request to /dashboards/ana creates her agent. Pages and files it makes for her appear under her path.",
     },
     {
       id: "files",
       title: "Images and PDFs as the reply",
-      body: "An agent can answer a user's request with a PNG or PDF it just made. Golem sends the bytes over HTTP with their MIME type, and as binary content over MCP.",
+      body: "An agent can reply with a PNG or PDF it just made: bytes with their MIME type over HTTP, binary content over MCP.",
     },
     {
       id: "routers",
-      title: "Downloads through a router",
-      body: "Asked to export a CSV, the agent links to a router that matches path and method, sets status, content type and download headers, and streams the CSV the agent builds.",
+      title: "CSV downloads through a router",
+      body: "A router matches path and method, sets status, content type and download headers, and streams the agent's CSV.",
     },
     {
       id: "signin",
-      title: "Sign-in",
-      body: "Users sign in with Google, GitLab or any OpenID Connect provider via OAuth2 with PKCE. Golem checks the short-lived token it issues before agent code builds them a page.",
+      title: "OAuth2 sign-in with PKCE",
+      body: "Login uses Google, GitLab or any OpenID Connect provider. Golem checks its short-lived token before agent code runs.",
     },
     {
       id: "login",
       title: "Only for the person who asked",
-      body: "Sign-in says who is asking, not what they may see. The agent records who asked for each chart and returns it only to that person; anyone else gets a 404.",
+      body: "Sign-in says who asks, not what they may see. The agent records who asked for each chart; others get a 404.",
     },
   ] as ChapterItem[],
 };

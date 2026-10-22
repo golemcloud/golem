@@ -269,3 +269,7 @@ its row so the text still occurs exactly once.
   `ai` SDK work inside the component.
 - The 21-feature list in `check.sh` is hard-coded; add a feature there and a
   prelude plus a `neg-cases.tsv` row when the page gains one.
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `const name = crypto.randomUUID()`. To stay within 31 lines, the `methods` block of the agent definition is folded onto two lines, as in the Effect snippet. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

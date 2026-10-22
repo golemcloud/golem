@@ -13,7 +13,10 @@ after the Artifacts chapter redesign: artifacts are made on request,
 Oct 22 2026 after the 7 + 7 + 7 reorganization: new `tools/middleware`,
 `artifacts/peruser`, `artifacts/routers` (a raw router again) and
 `artifacts/signin`, small edits to agents/overview, tools/publish,
-artifacts/overview, artifacts/routes and artifacts/login) on macOS arm64.
+artifacts/overview, artifacts/routes and artifacts/login; re-verified
+again Oct 22 2026 after artifacts/peruser gained `auth = true` and UUID
+file names: `check.sh` ALL_OK, `neg.sh artifacts-peruser` NEG_OK) on
+macOS arm64.
 
 ## Display files (the only inputs; read in place, never copied by hand)
 
@@ -558,3 +561,7 @@ from `Draft` (the Golem macro derives the schema itself) and removing
 
 Re-publish the SDK first (see above) if `sdks/scala` changed since the last
 local publication.
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `val key = HostApi.generateIdempotencyKey()` and `val name = Uuid.toStandardString(key)`, as in artifacts/peruser (imports in `harness/pre/artifacts-overview.scala`). To stay within 31 lines, `name = "chart"` moves onto the `FunctionTool(` line, as Rust does with `ToolDefinition`. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

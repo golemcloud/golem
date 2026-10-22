@@ -20,10 +20,12 @@ impl AnalystAgent for AnalystAgentImpl {
       parameters_schema: Quarter::SCHEMA.into() };
     run_tool_loop(&question, model("gpt-4.1"), chart,
       async |Quarter(q)| {
+        let name = Uuid::new_v4();
         fs::create_dir_all("/out")?;
-        fs::write(format!("/out/{q}.png"), chart_png(&q).await?)?; //@
-        fs::write(format!("/out/{q}.html"), page_for(&q))?; //@
-        Ok(format!("/chats/{}/{q}.html", self.chat))
+        fs::write(format!("/out/{name}.png"), //@
+          chart_png(&q).await?)?; //@
+        fs::write(format!("/out/{name}.html"), page_for(&q, name))?; //@
+        Ok(format!("/chats/{}/{name}.html", self.chat))
       }).await
   }
 }
