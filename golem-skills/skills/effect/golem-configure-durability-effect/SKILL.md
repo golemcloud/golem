@@ -88,8 +88,8 @@ seconds, and `everyN` does not count arbitrary effects inside that method.
 
 ## Ephemeral Agents
 
-An ephemeral agent writes oplog history to archive storage but does not replay it for recovery.
-Use it only when the work does not require durable
+An ephemeral agent writes oplog history to archive storage. Initialization can replay, but failed
+methods are not recovered by replay. Use it only when the work does not require durable method
 recovery, such as stateless transformations or request adapters:
 
 ```typescript

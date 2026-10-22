@@ -224,10 +224,16 @@ Both fields follow the cascade hierarchy and support merge modes (`wasiConfigMer
 Properties cascade from general to specific:
 
 ```
-componentTemplates → components → agents → presets
+componentTemplates (including their selected presets)
+  → components (including their selected presets)
+  → agents (including their selected presets)
 ```
 
 Each level can override or merge with its parent using merge modes:
+
+Presets apply within their owning layer, not after all other layers. Golem resolves the base
+component, including its template and component presets, before it applies agent overrides and
+agent presets.
 
 | Property | Merge Mode Field | Type | Default | Options |
 |----------|-----------------|------|---------|---------|

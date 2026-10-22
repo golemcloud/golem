@@ -74,7 +74,7 @@ See [`golem-custom-snapshot-ts`](../golem-custom-snapshot-ts/SKILL.md) for snaps
 Use **ephemeral** mode for stateless, per-invocation agents where persistence is not needed:
 
 - State is discarded after each invocation completes
-- The oplog is not replayed — lower overhead
+- Initialization can replay, but failed methods are not recovered by replay
 - Useful for pure functions, request handlers, or adapters
 
 Set `mode: 'ephemeral'` on the spec:
