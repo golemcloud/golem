@@ -87,7 +87,7 @@ CounterClient.newPhantom("counter-name")
 
 ## Key Points
 
-- Phantom identity and durability mode are independent. Durable phantom agents persist just like regular durable agents; ephemeral invocations discard their memory and failed methods do not recover by replay (initialization can replay).
+- Phantom identity and durability mode are independent. Durable phantom agents persist just like regular durable agents; ephemeral invocations discard their memory. If the executor restarts while preparing an ephemeral invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - The phantom ID is a `golem.Uuid` (high/low `BigInt` pair).
 - For durable targets, `newPhantom` generates a UUID via `HostApi.generateIdempotencyKey()`. For ephemeral targets it resolves without a phantom override; invocation metadata supplies the actual identity. Factory construction is synchronous in both cases.
 - For durable targets, `getPhantom` with the same UUID and parameters addresses the same persistent agent. For ephemeral targets it selects an invocation identity, not reusable persistent state.

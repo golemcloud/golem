@@ -10,7 +10,7 @@ description: "Creating ephemeral (stateless) agents in a TypeScript Golem projec
 An **ephemeral agent** is a Golem agent that gets a **fresh instance for every invocation**. Unlike the default durable agents, ephemeral agents:
 
 - **No shared state**: Each invocation starts from a fresh `init()` call — state set in one call is gone by the next
-- **No method recovery replay**: An oplog is still recorded lazily (useful for debugging via `golem agent oplog`), but failed methods are not recovered by replay. Initialization can replay.
+- **No method recovery replay**: An oplog is still recorded lazily (useful for debugging via `golem agent oplog`). If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - **No persistence**: The agent's memory is discarded after each invocation completes
 - **Logical target versus concrete identity**: The `id` record selects the logical target; each call uses a fresh, one-shot concrete agent identity
 
@@ -143,4 +143,4 @@ export const ConverterAgentImpl = ConverterAgent.implement({
 - Ephemeral mode is set at the **agent type level** via `mode: 'ephemeral'` — all instances of the type are ephemeral
 - The `id` record defines the logical target, not a reusable concrete instance across calls
 - Ephemeral agents can call other agents via RPC and make HTTP requests, but do not support durable suspension or unlimited waits
-- The oplog is still recorded lazily, so you can inspect what an ephemeral agent did via `golem agent oplog` — failed methods are not recovered by replay, but initialization can replay
+- The oplog is still recorded lazily, so you can inspect what an ephemeral agent did via `golem agent oplog`. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.

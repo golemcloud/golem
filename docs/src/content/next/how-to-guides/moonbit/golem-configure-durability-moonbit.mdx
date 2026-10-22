@@ -50,7 +50,7 @@ See [`golem-custom-snapshot-moonbit`](/next/how-to-guides/moonbit/golem-custom-s
 Use **ephemeral** mode for stateless, per-invocation agents where persistence is not needed:
 
 - State is discarded after each invocation completes
-- No method recovery replay (an oplog is still recorded lazily for debugging via `golem agent oplog`; initialization can replay)
+- An oplog is still recorded lazily for debugging via `golem agent oplog`. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - Each invocation calls `new()` to create a fresh instance, executes the method, then discards the instance
 - Useful for pure functions, request handlers, or adapters
 

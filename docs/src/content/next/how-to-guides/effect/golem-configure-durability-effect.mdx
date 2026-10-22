@@ -83,9 +83,11 @@ seconds, and `everyN` does not count arbitrary effects inside that method.
 
 ## Ephemeral Agents
 
-An ephemeral agent writes oplog history to archive storage. Initialization can replay, but failed
-methods are not recovered by replay. Use it only when the work does not require durable method
-recovery, such as stateless transformations or request adapters:
+An ephemeral agent writes oplog history to archive storage. If the executor restarts while preparing
+an invocation, Golem can replay the recorded initialization so that the method can still start. Once
+the method starts, a failure is terminal; Golem does not replay the method. Use ephemeral mode only
+when the work does not require durable method recovery, such as stateless transformations or request
+adapters:
 
 ```typescript
 export const StatelessHandler = defineAgent({
