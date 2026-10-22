@@ -14,7 +14,9 @@ impl AccountAgent for AccountAgentImpl {
   fn new(_team: String) -> Self { Self }
   async fn describe(&self, email: String)
     -> Result<String, AppError> {
-    // call the CRM's MCP tool through its generated typed client:
+    // a client generated from the MCP server's schemas:
+    // Golem checks, records and replays it like any tool call:
+    // a retry resends the same idempotency key to the server:
     let call = CrmFindCustomerClient::new() //@
       .crm_find_customer(email).await?; //@
     let result = call.collect().await.result?;
