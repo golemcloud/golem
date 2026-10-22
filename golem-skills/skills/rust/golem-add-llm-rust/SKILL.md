@@ -10,10 +10,10 @@ agents now target `wasm32-wasip2` and WASI HTTP 0.3, so dependency selection mat
 
 ## Select matching dependencies
 
-Upstream's [v0.5.4 source](https://github.com/golemcloud/golem-ai/tree/9243c29395a4cd85f81f9c7c635d8b0e3fe49216)
-targets `wasm32-wasip2` and uses fallible secret access. Its workspace pins `golem-rust` to
-`=3.0.0-rc5`. A GitHub release does not establish that the same version is on crates.io; the
-following source pins avoid that assumption:
+Create a Rust application with `golem new --yes --template rust ai-agent`. Add the core and
+provider dependencies to the component's `Cargo.toml`. This example uses the
+[v0.5.4 source](https://github.com/golemcloud/golem-ai/tree/9243c29395a4cd85f81f9c7c635d8b0e3fe49216)
+with its matching SDK:
 
 ```toml
 [dependencies]
@@ -22,32 +22,10 @@ golem-ai-llm = { git = "https://github.com/golemcloud/golem-ai", rev = "9243c293
 golem-ai-llm-openai = { git = "https://github.com/golemcloud/golem-ai", rev = "9243c29395a4cd85f81f9c7c635d8b0e3fe49216" }
 ```
 
-Keep the default `golem` features enabled and align the core, provider, and SDK dependencies.
-Start from `golem new --yes --template rust ai-agent`. Before replacing the scaffold's SDK version,
-check its target runtime: this repository's development SDK has version `0.0.0`, not `3.0.0-rc5`.
-
-For an application targeting this source checkout, use a local copy of the same pinned provider
-source and align its SDK dependency explicitly:
-
-1. Clone `https://github.com/golemcloud/golem-ai` and check out
-   `9243c29395a4cd85f81f9c7c635d8b0e3fe49216`.
-2. In that clone's root `Cargo.toml`, replace the `golem-rust` entry under
-   `[workspace.dependencies]` with `{ path = "/absolute/path/to/golem/sdks/rust/golem-rust" }`.
-3. In the application, replace the three dependencies above with these local paths:
-
-```toml
-[dependencies]
-golem-rust = { path = "/absolute/path/to/golem/sdks/rust/golem-rust", features = ["export_golem_agentic"] }
-golem-ai-llm = { path = "/absolute/path/to/golem-ai/llm/llm" }
-golem-ai-llm-openai = { path = "/absolute/path/to/golem-ai/llm/openai" }
-```
-
-The source path override is needed because a crates.io patch to a `0.0.0` SDK does not satisfy
-upstream's `=3.0.0-rc5` requirement. Both paths above support type-checking the OpenAI agent below
-for `wasm32-wasip2`; neither establishes deployed-runtime behavior. Inspect `cargo tree -d` to
-ensure the application and provider use one SDK, run `cargo check --target wasm32-wasip2`, then
-`golem build --yes`. Keep the resulting lockfile. Do not pass config/secret types between two
-different SDK versions.
+Keep the default `golem` features enabled. The application and provider must use the same SDK;
+check `cargo tree -d` for duplicate SDK versions. For a local SDK build, use the source-checkout
+instructions below instead. Build from the application directory with `golem build --yes` and
+keep the resulting lockfile.
 
 ## Configure and call OpenAI
 
@@ -120,14 +98,13 @@ agents:
       base_url: "https://openai-proxy.example.com/v1"
 ```
 
-Regular config retains the Rust field name `base_url`; the secret path is separately canonicalized
-as `apiKey`. This non-null value projects the custom URL into the provider runtime config.
+Regular config uses the Rust field name `base_url`; the secret path is `apiKey`.
 Replace the example proxy URL with a reachable OpenAI-compatible endpoint.
 
 Build, deploy, and call `chat` with a model available to the provider account. Check the returned
-domain error separately from invocation failure. Test a real request, secret rotation, and recovery
-before relying on the integration in production. For streaming use `LlmProvider::stream` and the
-upstream chat-stream interface; do not substitute an older release's call signature.
+domain error separately from invocation failure. For streaming, use `LlmProvider::stream` and the
+upstream chat-stream interface. Before production use, verify provider requests, secret rotation,
+and recovery.
 
 Authoritative API references at the pinned revision:
 [provider config](https://github.com/golemcloud/golem-ai/blob/9243c29395a4cd85f81f9c7c635d8b0e3fe49216/llm/openai/src/config.rs),
@@ -157,5 +134,22 @@ follow `golem-ai-<capability>-<provider>`.
 ## Direct HTTP alternative
 
 For a provider without a suitable adapter, call its HTTPS API with `golem_rust::http` as described
-by `golem-make-http-request-rust`. This is an alternative integration, not a requirement to bypass
-`golem-ai`. Store credentials with Golem secrets; load `golem-add-secret-rust` for provisioning.
+by `golem-make-http-request-rust`. Store credentials with Golem secrets; load
+`golem-add-secret-rust` for provisioning.
+
+## Use a local SDK checkout
+
+When targeting Golem's development SDK, clone `golemcloud/golem-ai` at the revision above. In
+the provider workspace's `[workspace.dependencies]`, replace `golem-rust` with
+`{ path = "/absolute/path/to/golem/sdks/rust/golem-rust" }`. Point the application at the same
+SDK and provider checkout:
+
+```toml
+[dependencies]
+golem-rust = { path = "/absolute/path/to/golem/sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+golem-ai-llm = { path = "/absolute/path/to/golem-ai/llm/llm" }
+golem-ai-llm-openai = { path = "/absolute/path/to/golem-ai/llm/openai" }
+```
+
+Change the provider workspace dependency directly: a crates.io patch to the development SDK's
+`0.0.0` version does not satisfy the provider's `=3.0.0-rc5` requirement.

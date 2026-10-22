@@ -45,7 +45,7 @@ For example, use `effect/json` for an Effect task manager or `go/human-in-the-lo
 
 Rust, TypeScript, Effect, Scala, and MoonBit also provide `<language>/snapshotting`.
 This template defines `CounterWithSnapshotAgent`, which snapshots its state every five invocations.
-There is no `go/snapshotting` template. This is a template availability limit, not a blanket SDK restriction: Go supports custom snapshot recovery through `Snapshotter`, with an active executor test covering restart, restoration, and `OnRestore`. Do not infer default JSON recovery or manual-update support from that custom recovery path; consult `golem-custom-snapshot-go` and `golem-update-running-agents` for their current limits.
+There is no `go/snapshotting` template. Go supports custom snapshot recovery through `Snapshotter`, but default JSON recovery and manual snapshot-based updates have separate limitations. See `golem-custom-snapshot-go` before enabling snapshots.
 
 TypeScript also provides `ts/counter-arktype` and `ts/counter-valibot` to demonstrate alternative schema libraries.
 

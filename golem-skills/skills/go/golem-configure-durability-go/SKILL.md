@@ -96,11 +96,10 @@ Periodic snapshots run at invocation boundaries or while the agent is idle;
 they do not interrupt an endless handler on a timer. Split recurring work into
 bounded invocations if it must reach snapshot points.
 
-For Go, use a custom `golem.Snapshotter`: an active executor test covers custom
-state recovery and `OnRestore` after restart. Default JSON recovery's executor
-test remains ignored, and manual snapshot-based component updates remain a
-separate unresolved limitation. A policy alone does not establish a working
-default JSON recovery path. See `golem-custom-snapshot-go` before enabling it.
+For Go, implement a custom `golem.Snapshotter` as well as setting a policy.
+Custom recovery supports state restoration and `OnRestore` after restart.
+Default JSON recovery and manual snapshot-based component updates have separate
+runtime limitations. See `golem-custom-snapshot-go` before enabling snapshots.
 
 Set the `Snapshot` field on the `golem.Spec`:
 
@@ -149,10 +148,9 @@ type Snapshotter interface {
 ```
 
 Without a `Snapshotter`, the snapshot is the JSON of the state's **exported**
-fields only. That serializer exists, but its recovery test remains ignored.
-Implement `Save`/`Load` on the `*state` for custom recovery, including when your
-state uses exported fields; do not infer default JSON recovery support from
-serialization alone.
+fields only. Use `Save`/`Load` on the `*state` for recovery even when all fields
+are exported; default JSON serialization does not remove the recovery limitation
+described above.
 
 ## Ephemeral Agents
 

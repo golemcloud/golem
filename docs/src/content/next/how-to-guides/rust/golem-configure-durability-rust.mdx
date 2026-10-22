@@ -69,7 +69,7 @@ See [`golem-custom-snapshot-rust`](/next/how-to-guides/rust/golem-custom-snapsho
 Use **ephemeral** mode for stateless, per-invocation agents where persistence is not needed:
 
 - State is discarded after each invocation completes
-- An ephemeral oplog is recorded and can be inspected, but it is not replayed for recovery
+- An ephemeral oplog is recorded for inspection. Initialization can replay, but methods do not recover by replay.
 - Useful for pure functions, request handlers, or adapters
 
 ```rust

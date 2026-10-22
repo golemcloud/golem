@@ -151,14 +151,10 @@ if (!response.ok) {
 const charge = await response.json();
 ```
 
-If status retry "doesn't seem to work", inspect the configured policy and server logs
-(see `golem-local-dev-server`). A status policy must reference `status-code` and
-match the response; transparent retries require live execution outside snapshotting.
-Policy-resolution failures log `Failed resolving p3 HTTP status retry policy`.
-An observational call or a delay above the in-function threshold can instead
-produce `HTTP status ... matched a status-code retry policy in an observational call`
-or `HTTP status ... matched retry policy but exceeded the in-function retry delay threshold`.
-Do not look for an idempotence-mode skip reason; that switch is not supported.
+To diagnose missing status retries, check that the policy references `status-code`
+and matches the response. Transparent retries require live execution outside
+snapshotting. Inspect the server logs for policy-resolution failures, observational
+calls, or delays above the in-function retry threshold (see `golem-local-dev-server`).
 
 ### Application-level retry
 

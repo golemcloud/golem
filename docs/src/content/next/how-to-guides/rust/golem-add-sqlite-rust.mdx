@@ -83,8 +83,7 @@ handling does not automatically serialize a `Connection`; explicitly serialize a
 database with the `serialize` feature when implementing custom snapshots. For file-backed databases,
 enable executor filesystem snapshots for snapshot-based manual updates. Golem captures and restores
 the files before `load_snapshot`; do not copy database files into the memory snapshot or write them
-from the read-only restoration hook. Read-only restoration does not guarantee that every attempted
-write traps; keep the hook free of writes regardless. Without filesystem snapshots, changed files prevent a
+from the read-only restoration hook. Without filesystem snapshots, changed files prevent a
 snapshot-based manual update. See [`golem-custom-snapshot-rust`](/next/how-to-guides/rust/golem-custom-snapshot-rust) for executor setup and restoration rules.
 
 ## Resource and runtime limits

@@ -153,10 +153,9 @@ Configure the plugin with `endpoint: "http://localhost:4318"` to use this stack.
 
 ## Per-Environment Configuration
 
-Use presets to vary the endpoint across environments:
-
-Use the environment selector `app-env:production`. A plain `production` custom preset can become
-the default custom preset when it is the only one, applying the production endpoint in every environment.
+Use the environment preset `app-env:production` to change only the production
+endpoint. A plain `production` custom preset can become the default when it is the
+only custom preset, applying that endpoint in every environment:
 
 ```yaml
 components:

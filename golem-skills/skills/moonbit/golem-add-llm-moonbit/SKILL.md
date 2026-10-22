@@ -33,8 +33,8 @@ pub(all) struct ChatConfig {
 ```
 
 Set `agents.ChatAgent.config.model` in `golem.yaml`, and create the secret at
-the `api_key` config path with `golem secret create api_key --type String --value
-"<provider-key>"`. Load `golem-add-secret-moonbit` for secret provisioning.
+the normalized `apiKey` path with `golem secret create apiKey --type String`.
+Enter the key at the hidden prompt. Load `golem-add-secret-moonbit` for secret provisioning.
 Never return or log the credential.
 
 ## Request and Response Lifecycle

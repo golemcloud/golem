@@ -11,6 +11,13 @@ A Golem agent can act as its own scheduler by calling `.poll.scheduleAt(...)` on
 
 ## Basic Pattern
 
+Use a non-phantom durable agent: `PollerAgentClient.get(name)` must address the
+running instance. Call `start` once to do the first poll immediately; subsequent
+polls run through the scheduled chain only. Repeated `start` calls or direct
+`poll` calls create extra chains. An executor restart recovers the existing
+chain and does not require another `start` call. The basic and backoff variants
+have no cancel or application-level restart method.
+
 The agent schedules its own method to run again after a delay:
 
 ```scala
@@ -78,6 +85,12 @@ class PollerAgentImpl(name: String) extends PollerAgent {
 
 ## Cancellation
 
+The cancellation variants use the same single-start contract. Cancellation is
+permanent for that agent identity: `start` does not clear `cancelled`, so it
+cannot restart the loop. Use a new identity for a new loop. The flag makes an
+already queued poll exit without work or rescheduling; it does not undo work
+that has already completed.
+
 ### Cancellation with CancellationToken
 
 For a durable target with stream-free methods, `scheduleCancelableAt` returns `Future[CancellationToken]`. Compose that future to store the token; do not block with `Await.result` in Scala.js. Add `def cancel(): Future[Unit]` to the trait for this variant:
@@ -113,7 +126,10 @@ class PollerAgentImpl(name: String) extends PollerAgent {
 
 For simpler cases, just use a boolean flag — the next scheduled `poll` checks it and exits early:
 
-The following fragments assume the corresponding application helpers and fields exist. Compose asynchronous work with `flatMap` before `scheduleNext`; do not discard its Future.
+Keep `start` from the cancellation variant and initialize `private var cancelled = false`.
+Replace `poll` and `cancel` with the fragments below, and add the `scheduleNext`
+helper shown later. Supply `doWork(): Future[Unit]`; compose it with `flatMap`
+before scheduling so its failure does not get discarded.
 
 ```scala
 def poll(): Future[Unit] =
@@ -127,7 +143,11 @@ def cancel(): Future[Unit] = Future.successful {
 
 ### Cancellation from the CLI
 
-Schedule with an explicit idempotency key and cancel the pending invocation:
+This cancels one pending invocation, not the recurring chain. Do not add this
+invocation to an already running chain. To stop that chain, invoke the agent's
+`cancel` method from one of the cancellation variants above.
+
+For a standalone scheduled poll, use an explicit idempotency key:
 
 ```shell
 # Schedule with a known idempotency key

@@ -184,7 +184,7 @@ let policy =
     .applies_when(Predicate::eq(Props::uri_scheme(), Value::text("https")))
 ```
 
-### Scoped Usage with `with_named_policy!`
+### Scoped Usage with a Policy Guard
 
 Apply a policy for a block of code — the previous policy is restored when the block exits:
 
@@ -298,6 +298,6 @@ When no user-defined retry policies are set, Golem activates a default catch-all
 - Policies are defined **per-environment** — different environments can have different retry behaviors
 - Policy names must be unique within an environment
 - Higher priority policies are evaluated first; the first matching predicate wins
-- `with_named_policy!` is scoped — the policy is restored when the closure exits
+- Drop the policy guard to restore the previous policy when the block exits
 - Inline transport retries use the semantic policy system; they are not a separate stage before it
 - Changes made via CLI or REST API take effect immediately for running agents

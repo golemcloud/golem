@@ -14,7 +14,7 @@ const self = yield * PollerDefinition.client.get({ name });
 const scheduled = yield * self.poll.schedule(scheduledAt, {});
 ```
 
-The pinned Effect SDK has these exact semantics:
+Use these client conventions:
 
 - `client.get(...)` takes the complete named constructor-parameter record.
 - A method with `input: {}` still receives `{}` in remote calls.
@@ -45,9 +45,10 @@ fail during normalization.
 
 ## Complete Logically Cancelable Ticker
 
-This example starts immediately and schedules each later tick five seconds ahead. Cancellation
-advances a generation so stale ticks cannot do work or start a second chain after a restart.
-It stores only logical state, not released cancellation handles:
+This example runs five ticks, starting immediately and scheduling each later tick five seconds
+ahead. Repeated `start` calls while running are no-ops; after cancellation or completion, `start`
+begins a fresh run. Each run has a new generation so stale ticks cannot do work or create a second
+chain. Like the TypeScript recurring-task recipe, it stores only logical state:
 
 ```typescript
 import { DateTime, Effect, Ref, Schema } from "effect";
@@ -74,7 +75,6 @@ export const Ticker = TickerDefinition.implement({
       return { name, state };
     }),
   methods: ({ name, state }) => {
-
     const scheduleNext = (delaySeconds: number, generation: number) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
@@ -139,10 +139,10 @@ callers should handle scheduling failures, map them to a domain error declared i
 ## Logical Stop Versus Exact Cancellation
 
 An already-scheduled invocation still arrives, checks its generation, and becomes a no-op after
-cancel or restart. A boolean alone is insufficient: restarting before an old tick arrives would
-make that tick see `running === true` and create a second chain. Durable replay reconstructs the
-logical state. If adding snapshots, save and restore the generation, running flag, and tick count
-together; never reset the generation while old schedules can still arrive.
+cancel or restart. A boolean alone is insufficient for a restartable loop: an old tick could see
+`running === true` after restart and create a second chain. Durable replay reconstructs the logical
+state. If adding snapshots, save and restore the generation, running flag, and tick count together;
+never reset the generation while old schedules can still arrive.
 
 `Client.ScheduledInvocation` is a live scoped host resource, not schema-serializable state. Call
 `cancel()` only while its allocating Scope is still open. Do not save it in a `Ref` for a later

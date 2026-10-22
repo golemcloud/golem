@@ -25,10 +25,10 @@ fields across RPC, then reconstruct the host record in the worker.
 ```moonbit
 #derive.agent
 struct Coordinator {
-  // no state needed
+  batch_name : String
 }
 
-fn Coordinator::new() -> Coordinator { {  } }
+fn Coordinator::new(batch_name : String) -> Coordinator { { batch_name } }
 
 /// Fan out work to child agents and collect results
 pub async fn Coordinator::fan_out(self : Self, items : Array[String]) -> Array[String] {
@@ -164,14 +164,14 @@ Fork multiple times for N-way parallelism:
 ```moonbit
 pub async fn ForkAgent::multi_fork(self : Self, n : UInt64) -> Array[String] {
   let promise_ids : Array[@types.PromiseId] = []
-  for _ = 0L; _ < n.to_int64(); _ = _ + 1L {
+  for i = 0UL; i < n; i = i + 1UL {
     promise_ids.push(@api.create_promise())
   }
 
   for i = 0; i < promise_ids.length(); i = i + 1 {
     match @api.fork() {
       Original(_) => {
-        // Continue to next fork
+        () // Continue to next fork
       }
       Forked(_) => {
         // Each forked agent does its slice of work

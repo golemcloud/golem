@@ -86,86 +86,79 @@ export const PollerAgentImpl = PollerAgent.implement({
 
 ## Cancellation
 
-`.schedule()` returns a `CancellationToken`. Keep it when the pending invocation
-must be canceled immediately, and call `.cancel()` before its scheduled time.
-For a recurring loop, also keep a boolean flag in state so a stale `poll` exits
-without doing work or rescheduling. This variant supports one start per agent
-identity, with no restart: duplicate `start` calls are no-ops, including after
-cancellation or snapshot restoration. Use a new identity to restart. A restartable
-design instead needs generation-based cancellation, with each tick carrying its
-generation and rejecting stale generations; that alternative is not implemented here:
+For a restartable loop, include a generation in every scheduled tick. `cancel`
+stops work logically; a pending tick still arrives but exits without doing work.
+Repeated `start` calls while running are no-ops. After cancellation, `start`
+advances the generation so an old tick cannot create a second chain.
+
+This complete variant replaces the basic definition and implementation. It stores
+only logical state, which the typed snapshot schema can restore:
 
 ```typescript
-import type { CancellationToken } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-export const PollerAgentImpl = PollerAgent.implement({
+const PollerState = z.object({
+    name: z.string(), running: z.boolean(), generation: z.number(),
+});
+
+export const PollerAgent = defineAgent({
+    name: 'PollerAgent',
+    id: { name: z.string() },
+    snapshotting: { state: PollerState, policy: { everyNInvocations: 10 } },
+    methods: {
+        start: method({ input: {}, returns: z.void() }),
+        poll: method({ input: { generation: z.number() }, returns: z.void() }),
+        cancel: method({ input: {}, returns: z.void() }),
+    },
+});
+
+function scheduleNext(name: string, generation: number, delaySecs: bigint): void {
+    const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+    PollerAgent.client.get({ name }).poll.schedule({
+        seconds: nowSecs + delaySecs, nanoseconds: 0,
+    }, { generation });
+}
+
+export const PollerAgentImpl = PollerAgent.implement<z.infer<typeof PollerState>>({
     init: ({ id }) => ({
         name: id.name,
-        started: false,
-        cancelled: false,
-        pending: undefined as CancellationToken | undefined,
+        running: false,
+        generation: 0,
     }),
     methods: {
         start() {
-            if (this.started || this.cancelled) return;
-            this.started = true;
-            const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-            this.pending = PollerAgent.client.get({ name: this.name }).poll.schedule({
-                seconds: nowSecs,
-                nanoseconds: 0,
-            });
+            if (this.running) return;
+            this.running = true;
+            this.generation++;
+            scheduleNext(this.name, this.generation, 0n);
         },
-        poll() {
-            if (this.cancelled) return; // stop the loop
-            doWork();
-            const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-            this.pending = PollerAgent.client.get({ name: this.name }).poll.schedule({
-                seconds: nowSecs + 60n,
-                nanoseconds: 0,
-            });
+        poll({ generation }) {
+            if (!this.running || this.generation !== generation) return;
+            console.log('Polling', this.name); // Replace with recurring work.
+            scheduleNext(this.name, generation, 60n);
         },
         cancel() {
-            this.cancelled = true;
-            this.pending?.cancel();
-            this.pending = undefined;
+            this.running = false;
+            this.generation++;
         },
     },
 });
 ```
 
-`pending` is a live host resource, not ordinary serializable state. Merely omitting
-it from a typed snapshot schema fails: typed snapshots reject undeclared ordinary
-state fields. For this layout use custom projection/restoration, with an enabled
-policy such as `snapshotting: { everyNInvocations: 10 }` on the definition:
+Restore the running flag and generation together. Do not reset the generation or
+enqueue a replacement during restoration: an existing scheduled tick may still arrive.
 
-```typescript
-// Add to the cancellation implementation above:
-snapshot: {
-    save() {
-        return new TextEncoder().encode(JSON.stringify({
-            name: this.name, started: this.started, cancelled: this.cancelled,
-        }));
-    },
-    load(bytes) {
-        const saved = z.object({
-            name: z.string(), started: z.boolean(), cancelled: z.boolean(),
-        })
-            .parse(JSON.parse(new TextDecoder().decode(bytes)));
-        return { ...saved, pending: undefined as CancellationToken | undefined };
-    },
-},
-```
-
-After restoration the token is unavailable, so `cancel` cannot immediately remove
-the existing scheduled invocation. The restored `cancelled` flag makes that tick
-exit without doing work or rescheduling. Do not enqueue a replacement during load.
-The restored `started` flag prevents `start` from creating a second chain while
-the old scheduled tick still exists. Cancellation is terminal even before start.
-Also declare `cancel: method({ input: {}, returns: z.void() })` on `PollerAgent`.
+For best-effort removal before a pending invocation starts, `.schedule()` returns
+a `CancellationToken` with `.cancel()`. That live host resource is not snapshot
+state. Keep the generation check even when using a token; cancellation cannot
+stop work that has already started. The logical variant above needs no token or
+custom snapshot hooks.
 
 ### Cancellation from the CLI
 
-If you scheduled the invocation from the CLI with an explicit idempotency key, cancel the pending invocation by key:
+For the basic no-input `poll` contract, schedule from the CLI with an explicit
+idempotency key, then cancel the pending invocation by key:
 
 ```shell
 # Schedule with a known idempotency key
@@ -238,4 +231,4 @@ function scheduleNext(name: string, delaySecs: bigint): void {
 
 Each scheduled tick (heartbeat, poll, cleanup) appends entries to the agent's oplog. For long-running or high-frequency recurring tasks, the oplog grows unboundedly, and recovery on crash will replay the full history — which becomes slow over time.
 
-**You cannot opt out of oplog writes for a durable agent.** Use snapshot-based recovery so recovery can start from the latest snapshot instead of replaying every prior tick. For JSON state, provide a schema for every ordinary state field plus a policy, for example `snapshotting: { state: z.object({ name: z.string() }), policy: { everyNInvocations: 10 } }` for the basic pattern above. A bare enabled policy without a state schema requires custom `snapshot: { save, load }` hooks even for JSON state. Use custom hooks for the cancellation-token projection above. See [`golem-custom-snapshot-ts`](/next/how-to-guides/ts/golem-custom-snapshot-ts).
+**You cannot opt out of oplog writes for a durable agent.** Enable snapshot-based recovery with a schema for every ordinary state field and a policy, as in the cancellation variant above. For the basic pattern, use `snapshotting: { state: z.object({ name: z.string() }), policy: { everyNInvocations: 10 } }`. A policy without a state schema requires custom `snapshot: { save, load }` hooks, even for JSON state. See [`golem-custom-snapshot-ts`](/next/how-to-guides/ts/golem-custom-snapshot-ts).

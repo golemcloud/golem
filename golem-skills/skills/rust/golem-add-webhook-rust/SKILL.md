@@ -7,7 +7,7 @@ description: "Using webhooks in a Rust Golem agent. Use when the user asks to cr
 
 ## Overview
 
-Golem webhooks let an agent generate a public callback URL that delivers the first POST body to the agent. A webhook is backed by a Golem promise. Creating it does not suspend execution. Awaiting an incomplete promise can durably suspend the agent after the runtime's suspension delay; this is not an immediate zero-resource guarantee.
+Golem webhooks let an agent generate a public callback URL that delivers the first POST body to the agent. A webhook is backed by a Golem promise. Creating it does not suspend execution. Awaiting an incomplete promise can durably suspend the agent after the runtime's suspension delay. Suspension releases guest execution resources; persisted state remains.
 
 This is useful for:
 - Integrating with webhook-driven APIs (payment gateways, CI/CD, GitHub, Stripe, etc.)
@@ -204,4 +204,4 @@ impl IntegrationAgent for IntegrationAgentImpl {
 - The first POST completes the promise. Duplicate POSTs return HTTP 204 without replacing the first payload; the URL is not invalidated by completion.
 - Only `POST` requests to the webhook URL will complete the promise
 - `WebhookHandler` implements `IntoFuture`, so use `.await` to wait for the callback
-- The agent is durably suspended while waiting — it survives failures, restarts, and updates
+- Use a durable agent for waits that must survive restarts; ephemeral waits are bounded and cannot durably suspend.
