@@ -262,7 +262,12 @@ The Rust libraries support these areas:
 - Speech to Text
 - Video Generation
 
-To use one of these libraries in a Rust agent, add the corresponding core crate and the desired provider crate(s) as dependencies. The `golem.yaml` files coming from the agent templates include commented-out entries for each possible choice of implementations, so just uncomment the desired ones and provide any necessary configuration (usually in the form of environment variables).
+To use one of these libraries in a Rust agent, add the corresponding core crate and provider crate
+from the same SDK-compatible release. Pass provider configuration explicitly; use Golem secrets
+for API keys. The `golem.yaml` files from the agent templates include commented environment-variable
+hints, but these settings only apply when the application reads them. See
+[AI capabilities in Rust](/next/how-to-guides/rust/golem-add-llm-rust) for dependency selection and
+provider configuration.
 
 The rest of the page describes these Rust libraries, their implementations, and their core traits
 (without a full documentation of every type involved).
@@ -277,6 +282,13 @@ The list of supported LLM providers is the following:
 - [Ollama](https://ollama.com)
 - [OpenAI](https://openai.com)
 - [OpenRouter](https://openrouter.ai)
+- [OrcaRouter](https://www.orcarouter.ai) through the OpenAI provider
+
+OrcaRouter uses `golem-ai-llm-openai`, not a separate provider crate. Set the OpenAI provider's
+`base_url` to `https://api.orcarouter.ai/v1` and use an OrcaRouter API key stored as a Golem secret.
+The client appends `/responses`; do not include that path or a trailing slash in the base URL.
+Select a model ID from OrcaRouter's catalog. Applications that read provider configuration with
+`OpenAiConfig::from_env()` use `OPENAI_API_KEY` and `OPENAI_BASE_URL` for these values.
 
 The core trait for LLMs (from the `golem-llm` crate):
 
