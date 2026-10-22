@@ -444,6 +444,47 @@ async fn a_silent_client_does_not_block_other_handshakes() {
 }
 
 #[test]
+async fn a_garbage_handshake_leaves_the_server_serving() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let pki = Pki::new();
+    let files = Files::new(&pki);
+    let tls = tls_for(&files, NEVER);
+    let server = TestServer::start(Some(&tls)).await;
+
+    let mut raw = TcpStream::connect(server.addr).await.unwrap();
+    raw.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+    let mut sink = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(2), raw.read_to_end(&mut sink)).await;
+    drop(raw);
+
+    let mut client = health_client(
+        server.addr,
+        &pki.ca_pem,
+        Some((&pki.client_pem, &pki.client_key_pem)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(check(&mut client).await.unwrap(), ServingStatus::Serving);
+
+    let refused = handshake(server.addr, None, &pki.ca_pem).await;
+    assert!(
+        refused.is_err(),
+        "a client without a certificate must be refused"
+    );
+
+    let mut client = health_client(
+        server.addr,
+        &pki.ca_pem,
+        Some((&pki.client_pem, &pki.client_key_pem)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(check(&mut client).await.unwrap(), ServingStatus::Serving);
+    server.stop().await;
+}
+
+#[test]
 async fn the_reloader_timer_picks_up_new_files() {
     let pki = Pki::new();
     let files = Files::new(&pki);
