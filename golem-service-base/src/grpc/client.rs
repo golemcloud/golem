@@ -14,6 +14,7 @@
 
 use crate::tls::material::{TLS_RELOAD_INTERVAL, TlsMaterial, TlsSources};
 use crate::tls::pem::{PemSource, TlsError};
+use arc_swap::ArcSwap;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::SafeDisplay;
@@ -133,11 +134,82 @@ impl ClientTls {
     }
 }
 
-/// The client TLS of a client: absent when TLS is off, the error when the settings are unusable.
-type ClientTlsState = Option<Arc<Result<Arc<ClientTls>, TlsError>>>;
+/// The TLS of a client family (a client and all its clones), shared by them. When the settings
+/// could not be loaded, the error is kept and the load is tried again on a later connect, at most
+/// once per `TLS_RELOAD_INTERVAL`, so a file that appears after the start is picked up.
+struct SharedClientTls {
+    use_name: String,
+    config: GrpcClientTlsConfig,
+    state: ArcSwap<Result<Arc<ClientTls>, TlsError>>,
+    /// When the load was last attempted after the start; taken only while the state is an error.
+    last_attempt: std::sync::Mutex<Option<Instant>>,
+}
+
+/// Absent when TLS is off.
+type ClientTlsState = Option<Arc<SharedClientTls>>;
 
 fn client_tls_state(config: &GrpcClientTlsConfig, use_name: &str) -> ClientTlsState {
-    ClientTls::from_config(config, use_name).map(Arc::new)
+    let loaded = ClientTls::from_config(config, use_name)?;
+    if let Err(err) = &loaded {
+        warn!(
+            "TLS settings of {use_name} cannot be loaded; connections fail, and the load is tried again every {} s: {err}",
+            TLS_RELOAD_INTERVAL.as_secs()
+        );
+    }
+    Some(Arc::new(SharedClientTls {
+        use_name: use_name.to_string(),
+        config: config.clone(),
+        state: ArcSwap::from_pointee(loaded),
+        last_attempt: std::sync::Mutex::new(Some(Instant::now())),
+    }))
+}
+
+impl SharedClientTls {
+    /// The TLS to connect with, or the reason there is none.
+    fn current(&self) -> Result<Arc<ClientTls>, Status> {
+        if let Ok(tls) = &**self.state.load() {
+            return Ok(tls.clone());
+        }
+        let mut last_attempt = self.last_attempt.lock().unwrap();
+        // Another connect may have loaded it while this one waited for the lock.
+        if let Ok(tls) = &**self.state.load() {
+            return Ok(tls.clone());
+        }
+        if last_attempt.is_none_or(|at| at.elapsed() >= TLS_RELOAD_INTERVAL) {
+            *last_attempt = Some(Instant::now());
+            if let Some(loaded) = ClientTls::from_config(&self.config, &self.use_name) {
+                match &loaded {
+                    Ok(_) => debug!(
+                        "TLS settings of {} loaded after an earlier failure",
+                        self.use_name
+                    ),
+                    Err(err) => warn!(
+                        "TLS settings of {} still cannot be loaded: {err}",
+                        self.use_name
+                    ),
+                }
+                self.state.store(Arc::new(loaded));
+            }
+        }
+        match &**self.state.load() {
+            Ok(tls) => Ok(tls.clone()),
+            Err(err) => Err(Status::failed_precondition(format!(
+                "TLS configuration: {err}"
+            ))),
+        }
+    }
+
+    fn material(&self) -> Option<Arc<TlsMaterial>> {
+        match &**self.state.load() {
+            Ok(tls) => Some(tls.material.clone()),
+            Err(_) => None,
+        }
+    }
+
+    /// Lets the next connect try the load again at once.
+    fn retry_now(&self) {
+        *self.last_attempt.lock().unwrap() = None;
+    }
 }
 
 /// The TLS server name for a URI whose host is an IPv6 literal. Without a configured domain name,
@@ -534,15 +606,11 @@ where
         // Built outside the entry lock, so a rejected URI cannot leave an entry
         // behind and unrelated targets sharing a bucket do not serialise behind
         // this work.
-        let endpoint = match self.tls.as_deref() {
-            Some(Err(err)) => {
-                return Err(Status::failed_precondition(format!(
-                    "TLS configuration: {err}"
-                )));
-            }
-            Some(Ok(tls)) => {
+        let endpoint = match &self.tls {
+            Some(shared) => {
+                let tls = shared.current()?;
                 tls.material.start_reloader(TLS_RELOAD_INTERVAL);
-                build_endpoint(target.clone(), config, Some(tls))?
+                build_endpoint(target.clone(), config, Some(&tls))?
             }
             None => build_endpoint(target.clone(), config, None)?,
         };
@@ -721,6 +789,12 @@ where
     #[doc(hidden)]
     pub fn tls_material(&self) -> Option<Arc<TlsMaterial>> {
         self.pool[0].tls_material()
+    }
+
+    /// Lets the next connect try loading the TLS settings again at once.
+    #[doc(hidden)]
+    pub fn retry_tls_load_now(&self) {
+        self.pool[0].retry_tls_load_now()
     }
 
     fn select(&self) -> &MultiTargetGrpcClient<T> {
@@ -973,9 +1047,14 @@ where
     /// The TLS material of this client, if TLS is enabled and its settings loaded.
     #[doc(hidden)]
     pub fn tls_material(&self) -> Option<Arc<TlsMaterial>> {
-        match self.connections.tls.as_deref() {
-            Some(Ok(tls)) => Some(tls.material.clone()),
-            _ => None,
+        self.connections.tls.as_ref()?.material()
+    }
+
+    /// Lets the next connect try loading the TLS settings again at once.
+    #[doc(hidden)]
+    pub fn retry_tls_load_now(&self) {
+        if let Some(tls) = &self.connections.tls {
+            tls.retry_now();
         }
     }
 

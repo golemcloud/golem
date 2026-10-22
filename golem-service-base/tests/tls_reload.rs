@@ -605,3 +605,38 @@ async fn a_client_with_a_bad_tls_file_fails_fast_with_the_setting_name() {
     assert_eq!(error.code(), tonic::Code::FailedPrecondition);
     assert!(error.message().contains("client_key_file"), "{error:?}");
 }
+
+#[test]
+async fn a_client_recovers_when_its_tls_files_appear_after_start() {
+    use golem_service_base::grpc::client::GrpcClient;
+    let pki = Pki::new();
+    let files = Files::new(&pki);
+    let server_tls = tls_for(&files, NEVER);
+    let server = TestServer::start(Some(&server_tls)).await;
+
+    files.write("client.crt", &pki.client_pem);
+    files.write("client-ca.crt", &pki.ca_pem);
+    // client.key does not exist yet
+    let client = GrpcClient::new(
+        "t",
+        |channel, _| HealthClient::new(channel),
+        format!("https://localhost:{}", server.addr.port())
+            .parse()
+            .unwrap(),
+        client_config(&files, Duration::from_secs(60)),
+    );
+    let error = client_check(&client).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert!(error.message().contains("client_key_file"), "{error:?}");
+    assert!(client.tls_material().is_none());
+
+    files.write("client.key", &pki.client_key_pem);
+    client.retry_tls_load_now();
+    assert_eq!(client_check(&client).await.unwrap(), ServingStatus::Serving);
+    assert!(client.tls_material().is_some());
+    assert_eq!(
+        *server.client_certs.lock().unwrap(),
+        vec![pem_sha256(&pki.client_pem)]
+    );
+    server.stop().await;
+}
