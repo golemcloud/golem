@@ -14,10 +14,28 @@ const ENCRYPTED_KEY_LABEL: &[u8] = b"-----BEGIN ENCRYPTED PRIVATE KEY-----";
 
 /// Where one PEM item comes from. `setting` is the name of the value setting, for example
 /// `server_cert`; the file setting is `<setting>_file`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum PemSource {
     File { setting: String, path: PathBuf },
     Inline { setting: String, bytes: Vec<u8> },
+}
+
+/// Prints no inline bytes: an inline item may be a private key.
+impl fmt::Debug for PemSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            PemSource::File { setting, path } => f
+                .debug_struct("File")
+                .field("setting", setting)
+                .field("path", path)
+                .finish(),
+            PemSource::Inline { setting, bytes } => f
+                .debug_struct("Inline")
+                .field("setting", setting)
+                .field("len", &bytes.len())
+                .finish(),
+        }
+    }
 }
 
 impl PemSource {
@@ -194,8 +212,8 @@ fn from_unix(seconds: i64) -> SystemTime {
 
 /// Describes every certificate in `pem`, in order. Fails when there is none, or when one of
 /// them cannot be parsed.
-pub fn describe_certificates(pem: &[u8]) -> Result<Vec<CertificateInfo>, TlsError> {
-    let source = "PEM".to_string();
+pub fn describe_certificates(source: &str, pem: &[u8]) -> Result<Vec<CertificateInfo>, TlsError> {
+    let source = source.to_string();
     let mut infos = Vec::new();
     for der in CertificateDer::pem_slice_iter(pem) {
         let der = der.map_err(|err| TlsError::BadCertificate {
@@ -223,9 +241,14 @@ pub fn describe_certificates(pem: &[u8]) -> Result<Vec<CertificateInfo>, TlsErro
 
 /// Refuses a key that does not belong to the certificate (chain) - or that is encrypted, or not
 /// a key at all - instead of letting every TLS handshake fail later.
-pub fn check_key_matches(cert_pem: &[u8], key_pem: &[u8]) -> Result<(), TlsError> {
-    let cert = "certificate".to_string();
-    let key = "private key".to_string();
+pub fn check_key_matches(
+    cert_source: &str,
+    cert_pem: &[u8],
+    key_source: &str,
+    key_pem: &[u8],
+) -> Result<(), TlsError> {
+    let cert = cert_source.to_string();
+    let key = key_source.to_string();
     if key_pem
         .windows(ENCRYPTED_KEY_LABEL.len())
         .any(|window| window == ENCRYPTED_KEY_LABEL)
@@ -311,7 +334,7 @@ mod tests {
     fn describe_certificates_gives_subject_validity_and_fingerprint() {
         let generated = self_signed();
         let pem = generated.cert.pem();
-        let infos = describe_certificates(pem.as_bytes()).unwrap();
+        let infos = describe_certificates("server_cert (inline)", pem.as_bytes()).unwrap();
         assert_eq!(infos.len(), 1);
         let info = &infos[0];
         assert!(!info.subject.is_empty());
@@ -327,7 +350,7 @@ mod tests {
     #[test]
     fn describe_certificates_rejects_text_without_a_certificate() {
         assert!(matches!(
-            describe_certificates(b"hello"),
+            describe_certificates("server_cert (inline)", b"hello"),
             Err(TlsError::NoCertificate { .. })
         ));
     }
@@ -338,10 +361,21 @@ mod tests {
         let b = self_signed();
         let cert_a = a.cert.pem();
         assert!(matches!(
-            check_key_matches(cert_a.as_bytes(), b.signing_key.serialize_pem().as_bytes()),
+            check_key_matches(
+                "server_cert_file /c.pem",
+                cert_a.as_bytes(),
+                "server_key_file /k.pem",
+                b.signing_key.serialize_pem().as_bytes()
+            ),
             Err(TlsError::KeyMismatch { .. })
         ));
-        check_key_matches(cert_a.as_bytes(), a.signing_key.serialize_pem().as_bytes()).unwrap();
+        check_key_matches(
+            "server_cert_file /c.pem",
+            cert_a.as_bytes(),
+            "server_key_file /k.pem",
+            a.signing_key.serialize_pem().as_bytes(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -350,8 +384,39 @@ mod tests {
         let key =
             b"-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n";
         assert!(matches!(
-            check_key_matches(a.cert.pem().as_bytes(), key),
+            check_key_matches("c", a.cert.pem().as_bytes(), "server_key (inline)", key),
             Err(TlsError::EncryptedKey { .. })
         ));
+    }
+
+    #[test]
+    fn debug_of_an_inline_source_shows_no_bytes() {
+        let source = PemSource::Inline {
+            setting: "server_key".to_string(),
+            bytes: b"-----BEGIN PRIVATE KEY-----SECRET".to_vec(),
+        };
+        let text = format!("{:?}", source);
+        assert!(!text.contains("SECRET"), "{text}");
+        assert!(text.contains("server_key"), "{text}");
+    }
+
+    #[test]
+    fn errors_name_the_settings() {
+        let a = self_signed();
+        let b = self_signed();
+        let err = check_key_matches(
+            "server_cert_file /c.pem",
+            a.cert.pem().as_bytes(),
+            "server_key_file /k.pem",
+            b.signing_key.serialize_pem().as_bytes(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("server_cert_file /c.pem"), "{err}");
+        assert!(err.contains("server_key_file /k.pem"), "{err}");
+        let err = describe_certificates("client_ca_cert (inline)", b"hello")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("client_ca_cert (inline)"), "{err}");
     }
 }
