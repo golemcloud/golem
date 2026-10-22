@@ -257,16 +257,48 @@ test "wire encoding preflights aliases before transferring any capability" {
 }
 
 ///|
-test "duplicate map keys cannot discard a lifted capability" {
+test "duplicate map keys keep the last entry on both decode paths" {
+  let tree : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.StringValue("a"),
+      @types.S32Value(1),
+      @types.StringValue("b"),
+      @types.S32Value(2),
+      @types.StringValue("a"),
+      @types.S32Value(3),
+      @types.MapValue([
+        { key: 0, value: 1, },
+        { key: 2, value: 3, },
+        { key: 4, value: 5, },
+      ]),
+    ],
+    root: 6,
+  }
+  let from_wire : Map[String, Int] = @schema.from_wire(tree)
+  let from_value : Map[String, Int] = @schema.FromSchema::from_value(
+    @model.SchemaValue::Map([
+      { key: String("a"), value: S32(1), },
+      { key: String("b"), value: S32(2), },
+      { key: String("a"), value: S32(3), },
+    ]),
+  )
+  assert_eq(from_wire.to_array(), [("a", 3), ("b", 2)])
+  assert_eq(from_value.to_array(), from_wire.to_array())
+}
+
+///|
+test "duplicate map keys drop the discarded capability exactly once" {
   let first = @types.QuotaTokenHandle(@types.QuotaToken::QuotaToken(71))
   let second = @types.QuotaTokenHandle(@types.QuotaToken::QuotaToken(72))
   let tree : @types.SchemaValueTree = {
     value_nodes: [
       @types.StringValue("same"),
-      first,
+      @types.OptionValue(Some(5)),
       @types.StringValue("same"),
-      second,
+      @types.OptionValue(Some(6)),
       @types.MapValue([{ key: 0, value: 1, }, { key: 2, value: 3, }]),
+      first,
+      second,
     ],
     root: 4,
   }
@@ -274,17 +306,47 @@ test "duplicate map keys cannot discard a lifted capability" {
   let reader = @schema.WireReader::new(tree, drop_resource=node => {
     dropped.push(node)
   })
+  let decoded : Map[String, @model.GuestQuotaTokenHandle?] = @schema.FromWire::read_wire(
+    reader,
+    tree.root,
+  )
+  assert_eq(dropped, [])
+  reader.finish()
+  assert_eq(dropped, [first])
+  assert_eq(decoded.length(), 1)
+  guard decoded.get("same") is Some(Some(_)) else {
+    fail("expected the last entry's capability")
+  }
+}
+
+///|
+test "duplicate map keys drop discarded capabilities once on abort" {
+  let first = @types.QuotaTokenHandle(@types.QuotaToken::QuotaToken(81))
+  let second = @types.QuotaTokenHandle(@types.QuotaToken::QuotaToken(82))
+  let tree : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.StringValue("same"),
+      first,
+      @types.StringValue("same"),
+      second,
+      @types.MapValue([{ key: 0, value: 1, }, { key: 2, value: 3, }]),
+      @types.TupleValue([4]),
+    ],
+    root: 5,
+  }
+  let dropped = []
+  let reader = @schema.WireReader::new(tree, drop_resource=node => {
+    dropped.push(node)
+  })
   try {
-    let _ : Map[String, @model.GuestQuotaTokenHandle] = @schema.FromWire::read_wire(
+    let _ : (Map[String, @model.GuestQuotaTokenHandle], String) = @schema.FromWire::read_wire(
       reader,
       tree.root,
     )
   } catch {
-    @schema.WireError::Invalid("duplicate map key") => reader.abort()
-    @schema.WireError::Invalid(message) =>
-      fail("unexpected wire error: \{message}")
+    @schema.WireError::Invalid(_) => reader.abort()
   } noraise {
-    _ => fail("duplicate map key silently discarded an owned value")
+    _ => fail("accepted a tuple with a missing element")
   }
   assert_eq(dropped, [first, second])
 }
@@ -350,5 +412,177 @@ test "early and late wrapped endpoint aliases preserve every holder" {
       _ => fail("accepted distinct holders of the same endpoint")
     }
     assert_true(handles.all(handle => handle.is_present()))
+  }
+}
+
+///|
+fn utf16(units : Array[Int]) -> String {
+  String::from_array(units.map(unit => unit.unsafe_to_char()))
+}
+
+///|
+test "unpaired surrogates are rejected on both encode paths" {
+  let lone = [
+    utf16([0xD800]),
+    utf16([0x61, 0xDC00]),
+    utf16([0xD83D, 0x61]),
+    utf16([0x61, 0xDBFF]),
+  ]
+  for s in lone {
+    let wire_values : Array[&@schema.IntoWire] = [
+      s,
+      @schema.Path::new(s),
+      @schema.Url::new(s),
+    ]
+    for value in wire_values {
+      try {
+        let _ = @schema.into_wire_record([value])
+      } catch {
+        @schema.WireError::Invalid(message) =>
+          assert_true(message.contains("unpaired surrogate"))
+      } noraise {
+        _ => fail("wire encode accepted an unpaired surrogate")
+      }
+    }
+    for
+      value in [
+        @model.SchemaValue::String(s),
+        @model.SchemaValue::Path(s),
+        @model.SchemaValue::Url(s),
+        @model.SchemaValue::Text(s, None),
+        @model.SchemaValue::List([String("ok"), String(s)]),
+      ] {
+      try {
+        let _ = @model.schema_value_to_wit(value)
+      } catch {
+        @model.SchemaModelError::EncodeError(message) =>
+          assert_true(message.contains("unpaired surrogate"))
+        other => fail("unexpected error: \{repr(other)}")
+      } noraise {
+        _ => fail("schema value encode accepted an unpaired surrogate")
+      }
+    }
+  }
+  let emoji = utf16([0x61, 0xD83D, 0xDE00])
+  assert_eq(emoji, "a😀")
+  let decoded : String = @schema.from_wire(@schema.into_wire(emoji))
+  assert_eq(decoded, emoji)
+  let tree = @model.schema_value_to_wit(@schema.IntoSchema::to_value(emoji))
+  assert_eq(tree.value_nodes, [@types.StringValue(emoji)])
+}
+
+///|
+test "surrogate chars are rejected on both encode paths" {
+  let surrogate = (0xDFFF).unsafe_to_char()
+  try {
+    let _ = @schema.into_wire(surrogate)
+  } catch {
+    @schema.WireError::Invalid(message) =>
+      assert_true(message.contains("Unicode scalar value"))
+  } noraise {
+    _ => fail("wire encode accepted a surrogate char")
+  }
+  try {
+    let _ = @model.schema_value_to_wit(@schema.IntoSchema::to_value(surrogate))
+  } catch {
+    @model.SchemaModelError::EncodeError(message) =>
+      assert_true(message.contains("Unicode scalar value"))
+    other => fail("unexpected error: \{repr(other)}")
+  } noraise {
+    _ => fail("schema value encode accepted a surrogate char")
+  }
+  let decoded : Char = @schema.from_wire(@schema.into_wire('😀'))
+  assert_eq(decoded, '😀')
+}
+
+///|
+test "unit result arms reject a present payload on both decode paths" {
+  let unit_payload : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.TupleValue([]),
+      @types.ResultValue(@types.OkValue(Some(0))),
+    ],
+    root: 1,
+  }
+  try {
+    let _ : Result[Unit, String] = @schema.from_wire(unit_payload)
+  } catch {
+    @schema.WireError::Invalid(message) =>
+      assert_eq(message, "unexpected payload")
+  } noraise {
+    _ => fail("accepted a payload for a unit ok arm")
+  }
+  let unit_err_payload : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.TupleValue([]),
+      @types.ResultValue(@types.ErrValue(Some(0))),
+    ],
+    root: 1,
+  }
+  try {
+    let _ : Result[String, Unit] = @schema.from_wire(unit_err_payload)
+  } catch {
+    @schema.WireError::Invalid(message) =>
+      assert_eq(message, "unexpected payload")
+  } noraise {
+    _ => fail("accepted a payload for a unit err arm")
+  }
+  for
+    value in [
+      @model.SchemaValue::ResultOk(Some(Tuple([]))),
+      @model.SchemaValue::ResultErr(Some(Tuple([]))),
+    ] {
+    try {
+      let _ : Result[Unit, Unit] = @schema.FromSchema::from_value(value)
+    } catch {
+      @schema.FromSchemaError::Custom(message) =>
+        assert_eq(message, "unexpected payload for a unit result arm")
+      other => fail("unexpected error: \{repr(other)}")
+    } noraise {
+      _ => fail("accepted a payload for a unit result arm")
+    }
+  }
+  let ok : Result[Unit, Unit] = @schema.FromSchema::from_value(ResultOk(None))
+  assert_eq(ok, Ok(()))
+  let err : Result[Unit, Unit] = @schema.FromSchema::from_value(ResultErr(None))
+  assert_eq(err, Err(()))
+  let wire_ok : Result[Unit, String] = @schema.from_wire(
+    @schema.into_wire((Ok(()) : Result[Unit, String])),
+  )
+  assert_eq(wire_ok, Ok(()))
+}
+
+///|
+test "non-unit result arms reject a missing payload on both decode paths" {
+  for
+    tree in [
+      (
+        { value_nodes: [@types.ResultValue(@types.OkValue(None))], root: 0, } :
+        @types.SchemaValueTree),
+      { value_nodes: [@types.ResultValue(@types.ErrValue(None))], root: 0, },
+    ] {
+    try {
+      let _ : Result[String, String] = @schema.from_wire(tree)
+    } catch {
+      @schema.WireError::Invalid(message) =>
+        assert_eq(message, "missing required payload")
+    } noraise {
+      _ => fail("accepted a missing payload for a non-unit arm")
+    }
+  }
+  for
+    value in [
+      @model.SchemaValue::ResultOk(None),
+      @model.SchemaValue::ResultErr(None),
+    ] {
+    try {
+      let _ : Result[String, String] = @schema.FromSchema::from_value(value)
+    } catch {
+      @schema.FromSchemaError::Custom(message) =>
+        assert_eq(message, "missing payload for a result arm")
+      other => fail("unexpected error: \{repr(other)}")
+    } noraise {
+      _ => fail("accepted a missing payload for a non-unit arm")
+    }
   }
 }
