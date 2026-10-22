@@ -1132,8 +1132,8 @@ async fn a_standby_keeps_campaigning_after_its_election_connection_meets_a_refus
     _tracing: &Tracing,
     _crypto: &CryptoProvider,
 ) {
-    // Client certificates and a user: the probe of the renewed files sends no login, so etcd
-    // refuses its read after the handshake, and that answer must still count as accepted files.
+    // Client certificates and a user: the probe of the renewed files logs in as that user, like
+    // every other connection, so the renewed files are tried the way the replica will use them.
     let pki = TestPki::new();
     let etcd = auth_etcd(&pki, pki.mtls_etcd_options()).await;
     let with_user = |url: &str, tls: EtcdTlsConfig| {

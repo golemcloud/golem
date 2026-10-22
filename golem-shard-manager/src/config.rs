@@ -299,12 +299,14 @@ pub struct EtcdConfig {
     #[serde(default)]
     pub username: Option<String>,
     /// The password of `username`; usually set from a secret through
-    /// `GOLEM__PERSISTENCE__CONFIG__PASSWORD`. Serialized as `****`, so no configuration dump holds it.
+    /// `GOLEM__PERSISTENCE__CONFIG__PASSWORD`. Serialized as `****`, so no configuration dump holds
+    /// it.
     /// Set this or `password_file`, not both.
     #[serde(default)]
     pub password: Option<EtcdPassword>,
     /// A file that holds the password of `username`, such as a key of a Kubernetes Secret mounted
-    /// as files. Read at startup, and again when a TLS file changes, as it is: only one trailing line ending is removed.
+    /// as files. Read at startup, and again when a TLS file changes, as it is: only one trailing
+    /// line ending is removed.
     #[serde(default)]
     pub password_file: Option<PathBuf>,
     /// Replaces the build version in this replica's election value. **Tests only**: the replicas

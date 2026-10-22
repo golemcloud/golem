@@ -1621,6 +1621,10 @@ pub async fn run(
     let task_shutdown = server_shutdown.clone();
     let server_task = tokio::spawn(
         async move {
+            let incoming = GrpcServerTls::incoming(
+                tls.as_ref(),
+                accept_until(listener, task_shutdown.clone()),
+            );
             let serving = server
                 .layer(
                     middleware::server::OtelGrpcLayer::default()
@@ -1629,7 +1633,7 @@ pub async fn run(
                 .add_service(reflection_service)
                 .add_service(GatedService::new(server_gate))
                 .add_service(health_service)
-                .serve_with_incoming_shutdown(GrpcServerTls::incoming(tls.as_ref(), accept_until(listener, task_shutdown.clone())), {
+                .serve_with_incoming_shutdown(incoming, {
                     let shutdown = task_shutdown.clone();
                     async move { shutdown.cancelled().await }
                 });
