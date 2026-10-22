@@ -71,6 +71,12 @@ pub struct TlsMaterial {
     /// The file bytes of the last rejected set, so one bad set is reported once.
     rejected: Mutex<Option<[Vec<u8>; 3]>>,
     reloader: OnceLock<JoinHandle<()>>,
+    /// Serializes the read, compare, validate and store of one reload, so an older read can never
+    /// be stored over a newer one. Readers of `current` never take it.
+    reload_lock: Mutex<()>,
+    /// Test-only seam: called once the files are read, before anything is compared or stored.
+    #[cfg(test)]
+    after_read: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl TlsMaterial {
@@ -87,6 +93,9 @@ impl TlsMaterial {
             current: ArcSwap::from_pointee(loaded),
             rejected: Mutex::new(None),
             reloader: OnceLock::new(),
+            reload_lock: Mutex::new(()),
+            #[cfg(test)]
+            after_read: Mutex::new(None),
         }))
     }
 
@@ -115,7 +124,15 @@ impl TlsMaterial {
         if !self.has_files() {
             return ReloadOutcome::Unchanged;
         }
+        let _serialized = self.reload_lock.lock().unwrap();
         let (snapshot, read_error) = read_snapshot(&self.sources);
+        #[cfg(test)]
+        {
+            let hook = self.after_read.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         let outcome = match read_error {
             Some(error) => Err(error),
             None => {
@@ -471,6 +488,43 @@ mod tests {
         ));
         assert_eq!(m.current().certificate.sha256, sha(&cert));
         assert_eq!(Fixture::failures("t-not-yet"), before + 1);
+    }
+
+    #[test]
+    fn concurrent_reloads_never_store_an_older_read_over_a_newer_one() {
+        use std::sync::mpsc;
+        let f = Fixture::new();
+        let m = TlsMaterial::load("t-serial", f.sources()).unwrap();
+        let (cert1, key1) = signed_by(&f.ca, None);
+        let (cert2, key2) = signed_by(&f.ca, None);
+        f.write("tls.crt", &cert1);
+        f.write("tls.key", &key1);
+        let (parked_tx, parked_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        *m.after_read.lock().unwrap() = Some(Arc::new(move || {
+            parked_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+        }));
+        let first = {
+            let m = m.clone();
+            std::thread::spawn(move || m.reload_if_changed())
+        };
+        // The first reload has read cert1 and is parked.
+        parked_rx.recv().unwrap();
+        f.write("tls.crt", &cert2);
+        f.write("tls.key", &key2);
+        let second = {
+            let m = m.clone();
+            std::thread::spawn(move || m.reload_if_changed())
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        release_tx.send(()).unwrap();
+        let first = first.join().unwrap();
+        let second = second.join().unwrap();
+        assert!(matches!(first, ReloadOutcome::Reloaded), "{first:?}");
+        assert!(matches!(second, ReloadOutcome::Reloaded), "{second:?}");
+        assert_eq!(m.current().certificate.sha256, sha(&cert2));
     }
 
     #[cfg(unix)]
