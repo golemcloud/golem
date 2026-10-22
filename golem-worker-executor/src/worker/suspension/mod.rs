@@ -217,6 +217,11 @@ impl OwnerSuspension {
         }
         for activity in &state.external_activities {
             match state.activities.get(activity) {
+                Some(ActivityClass::Neutral { dependencies, .. })
+                    if !dependencies.is_empty()
+                        && dependencies
+                            .iter()
+                            .all(|id| state.activities.contains_key(id)) => {}
                 Some(ActivityClass::SourceWait { store_id })
                     if state.stores.get(store_id).is_some_and(|store| {
                         store.driver.runtime_run.is_some()
@@ -375,6 +380,19 @@ impl RuntimeSource {
 }
 
 impl ExternalActivity {
+    pub(crate) fn coordinate_entity<'a, F: Future>(
+        &'a self,
+        invocation: &'a EntityInvocationId,
+        future: F,
+    ) -> EntityCoordinate<'a, F> {
+        EntityCoordinate {
+            activity: self,
+            invocation,
+            future,
+            enabled: None,
+        }
+    }
+
     /// Only the receive is passive; the caller retains the activity for all processing.
     /// The source must identify the runtime that can produce this receive's next event.
     pub(crate) fn receive<'a, F: Future>(
@@ -421,6 +439,77 @@ pub(crate) struct ExternalReceive<'a, F> {
     source: &'a RuntimeSource,
     future: F,
     fence_delivery: bool,
+}
+
+pub(crate) struct EntityCoordinate<'a, F> {
+    activity: &'a ExternalActivity,
+    invocation: &'a EntityInvocationId,
+    future: F,
+    enabled: Option<&'a std::sync::atomic::AtomicBool>,
+}
+
+impl<'a, F> EntityCoordinate<'a, F> {
+    pub(crate) fn after(mut self, enabled: &'a std::sync::atomic::AtomicBool) -> Self {
+        self.enabled = Some(enabled);
+        self
+    }
+}
+
+impl<F: Future> Future for EntityCoordinate<'_, F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: the inner future is structurally pinned and never moved.
+        let this = unsafe { self.get_unchecked_mut() };
+        {
+            let mut state = this.activity.owner.state.lock().unwrap();
+            this.activity
+                .invalidated
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            state
+                .activities
+                .insert(this.activity.activity.clone(), ActivityClass::Unknown);
+            OwnerSuspension::invalidate(&mut state);
+        }
+        let wake = Arc::new(ExternalReceiveWake {
+            owner: this.activity.owner.clone(),
+            activity: this.activity.activity.clone(),
+            invalidated: this.activity.invalidated.clone(),
+            forward: cx.waker().clone(),
+        });
+        let waker = futures::task::waker_ref(&wake);
+        let result =
+            unsafe { Pin::new_unchecked(&mut this.future) }.poll(&mut Context::from_waker(&waker));
+        if result.is_pending()
+            && this
+                .enabled
+                .is_none_or(|enabled| enabled.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            let mut state = this.activity.owner.state.lock().unwrap();
+            if !wake.invalidated.load(std::sync::atomic::Ordering::Relaxed)
+                && state.stopped.is_none()
+                && let Some(dependency) = state.entity_activities.get(this.invocation).cloned()
+            {
+                state.next_classification = state.next_classification.wrapping_add(1);
+                let classification = state.next_classification;
+                state.activities.insert(
+                    this.activity.activity.clone(),
+                    ActivityClass::Neutral {
+                        classification,
+                        dependencies: vec![dependency],
+                    },
+                );
+                OwnerSuspension::invalidate(&mut state);
+            }
+        }
+        result
+    }
+}
+
+impl<F> Drop for EntityCoordinate<'_, F> {
+    fn drop(&mut self) {
+        self.activity.active();
+    }
 }
 
 struct ExternalReceiveWake {
@@ -888,6 +977,7 @@ impl RuntimeStore {
         self.owner.register_rpc(eligible_after, resume_after)
     }
 
+    #[cfg(test)]
     pub(crate) fn neutral_runtime(
         &self,
         runtime: RuntimeActivityId,
@@ -907,14 +997,27 @@ impl RuntimeStore {
         self.neutral(&mut state, runtime, dependencies)
     }
 
+    #[cfg(test)]
     pub(crate) fn neutral_entity(
         &self,
         runtime: RuntimeActivityId,
         invocation: &EntityInvocationId,
     ) -> Option<NeutralActivity> {
+        self.neutral_entities(runtime, std::slice::from_ref(invocation))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn neutral_entities(
+        &self,
+        runtime: RuntimeActivityId,
+        invocations: &[EntityInvocationId],
+    ) -> Option<NeutralActivity> {
         let mut state = self.owner.state.lock().unwrap();
-        let dependency = state.entity_activities.get(invocation)?.clone();
-        self.neutral(&mut state, runtime, vec![dependency])
+        let dependencies = invocations
+            .iter()
+            .map(|invocation| state.entity_activities.get(invocation).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        self.neutral(&mut state, runtime, dependencies)
     }
 
     fn neutral(
@@ -952,6 +1055,23 @@ impl RuntimeStore {
 
     pub(crate) fn external_activity(&self) -> ExternalActivity {
         self.owner.register_external()
+    }
+
+    pub(crate) fn neutral_externals<'a>(
+        &self,
+        runtime: RuntimeActivityId,
+        external: impl IntoIterator<Item = &'a ExternalActivity>,
+    ) -> Option<NeutralActivity> {
+        let mut state = self.owner.state.lock().unwrap();
+        let dependencies = external
+            .into_iter()
+            .map(|external| {
+                (Arc::ptr_eq(&self.owner, &external.owner)
+                    && state.activities.contains_key(&external.activity))
+                .then(|| external.activity.clone())
+            })
+            .collect::<Option<Vec<_>>>()?;
+        self.neutral(&mut state, runtime, dependencies)
     }
 
     fn delegate(&self, invocation: &EntityInvocationId) -> Option<DelegatedActivity> {

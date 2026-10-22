@@ -103,6 +103,8 @@ fn replaying_call(
         scope_replay_recovery: recovery.into(),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
         runtime_teardown: Arc::new(|| false),
+        tool_trap_disposal: Arc::new(AtomicBool::new(false)),
+        entity_admission: false,
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: None,

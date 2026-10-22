@@ -831,9 +831,53 @@ impl SecretPolicyProbe for SecretPolicyProbeImpl {
 
 struct MiddlewareProbeImpl;
 
+struct TrapIsolationMiddleware;
+
+impl TrapIsolationMiddleware {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[golem_rust::tool_middleware(name = "nested-trap-isolation", constructor = TrapIsolationMiddleware::new)]
+impl MiddlewareProbeMiddleware for TrapIsolationMiddleware {
+    async fn apply(
+        &self,
+        underlying: &MiddlewareProbeUnderlying,
+        value: String,
+    ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
+        if value == "parent-trap" {
+            let first = underlying
+                .start_apply("cascade-blocked(first)".to_string())
+                .await?;
+            let second = underlying
+                .start_apply("cascade-blocked(second)".to_string())
+                .await?;
+            wait_at_promise_checkpoint("parent-descendants-admitted").await;
+            drop((first, second));
+            panic!("deterministic middleware parent trap");
+        }
+        let failure = underlying
+            .apply("nested-permanent-trap".to_string())
+            .await
+            .expect_err("child must trap without destroying its middleware Store");
+        assert!(matches!(
+            failure,
+            golem_rust::tool::ToolInvokeError::InternalError(ref message)
+                if message.contains("unreachable")
+        ));
+        let first = underlying.apply("healthy-first".to_string()).await?;
+        let second = underlying.apply("healthy-second".to_string()).await?;
+        Ok(format!("handled[{first}|{second}]"))
+    }
+}
+
 #[tool_implementation]
 impl MiddlewareProbe for MiddlewareProbeImpl {
     async fn apply(&self, value: String) -> String {
+        if value == "nested-permanent-trap" {
+            panic!("deterministic nested child trap");
+        }
         if value.starts_with("early-child(")
             || value.starts_with("race-cancelled(")
             || value.starts_with("race-detached(")
@@ -2239,6 +2283,23 @@ impl CapableStreaming for CapableStreamingImpl {
         } else if let Some(path) = path.strip_prefix("stdout-over:") {
             write_owner_file(path, &bytes).expect("capable tool must share the owner filesystem");
             vec![b'x'; 65]
+        } else if let Some(path) = path
+            .strip_prefix("permanent-trap:")
+            .or_else(|| path.strip_prefix("allocation-permanent-trap:"))
+        {
+            let allocation = if path == "/allocation-permanent-trap-state" {
+                Some(vec![0x5au8; 40 * 1024 * 1024])
+            } else {
+                None
+            };
+            std::hint::black_box(&allocation);
+            write_owner_file(path, &bytes).expect("persist state before permanent tool trap");
+            stdout
+                .write(bytes.clone())
+                .await
+                .expect("publish partial output before permanent tool trap");
+            announce_middleware_probe_effect("permanent-tool-trap").await;
+            panic!("deterministic capable streaming tool trap");
         } else if let Some(path) = path.strip_prefix("trap-once:") {
             write_owner_file(path, &bytes)
                 .expect("capable trap marker must share the owner filesystem");

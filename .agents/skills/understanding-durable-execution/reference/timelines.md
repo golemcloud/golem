@@ -443,8 +443,17 @@ Incomplete replay (crash between #61 and #65): `ReplayingIncomplete` switches th
 `PendingReplayToLive::finish` with `ReplayToLiveRole::NonPrimary` sets the entity Store's
 `local_live_tail`, and the terminal is appended under the original index 61.
 
-Trap inside the body: no entity terminal is invented; the owner invocation fails and the owner
-group drains (`guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group`).
+Allowlisted permanent guest instruction trap inside the body: #65 records an `End` with
+`body_execution: Trapped` and `RemoteInternalError`. Physical Store destruction retains the
+original `Ctx` for cleanup. Supervisors independent of the caller Store cancel descendants of
+the failed parent, preserving selected outcomes and unrelated siblings. Replay re-executes the
+trapped body and its recorded host calls, rebuilds shared filesystem effects and partial stdout,
+and validates the exact terminal and descendants without repeating completed external effects.
+An already-completed stream stays completed even though the structured result fails.
+`permanent_tool_guest_trap` excludes typed quota, policy exhaustion, `WorkerOutOfMemory`,
+infrastructure and lifecycle failures even when their retry decision is exhausted; those retain
+owner recovery. Allocation-dependent `memory.grow` backing refusal returning -1 and leading to
+panic remains a separate preexisting nondeterminism limitation, not a universal guarantee.
 Owners: `durable_host/entity.rs::{EntityInvocationDurability, drive_access}`,
 `durable_host/tool/{mod.rs,operation.rs}`, `worker/instance/mod.rs::{OwnerExecution,
 HostedInstance::invoke_scoped}`, `worker/owner_lane.rs`.

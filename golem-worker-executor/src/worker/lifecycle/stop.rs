@@ -810,6 +810,9 @@ impl UnloadReason {
 
     pub(in crate::worker) fn from_interrupt(kind: InterruptKind) -> Self {
         match kind {
+            InterruptKind::EntityCancellation => {
+                unreachable!("entity cancellation cannot unload the owner")
+            }
             InterruptKind::Restart | InterruptKind::Jump => Self::Restart,
             InterruptKind::Suspend(_) => Self::Suspend,
             InterruptKind::Interrupt(_) => Self::Interrupt,

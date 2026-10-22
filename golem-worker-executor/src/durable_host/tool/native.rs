@@ -14,9 +14,10 @@
 
 use super::{
     Accessor, AccessorTask, Arc, AttachmentController, ByteStreamFailure, DurabilityHost,
-    DurableInputEndpoint, DurableStreamHandle, DurableWorkerCtx, EntityCallMode,
-    EntityInvocationKeyContext, FromSchema, Future, GuestCallSettlementError, HasNativeToolCatalog,
-    HasSelf, HasWorker, HostResponseEntityInvocation, IntoTypedSchemaValue, LiveStreamEndpoint,
+    DurableInputEndpoint, DurableStreamHandle, DurableWorkerCtx, EntityBodyFinalization,
+    EntityBodyOutcome, EntityCallMode, EntityInvocationKeyContext, FromSchema, Future,
+    GuestCallSettlementError, HasNativeToolCatalog, HasSelf, HasWorker,
+    HostResponseEntityInvocation, InterruptKind, IntoTypedSchemaValue, LiveStreamEndpoint,
     NativeToolInvocation, NativeToolKey, NativeToolTask, Resource, RetainedEntityStore,
     RetainedNativeContext, SchemaGraph, SchemaType, SchemaValueStream,
     SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
@@ -26,9 +27,9 @@ use super::{
     WorkerCtx, WorkerCtxExecutable, WorkerExecutorError, accounted_byte_output_stream_pair,
     admit_tool_response_secret_holds, anyhow, cleanup_failed_tool_dispatch, close_stdin,
     create_native_underlying_stdin, create_output_attachment, dispatch_tool_attempt, durability,
-    encode_tool_operation_terminal, encode_tool_terminal, execute_accepted_tool_call,
-    first_output_limit_error, mcp, native_output_handles, operation, register_tool_admission,
-    reject_output, tool_rpc_for_current_owner, validate_native_tool_output,
+    encode_tool_operation_terminal, encode_tool_terminal, first_output_limit_error, mcp,
+    native_output_handles, operation, reject_output, spawn_tool_execution,
+    tool_rpc_for_current_owner, validate_native_tool_output,
 };
 
 pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
@@ -41,7 +42,7 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
     cancellation: Option<tokio_util::sync::CancellationToken>,
     runner_abort: tokio_util::sync::CancellationToken,
 ) -> (
-    Result<HostResponseEntityInvocation, WorkerExecutorError>,
+    Result<EntityBodyOutcome<HostResponseEntityInvocation>, WorkerExecutorError>,
     Option<Box<dyn RetainedEntityStore>>,
 ) {
     let source = scope.activation().source();
@@ -96,8 +97,17 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
         host_tool_id: host_tool_id.clone(),
         implementation_version: implementation_version.clone(),
     };
+    let (filesystem, drain) = match worker
+        .owner_runtime_resources()
+        .filesystem_generation_handle()
+    {
+        Ok(filesystem) => filesystem.for_invocation(),
+        Err(error) => return (Err(error), None),
+    };
     let mut ctx = match await_native_entity_body(
         &runner_abort,
+        Some(registration.cancellation()),
+        Default::default(),
         worker.create_entity_context(
             golem_common::model::entity::OwnerRuntime::Entity(scope.activation().entity()),
             scope.mode(),
@@ -107,12 +117,20 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
             owner_component_metadata,
             scope.authority_wallet().to_vec(),
             Some(scope.invocation_id().start_index()),
+            filesystem,
         ),
     )
     .await
     {
-        Ok(ctx) => ctx,
-        Err(error) => return (Err(error), None),
+        Ok(EntityBodyOutcome::Completed(ctx)) => ctx,
+        Ok(EntityBodyOutcome::Cancelled) => {
+            drain.close_and_drain().await;
+            return (Ok(EntityBodyOutcome::Cancelled), None);
+        }
+        Err(error) => {
+            drain.close_and_drain().await;
+            return (Err(error), None);
+        }
     };
     if let Err(error) = registration
         .attach_linear_memory(ctx.durable_ctx().linear_memory_tracker())
@@ -122,6 +140,8 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
                 .set_entity_tool_operation(operation.clone())
         })
     {
+        drop(ctx);
+        drain.close_and_drain().await;
         return (Err(error), None);
     }
     if let Some(cancellation) = cancellation.clone()
@@ -129,16 +149,23 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
             .durable_ctx_mut()
             .set_entity_cancellation(cancellation.clone())
     {
+        drop(ctx);
+        drain.close_and_drain().await;
         return (Err(error), None);
     }
     ctx.durable_ctx_mut()
         .set_invocation_principal(Some(invocation.principal.clone()));
     let tasks = match crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks) {
         Ok(tasks) => tasks,
-        Err(error) => return (Err(error), None),
+        Err(error) => {
+            drop(ctx);
+            drain.close_and_drain().await;
+            return (Err(error), None);
+        }
     };
     let spawner = tasks.spawner();
     let monitor = tasks.monitor();
+    let finalization = ctx.durable_ctx().entity_body_finalization.clone();
     let mut retained = RetainedNativeContext::new(
         ctx,
         registration.clone(),
@@ -178,7 +205,11 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
         .transpose()
     {
         Ok(stdin) => stdin,
-        Err(error) => return (Err(error.into()), None),
+        Err(error) => {
+            drop(retained);
+            drain.close_and_drain().await;
+            return (Err(error.into()), None);
+        }
     };
     let native_invocation = NativeToolInvocation {
         command_path: invocation.command_path,
@@ -189,24 +220,41 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
         stdout,
         stderr,
     };
-    let completed = await_native_entity_body(&runner_abort, async move {
-        let result = tokio::select! {
-            biased;
-            error = monitor.wait_for_failure() => Err(error),
-            error = monitor.wait_for_body_failure() => Err(error),
-            result = async {
-                match handler {
-            Some(handler) => {
-                handler
-                    .invoke(retained.context_mut(), native_invocation)
-                    .await
-            }
-            None => mcp::invoke(retained.context_mut(), native_invocation).await,
+    let completed = async move {
+        let result = await_native_entity_body(
+            &runner_abort,
+            Some(registration.cancellation()),
+            finalization,
+            async {
+                tokio::select! {
+                    biased;
+                    error = monitor.wait_for_failure() => Err(error),
+                    error = monitor.wait_for_body_failure() => Err(error),
+                    result = async {
+                        match handler {
+                            Some(handler) => handler.invoke(retained.context_mut(), native_invocation).await,
+                            None => mcp::invoke(retained.context_mut(), native_invocation).await,
+                        }
+                    } => result,
                 }
-            } => result,
+            },
+        ).await;
+        let result = match result {
+            Ok(EntityBodyOutcome::Completed(result)) => Ok(result),
+            Ok(EntityBodyOutcome::Cancelled) => {
+                return (Ok(EntityBodyOutcome::Cancelled), Some(Box::new(retained) as Box<dyn RetainedEntityStore>));
+            }
+            Err(error) => Err(error),
         };
         if result.is_err() {
             durability::abort_producer_disposals(&mut retained.context_mut().shared).await;
+        }
+        let locally_cancelled = matches!(
+            &result,
+            Err(WorkerExecutorError::Interrupted { kind: InterruptKind::EntityCancellation })
+        );
+        if locally_cancelled {
+            return (Ok(EntityBodyOutcome::Cancelled), Some(Box::new(retained) as Box<dyn RetainedEntityStore>));
         }
         let parent_end = if result.is_ok() {
             retained.prepare_parent_end().await
@@ -238,10 +286,12 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
             durability::abort_producer_disposals(&mut retained.context_mut().shared).await;
         }
         let retained = Box::new(retained) as Box<dyn RetainedEntityStore>;
-        Ok((result, Some(retained)))
-    })
+        (result.map(EntityBodyOutcome::Completed), Some(retained))
+    }
     .await;
-    let completed = completed.unwrap_or_else(|error| (Err(error), None));
+    if completed.1.is_none() {
+        drain.close_and_drain().await;
+    }
     if completed
         .0
         .as_ref()
@@ -291,24 +341,38 @@ pub(super) fn select_native_body_result<T>(
 
 pub(super) async fn await_native_entity_body<T>(
     runner_abort: &tokio_util::sync::CancellationToken,
+    lifecycle: Option<tokio_util::sync::CancellationToken>,
+    finalization: EntityBodyFinalization,
     body: impl Future<Output = Result<T, WorkerExecutorError>>,
-) -> Result<T, WorkerExecutorError> {
+) -> Result<EntityBodyOutcome<T>, WorkerExecutorError> {
+    if lifecycle.as_ref().is_some_and(|token| token.is_cancelled()) {
+        return Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Interrupt(golem_common::model::Timestamp::now_utc()),
+        });
+    }
+    if runner_abort.is_cancelled() {
+        return Ok(EntityBodyOutcome::Cancelled);
+    }
     tokio::select! {
         biased;
-        _ = runner_abort.cancelled() => Err(WorkerExecutorError::runtime("native entity body was aborted")),
-        result = body => result,
+        _ = async {
+            match lifecycle {
+                Some(token) => token.cancelled().await,
+                None => std::future::pending().await,
+            }
+        } => Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Interrupt(golem_common::model::Timestamp::now_utc()),
+        }),
+        result = body => result.map(EntityBodyOutcome::Completed),
+        _ = finalization.abortable(runner_abort) => Ok(EntityBodyOutcome::Cancelled),
     }
 }
 
 pub(super) async fn guest_trap_output_failure(
     operation: &operation::OwnerToolOperation,
     trap: crate::model::TrapType,
-    replaying_completed: bool,
-    local_cancellation_selected: bool,
 ) -> ByteStreamFailure {
-    if replaying_completed {
-        ByteStreamFailure::Failed("tool sidecar trapped".to_string())
-    } else if local_cancellation_selected || !operation.select_trap(trap).await {
+    if !operation.select_trap(trap).await {
         ByteStreamFailure::Cancelled
     } else {
         ByteStreamFailure::Failed("tool sidecar trapped".to_string())
@@ -535,8 +599,9 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                         }
                         stdin => stdin,
                     };
-                    register_tool_admission(accessor, &mut accepted)?;
-                    execute_accepted_tool_call(accessor, *accepted, stdout, stderr, None, None)
+                    spawn_tool_execution(accessor, *accepted, stdout, stderr)
+                        .await?
+                        .result()
                         .await?
                 }
             };

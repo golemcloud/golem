@@ -2877,6 +2877,202 @@ async fn next_crash_checkpoint(
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
+async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            ..Default::default()
+        }
+        .with_agent_sockets(),
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        &agent_type.0,
+        metadata.tools,
+    );
+    let definition = metadata
+        .tool_middlewares
+        .iter()
+        .find(|d| d.name == "nested-trap-isolation")
+        .unwrap();
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &ToolName::try_from("middleware-probe").unwrap(),
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        &metadata.tool_middlewares,
+        vec![(
+            definition.name.as_str(),
+            empty_middleware_parameters(definition),
+        )],
+    );
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (port, gate_port, server, _checkpoints) = start_crash_checkpoint_server().await;
+    let (promise_port, promise_server, mut promises) = start_promise_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "nested-trap-isolation");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                ("CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    gate_port.to_string(),
+                ),
+                (
+                    "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+                    promise_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let mut disposals = executor.probe_entity_store_disposal(&worker);
+    for mode in ["child-trap", "parent-trap", "child-trap"] {
+        let call = executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "nested_trap_probe",
+            data_value!(mode),
+        );
+        tokio::pin!(call);
+        if mode == "parent-trap" {
+            let admitted = tokio::select! {
+                result = call.as_mut() => panic!("parent settled before descendants admitted: {result:?}"),
+                checkpoint = next_promise_checkpoint(&mut promises, "parent-descendants-admitted") => checkpoint?,
+            };
+            executor
+                .complete_promise(
+                    &PromiseId {
+                        agent_id: worker.clone(),
+                        oplog_idx: admitted.oplog_idx,
+                    },
+                    vec![],
+                )
+                .await?;
+        }
+        let result: String = tokio::time::timeout(Duration::from_secs(30), call)
+            .await??
+            .into_typed()?;
+        assert_eq!(
+            result,
+            if mode == "parent-trap" {
+                "parent-trap-handled"
+            } else {
+                "handled[leaf(healthy-first)|leaf(healthy-second)]"
+            }
+        );
+        if let Some(active) = executor
+            .active_entity_metadata(&OwnedAgentId::new(context.default_environment_id, &worker))
+            .await
+        {
+            assert!(active.tool_operations.operations.is_empty());
+            assert!(active.lane.holder.is_none());
+            assert_eq!(active.lane.active_invocation_count, 0);
+            assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+        }
+    }
+    executor.simulated_crash(&worker).await?;
+    let fresh: StreamEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "collect_capable",
+            data_value!("/nested-after-reconstruction", b"healthy".to_vec()),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(fresh.completion, "ok");
+    assert_eq!(fresh.output, b"healthy");
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|e| matches!(e.entry, PublicOplogEntry::Error(_)))
+    );
+    let starts = oplog.iter().filter_map(|entry| {
+        matches!(&entry.entry, PublicOplogEntry::Start(s) if s.function_name == "golem::entity::invoke")
+            .then_some(entry.oplog_index)
+    }).collect::<Vec<_>>();
+    assert_eq!(
+        starts.len(),
+        12,
+        "two handled child traps, one parent with two descendants, and one fresh call"
+    );
+    let mut destroyed = Vec::new();
+    while let Ok(start) = disposals.try_recv() {
+        destroyed.push(start);
+    }
+    let mut trapped = 0;
+    for entry in &oplog {
+        if let PublicOplogEntry::End(end) = &entry.entry
+            && starts.contains(&end.start_index)
+            && end.response.as_ref().is_some_and(|response| {
+                SerializableToolOperationTerminal::from_value(response.value()).is_ok_and(
+                    |terminal| terminal.body_execution == SerializableEntityBodyExecution::Trapped,
+                )
+            })
+        {
+            trapped += 1;
+            assert!(
+                destroyed.contains(&end.start_index),
+                "trapped Store context must be physically disposed before owner completion"
+            );
+        }
+        if matches!(&entry.entry, PublicOplogEntry::Start(s) if s.function_name == "golem::entity::invoke")
+        {
+            assert_eq!(oplog.iter().filter(|e| matches!(&e.entry, PublicOplogEntry::End(end) if end.start_index == entry.oplog_index)
+                || matches!(&e.entry, PublicOplogEntry::Cancelled(c) if c.start_index == entry.oplog_index)).count(), 1);
+        }
+    }
+    assert_eq!(trapped, 3);
+    server.abort();
+    promise_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
 async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_in_all_modes(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -6695,76 +6891,274 @@ async fn rust_generated_client_interrupt_releases_held_tool_streams(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn rust_tool_trap_retries_owner_without_replay_overflow(
+async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            configure: Some(Arc::new(|config| {
-                config.retry = RetryConfig {
-                    max_attempts: 2,
-                    min_delay: std::time::Duration::from_millis(1),
-                    max_delay: std::time::Duration::from_millis(1),
-                    multiplier: 1.0,
-                    max_jitter_factor: None,
-                };
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    let provider_component = executor
-        .component_dep(&context.default_environment_id, provider)
-        .store()
+    for (allocation, pressure) in [(false, false), (true, false), (true, true)] {
+        let context = TestContext::new(last_unique_id);
+        let environment_state = Arc::new(TestEnvironmentStateService::default());
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                environment_state_service: Some(environment_state.clone()),
+                configure: Some(Arc::new(move |config| {
+                    config.memory.system_memory_override = Some(64 * 1024 * 1024);
+                    config.memory.worker_memory_ratio = 1.0;
+                    config.memory.component_size_coefficient = 0.0;
+                    config.retry = RetryConfig {
+                        max_attempts: 2,
+                        min_delay: std::time::Duration::from_millis(1),
+                        max_delay: std::time::Duration::from_millis(1),
+                        multiplier: 1.0,
+                        max_jitter_factor: None,
+                    };
+                })),
+                ..Default::default()
+            },
+        )
         .await?;
-    let caller_component = executor
-        .component_dep(&context.default_environment_id, caller)
-        .store()
-        .await?;
-    let provider_path = deps
-        .component_directory
-        .join(format!("{}.wasm", provider.wasm_name));
-    let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    environment_state.set_tool_deployment(
-        context.default_environment_id,
-        caller_component.id,
-        caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
-    );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "rust-trap");
-    let result = executor
-        .invoke_and_await_agent(
+        let provider_component = executor
+            .component_dep(&context.default_environment_id, provider)
+            .store()
+            .await?;
+        let caller_component = executor
+            .component_dep(&context.default_environment_id, caller)
+            .store()
+            .await?;
+        let provider_path = deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name));
+        let metadata = extract_component_metadata(&provider_path, false, true).await?;
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            caller_component.id,
+            caller_component.revision,
+            Some(deployment_state(
+                context.account_id,
+                provider_component.id,
+                provider_component.revision,
+                "golem-it:tool-streaming-rust-provider",
+                "ToolStreamingCaller",
+                metadata.tools,
+            )),
+        );
+
+        let (effect_port, mut effects, effect_server) =
+            middleware_acceptance::start_probe_effect_server().await;
+        let agent_id = agent_id!("ToolStreamingCaller", "rust-trap");
+        let mut env = HashMap::from([(
+            "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
+            effect_port.to_string(),
+        )]);
+        if allocation {
+            env.insert("TOOL_TRAP_ALLOCATION".to_string(), "1".to_string());
+        }
+        let worker_id = executor
+            .start_agent_with(&caller_component.id, agent_id.clone(), env, Vec::new())
+            .await?;
+        let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let victim = if pressure {
+            let component = executor
+                .component_dep(&context.default_environment_id, large_dynamic_memory)
+                .store()
+                .await?;
+            let agent = agent_id!("LargeDynamicMemoryAgent", "tool-reacquire-victim");
+            let worker = executor.start_agent(&component.id, agent.clone()).await?;
+            let work = tokio::spawn({
+                let executor = executor.clone();
+                async move {
+                    executor
+                        .invoke_and_await_agent(
+                            &component,
+                            &agent,
+                            "run_with_memory_and_work",
+                            data_value!(30u64, 60_000u64),
+                        )
+                        .await
+                }
+            });
+            let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while executor
+                    .worker_memory_requirement(&owned)
+                    .await
+                    .unwrap_or(0)
+                    < 30 * 1024 * 1024
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+            assert!(executor.worker_eviction_class(&owned).await.is_none());
+            let owner_bytes = executor.worker_memory_requirement(&owner).await?;
+            let victim_bytes = executor.worker_memory_requirement(&owned).await?;
+            assert!(owner_bytes + victim_bytes <= 64 * 1024 * 1024);
+            assert!(owner_bytes + 40 * 1024 * 1024 <= 64 * 1024 * 1024);
+            assert!(owner_bytes + victim_bytes + 40 * 1024 * 1024 > 64 * 1024 * 1024);
+            Some((worker, work))
+        } else {
+            None
+        };
+        let invocation = executor.invoke_and_await_agent(
             &caller_component,
             &agent_id,
-            "collect",
-            data_value!("trap", Vec::<u8>::new(), 1_u32),
-        )
-        .await;
-    let error = result.expect_err("the tool trap must fail the owner invocation");
-    assert!(
-        error
-            .to_string()
-            .contains("deterministic streaming tool trap"),
-        "the original tool trap must survive owner recovery: {error:?}"
-    );
+            "permanent_tool_trap_isolation",
+            data_value!(),
+        );
+        tokio::pin!(invocation);
+        if let Some((victim, work)) = victim {
+            tokio::select! {
+                result = &mut invocation => panic!("tool finished before capacity OOM: {result:?}"),
+                failure = tokio::time::timeout(Duration::from_secs(20), async {
+                    loop {
+                        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                        if oplog.iter().any(|entry| matches!(&entry.entry,
+                            PublicOplogEntry::Error(error) if error.error == "Out of memory")) {
+                            return Ok::<(), anyhow::Error>(());
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }) => { failure??; }
+            }
+            // The running co-resident cannot be evicted. Release it only after real growth
+            // admission has trapped, so the owner must reconstruct and reacquire permits.
+            executor.interrupt(&victim).await?;
+            assert!(work.await?.is_err());
+        }
+        let result: Vec<String> = invocation.await?.into_typed()?;
+        assert_eq!(result.len(), 5);
+        assert_eq!(result[0], "partial-state");
+        assert!(result[1].contains("Failed"), "{result:?}");
+        assert!(result[1].contains("unreachable"), "{result:?}");
+        assert!(result[2].starts_with("Rpc(RemoteInternal("), "{result:?}");
+        assert_eq!(result[3], "partial-state");
+        assert_eq!(result[4], "healthy");
+        assert_eq!(effects.recv().await.as_deref(), Some("permanent-tool-trap"));
+
+        let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let terminals = before
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) => params.response.as_ref(),
+                _ => None,
+            })
+            .filter_map(|response| {
+                SerializableToolOperationTerminal::from_value(response.value()).ok()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(terminals.len(), 2, "both same-tool operations settle");
+        assert_eq!(
+            terminals[0].body_execution,
+            SerializableEntityBodyExecution::Trapped
+        );
+        assert!(matches!(
+            &terminals[0].result,
+            Err(SerializableToolRpcError::RemoteInternalError(details))
+                if details.contains("unreachable")
+        ));
+        assert_eq!(
+            terminals[1].body_execution,
+            SerializableEntityBodyExecution::Executed
+        );
+        assert!(terminals[1].result.is_ok());
+        let recovery_errors = before
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Error(error)
+                    if error.error == "Out of memory")
+            })
+            .count();
+        assert_eq!(recovery_errors, usize::from(pressure), "{before:#?}");
+        assert_eq!(
+            before
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                .count(),
+            recovery_errors
+        );
+
+        executor.simulated_crash(&worker_id).await?;
+        let fresh: StreamEvidence = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id,
+                "collect_capable",
+                data_value!("/fresh-after-reconstruction", b"fresh".to_vec()),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(fresh.completion, "ok");
+        assert_eq!(fresh.output, b"fresh");
+        assert_eq!(
+            executor
+                .get_file_contents(
+                    &worker_id,
+                    if allocation {
+                        "/allocation-permanent-trap-state"
+                    } else {
+                        "/permanent-trap-state"
+                    }
+                )
+                .await?,
+            b"partial-state".to_vec()
+        );
+        assert!(
+            effects.try_recv().is_err(),
+            "completed HTTP effect repeated during replay"
+        );
+        let repeated: Vec<String> = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id,
+                "permanent_tool_trap_isolation",
+                data_value!(),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(repeated, result);
+        assert_eq!(effects.recv().await.as_deref(), Some("permanent-tool-trap"));
+        assert!(
+            effects.try_recv().is_err(),
+            "fresh body executes one HTTP effect"
+        );
+        let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let replayed_terminals = after
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) => params.response.as_ref(),
+                _ => None,
+            })
+            .filter_map(|response| {
+                SerializableToolOperationTerminal::from_value(response.value()).ok()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            replayed_terminals.len(),
+            5,
+            "replay must not append duplicate terminals"
+        );
+        assert_eq!(&replayed_terminals[..2], terminals.as_slice());
+        assert_eq!(
+            after
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                .count(),
+            recovery_errors
+        );
+        let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        if let Some(active) = executor.active_entity_metadata(&owner).await {
+            assert!(active.tool_operations.operations.is_empty());
+            assert!(active.lane.holder.is_none());
+        }
+        effect_server.abort();
+    }
 
     Ok(())
 }
@@ -6772,7 +7166,7 @@ async fn rust_tool_trap_retries_owner_without_replay_overflow(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
+async fn guest_trap_preserves_a_blocked_same_tool_sibling_and_drains_cleanup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -6885,23 +7279,15 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
             );
         }
     };
-    let error = result.expect_err("the exact guest trap must fail the owner invocation");
-    assert!(
-        error
-            .to_string()
-            .contains("deterministic streaming tool trap"),
-        "the original guest-trap provenance must survive owner-group fencing: {error:?}"
-    );
+    result?;
 
-    // Failure notification must follow destruction of both original contexts, not just fencing.
+    // Both bodies settle before the owner returns.
     let mut destroyed = Vec::new();
     for _ in 0..2 {
         let start = disposal_probe
             .try_recv()
-            .expect("entity Store context must be destroyed before owner failure is returned");
-        eprintln!(
-            "trap scenario Start {start}: Store context destroyed before failure notification"
-        );
+            .expect("entity Store context must be destroyed before owner completion is returned");
+        eprintln!("trap scenario Start {start}: Store context destroyed before owner completion");
         destroyed.push(start);
     }
     destroyed.sort();
@@ -6962,12 +7348,18 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
     );
     assert!(
         oplog.iter().all(|entry| {
-            !matches!(&entry.entry, PublicOplogEntry::End(params)
-            if entity_starts.contains(&params.start_index))
-                && !matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
+            !matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
                 if entity_starts.contains(&params.start_index))
         }),
-        "owner fencing must not fabricate entity terminals"
+        "an unrelated sibling must not be cancelled"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::End(end) if entity_starts.contains(&end.start_index)))
+            .count(),
+        2
     );
     assert_eq!(destroyed, entity_starts);
     assert_eq!(
@@ -6978,14 +7370,14 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
                     && matches!(entry.entry, PublicOplogEntry::Error(_))
             })
             .count(),
-        1,
-        "the owner must classify the original trap exactly once"
+        0,
+        "isolated guest failure is not an owner error"
     );
 
     Ok(())
 }
 
-async fn run_owner_trap_sibling_lifecycle_case(
+async fn run_isolated_trap_sibling_lifecycle_case(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     provider: &PrecompiledComponent,
@@ -7058,21 +7450,15 @@ async fn run_owner_trap_sibling_lifecycle_case(
         ),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("{lifecycle} waiter did not wake after owner trap"))?;
-    let error = result.expect_err("the exact guest trap must fail the owner invocation");
-    assert!(
-        error
-            .to_string()
-            .contains("deterministic streaming tool trap"),
-        "the original trap must reach the {lifecycle} waiter: {error:?}"
-    );
+    .map_err(|_| anyhow::anyhow!("{lifecycle} waiter did not wake after isolated tool trap"))?;
+    result?;
 
     let mut destroyed = Vec::new();
     for _ in 0..2 {
         destroyed.push(
             disposals
                 .try_recv()
-                .expect("both sibling Stores are destroyed before failure notification"),
+                .expect("both sibling Stores are destroyed before owner completion"),
         );
     }
     destroyed.sort();
@@ -7112,10 +7498,17 @@ async fn run_owner_trap_sibling_lifecycle_case(
     assert_eq!(destroyed, sorted_starts);
     assert!(
         oplog.iter().all(|entry| {
-            !matches!(&entry.entry, PublicOplogEntry::End(end) if entity_starts.contains(&end.start_index))
-                && !matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if entity_starts.contains(&cancelled.start_index))
+            !matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if entity_starts.contains(&cancelled.start_index))
         }),
-        "owner fencing must not fabricate normal terminals for {lifecycle}"
+        "the unrelated {lifecycle} sibling must not be cancelled"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::End(end) if entity_starts.contains(&end.start_index)))
+            .count(),
+        2
     );
     assert_eq!(
         oplog
@@ -7123,10 +7516,9 @@ async fn run_owner_trap_sibling_lifecycle_case(
             .filter(|entry| entry.oplog_index > invocation_start
                 && matches!(entry.entry, PublicOplogEntry::Error(_)))
             .count(),
-        1
+        0
     );
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let settled = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_eq!(
         settled
@@ -7138,7 +7530,7 @@ async fn run_owner_trap_sibling_lifecycle_case(
             })
             .count(),
         2,
-        "the owner fence must prevent post-termination dispatch"
+        "settlement must not dispatch duplicate bodies"
     );
     Ok(())
 }
@@ -7146,35 +7538,47 @@ async fn run_owner_trap_sibling_lifecycle_case(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn guest_trap_retires_a_detached_child_before_waking_the_owner_waiter(
+async fn guest_trap_preserves_a_detached_same_tool_sibling(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_owner_trap_sibling_lifecycle_case(last_unique_id, deps, provider, caller, "detached-child")
-        .await
+    run_isolated_trap_sibling_lifecycle_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "detached-child",
+    )
+    .await
 }
 
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn guest_trap_wakes_an_observed_sibling_future_and_retires_its_store(
+async fn guest_trap_preserves_an_observed_same_tool_sibling_future(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_owner_trap_sibling_lifecycle_case(last_unique_id, deps, provider, caller, "observed-future")
-        .await
+    run_isolated_trap_sibling_lifecycle_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "observed-future",
+    )
+    .await
 }
 
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
-async fn detached_and_fire_and_forget_traps_fail_the_owner_without_entity_terminals(
+async fn detached_and_fire_and_forget_traps_settle_without_failing_the_owner(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -7251,13 +7655,7 @@ async fn detached_and_fire_and_forget_traps_fail_the_owner_without_entity_termin
                 .invoke_and_await_agent(&caller_component, &agent_id, method, data_value!())
                 .await
         };
-        let error = result.expect_err("a tool trap must fail its launching owner invocation");
-        assert!(
-            error
-                .to_string()
-                .contains("deterministic streaming tool trap"),
-            "the original classified trap must reach the owner boundary for {method}: {error:?}"
-        );
+        result?;
 
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let invocation_start = oplog
@@ -7269,11 +7667,11 @@ async fn detached_and_fire_and_forget_traps_fail_the_owner_without_entity_termin
             })
             .expect("failed invocation has an AgentInvocationStarted entry");
         assert!(
-            oplog.iter().all(|entry| {
-                entry.oplog_index <= invocation_start
-                    || !matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            oplog.iter().any(|entry| {
+                entry.oplog_index > invocation_start
+                    && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
             }),
-            "{method} must not commit AgentInvocationFinished after a detached tool trap"
+            "{method} must finish despite a detached tool trap"
         );
         let entity_starts = oplog
             .iter()
@@ -7292,16 +7690,25 @@ async fn detached_and_fire_and_forget_traps_fail_the_owner_without_entity_termin
             1,
             "{method} must retain exactly one accepted entity Start"
         );
-        assert!(
-            oplog.iter().all(|entry| {
-                !matches!(
-                    &entry.entry,
-                    PublicOplogEntry::End(params)
-                        if entity_starts.contains(&params.start_index)
-                )
-            }),
-            "{method} must not append an ordinary entity terminal after a tool trap"
+        let responses = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) if entity_starts.contains(&params.start_index) => {
+                    params.response.as_ref()
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(responses.len(), 1, "{method} has exactly one terminal");
+        let terminal = SerializableToolOperationTerminal::from_value(responses[0].value())?;
+        assert_eq!(
+            terminal.body_execution,
+            SerializableEntityBodyExecution::Trapped
         );
+        assert!(matches!(
+            terminal.result,
+            Err(SerializableToolRpcError::RemoteInternalError(_))
+        ));
         assert_eq!(
             oplog
                 .iter()
@@ -7310,8 +7717,8 @@ async fn detached_and_fire_and_forget_traps_fail_the_owner_without_entity_termin
                         && matches!(entry.entry, PublicOplogEntry::Error(_))
                 })
                 .count(),
-            1,
-            "{method} must classify and record the original owner trap exactly once"
+            0,
+            "{method} must not fail the owner"
         );
     }
 
@@ -10766,13 +11173,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
             .expect("release provider clean-stdout gate");
     };
     let (trap_result, ()) = tokio::join!(trap_call, trap_gates);
-    let trap_error = trap_result.expect_err("non-retryable provider trap must fail the owner");
-    assert!(
-        trap_error
-            .to_string()
-            .contains("deterministic streaming tool trap after clean stdout"),
-        "original non-retryable trap must reach the owner: {trap_error:?}"
-    );
+    trap_result?;
     let trap_oplog = executor
         .get_oplog(&trap_worker, OplogIndex::INITIAL)
         .await?;
@@ -10781,8 +11182,8 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
             .iter()
             .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
             .count(),
-        1,
-        "non-retryable trap is recorded exactly once"
+        0,
+        "a clean stdout terminal does not promote a guest trap to an owner error"
     );
     if let Some(active) = executor.active_entity_metadata(&trap_owner).await {
         assert!(active.tool_operations.operations.is_empty());
@@ -12912,6 +13313,8 @@ async fn deterministic_stream_crash_checkpoint_matrix(
             )
             .await?;
         let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let mut original_body = (checkpoint.name() == "before-input")
+            .then(|| executor.gate_next_entity_body_start(&worker_id));
         match checkpoint {
             Checkpoint::Incapable { checkpoint, .. } => {
                 executor
@@ -12969,6 +13372,11 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
         assert_eq!(original_checkpoint.name, checkpoint.name());
 
+        if let Some(body) = original_body.as_mut() {
+            tokio::time::timeout(std::time::Duration::from_secs(30), body.entered())
+                .await
+                .map_err(|_| anyhow::anyhow!("tool did not reach its pre-body crash gate"))?;
+        }
         let original_start = if let Some((expected_admission, expected_lane)) =
             checkpoint.expected_operation()
         {
@@ -13086,6 +13494,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         };
 
         executor.simulated_crash(&worker_id).await?;
+        drop(original_body);
         drop(original_checkpoint.release);
 
         let replayed_checkpoint = tokio::time::timeout(

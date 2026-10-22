@@ -15,6 +15,41 @@
 use super::*;
 
 impl<Adapter: SandboxFilesystemAdapter> FilesystemGenerationHandle<Adapter> {
+    /// Gives one body its own admission and drainage boundary without sealing its siblings.
+    pub(crate) fn for_invocation(&self) -> (Self, FilesystemInvocation) {
+        let invocation = FilesystemInvocation {
+            activity: Arc::new(InvocationActivity {
+                state: Mutex::new(InvocationActivityState {
+                    closed: false,
+                    active: 0,
+                }),
+                changed: tokio::sync::Notify::new(),
+            }),
+        };
+        let mut handle = self.clone();
+        handle.invocation = Some(invocation.clone());
+        (handle, invocation)
+    }
+
+    pub(crate) fn invocation(&self) -> Option<FilesystemInvocation> {
+        self.invocation.clone()
+    }
+
+    pub(super) fn lease_call(
+        &self,
+        registry: &Arc<GenerationRegistry>,
+        effect: CallEffect,
+    ) -> Result<CallLease, AccessError> {
+        let invocation = self
+            .invocation
+            .as_ref()
+            .map(FilesystemInvocation::admit)
+            .transpose()?;
+        let mut lease = registry.lease_call(effect)?;
+        lease.invocation = invocation;
+        Ok(lease)
+    }
+
     pub(crate) fn attach_usage_tracker(
         &self,
         tracker: &crate::services::linear_memory::LinearMemoryTracker,
@@ -33,6 +68,7 @@ impl<Adapter: SandboxFilesystemAdapter> Clone for FilesystemGenerationHandle<Ada
         Self {
             generation: self.generation.clone(),
             phase: self.phase,
+            invocation: self.invocation.clone(),
         }
     }
 }
@@ -213,6 +249,7 @@ pub(crate) fn reconstruction_generation_handle<Adapter: SandboxFilesystemAdapter
     Ok(FilesystemGenerationHandle {
         generation: Arc::downgrade(generation),
         phase: GenerationHandlePhase::Reconstruction,
+        invocation: None,
     })
 }
 
@@ -231,6 +268,7 @@ pub(crate) fn resident_generation_handle<Adapter: SandboxFilesystemAdapter>(
                 .expect("agent filesystem generation already consumed"),
         ),
         phase: GenerationHandlePhase::Resident,
+        invocation: None,
     }
 }
 

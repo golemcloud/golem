@@ -50,6 +50,48 @@ pub mod postgres;
 pub mod serialized;
 pub mod types;
 
+/// Close resident transaction protocols before discarding a trapped Store's resource table.
+/// This uses the guest Drop terminal, including its recorded outcome during replay; it
+/// does not promise that the database rolled the transaction back.
+pub(crate) async fn cleanup_trapped_transactions<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+) -> anyhow::Result<()> {
+    use crate::services::rdbms::{ignite::IgniteType, mysql::MysqlType, postgres::PostgresType};
+
+    enum Transaction {
+        Mysql(Resource<RdbmsTransactionEntry<MysqlType>>),
+        Postgres(Resource<RdbmsTransactionEntry<PostgresType>>),
+        Ignite(Resource<RdbmsTransactionEntry<IgniteType>>),
+    }
+
+    let mut transactions = Vec::new();
+    for entry in ctx.table().iter_mut() {
+        if let Some(tx) = entry.downcast_ref::<RdbmsTransactionEntry<MysqlType>>() {
+            transactions.push((tx.begin_index, Transaction::Mysql(tx.resource()?)));
+        } else if let Some(tx) = entry.downcast_ref::<RdbmsTransactionEntry<PostgresType>>() {
+            transactions.push((tx.begin_index, Transaction::Postgres(tx.resource()?)));
+        } else if let Some(tx) = entry.downcast_ref::<RdbmsTransactionEntry<IgniteType>>() {
+            transactions.push((tx.begin_index, Transaction::Ignite(tx.resource()?)));
+        }
+    }
+    transactions.sort_by_key(|(begin, _)| *begin);
+    for (begin, transaction) in transactions {
+        if !ctx.state.transaction_protocols.contains_key(&begin) {
+            continue;
+        }
+        match transaction {
+            Transaction::Mysql(resource) => db_transaction_drop(ctx, resource).await?,
+            Transaction::Postgres(resource) => db_transaction_drop(ctx, resource).await?,
+            Transaction::Ignite(resource) => db_transaction_drop(ctx, resource).await?,
+        }
+    }
+    anyhow::ensure!(
+        ctx.state.transaction_protocols.is_empty(),
+        "Trapped Store has a transaction protocol without a resource"
+    );
+    Ok(())
+}
+
 fn classify_rdbms_error(error: &RdbmsError) -> HostFailureKind {
     match error {
         RdbmsError::ConnectionFailure(_) => HostFailureKind::Transient,
@@ -297,6 +339,7 @@ where
             }
             let entry = RdbmsTransactionEntry::new(pool_key, transaction_state, begin_oplog_idx);
             let resource = ctx.as_wasi_view().table().push(entry)?;
+            ctx.table().get_mut(&resource)?.resource_rep = Some(resource.rep());
             Ok(Ok(resource))
         }
         Err(error) => match error.downcast::<RdbmsError>() {
@@ -1478,7 +1521,9 @@ async fn retry_transaction_resolution<Ctx: WorkerCtx, R>(
         Ok(()) => {
             if !ctx.is_live() {
                 ctx.state.replay_state.abandon_replay_for_failure().await?;
-                ctx.state.authoritative_replay_failure = true;
+                ctx.state
+                    .authoritative_replay_failure
+                    .store(true, std::sync::atomic::Ordering::Release);
             }
             Err(anyhow!(ClassifiedHostError {
                 kind: HostFailureKind::Permanent,
@@ -1650,6 +1695,9 @@ pub struct RdbmsTransactionEntry<T: RdbmsType + 'static> {
     pool_key: RdbmsPoolKey,
     state: RdbmsTransactionState<T>,
     begin_index: OplogIndex,
+    // ResourceTable iteration exposes values without handles. Retain the handle so
+    // host cleanup can invoke the typed Drop path without allocating another slot.
+    resource_rep: Option<u32>,
 }
 
 impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
@@ -1662,7 +1710,14 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
             pool_key,
             state,
             begin_index,
+            resource_rep: None,
         }
+    }
+
+    fn resource(&self) -> anyhow::Result<Resource<Self>> {
+        Ok(Resource::new_own(self.resource_rep.ok_or_else(|| {
+            anyhow!("Transaction resource handle was not installed")
+        })?))
     }
 
     fn set_closed(&mut self) {

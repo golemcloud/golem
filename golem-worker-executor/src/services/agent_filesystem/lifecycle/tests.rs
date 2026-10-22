@@ -12,6 +12,7 @@ use crate::services::golem_config::{
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::close_window;
+use futures::FutureExt;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{AgentFilePath, AgentFilePermissions, ComponentId};
@@ -1742,6 +1743,103 @@ async fn dropping_a_started_call_transfers_the_same_operation_once() {
 
 #[test]
 #[timeout("5s")]
+async fn invocation_drain_joins_abandoned_writes_and_closes_without_sealing_siblings() {
+    let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    let generation = resident_generation_handle(&filesystem);
+    let (body, invocation) = generation.for_invocation();
+    let (sibling_body, sibling) = generation.for_invocation();
+    let file = open_file(&body, &control, 702).await;
+    control.push_write(Ok(SandboxWriteAttempt::completed(4)));
+    let write_gate = control.block("write");
+    let observer = tokio::spawn(
+        write(
+            &body,
+            &file,
+            WritePlacement::At(3),
+            Bytes::from_static(b"data"),
+        )
+        .unwrap(),
+    );
+    write_gate.wait_started().await;
+    observer.abort();
+    let _ = observer.await;
+
+    control.push_close(Ok(()));
+    let close_gate = control.block("close");
+    drop(file);
+    close_gate.wait_started().await;
+    let drain = invocation.close_and_drain();
+    tokio::pin!(drain);
+    assert!(drain.as_mut().now_or_never().is_none());
+
+    assert!(matches!(
+        open(
+            &body,
+            PathTarget::at_root(&body, "refused").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
+    write_gate.release();
+    write_gate.wait_completed().await;
+    assert!(drain.as_mut().now_or_never().is_none());
+    close_gate.release();
+    close_gate.wait_completed().await;
+    drain.await;
+
+    let file = open_file(&sibling_body, &control, 703).await;
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    sibling.close_and_drain().await;
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("5s")]
+async fn invocation_drain_joins_abandoned_open_and_its_unobserved_close() {
+    let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    let generation = resident_generation_handle(&filesystem);
+    let (body, invocation) = generation.for_invocation();
+    control.push_open(Ok(SandboxOpened::scripted_file(704)));
+    let open_gate = control.block("open");
+    let observer = tokio::spawn(
+        open(
+            &body,
+            PathTarget::at_root(&body, "abandoned").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        )
+        .unwrap(),
+    );
+    open_gate.wait_started().await;
+    observer.abort();
+    let _ = observer.await;
+
+    control.push_close(Ok(()));
+    let close_gate = control.block("close");
+    let drain = invocation.close_and_drain();
+    tokio::pin!(drain);
+    assert!(drain.as_mut().now_or_never().is_none());
+    open_gate.release();
+    close_gate.wait_started().await;
+    assert!(drain.as_mut().now_or_never().is_none());
+    close_gate.release();
+    drain.await;
+
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("5s")]
 async fn dropping_a_started_close_transfers_it_once_and_unblocks_deletion() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -1919,6 +2017,7 @@ async fn delete_barrier_covers_directory_attribute_and_symlink_queries() {
                     generation_id: file.ownership.generation_id,
                     access: file.ownership.access,
                     node_lease: None,
+                    invocation: None,
                     close: None,
                 },
             })),

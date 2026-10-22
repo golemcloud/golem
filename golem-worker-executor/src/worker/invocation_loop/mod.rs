@@ -1080,6 +1080,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .current_idempotency_key
                                             .clone();
                                         let recorded = match kind {
+                                            InterruptKind::EntityCancellation => unreachable!("entity cancellation cannot interrupt the owner"),
                                             InterruptKind::Suspend(_) => {
                                                 self.parent.add_and_commit_oplog(OplogEntry::suspend()).await.map(|_| ())
                                             }

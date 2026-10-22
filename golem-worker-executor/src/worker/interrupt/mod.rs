@@ -465,6 +465,9 @@ impl PendingWorkerInterrupt {
             RetryDecision::ReacquirePermits
         } else {
             match self.kind {
+                InterruptKind::EntityCancellation => {
+                    unreachable!("entity cancellation cannot interrupt the owner")
+                }
                 InterruptKind::Restart | InterruptKind::Jump => RetryDecision::Immediate,
                 InterruptKind::Interrupt(_) | InterruptKind::ShardLost => RetryDecision::None,
                 InterruptKind::Suspend(timestamp) => RetryDecision::TryStop(timestamp),

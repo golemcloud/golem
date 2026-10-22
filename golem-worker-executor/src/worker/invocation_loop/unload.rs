@@ -17,6 +17,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
             let status = self.parent.get_last_known_status().await;
             let marker = match kind {
+                InterruptKind::EntityCancellation => {
+                    unreachable!("entity cancellation cannot interrupt the owner")
+                }
                 InterruptKind::Suspend(_) => Some(OplogEntry::suspend()),
                 InterruptKind::Interrupt(_) => Some(OplogEntry::interrupted()),
                 InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => None,
