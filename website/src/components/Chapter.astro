@@ -5,7 +5,6 @@ import {
   toolsChapter,
   artifactsChapter,
   codeLanguages,
-  type ChapterCode,
   type ChapterItem,
 } from "../data/homepage";
 
@@ -15,14 +14,49 @@ interface Props {
 
 const { kind } = Astro.props;
 const chapter = { agents: agentsChapter, tools: toolsChapter, artifacts: artifactsChapter }[kind];
-const { eyebrow, heading, lead, figure } = chapter;
+const { eyebrow, heading, snippets } = chapter;
+const missing: Record<string, string> = "missing" in chapter ? chapter.missing : {};
 const items: ChapterItem[] = chapter.items;
+const features = items.map((item) => item.id);
 const id = `ch-${kind}`;
+const figId = `${id}-code`;
 
-const codeLines = ({ code, highlight }: ChapterCode) => ({
+// A line ending in " //@" (" #@" in YAML) is highlighted; the marker is
+// stripped from the displayed code.
+const MARK = /[ ]+(\/\/|#)@$/;
+const marked = (source: string) => {
+  const lines = source.split("\n");
+  return {
+    code: lines.map((line) => line.replace(MARK, "")).join("\n"),
+    hl: new Set(lines.flatMap((line, i) => (MARK.test(line) ? [i + 1] : []))),
+  };
+};
+
+// Each language gets one variant per feature: a snippet, or a note where the
+// language lacks the feature. A missing snippet without a note fails the build.
+const variants = codeLanguages.map((l) => ({
+  ...l,
+  features: features.map((feature) => {
+    const pane = snippets[feature]?.[l.id];
+    const note = missing[feature];
+    if (!pane && !note) throw new Error(`Missing ${kind}/${feature} snippet for ${l.id}`);
+    return {
+      feature,
+      pane: note && !pane ? undefined : pane && { ...pane, ...marked(pane.source) },
+      note,
+    };
+  }),
+}));
+
+const shikiLang = (filename: string, fallback: string) =>
+  filename.endsWith(".yaml") ? "yaml" : fallback;
+
+// Wrapped lines hang under their first character, and may break after "(" or ".".
+const codeLines = (code: string, hl: Set<number>) => ({
   line(node: any, line: number) {
     const hang = code.split("\n")[line - 1].search(/\S|$/) + 2;
     node.properties.style = `padding-left:${hang}ch;text-indent:-${hang}ch`;
+    if (hl.has(line)) this.addClassToHast(node, "hl");
     for (const span of node.children) {
       const text = span.children?.[0];
       if (text?.type !== "text") continue;
@@ -35,7 +69,6 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
             : []),
         ]);
     }
-    if (highlight.includes(line)) this.addClassToHast(node, "hl");
   },
 });
 ---
@@ -43,15 +76,14 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
 <section
   class:list={["chapter", `chapter-${kind}`, { band: kind === "tools" }]}
   aria-labelledby={id}
+  data-chapter
 >
   <div class="container grid">
     <header class="head">
       <span class="eyebrow">{eyebrow}</span>
       <h2 class="section-heading" id={id}>{heading}</h2>
     </header>
-    <p class="lead">{lead}</p>
-
-    <figure class="fig code-block" data-code-switcher>
+    <figure class="fig code-block" id={figId} data-code-switcher data-active="overview">
       <div class="code-header">
         <div class="tabs" role="tablist" aria-label="Language">
           {
@@ -72,39 +104,59 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
           }
         </div>
         {
-          codeLanguages.map((l) => (
-            <span class="code-filename mono" data-variant={l.id} hidden={l.id !== "ts"}>
-              {figure[l.id].filename}
-            </span>
-          ))
+          variants.map((l) =>
+            l.features.map((v) => (
+              <span
+                class:list={["code-filename", "mono", { off: v.feature !== "overview" }]}
+                data-variant={l.id}
+                data-show={v.feature}
+                hidden={l.id !== "ts"}
+              >
+                {v.pane?.filename ?? "\u00a0"}
+              </span>
+            ))
+          )
         }
       </div>
       {
-        codeLanguages.map((l) => (
+        variants.map((l) => (
           <div
             role="tabpanel"
+            class="stack"
             id={`${id}-code-${l.id}`}
             aria-labelledby={`${id}-tab-${l.id}`}
             data-variant={l.id}
             hidden={l.id !== "ts"}
           >
-            <Code
-              code={figure[l.id].code}
-              lang={l.shiki}
-              theme="github-dark-default"
-              wrap
-              transformers={[codeLines(figure[l.id])]}
-            />
+            {l.features.map((v) => (
+              <div
+                class:list={["variant", { off: v.feature !== "overview" }]}
+                data-show={v.feature}
+              >
+                {v.pane ? (
+                  <Code
+                    code={v.pane.code}
+                    lang={shikiLang(v.pane.filename, l.shiki) as any}
+                    theme="github-dark-default"
+                    wrap
+                    transformers={[codeLines(v.pane.code, v.pane.hl)]}
+                  />
+                ) : (
+                  <p class="note">{v.note}</p>
+                )}
+              </div>
+            ))}
           </div>
         ))
       }
+      <button type="button" class="code-more" hidden>Show all code</button>
     </figure>
 
     <ul class="points">
       {
         items.map((item) => (
-          <li>
-            <strong>{item.title}</strong>
+          <li data-feature={item.id} class:list={{ active: item.id === "overview" }}>
+            <strong class="pt">{item.title}</strong>
             <span>{item.body}</span>
           </li>
         ))
@@ -115,26 +167,52 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
 
 <script>
   const KEY = "golem-code-lang";
-  const figures = [...document.querySelectorAll<HTMLElement>("[data-code-switcher]")];
+  const chapters = [...document.querySelectorAll<HTMLElement>("[data-chapter]")];
+  const desktop = matchMedia("(min-width: 1100px)");
+  const currentLang = (chapter: HTMLElement) =>
+    chapter.querySelector<HTMLElement>("[role=tab][aria-selected=true]")!.dataset.lang!;
+
+  // Narrow screens: a bullet's "Show code" opens a copy of its snippet, in the
+  // chapter's current language, under the bullet.
+  function fillInline(chapter: HTMLElement, box: HTMLElement) {
+    const lang = currentLang(chapter);
+    const feature = box.dataset.inline!;
+    const name = chapter
+      .querySelector(`.code-filename[data-variant="${lang}"][data-show="${feature}"]`)!
+      .textContent!.trim();
+    const variant = chapter.querySelector(
+      `.stack[data-variant="${lang}"] .variant[data-show="${feature}"]`
+    )!;
+    box.replaceChildren(...variant.cloneNode(true).childNodes);
+    if (name) {
+      const header = document.createElement("div");
+      header.className = "code-header code-filename mono";
+      header.textContent = name;
+      box.prepend(header);
+    }
+  }
 
   function select(lang: string, from = 0) {
-    for (const fig of figures.slice(from)) {
-      for (const tab of fig.querySelectorAll<HTMLElement>("[role=tab]")) {
+    for (const chapter of chapters.slice(from)) {
+      for (const tab of chapter.querySelectorAll<HTMLElement>("[role=tab]")) {
         const on = tab.dataset.lang === lang;
         tab.setAttribute("aria-selected", String(on));
         tab.tabIndex = on ? 0 : -1;
       }
-      for (const el of fig.querySelectorAll<HTMLElement>("[data-variant]")) {
+      for (const el of chapter.querySelectorAll<HTMLElement>("[data-variant]")) {
         el.hidden = el.dataset.variant !== lang;
+      }
+      for (const box of chapter.querySelectorAll<HTMLElement>("[data-inline]")) {
+        fillInline(chapter, box);
       }
     }
   }
 
-  // Only the chosen figure and those below it change, so nothing above the
+  // Only the chosen chapter and those below it change, so nothing above the
   // reader's position resizes.
-  function choose(fig: HTMLElement, tab: HTMLElement) {
+  function choose(chapter: HTMLElement, tab: HTMLElement) {
     const lang = tab.dataset.lang!;
-    select(lang, figures.indexOf(fig));
+    select(lang, chapters.indexOf(chapter));
     try {
       localStorage.setItem(KEY, lang);
     } catch {}
@@ -146,19 +224,117 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
   } catch {}
   if (stored && document.querySelector(`[role=tab][data-lang="${stored}"]`)) select(stored);
 
-  for (const fig of figures) {
+  let lastX = -1;
+  let lastY = -1;
+  document.addEventListener("pointermove", (e) => {
+    lastX = e.clientX;
+    lastY = e.clientY;
+  });
+  // Ignores events without real movement, such as a page scrolling under a
+  // stationary pointer.
+  const moved = (e: PointerEvent) => e.clientX !== lastX || e.clientY !== lastY;
+
+  for (const chapter of chapters) {
+    const fig = chapter.querySelector<HTMLElement>("[data-code-switcher]")!;
+    const items = [...chapter.querySelectorAll<HTMLElement>("[data-feature]")];
     const tabs = [...fig.querySelectorAll<HTMLElement>("[role=tab]")];
     tabs.forEach((tab, i) => {
-      tab.addEventListener("click", () => choose(fig, tab));
+      tab.addEventListener("click", () => choose(chapter, tab));
       tab.addEventListener("keydown", (e) => {
         const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
         if (!step) return;
         e.preventDefault();
         const next = tabs[(i + step + tabs.length) % tabs.length];
-        choose(fig, next);
+        choose(chapter, next);
         next.focus();
       });
     });
+
+    // Desktop: pointing at, focusing or clicking a point shows its snippet
+    // until another is picked; Escape restores the overview.
+    const activate = (feature: string) => {
+      if (fig.dataset.active === feature) return;
+      fig.dataset.active = feature;
+      for (const el of fig.querySelectorAll<HTMLElement>("[data-show]")) {
+        el.classList.toggle("off", el.dataset.show !== feature);
+      }
+      for (const item of items) {
+        const on = item.dataset.feature === feature;
+        item.classList.toggle("active", on);
+        item.querySelector("button.pt")?.setAttribute("aria-pressed", String(on));
+      }
+    };
+    const reset = () => activate("overview");
+    chapter.addEventListener("keydown", (e) => e.key === "Escape" && reset());
+    for (const item of items) {
+      item.addEventListener("pointermove", (e) => {
+        if (desktop.matches && moved(e)) activate(item.dataset.feature!);
+      });
+      item.addEventListener("click", () => desktop.matches && activate(item.dataset.feature!));
+    }
+
+    // Narrow screens: start a long overview collapsed, with a button to show all.
+    const more = fig.querySelector<HTMLButtonElement>(".code-more")!;
+    let expanded = false;
+    more.addEventListener("click", () => {
+      expanded = true;
+      fig.classList.remove("collapsed");
+      more.hidden = true;
+    });
+
+    const enhance = () => {
+      if (!desktop.matches) reset();
+      const on = !desktop.matches && !expanded && fig.scrollHeight > 640;
+      fig.classList.toggle("collapsed", on);
+      more.hidden = !on;
+      for (const item of items) {
+        const feature = item.dataset.feature!;
+        const title = item.querySelector<HTMLElement>(".pt")!;
+        const want = desktop.matches ? "BUTTON" : "STRONG";
+        if (title.tagName !== want) {
+          const next = document.createElement(want.toLowerCase());
+          next.className = "pt";
+          next.textContent = title.textContent;
+          if (want === "BUTTON") {
+            next.setAttribute("type", "button");
+            next.setAttribute("aria-controls", fig.id);
+            next.setAttribute("aria-pressed", String(feature === fig.dataset.active));
+            next.addEventListener("focus", () => activate(feature));
+            const arrow = document.createElement("span");
+            arrow.className = "arrow";
+            arrow.setAttribute("aria-hidden", "true");
+            next.append(arrow);
+          }
+          title.replaceWith(next);
+        }
+        const toggle = item.querySelector<HTMLButtonElement>(".show-code");
+        // The figure itself shows the overview on narrow screens.
+        if (desktop.matches || feature === "overview") {
+          toggle?.remove();
+          item.querySelector("[data-inline]")?.remove();
+        } else if (!toggle) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "show-code";
+          button.textContent = "Show code";
+          button.setAttribute("aria-expanded", "false");
+          button.addEventListener("click", () => {
+            const open = item.querySelector<HTMLElement>("[data-inline]");
+            button.setAttribute("aria-expanded", String(!open));
+            button.textContent = open ? "Show code" : "Hide code";
+            if (open) return open.remove();
+            const box = document.createElement("div");
+            box.className = "inline-code code-block";
+            box.dataset.inline = feature;
+            item.append(box);
+            fillInline(chapter, box);
+          });
+          item.append(button);
+        }
+      }
+    };
+    enhance();
+    desktop.addEventListener("change", enhance);
   }
 </script>
 
@@ -173,11 +349,6 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
   .head .section-heading {
     max-width: none;
     margin-bottom: 0.75rem;
-  }
-  .lead {
-    font-size: 1.05rem;
-    max-width: 60ch;
-    margin: 0 0 1.5rem;
   }
   .fig {
     margin: 0 0 1.75rem;
@@ -233,8 +404,33 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
     padding: 0.6rem 0;
   }
   .code-filename[hidden],
+  .code-filename.off,
   [role="tabpanel"][hidden] {
     display: none;
+  }
+  /* Every variant shares one grid cell, so the figure keeps the height of
+     the tallest and swapping snippets moves nothing. */
+  .stack {
+    display: grid;
+  }
+  .variant {
+    grid-area: 1 / 1;
+    min-width: 0;
+  }
+  .variant.off {
+    visibility: hidden;
+  }
+  .variant:has(> .note) {
+    display: grid;
+    place-items: center;
+  }
+  .note,
+  .points :global(.inline-code .note) {
+    margin: 0;
+    padding: 1rem 1.25rem;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    text-align: center;
   }
   .code-block :global(pre) {
     border: 0 !important;
@@ -250,13 +446,47 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
     flex-direction: column;
   }
   .code-block :global(.line) {
+    position: relative;
     min-height: 21px;
+  }
+  .code-block :global(.line.hl)::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 -1.25rem;
+    width: 3px;
+    background: var(--accent);
   }
   .code-block :global(.line.hl) {
     background: var(--accent-dim);
     box-shadow:
       -1.25rem 0 0 var(--accent-dim),
       1.25rem 0 0 var(--accent-dim);
+  }
+  .code-more {
+    display: none;
+  }
+  @media (max-width: 1099px) {
+    .variant.off {
+      display: none;
+    }
+    .fig.collapsed {
+      position: relative;
+      max-height: 32rem;
+    }
+    .fig.collapsed .code-more {
+      display: block;
+      position: absolute;
+      inset: auto 0 0 0;
+      padding: 4rem 0 1rem;
+      background: linear-gradient(transparent, var(--code-bg) 70%);
+      color: var(--accent);
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .fig.collapsed .code-more:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -4px;
+    }
   }
   @media (max-width: 400px) {
     .code-header {
@@ -272,6 +502,9 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
       box-shadow:
         -0.875rem 0 0 var(--accent-dim),
         0.875rem 0 0 var(--accent-dim);
+    }
+    .code-block :global(.line.hl)::before {
+      left: -0.875rem;
     }
   }
 
@@ -291,12 +524,102 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
     border-top: 0;
     padding-top: 0;
   }
-  .points strong {
+  .points :global(.pt) {
     color: var(--text);
     font-weight: 600;
     font-size: 0.95rem;
   }
-  .points span {
+  .points :global(button.pt) {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: inherit;
+    line-height: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  /* A small chevron, right-aligned on each desktop title, marks the points
+     as selectable. */
+  .points :global(.arrow) {
+    flex: none;
+    width: 0.45em;
+    height: 0.45em;
+    margin-right: 0.2em;
+    border: solid var(--text-muted);
+    border-width: 0 2px 2px 0;
+    transform: rotate(-45deg);
+  }
+  .points :global(button.pt:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+  .points :global(.show-code) {
+    align-self: flex-start;
+    margin-top: 0.35rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .points :global(.show-code:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .points :global(.inline-code) {
+    margin-top: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--code-bg);
+  }
+  .points :global(.inline-code .code-header) {
+    padding: 0.6rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-size: 0.78rem;
+  }
+  .points :global(.inline-code pre) {
+    border: 0 !important;
+    border-radius: 0 !important;
+    margin: 0;
+    padding: 1rem 1.25rem;
+    font-size: 13px;
+    line-height: 21px;
+    overflow-wrap: break-word;
+  }
+  .points :global(.inline-code pre code) {
+    display: flex;
+    flex-direction: column;
+  }
+  .points :global(.inline-code .line) {
+    position: relative;
+    min-height: 21px;
+  }
+  .points :global(.inline-code .line.hl) {
+    background: var(--accent-dim);
+    box-shadow:
+      -1.25rem 0 0 var(--accent-dim),
+      1.25rem 0 0 var(--accent-dim);
+  }
+  .points :global(.inline-code .line.hl)::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 -1.25rem;
+    width: 3px;
+    background: var(--accent);
+  }
+  .points li > span {
     color: var(--text-secondary);
     font-size: 0.95rem;
     line-height: 1.5;
@@ -308,7 +631,7 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
     }
     .grid {
       grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-      grid-template-rows: auto auto 1fr;
+      grid-template-rows: auto 1fr;
       column-gap: 48px;
     }
     .head {
@@ -316,29 +639,33 @@ const codeLines = ({ code, highlight }: ChapterCode) => ({
       grid-row: 1;
       margin-bottom: 0.75rem;
     }
-    .lead {
+    .points {
       grid-column: 1;
       grid-row: 2;
     }
-    .points {
-      grid-column: 1;
-      grid-row: 3;
+    .points li {
+      cursor: pointer;
     }
     .fig {
       grid-column: 2;
-      grid-row: 2 / span 2;
+      grid-row: 2;
       align-self: start;
       margin: 0;
     }
     .chapter-tools .grid {
       grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
     }
-    .chapter-tools .lead,
     .chapter-tools .points {
       grid-column: 2;
     }
     .chapter-tools .fig {
       grid-column: 1;
+    }
+    .points li.active :global(.pt) {
+      color: var(--accent);
+    }
+    .points li.active :global(.arrow) {
+      border-color: var(--accent);
     }
   }
 </style>
