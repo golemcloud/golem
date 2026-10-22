@@ -29,7 +29,7 @@ describe('direct flat-wire schema codecs', () => {
       [z.literal('fixed'), { tag: 'string', value: 'wrong' }],
       [z.literal(17), { tag: 'f64', value: 31 }],
       [z.literal(true), { tag: 'bool', value: false }],
-      [z.literal(17n), { tag: 'u64', value: 31n }],
+      [z.literal(17n), { tag: 's64', value: 31n }],
     ] as const;
     for (const [schema, value] of cases) {
       const codec = compileSchema(z.tuple([schema]));

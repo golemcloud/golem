@@ -91,7 +91,7 @@ TypeScript agents declare runtime schemas. An arbitrary interface, type alias, o
 | ----------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------ |
 | `z.string()`, `z.boolean()`                           | `"hi"`, `true`                        | String, boolean                                              |
 | `z.number()`                                          | `1.5`                                 | `number`, defaults to `f64`                                  |
-| `z.bigint()`                                          | `"42"`                                | `bigint`, defaults to **unsigned `u64`**                     |
+| `z.bigint()`                                          | `"-42"`                               | `bigint`, defaults to **signed `s64`**; use `s.u64()` above 2^63 - 1 |
 | `s.s64()`, `s.u64()`                                  | `"-42"`, `"42"`                       | Explicit signed/unsigned 64-bit integers                     |
 | `s.s8()` … `s.s32()`, `s.u8()` … `s.u32()`, `s.f32()` | `42`                                  | Exact numeric widths                                         |
 | `z.object({count: z.number()})`                       | `{"count":5}`                         | Record                                                       |
@@ -292,14 +292,14 @@ Method parameters are the exported fields of the input struct. Field names becom
 | `[]T`, `[N]T`                                         | JSON array; nil slice becomes `[]`                                       |
 | `[]byte`                                              | Numeric byte list, not rich binary                                       |
 | `*T`, `golem.Option[T]`                               | Inner value or `null`                                                    |
-| Struct                                                | Object containing exported fields                                        |
-| `map[K]V`                                             | Key-value pair array; keys must be primitive                             |
+| Struct                                                | Object containing exported fields; a struct with fields but none exported (`big.Int`, `url.URL`) is rejected |
+| `map[K]V`                                             | Key-value pair array; `K` is `bool`, a sized integer, a float, `golem.Char` or `string` |
 | `golem.DefineVariant` interface                       | `{"card":{"number":"4242"}}`; empty-struct case → `"cash"`               |
 | `golem.DefineEnum` integer type                       | Registered string, e.g. `"active"`                                       |
 | `golem.DefineFlags` bool-field struct                 | Selected names, e.g. `["read","write"]`                                  |
 | `golem.Tuple1[T]` … `golem.Tuple8[...]`               | Fixed-order array                                                        |
-| `golem.Result[Ok,Err]`                                | `{"ok":5}` or `{"err":"failed"}`                                         |
-| `golem.Unit`                                          | No method parameters/result at the method boundary; nested value is `{}` |
+| `golem.Result[Ok,Err]`                                | `{"ok":5}` or `{"err":"failed"}`; a `golem.Unit` arm is `{"ok":null}`    |
+| `golem.Unit`                                          | The empty tuple: no method parameters/result at the method boundary, a payloadless result arm, and `[]` elsewhere |
 
 ```go
 type PaymentMethod interface{ isPaymentMethod() }

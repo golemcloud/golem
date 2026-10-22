@@ -43,9 +43,10 @@ function f64Bits(x: number): bigint {
 }
 
 /**
- * Read min/max bounds off a Zod number schema (v3 `_def.checks` / v4
- * `_zod.def.checks`) into f64 `NumericRestrictions` (the bound is the inclusive
- * value; the model carries no inclusivity flag). `undefined` when unconstrained.
+ * Read inclusive min/max bounds off a Zod number schema (v3 `_def.checks` / v4
+ * `_zod.def.checks`) into f64 `NumericRestrictions`; the tightest bound wins.
+ * The model has only inclusive bounds, so exclusive `.gt` / `.lt` bounds are not
+ * published. `undefined` when unconstrained.
  */
 function numberRestrictions(schema: any): NumericRestrictions | undefined {
   const def = schema?._zod?.def ?? schema?._def;
@@ -56,9 +57,11 @@ function numberRestrictions(schema: any): NumericRestrictions | undefined {
     const cd = c?._zod?.def ?? c?._def ?? c;
     const kind = cd?.check ?? cd?.kind;
     const value = cd?.value;
-    if (typeof value !== 'number') continue;
-    if (kind === 'greater_than' || kind === 'min') min = value;
-    else if (kind === 'less_than' || kind === 'max') max = value;
+    if (typeof value !== 'number' || cd?.inclusive === false) continue;
+    if (kind === 'greater_than' || kind === 'min')
+      min = min === undefined ? value : Math.max(min, value);
+    else if (kind === 'less_than' || kind === 'max')
+      max = max === undefined ? value : Math.min(max, value);
   }
   if (min === undefined && max === undefined) return undefined;
   const bound = (x: number): NumericBound => ({ tag: 'float-bits', val: f64Bits(x) });
@@ -281,9 +284,9 @@ const zodWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
       );
     case 'bigint':
       return leaf(
-        t.u64(),
-        (value) => v.u64(value as bigint),
-        (sv) => (sv as Extract<SchemaValue, { tag: 'u64' }>).value,
+        t.s64(),
+        (value) => v.s64(value as bigint),
+        (sv) => (sv as Extract<SchemaValue, { tag: 's64' }>).value,
       );
     case 'array': {
       const elemCodec = recurse(element);
@@ -375,8 +378,8 @@ const zodWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
           );
         case 'bigint':
           return leaf(
-            t.u64(),
-            () => v.u64(lit as bigint),
+            t.s64(),
+            () => v.s64(lit as bigint),
             () => lit,
           );
         default:
