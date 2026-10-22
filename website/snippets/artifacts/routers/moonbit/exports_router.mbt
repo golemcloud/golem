@@ -1,4 +1,5 @@
-// this router serves exports from durable agents:
+fn bytes(s : String) -> Array[Byte] { @utf8.encode(s).to_array() }
+
 #derive.http_router
 #derive.mount("/exports")
 struct ExportsRouter {}
@@ -9,21 +10,22 @@ fn ExportsRouter::new() -> ExportsRouter { ExportsRouter::{ } }
 pub async fn ExportsRouter::serve(
   _self : Self, request : @http.HttpRequest,
 ) -> @http.HttpResponse {
-  let id = match request.path { //@
-    [.. "/exports/", .. id, .. ".csv"] if is_word(id) => Some(id)
-    _ => None
+  guard request.method == "GET" &&
+    request.path is [.. "/exports/", .. id, .. ".csv"] &&
+    is_word(id) else {
+    let body = @schema.AgentStream::produce(async fn(_) {  })
+    return { status: 404, headers: [], body }
   }
-  guard request.method == "GET" && id is Some(id) else { //@
-    return { status: 404, headers: [], body: empty() } //@
-  }
-  // the durable agent behind each export streams its CSV:
+  // stream the CSV from the agent that builds this export:
   let rows = ExportAgentClient::get(id.to_owned()).csv() //@
   {
     status: 200,
     headers: [
-      header("content-type", "text/csv"),
-      header("content-disposition", "attachment"), //@
+      { name: "content-type", value: bytes("text/csv") }, //@
+      // browsers save it as a file instead of opening it:
+      { name: "content-disposition", value: bytes( //@
+        "attachment; filename=\"\{id}.csv\"") }, //@
     ],
-    body: rows, //@
+    body: rows,
   }
 }

@@ -13,25 +13,25 @@ misuse. No `.wasm` is produced (see "Known limits").
 
 | Chapter / feature | File |
 |---|---|
-| agents/overview | `website/snippets/agents/overview/effect/support-agent.ts` |
-| agents/language | `website/snippets/agents/language/effect/cart-agent.ts` |
+| agents/overview | `website/snippets/agents/overview/effect/triage-agent.ts` |
 | agents/sqlite | `website/snippets/agents/sqlite/effect/notes-agent.ts` |
 | agents/models | `website/snippets/agents/models/effect/draft-agent.ts` |
 | agents/team | `website/snippets/agents/team/effect/planner-agent.ts` |
 | agents/waits | `website/snippets/agents/waits/effect/checkout-agent.ts` |
-| tools/overview | `website/snippets/tools/overview/effect/refund-tool.ts` |
+| tools/overview | `website/snippets/tools/overview/effect/digest-agent.ts` |
 | tools/custom | `website/snippets/tools/custom/effect/build-agent.ts` |
 | tools/requests | `website/snippets/tools/requests/effect/stripe-refund.ts` |
 | tools/permissions | `website/snippets/tools/permissions/effect/orders-access.ts` |
 | tools/secrets | `website/snippets/tools/secrets/effect/support-agent.ts` |
-| artifacts/overview | `website/snippets/artifacts/overview/effect/site-agent.ts` |
-| artifacts/routes | `website/snippets/artifacts/routes/effect/report-agent.ts` |
+| tools/publish | `website/snippets/tools/publish/effect/account-agent.ts` |
+| artifacts/overview | `website/snippets/artifacts/overview/effect/brief-agent.ts` |
+| artifacts/routes | `website/snippets/artifacts/routes/effect/board-agent.ts` |
 | artifacts/routers | `website/snippets/artifacts/routers/effect/exports-router.ts` |
-| artifacts/stream | `website/snippets/artifacts/stream/effect/writer-agent.ts` |
-| artifacts/login | `website/snippets/artifacts/login/effect/notebook-agent.ts` |
-| artifacts/readonly | `website/snippets/artifacts/readonly/effect/page-agent.ts` |
+| agents/stream | `website/snippets/agents/stream/effect/writer-agent.ts` |
+| artifacts/login | `website/snippets/artifacts/login/effect/payslip-agent.ts` |
+| agents/readonly | `website/snippets/agents/readonly/effect/stock-agent.ts` |
 
-The shared `tools/publish/golem.yaml` is not ported. `tools/secrets` is a per-language snippet
+`tools/publish` is a per-language code snippet (the shared `golem.yaml` is gone). `tools/secrets` is a per-language snippet
 (`SupportAgent`, secret config field `stripeKey`, tool `refund`, method `issueRefund`).
 
 ### Highlight markers
@@ -86,7 +86,8 @@ prelude/<chapter>-<feature>.ts   imports + omitted supporting code for that snip
 prelude/tools-requests.post.ts   appended after the requests snippet: the refund tool using it
 stubs/_guest.ts          GuestMethod / Get types copied from the Effect guest bridge generator
 stubs/research-agent-guest-client.ts, stubs/slack-agent-guest-client.ts,
-stubs/bash-tool-guest-client.ts  stand-ins for `golem build` generated clients
+stubs/bash-tool-guest-client.ts,
+stubs/crm-find-customer-tool-guest-client.ts  stand-ins for `golem build` generated clients
 vendor/                  npm project holding @effect/ai-openai@4.0.0 and @effect/ai-anthropic@4.0.0
 node_modules/            symlinks created by check.sh:
   effect                    -> sdks/effect/node_modules/effect
@@ -95,6 +96,7 @@ node_modules/            symlinks created by check.sh:
   @effect/ai-openai         -> vendor/node_modules/@effect/ai-openai
   @effect/ai-anthropic      -> vendor/node_modules/@effect/ai-anthropic
 gen/                     generated sources, tsconfigs and tsc output (rebuilt on every run)
+gen/sdk-fixed/           SHIM: copy of sdks/effect/dist with the Tool.ts:92 fix (tools-overview only)
 ```
 
 TypeScript resolves symlinks to real paths. The providers' real paths are inside `vendor/`, so
@@ -120,7 +122,11 @@ that stripped copy.
    them; ES imports are hoisted, so they may follow prelude code.
 4. Writes `gen/tsconfig.<chapter>-<feature>.json`
    (`extends ../tsconfig.base.json`, `files: [<f>.ts]`, `include: [sdks/effect/golem-types/*.d.ts]`)
-   and runs, printing the command and exit code:
+   and runs, printing the command and exit code. For the snippets listed in `FIXED_SDK`
+   (only `tools-overview`) it first builds `gen/sdk-fixed/` (a copy of `sdks/effect/dist` and
+   `package.json`, `golem-types` symlinked) whose `dist/src/Tool.d.ts` has the one-line
+   `Output<B>` fix applied by `sed` (the run fails if the line no longer matches), maps
+   `@golemcloud/effect-golem` to it with `compilerOptions.paths`, and prints a `SHIM:` line:
    `node sdks/effect/node_modules/typescript/bin/tsc -p .amp/in/snippets/effect/gen/tsconfig.<f>.json --pretty false`
 5. Prints `ALL_OK` only if every style check and all 17 tsc runs passed; otherwise
    `CHECK FAILED` and exit 1.
@@ -129,22 +135,23 @@ that stripped copy.
 
 | Prelude | Provides |
 |---|---|
-| agents-overview | `openai` (OpenAiClient.layerConfig from `OPENAI_API_KEY` + FetchHttpClient), `Message = Prompt.MessageEncoded`, `Reply`, `Approval`, `Ticket`, `notifyReviewer`, `refundOrder` |
-| agents-language | `placeOrder` (POST, decode `{ id }`) |
+| agents-overview | `classify(body): Effect<string>` (Effect AI `generateText`, OpenAI from `OPENAI_API_KEY`), `applyLabel(inbox, id, label)` (POST) |
 | agents-sqlite | `fs` |
 | agents-models | `providers` (OpenAI + Anthropic clients from env keys, FetchHttpClient) |
-| agents-team | `Facts`, `Plan`, `inDays`, imports of the two generated-client stubs |
+| agents-team | `Facts`, `Plan`, imports of the two generated-client stubs |
 | agents-waits | `PaymentEvent`, `Mailer` (MailerAgent spec with `remind`), `createPaymentLink`, `sendSurvey`, `inDays` |
-| tools-overview | `Refund`, `stripeRefund` (same body as the requests snippet) |
+| tools-overview | `Urls`, `summarizeText(page): Effect<string>` (Effect AI, OpenAI); header comment labels the `gen/sdk-fixed` SHIM |
+| tools-publish | imports only (the display file imports the CRM client stub itself, as TypeScript does) |
 | tools-requests (+ .post) | `Refund`; after the snippet, the refund tool calling the displayed `stripeRefund` |
 | tools-permissions | `AgentId`, `Card = Permissions.PersistentCard` |
 | tools-custom | `Headings`, `fs`, `BashClient` stub import |
-| tools-secrets | `defineConfig` import, `Refund`, the `refund` tool definition from tools/overview (body only, no implementation) |
-| artifacts-overview | `fs`, `streamPage(brief): Stream<string>` |
-| artifacts-routes | `fs`, `frontEnd(team): string`, `render(month): Effect<string>` |
+| tools-secrets | `defineConfig` import, `Refund`, the `refund` tool definition (charge, amount, secret apiKey; body only, no implementation) |
+| artifacts-overview | `fs`, `openai` client layer |
+| artifacts-routes | `fs` |
 | artifacts-routers | `HttpServerResponse` import; `Export`, an unimplemented `defineAgent` spec for `ExportAgent` (id `{ id: Schema.String }`, method `csv` with `success: WitTypes.AgentStream(WitTypes.Uint8ArraySchema)`) used only through its typed client |
-| artifacts-stream | `openai` client layer |
-| artifacts-login, artifacts-readonly | imports only |
+| agents-stream | `openai` client layer |
+| artifacts-login | imports (`Option`, `Unstructured`, `Principal`, `fs`) |
+| agents-readonly | imports only |
 
 Prelude helpers return `Effect<_, never>` (failures become defects), matching the TypeScript
 helpers that throw.
@@ -160,7 +167,9 @@ Nothing was invented for Effect; every library is real.
   `Reflection.getAllAgentTypes` / `getAllToolTypes()`; `Tool.toolDefinition` with
   `requiresFilesystem`, `WitTypes.Secret`, `Secrets.reveal`, `Tool.ok/err`, `.client()`;
   `Permissions.deriveFromWallet/derive/install/revoke`, `Lifespan.fromIso8601`, `Holder.agent`;
-  `Principal.PrincipalSchema`; `WitTypes.AgentStream`; `readOnly: true`).
+  `Principal.PrincipalSchema`; `Unstructured.UnstructuredBinary` + `Unstructured.Option` (an
+  optional unstructured result: `none` is a 404); `WitTypes.AgentStream`; `readOnly: true`;
+  method `description`; generated MCP tool clients' `StartedToolInvocation.collect`).
 - SQLite: `SqliteClient` from `@golemcloud/effect-golem/sqlite` (Effect SQL over Golem's
   embedded SQLite, per `golem-add-sqlite-effect`).
 - Models: Effect AI (`LanguageModel.generateText`, `generateObject` from `effect/ai`) with
@@ -179,10 +188,11 @@ Nothing was invented for Effect; every library is real.
 | `research-agent-guest-client` (`ResearchAgent.get(topic)`, `gather()`, `refresh`) | client generated by `golem build` for a Rust agent listed in `dependencies.agents` | `cli/golem-cli/src/bridge_gen/effect/effect_guest.rs`; `docs/src/content/v1.6/develop/rpc.mdx` (Effect tab) |
 | `slack-agent-guest-client` (`SlackAgent.get(channel)`, `post(text)`) | same | same |
 | `bash-tool-guest-client` (`BashClient.newClient().run(script, cwd, timeout)`) | Effect client generated for the built-in `bash@0.2.1` tool | `cli/golem-cli/src/bridge_gen/effect/effect_tool.rs`, `typescript/tool.rs` (Effect dialect); `docs/.../golem-generating-tool-clients.mdx` |
+| `crm-find-customer-tool-guest-client` (`CrmFindCustomerClient.newClient().crm_find_customer(email)` → `Effect<StartedToolInvocation<{ structured: { name, plan }, content }, McpToolError>, …, ToolRequirements \| Scope>`; also `client`) | Effect client generated for the MCP-imported tool `crm_find_customer` (input `{ email }`, `additionalProperties: false`; output schema `{ name, plan }`) | `typescript/tool.rs` `write_effect_leaf` (a leaf with stdout returns a scoped `StartedToolInvocation`), `effect/effect_tool.rs` (`export const client`), `golem-mcp-import/src/tool.rs` (result `{ structured, content }`, optional stdout, error `mcp-tool-error: string`), `cli/golem-cli/tests/bridge_gen/mcp_import.rs`; `docs/src/content/v1.6/invoke/mcp.mdx` (Effect tab) |
 
 The stubs are `declare class` types built only from real exported SDK types (`Bridge.RemoteAgentHandle`,
 `Bridge.RemoteCallError`, `Bridge.ConnectionRequirements`, `BridgeTool.ToolRuntimeError`,
-`BridgeTool.ToolRequirements`). They have no runtime body. Generating the real clients needs a
+`BridgeTool.ToolRequirements`, `BridgeTool.StartedToolInvocation`). They have no runtime body. Generating the real clients needs a
 running Golem environment with the provider components; the stub signatures follow the generator
 code exactly (positional constructor arguments, Effect results, `trigger` / `schedule` /
 `scheduleCancelable` on stream-free methods).
@@ -196,18 +206,18 @@ and prints `NEG_OK`.
 
 | Case | Mutation | Error |
 |---|---|---|
-| overview-ts-webhook | `Webhook.create` → `Webhook.createWebhook` (TS SDK name) | TS2339 |
-| language-wrong-success | `add` `success: Schema.Int` → `Schema.String` | TS2322 |
+| triage-decode-wrong-schema | `decodeUnknownEffect(Label)` → `(Email)` | TS2345 |
 | sqlite-wrong-option | `SqliteClient.make({ filename` → `{ path` | TS2353 |
 | models-old-params | method `input:` → `params:` (old API) | TS2769 |
 | team-call-reflection-value | `Reflection.getAllAgentTypes` called as a function | TS2349 |
 | waits-positional-id | `Mailer.client.get({ orderId })` → `get(orderId)` | TS2345 |
 | custom-misspelt-option | `requiresFilesystem` → `requiresFileSystem` | TS2561 |
-| overview-undeclared-error | `Tool.err("http"` → `Tool.err("timeout"` | TS2322 |
+| digest-wrong-result | `summarize` `.returns(Schema.String)` → `Schema.Number` | TS2322, TS2345 |
+| publish-object-input | `.crm_find_customer(email)` → `({ email })` (generated clients are positional) | TS2345 |
 | requests-amount-type | `amount: number` → `bigint` (the refund tool passes `Schema.Int`) | TS2345 |
 | permissions-ts-lifespan | `Lifespan.fromIso8601` → `Lifespan.iso8601` (TS SDK name) | TS2339 |
-| site-stream-item-type | `AgentStream(Schema.String)` → `AgentStream(Schema.Number)` | TS2322 |
-| routes-file-not-path | `exposeFiles` entry `path:` → `file:` | TS2353 |
+| brief-openai-field | `res.text` → `res.output_text` (OpenAI SDK name) | TS2339 |
+| board-file-not-path | `exposeFiles` entry `path:` → `file:` | TS2353 |
 | routers-ts-implement-raw | router `.implement(` → `.implementRaw(` (TS SDK name) | TS2551 |
 | stream-endpoint-not-array | `http: [Http.post(…)]` → `http: Http.post(…)` (TS SDK shape) | TS2769 |
 | login-ts-principal-shape | `caller.val.sub` → `caller.sub` (TS SDK shape) | TS2339 |
@@ -222,16 +232,30 @@ with the Golem refund tool spliced after it.
 - Handlers are Effects: method failures become defects with `Effect.orDie` / `Effect.die` /
   `throw` inside `Effect.sync` (all trap, like a TypeScript throw); permission calls keep their
   typed errors instead of `.unwrap()`.
-- `agents/overview`: `LanguageModel.generateObject({ prompt: history, schema: Reply })` replaces
-  `chat.completions.parse` + `zodResponseFormat` + `Reply.parse`; the schema decode happens inside
-  `generateObject`. The OpenAI client layer (`openai`) is provided at the end of the handler.
+- `agents/overview`: `Label.parse(await classify(...))` becomes `classify(...)` piped into
+  `Schema.decodeUnknownEffect(Label)` (two lines); `z.record` is `Schema.Record`.
 - `agents/models`: the model is chosen by providing `OpenAiLanguageModel.model(...)` /
   `AnthropicLanguageModel.model(...)`; `Output.object({ schema })` becomes `generateObject`.
-- `agents/team`: generated Effect clients resolve with `yield* X.get(...)`, so the Slack trigger
-  takes two lines; `research.refresh.schedule(inDays(1))` needs a `Scope` (`Effect.scoped`).
-- `agents/waits`: `Effect.sleep("7 days")` replaces `node:timers/promises` (no import line).
-- `tools/overview`: Effect tool errors carry a payload schema, so `http` carries the status
-  (`Tool.err("http", res.status)`); the error kind is `"runtime-error"`.
+- `agents/team`: generated Effect clients resolve with `yield* X.get(...)`, so the awaited call and
+  the Slack trigger each take two lines (both lines of the awaited call are highlighted for the
+  one TS line); the handler is `Effect.scoped` because the bridge connection requires a `Scope`.
+  The reflection `tools` line is split; its first line is highlighted.
+- `agents/waits`: the reminder client takes two statements (`Mailer.client.get`, then
+  `.remind.schedule`); both are highlighted, like the two TS lines.
+- `agents/waits` (sleep): `Effect.sleep("7 days")` replaces `node:timers/promises` (no import line).
+- `tools/overview`: `fetch(url).text()` becomes `HttpClient.get(url)` + `res.text` (two lines,
+  the first highlighted); `FetchHttpClient.layer` is passed to `implement`. The root command is
+  called as `summarize.client()({ url })`. SDK typing bug (same as `tools/custom`, see below):
+  the client types the result as `void`, so `out.push(...)` into `string[]` fails with TS2345
+  against the real declarations (verified). The snippet keeps the natural code; `check.sh`
+  compiles it against `gen/sdk-fixed` (SHIM, labelled in the prelude and in the run output).
+- `tools/publish`: the generated Effect client returns an Effect of a `StartedToolInvocation`, so
+  the call is `yield*`-ed inside `Effect.scoped`. The SDK has `StartedToolInvocation.collect`
+  (`sdks/effect/src/BridgeTool.ts:52`), an Effect rather than a method, so the brief's "Effect has
+  no `.collect()`" does not hold and the snippet uses `yield* call.collect`, mirroring TS. The
+  rejected-result check is `yield* Effect.fromResult(result)` (fails with the tool error, which
+  `Effect.orDie` turns into a trap like the TS `throw`). Method `description` exists in the Effect
+  SDK; `structured` is typed by the generated client; no shim beyond the client stand-in.
 - `tools/custom`: SDK typing bug, visible in the snippet: the typed tool client
   (`outline.client()`, `Tool.client`) types every call result as `void` because `Output<B>` reads
   the optional `BodyModel.output` (`S | undefined` never extends `Schema.Top`). The snippet
@@ -249,27 +273,32 @@ with the Golem refund tool spliced after it.
   config secret to a secret tool parameter is otherwise sound: `.borrow` and
   `WitTypes.Secret(...)` share the `GuestSecretHandle` type and the codec transfers it
   (`test/gol-40-effect-client-capabilities.test.ts` "CLIENT-SECRET" passes).
-- Comment placement differs where the Effect structure differs: `artifacts/overview` builds the
-  `save` effect before the stream so the completion comment fits in 68 columns.
-- `artifacts/routes`: init receives the id fields directly (`({ team })`) and writes the front-end in
-  `Effect.sync`; the state is `void`, so `methods: () => ...`.
-- `artifacts/routers`: the Effect SDK has no `implementRaw`; a router is implemented with an Effect
-  application (`HttpRouter.define(...).implement(Effect.succeed(app))`). The handler reads the
-  original full path and method from `yield* HttpRouter.request` (not the mount-relative Effect
-  `HttpServerRequest`), so it matches `/exports/<id>.csv` like the TypeScript raw handler. A miss
-  returns `HttpServerResponse.empty({ status: 404 })`. The typed client resolves in two steps
-  (`yield* Export.client.get({ id })`, then `yield* exp.csv({})`; Effect RPC input is always one
-  object, so `csv()` without `{}` is a type error); both lines are highlighted for the one TS line.
-  The received `Stream<Uint8Array, unknown>` is forwarded directly with
-  `HttpServerResponse.stream(rows, { contentType, headers })`; that line is the counterpart of
-  `body: rows`. No shim was needed.
-- `artifacts/login`: OIDC principals are `{ tag: "oidc", val: { sub, ... } }`.
+- `artifacts/overview`: `openai.responses.create` becomes Effect AI `generateText` (`res.text`); the
+  OpenAI model and client layers are provided at the end of the handler.
+- `artifacts/routes`: the embedded HTML/JS template literal is byte-identical to TypeScript. The
+  `add` method spec is written `methods: { add: method({ ... }) }` (two lines shorter) to stay
+  within 31 lines, since `input` and `success` cannot share one line. Init receives no id, writes
+  the page in `Effect.sync` and returns `{ cards }`.
+- `artifacts/routers`: the Effect SDK has no `implementRaw`, and `HttpRouter.define(...).implement`
+  returns `void`, so there is no `export const Exports =`. A router is implemented with an Effect
+  application; the handler reads the original full path and method from `yield* HttpRouter.request`.
+  A miss returns Effect's native `HttpServerResponse.empty({ status: 404 })`. The typed client
+  resolves in two steps (`yield* Export.client.get({ id })`, then `yield* exp.csv({})`); both
+  lines are highlighted for the one TS line. The response is `HttpServerResponse.stream(rows,
+  { status, contentType, headers })`: the content type is the native `contentType` option
+  (highlighted as the counterpart of the TS content-type header) and the content-disposition
+  header is a plain record entry over two highlighted lines. No `bytes()` helper is needed.
+- `artifacts/login`: OIDC principals are `{ tag: "oidc", val: { sub, ... } }`. `s.option(Pdf)` is
+  `Unstructured.Option(Unstructured.UnstructuredBinary({ restrictions: [{ mimeType }] }))`; the
+  handler returns `Option.none()` (404) or `Option.some({ _tag: "inline", val, mimeType })`.
 
 ## Known limits (compiles, not proven at runtime)
 
 - Type-check only: no Rollup bundle, no WASM, no deployment. A real component needs
   `golem new --language effect`, the snippet modules imported from `src/main.ts`, the two AI
-  providers added to that app, and `golem build`.
+  providers added to that app, and `golem build` (for `tools/publish`, an MCP import in the
+  manifest and a reachable MCP server so the real client can be generated).
+- `tools/overview` compiles only with the `gen/sdk-fixed` SHIM until the SDK fix lands.
 - Runtime-only validations are not exercised: `Http.mount` / endpoint path parsing fallbacks,
   `exposeFiles` mapping compilation, forwarding an RPC byte stream into a router response body, and agent registration happen at module
   import inside the guest.

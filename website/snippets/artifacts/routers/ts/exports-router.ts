@@ -1,19 +1,23 @@
-// this router serves exports from durable agents:
+const bytes = (text: string) => new TextEncoder().encode(text)
+
 export const Exports = defineHttpRouter('ExportsRouter')
   .mount('/exports')
   .implementRaw(async (request) => {
-    const match = request.path.match(/^\/exports\/([\w-]+)\.csv$/) //@
-    if (request.method !== 'GET' || !match) { //@
-      return { status: 404, headers: [], body: empty() } //@
+    const id = request.path.match(/^\/exports\/([\w-]+)\.csv$/)?.[1]
+    if (request.method !== 'GET' || !id) {
+      const body = AgentStream.from<Uint8Array>([])
+      return { status: 404, headers: [], body }
     }
-    // the durable agent behind each export streams its CSV:
-    const rows = await Export.client.get({ id: match[1] }).csv() //@
+    // stream the CSV from the agent that builds this export:
+    const rows = await Export.client.get({ id }).csv() //@
     return {
       status: 200,
       headers: [
-        header('content-type', 'text/csv'),
-        header('content-disposition', 'attachment'), //@
+        { name: 'content-type', value: bytes('text/csv') }, //@
+        // browsers save it as a file instead of opening it:
+        { name: 'content-disposition', value: bytes( //@
+          `attachment; filename="${id}.csv"`) }, //@
       ],
-      body: rows, //@
+      body: rows,
     }
   })

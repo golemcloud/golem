@@ -8,20 +8,15 @@ fn PlannerAgent::new(topic : String) -> PlannerAgent {
 }
 
 pub async fn PlannerAgent::plan(self : Self) -> Plan {
-  // use a typed client generated for a Rust ResearchAgent:
-  let research = @research.ResearchAgentClient::get(self.topic) //@
-  defer research.drop()
-  let facts = research.gather()
+  // wait for a typed result from a Rust ResearchAgent:
+  let facts = @research.ResearchAgentClient::get(self.topic) //@
+    .gather() //@
   // send now, without waiting for a result:
-  let slack = @slack.SlackAgentClient::get("ops")
-  defer slack.drop()
-  slack.trigger_post(facts.summary) //@
-  // schedule a call for tomorrow:
-  research.schedule_refresh(in_days(1)) //@
-  // discover what other agents and tools offer:
-  let agents = @reflection.get_all_agent_types() //@
-    .map(a => "\{a.name()} (\{a.source_language()})")
-  let tools = @reflection.get_all_tool_types()
-    .map(t => t.lookup_name())
+  @slack.SlackAgentClient::get("ops").trigger_post(facts.summary) //@
+  // discover agents, their methods, and available tools:
+  let agents = @reflection.get_all_agent_types().map(a => //@
+    "\{a.name()}: \{a.methods().map(m => m.name()).join(", ")}") //@
+  let tools = @reflection.get_all_tool_types() //@
+    .map(t => t.lookup_name()) //@
   { facts, agents, tools }
 }

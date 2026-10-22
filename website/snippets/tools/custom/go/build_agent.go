@@ -5,7 +5,6 @@ var Outline = tool.DefineTool[Outliner]("outline", tool.Spec{ //@
     s.Positional(&a.File)
 })
 var _ = Outline.Handle(
-    // each call runs in a fresh WebAssembly VM:
     func(_ *tool.Context, a Args) (Headings, error) {
         text := string(golem.Must(os.ReadFile(a.File)))
         headings := regexp.MustCompile("(?m)^#.*")

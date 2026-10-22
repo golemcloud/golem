@@ -13,7 +13,7 @@ var _ = Checkout.Implement(func(id CheckoutID) *CheckoutID {
     paid := golem.NewWebhook[PaymentEvent]()
     createPaymentLink(c.OrderID, in.Amount, paid.URL())
     // schedule a call on another agent for tomorrow:
-    mailer := Mailer.Get(MailerID{OrderID: c.OrderID})
+    mailer := Mailer.Get(MailerID{OrderID: c.OrderID}) //@
     reminder := Remind.MustSchedule(mailer, inDays(1), golem.Unit{}) //@
     // it waits here for days if needed, using no CPU or memory:
     event := paid.MustAwait() //@

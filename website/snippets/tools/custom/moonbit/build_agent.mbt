@@ -2,7 +2,6 @@
 #derive.tool("outline", requires_filesystem=true) //@
 struct Outline {}
 
-// each call runs in a fresh WebAssembly VM:
 pub async fn Outline::outline(file : String) -> Array[String] {
   let root = @fs.get_root_dir().unwrap()
   let text = @fs.read_string(root, file).unwrap()

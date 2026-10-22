@@ -14,7 +14,7 @@ impl CheckoutAgent for CheckoutAgentImpl {
     let paid = create_webhook()?;
     create_payment_link(&self.order_id, amount, paid.url()).await?;
     // schedule a call on another agent for tomorrow:
-    let reminder = MailerAgentClient::get(self.order_id.clone())
+    let reminder = MailerAgentClient::get(self.order_id.clone()) //@
       .schedule_cancelable_remind(in_days(1))?; //@
     // it waits here for days if needed, using no CPU or memory:
     let event: PaymentEvent = paid.await.json()?; //@

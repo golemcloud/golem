@@ -13,7 +13,7 @@ trait DraftAgent extends BaseAgent:
 final class DraftAgentImpl(topic: String) extends DraftAgent:
   def write(idea: String): Future[Draft] =
     for
-      // completed model calls are not repeated on recovery:
+      // draft with one provider, review with another:
       draft <- generateText(
         model = openai("gpt-4.1"), //@
         prompt = s"Product update on $topic: $idea",

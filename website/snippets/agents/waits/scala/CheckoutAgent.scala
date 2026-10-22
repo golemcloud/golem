@@ -12,7 +12,7 @@ final class CheckoutAgentImpl(orderId: String)
     for
       _ <- createPaymentLink(orderId, amount, paid.url)
       // schedule a call on another agent for tomorrow:
-      reminder <- MailerAgentClient.get(orderId)
+      reminder <- MailerAgentClient.get(orderId) //@
         .remind.scheduleCancelableAt(inDays(1)) //@
       // it waits here for days if needed, using no CPU or memory:
       event <- paid.await().map(_.json[PaymentEvent]()) //@

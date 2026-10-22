@@ -18,7 +18,7 @@ var Write = Drafter.Method[WriteIn, Draft]("write")
 var _ = Drafter.Implement(func(id DraftID) *DraftID {
     return &id
 }).Handle(Write, golem.Adapt(func(d *DraftID, in WriteIn) Draft {
-    // completed model calls are not repeated on recovery:
+    // draft with one provider, review with another:
     draft := golem.Must(genkit.GenerateText(ctx, g,
         ai.WithModelName("openai/gpt-4.1"), //@
         ai.WithPrompt("Product update on "+d.Topic+": "+in.Idea)))

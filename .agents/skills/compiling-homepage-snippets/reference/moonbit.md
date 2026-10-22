@@ -20,34 +20,35 @@ bash .amp/in/snippets/moonbit/neg.sh     # 16 negative controls + a clean run; e
 
 A warm `check.sh` run takes about 15 s (32 code-generator runs, one
 `moon build`, 16 component links); `neg.sh` runs `check.sh` 17 times, about
-5 minutes. The first run is longer while Moon compiles the SDK and the
+8 minutes. The first run is longer while Moon compiles the SDK and the
 generator.
 
 ## Display files
 
 | Display file | Harness package |
 |---|---|
-| `agents/overview/moonbit/support_agent.mbt` | `harness/agents_overview` |
-| `agents/language/moonbit/cart_agent.mbt` | `harness/agents_language` |
+| `agents/overview/moonbit/triage_agent.mbt` | `harness/agents_overview` |
 | `agents/models/moonbit/draft_agent.mbt` | `harness/agents_models` |
 | `agents/team/moonbit/planner_agent.mbt` | `harness/agents_team` |
 | `agents/waits/moonbit/checkout_agent.mbt` | `harness/agents_waits` |
-| `tools/overview/moonbit/refund_tool.mbt` | `harness/tools_overview` |
+| `agents/stream/moonbit/writer_agent.mbt` | `harness/agents_stream` |
+| `agents/readonly/moonbit/stock_agent.mbt` | `harness/agents_readonly` |
+| `tools/overview/moonbit/digest_agent.mbt` | `harness/tools_overview` |
 | `tools/custom/moonbit/build_agent.mbt` | `harness/tools_custom` |
 | `tools/requests/moonbit/stripe_refund.mbt` | `harness/tools_requests` |
 | `tools/permissions/moonbit/orders_access.mbt` | `harness/tools_permissions` |
-| `artifacts/overview/moonbit/site_agent.mbt` | `harness/artifacts_overview` |
-| `artifacts/routes/moonbit/report_agent.mbt` | `harness/artifacts_routes` |
-| `artifacts/routers/moonbit/exports_router.mbt` | `harness/artifacts_routers` |
-| `artifacts/stream/moonbit/writer_agent.mbt` | `harness/artifacts_stream` |
-| `artifacts/login/moonbit/notebook_agent.mbt` | `harness/artifacts_login` |
-| `artifacts/readonly/moonbit/page_agent.mbt` | `harness/artifacts_readonly` |
 | `tools/secrets/moonbit/support_agent.mbt` | `harness/tools_secrets` |
+| `tools/publish/moonbit/account_agent.mbt` | `harness/tools_publish` |
+| `artifacts/overview/moonbit/brief_agent.mbt` | `harness/artifacts_overview` |
+| `artifacts/routes/moonbit/board_agent.mbt` | `harness/artifacts_routes` |
+| `artifacts/routers/moonbit/exports_router.mbt` | `harness/artifacts_routers` |
+| `artifacts/login/moonbit/payslip_agent.mbt` | `harness/artifacts_login` |
 
 There is no `agents/sqlite/moonbit` (owner's decision: MoonBit has no
 embedded SQLite; the page shows a note). `check.sh` fails if that folder
-appears. The shared `tools/publish/golem.yaml` is not checked here (the
-TypeScript harness validates it).
+appears. So the page's 17 features have 16 MoonBit display files.
+`tools/publish` is a code snippet (`account_agent.mbt`); the shared
+`golem.yaml` it replaced is gone and nothing checks it any more.
 
 The display files omit what MoonBit keeps outside source files (package
 imports live in `moon.pkg`) and the `///|` block separators `moon fmt` would
@@ -107,34 +108,35 @@ add. They are hand-formatted with 2-space indentation and are not
     research-agent-guest-client/  package client (@research): ResearchAgentClient, Facts
     slack-agent-guest-client/     package client (@slack): SlackAgentClient
     bash-tool-guest-client/       package client (@bash): BashClient, BashResult, BashError
+    crm-find-customer-tool-guest-client/
+                                  package client (@crm): CrmFindCustomerClient (MCP-imported tool)
 ```
 
 One package per snippet keeps the snippets from colliding (several define
-`RefundResult`, `stripe_refund` or agents with clashing generated clients)
+`RefundResult`, `Refund` tools or agents with clashing generated clients)
 and makes each negative control hit exactly one package.
 
 What each `harness.mbt` supplies:
 
 | Package | Harness code |
 |---|---|
-| `agents_overview` | `Reply` (`#derive.golem_schema`, `FromJson`), `Approval`, `notify_reviewer` and `refund_order` (JSON POSTs that fail on non-2xx) |
-| `agents_language` | `Order`, `place_order(user, items)` (JSON POST, decodes `{ id }`) |
+| `agents_overview` | `classify(body) -> Label` (stand-in classifier, already typed: TS `Label.parse(await classify(...))`), `apply_label(inbox, id, label)` (JSON POST that fails on non-2xx); `Email` and `Label` are displayed |
 | `agents_models` | nothing (`Review` and `Draft` are displayed) |
-| `agents_team` | `Plan { facts : @research.Facts, agents, tools }` (`#derive.golem_schema`), `in_days` |
+| `agents_team` | `Plan { facts : @research.Facts, agents, tools }` (`#derive.golem_schema`) |
 | `agents_waits` | `PaymentEvent`, a real `#derive.agent struct MailerAgent` with `remind` (so the generated `MailerAgentClient` exists), `create_payment_link`, `send_survey`, `in_days` |
-| `tools_overview` | `RefundResult` (`#derive.golem_schema`), `stripe_refund` (the Requests snippet's helper), `read_text` |
-| `tools_requests` | the refund tool of the Tools overview, calling the displayed `stripe_refund`; `form_post`, `read_text` |
+| `tools_overview` | `summarize_text(page)` (stand-in for TS `summarizeText`); `get(url)` and `read_text` from `util` |
+| `tools_requests` | the refund tool of the Secrets/old Tools snippet, calling the displayed `stripe_refund`; `form_post`, `read_text` |
 | `tools_permissions` | `#derive.agent struct OrdersAccess` whose `share(agent)` / `revoke()` call the displayed `share_orders` / `revoke_orders` (target id from `@api.resolve_agent_id`) |
 | `tools_custom` | nothing (bash client from `stubs/`) |
-| `artifacts_overview` | `stream_page(brief) -> @schema.AgentStream[String]` |
-| `artifacts_routes` | `render(month)`, `front_end(team)` |
-| `artifacts_routers` | a real durable `#derive.agent struct ExportAgent` (`new(id)`, `csv() -> @schema.AgentStream[Array[Byte]]`), so the generator emits the same-component client `ExportAgentClient`; `header(name, value) -> @http.HttpHeader` and `empty()` (an empty byte stream), the TS helpers of the same names; `is_word(id)` (the `[\w-]+` rule of the TS regex) |
-| `tools_secrets` | the refund tool of the Tools overview (same signature, trivial body) and `RefundResult`, so the generator emits the typed tool client `RefundClient` in this component |
-| `artifacts_stream`, `artifacts_login`, `artifacts_readonly` | nothing |
+| `tools_publish` | nothing (the MCP tool client stand-in is in `stubs/crm-find-customer-tool-guest-client`) |
+| `artifacts_routers` | a real durable `#derive.agent struct ExportAgent` (`new(id)`, `csv() -> @schema.AgentStream[Array[Byte]]`), so the generator emits the same-component client `ExportAgentClient`; `is_word(id)` (the `[\w-]+` rule of the TS regex) |
+| `tools_secrets` | a `refund` tool (same signature as the Requests harness, trivial body) and `RefundResult`, so the generator emits the typed tool client `RefundClient` in this component |
+| `agents_stream`, `agents_readonly`, `artifacts_overview`, `artifacts_routes`, `artifacts_login` | nothing |
 
 `util` (`golemcloud/home_snippets_v3/util`): `json_post`, `form_post`
 (form-encoded HTTPS POST with percent-encoding and extra headers, the
-`URLSearchParams` equivalent), `send_ok`, `read_text` (all on the SDK's P3
+`URLSearchParams` equivalent), `get` (a body-less HTTPS GET, the `fetch(url)`
+equivalent), `send_ok`, `read_text` (all on the SDK's P3
 `@http`), and `in_days(n)` (`@systemClock.Instant` now + n × 86 400 s).
 Harness packages bring the names a snippet calls unqualified into scope
 with `using @util {...}`.
@@ -149,6 +151,10 @@ with `using @util {...}`.
    marker left anywhere but at a line end; every line whose code part
    (string literals removed) contains `//` must be a comment line
    (`^\s*//`) ending with `:` (a highlighted comment line ends in `: //@`).
+   `///` doc comments are exempt: in MoonBit a doc comment *is* the method
+   description (the generator copies it into the agent type), the
+   counterpart of TS `description: '...'`, and is not a sentence ending in
+   a colon (`tools/publish`).
    Prints `<file>: N lines, longest M, markers K` for each.
 3. **Splice**: `moon.pkg.in` → `moon.pkg` (the generators rewrite
    `moon.pkg`), delete old `golem_*.mbt` / `snippet_*.mbt`, then write the
@@ -191,51 +197,69 @@ control; a final clean run must print `ALL_OK`.
 
 | Snippet | Planted wrong Golem API use | Rejected by |
 |---|---|---|
-| support_agent | `approval.url()` → `approval.get_url()` | moonc: `WebhookHandler has no method get_url` |
-| cart_agent | `#derive.golem_schema` → `#derive.golem_scheme` | moonc: `Item does not implement trait WireSchema` (generated dispatch) |
+| triage_agent | `#derive.golem_schema` → `#derive.golem_scheme` | moonc: `Email does not implement trait WireSchema` (generated dispatch) |
 | draft_agent | `fn DraftAgent::new(` → `fn DraftAgent::create(` | golem_sdk_tools: `AgentParseError` (agents need `new`) |
-| planner_agent | `research.schedule_refresh(` → `research.refresh.schedule(` | moonc: `ResearchAgentClient has no field refresh` |
+| planner_agent | `.trigger_post(` → `.post.trigger(` | moonc: `SlackAgentClient has no field post` |
 | checkout_agent | `schedule_cancelable_remind(` → `schedule_remind(` | moonc: `Unit has no method cancel` |
-| site_agent | `out.write_one(part)` → `out.write(part)` | moonc: `AgentStreamWriter[String] has no method write` |
-| report_agent | `#derive.expose_files("/*", "/site/$1")` → `("/*", "/site")` | golem_sdk_tools: `AgentParseError` (a `/*` subtree needs a `/$1` target) |
-| exports_router | `#derive.http_handler` → `#derive.endpoint(get="/")` | golem_sdk_tools: `AgentParseError` (router methods must be HTTP handlers) |
 | writer_agent | `out.write_one(reply)` → `out.write_all(reply)` | moonc: type mismatch |
-| notebook_agent | `caller : @common.Principal` → `caller : String` | moonc: `Oidc is unbound` |
-| page_agent | `#derive.endpoint(put="/")` → `put="/{name}"` | golem_sdk_tools: `AgentParseError` (path variable is not a parameter) |
-| refund_tool | `return Err(Http)` → `Err(Timeout)` | moonc: `RefundError does not have the constructor Timeout` |
+| stock_agent | `#derive.agent` → `#derive.agent("ephemeral")` | golem_sdk_tools: `AgentParseError` (read-only methods need a durable agent, `lib/agents.mbt:1839`; the same file with `#derive.read_only` also removed passes) |
+| brief_agent | `expose_files("/", …)` → `expose_files("/*", …)` | golem_sdk_tools: `AgentParseError` (a `/*` subtree needs a `/$1` target) |
+| board_agent | `endpoint(post="/cards")` → `post="/cards/{id}"` | golem_sdk_tools: `AgentParseError` (path variable is not a parameter) |
+| exports_router | `#derive.http_handler` → `#derive.endpoint(get="/")` | golem_sdk_tools: `AgentParseError` (router methods must be HTTP handlers) |
+| payslip_agent | `caller : @common.Principal` → `caller : String` | moonc: `Oidc is unbound` |
+| digest_agent | `SummarizeClient::new().summarize(` → `Summarize::client().summarize(` | moonc: `Summarize has no method client` |
 | build_agent | `OutlineClient::new().outline(` → `Outline::client().outline(` | moonc: `Outline has no method client` |
 | stripe_refund | drop `.unwrap()` after `@http.send(...)` | moonc: type mismatch (`Result` vs `@http.Response`) |
 | orders_access | `lifespan=@permissions.Lifespan::iso8601("PT1H")` → `lifespan="PT1H"` | moonc: type mismatch |
+| account_agent | drop `.unwrap()` after `.crm_find_customer(email)` | moonc: `Result[@tool.TypedToolInvocation[…], @tool.ToolError[…]] has no method collect` |
 | support_agent (secrets) | pass `self.config.stripe_key` (a `@config.Secret[String]`) straight to `RefundClient::refund` | moonc: type mismatch (`@config.Secret[String]` vs `@secrets.SecretHandle[String]`) |
 
 The code generator prints only the error type (`AgentParseError`), not its
-message, so those four controls are identified by the failing
+message, so those five controls are identified by the failing
 `agents <package>` step.
 
 ## Real SDK APIs used by the snippets
 
-- Agents: `#derive.agent`, `fn T::new(...)` constructors (identity
-  parameters), `pub fn` / `pub async fn` methods; `#derive.golem_schema`
-  records; `#derive.mount("/tickets/{ticket}")`; `@webhook.create`,
-  `WebhookHandler::url`, `wait`, `WebhookRequestPayload::text`; generated
-  same-component client `MailerAgentClient::get` +
-  `schedule_cancelable_remind(at)` → `@agentHost.CancellationToken::cancel`;
-  `@monotonicClock.wait_for(ns)` (WASI P3 clock, made durable by the worker
-  executor, `golem-worker-executor/src/durable_host/p3/clocks.rs`);
-  `@reflection.get_all_agent_types` / `AgentType::name` / `source_language`,
-  `@reflection.get_all_tool_types` / `ToolType::lookup_name`; guest-client
-  shapes `get`, `drop`, awaited call, `trigger_<m>`, `schedule_<m>`.
-- Tools: `#derive.tool("refund", version="1.0.0")`,
+- Agents: `#derive.agent`, `fn T::new(...)` constructors (their parameters
+  are the agent's identity), `pub fn` / `pub async fn` methods;
+  `#derive.golem_schema` records and enums; `Array[Email]` parameters and a
+  `Map[String, Label]` result; `#derive.mount("/checkout/{order_id}")`;
+  `@webhook.create`, `WebhookHandler::url`, `wait`,
+  `WebhookRequestPayload::text`; generated same-component client
+  `MailerAgentClient::get(id).schedule_cancelable_remind(at)` →
+  `@agentHost.CancellationToken::cancel`; `@monotonicClock.wait_for(ns)`
+  (WASI P3 clock, made durable by the worker executor,
+  `golem-worker-executor/src/durable_host/p3/clocks.rs`);
+  `@reflection.get_all_agent_types` / `AgentType::name` / `methods` /
+  `AgentMethod::name`, `@reflection.get_all_tool_types` /
+  `ToolType::lookup_name`; guest-client shapes `get`, awaited call,
+  `trigger_<m>`; `#derive.read_only` on a plain method (generated
+  `read_only: Some({ cache_policy: UntilWrite })`).
+- Tools: `#derive.tool("summarize")` with an `async fn` returning a plain
+  `String` (no error enum), generated `SummarizeClient::new().summarize(url)`
+  → `Result[String, @tool.ToolError[@tool.NoToolError]]`;
   `#derive.tool("outline", requires_filesystem=true)` (generated
-  `requires_filesystem: true`), error enum with
-  `#derive.error(kind="runtime", exit_code="1")`, positional arguments by
-  default, generated `OutlineClient::new().outline(file)`; `@http.send`;
-  `@permissions.PatternGrant`, `Bounds::new(lower_positive=…)`,
+  `requires_filesystem: true`), generated `OutlineClient::new().outline(file)`;
+  `@http.send`; `@permissions.PatternGrant`, `Bounds::new(lower_positive=…)`,
   `derive_from_wallet`, `PersistentCard::derive_child(bounds,
   lifespan=Lifespan::iso8601("PT1H"))` (`derive` is a MoonBit keyword),
   `install(Agent(id))`, `revoke()` (returns the revoked count, ignored).
   `share_orders` / `revoke_orders` are `raise` functions, the MoonBit form of
   TS `.unwrap()`.
+- MCP (`tools/publish`): a `///` doc comment on an agent method becomes the
+  method's `description` in the generated agent type (`golem_agents.mbt`:
+  `description: "Summarize a customer account by email"`), which an MCP
+  deployment exposes as the tool description. The imported tool is called
+  through the generated tool client shape of
+  `cli/golem-cli/src/bridge_gen/moonbit/tool.rs`: `CrmFindCustomerClient::new()`,
+  a non-async leaf method `crm_find_customer(email)` (the projection declares
+  stdout, so it starts an invocation) returning
+  `Result[@tool.TypedToolInvocation[R, E], @tool.ToolError[E]]`, then the
+  real SDK `TypedToolInvocation::collect()` →
+  `@tool.CollectedToolInvocation { result, stdout, stderr }`
+  (`golem_sdk/tool/client.mbt:40,234`); `result.structured` is typed by the
+  upstream output schema (`golem-mcp-import/src/tool.rs:160-168`, checked for
+  MoonBit by `cli/golem-cli/tests/bridge_gen/mcp_import.rs:204-250`).
 - Secrets: `#derive.config struct SupportConfig { stripe_key :
   @config.Secret[String] }`, constructor parameter
   `config : @config.Config[SupportConfig]` (stored as `config.value`; the
@@ -243,29 +267,34 @@ message, so those four controls are identified by the failing
   key), generated typed tool client `RefundClient::new().refund(charge,
   amount, api_key)` → `Result[RefundResult, @tool.ToolError[RefundError]]`,
   `.unwrap()` as in `tools/custom`.
-- Artifacts: `#derive.expose_files(route, path)` (agent file bindings;
-  `("/*", "/site/$1")` is a subtree binding, generated as
-  `{ public_prefix: [], filesystem_root: "/site" }`), an `async fn
-  T::new(...)` constructor that writes files when the agent is created (as
-  `FileOwner` in `golem_sdk_example1`), `#derive.http_router` +
+- Artifacts: `#derive.expose_files(route, path)` (agent file bindings,
+  generated as `FileMapping::Exact { public_path, file_path }`), an `async
+  fn T::new(...)` constructor that writes files when the agent is created
+  (as `FileOwner` in `golem_sdk_example1`), `#derive.http_router` +
   `#derive.mount("/exports")` on an empty struct with one
   `#derive.http_handler pub async fn serve(_self, request :
   @http.HttpRequest) -> @http.HttpResponse` (the MoonBit raw handler, the
   form of `defineHttpRouter(...).implementRaw(...)`; generated as an
   ephemeral agent with an `Any` endpoint), `@http.HttpRequest` `method` /
   `path` (the original public path), `@http.HttpResponse { status, headers :
-  Array[@http.HttpHeader], body : @schema.AgentStream[Array[Byte]] }`; a
-  generated same-component client `ExportAgentClient::get(id).csv()`
-  returning `@schema.AgentStream[Array[Byte]]`, passed straight on as the
-  response body (`AgentStream`'s `IntoWire` forwards the received stream
-  handle, `golem_sdk/schema/agent_stream.mbt:349`),
-  `#derive.endpoint(post=…/put=…/get=…)`, `#derive.mount_auth(true)`
-  (`auth_details: required`), `#derive.mount_cors(origin)`,
+  Array[@http.HttpHeader { name, value : Array[Byte] }], body :
+  @schema.AgentStream[Array[Byte]] }` built as plain records; an empty body
+  `AgentStream::produce(async fn(_) { })`; a generated same-component client
+  `ExportAgentClient::get(id).csv()` returning
+  `@schema.AgentStream[Array[Byte]]`, passed straight on as the response
+  body (`AgentStream`'s `IntoWire` forwards the received stream handle,
+  `golem_sdk/schema/agent_stream.mbt:349`), `#derive.endpoint(post=…/get=…)`,
+  `#derive.mount_auth(true)` (`auth_details: Some({ required: true })`),
   `caller : @common.Principal` parameter (host-injected, matched on
-  `Oidc({ sub, .. })`), `@schema.AgentStream[String]` result built with
-  `AgentStream::produce` / `write_one` / `read`, `#derive.read_only`
-  (`cache_policy: UntilWrite`), `@fs.get_root_dir`, `@fs.read_string`,
-  `@fs.write_string`, `Descriptor::create_directory_at`.
+  `Oidc({ sub, .. })`), an optional unstructured binary result
+  `@schema.UnstructuredBinary[Pdf]?` with a phantom `Pdf :
+  @schema.AllowedMimeTypes` (`["application/pdf"]`, the MoonBit form of
+  `s.unstructuredBinary({ mimeTypes })`; `None` is a 404, as
+  `WeatherAgent::get_report` in `golem_sdk_example1`), `Inline(bytes~,
+  mime_type=…)`, `@schema.AgentStream[String]` built with
+  `AgentStream::produce` / `write_one`, `@fs.get_root_dir`,
+  `@fs.read_string`, `@fs.read_bytes`, `@fs.write_string`,
+  `Descriptor::create_directory_at`.
 
 ## Invented libraries
 
@@ -286,6 +315,7 @@ module names, package and type names:
 | `research-agent-guest-client/client` (`@research`) | Output of the in-tree `golem_sdk_tools agents` for an agent `ResearchAgent(topic)` with `gather() -> Facts` and `refresh()`, plus the generated `golem_derive` impls for `Facts { summary, sources }` (type id `research.Facts`) | Real Golem RPC through `@rpc.AgentClient` (`get`, `drop`, `gather`, `trigger_*`, `schedule_*`, `schedule_cancelable_*`). The real bridge for a Rust agent comes from `cli/golem-cli/src/bridge_gen/moonbit` with the same signatures. |
 | `slack-agent-guest-client/client` (`@slack`) | Same generator, agent `SlackAgent(channel)` with `post(text)` | Real RPC, as above. |
 | `bash-tool-guest-client/client` (`@bash`) | Hand-written after `bridge_gen/moonbit/tool.rs` and the bash 0.2.x schema (`cli/golem-cli/src/command_handler/ssh/bash-0.2.0.json`): `BashClient::new()`, `new_for`, `drop`, `async run(script, cwd, timeout : UInt) -> Result[BashResult, @tool.ToolError[BashError]]`, `BashResult { stdout, stderr, exit_code : Byte, cwd }` | `run` aborts at runtime. |
+| `crm-find-customer-tool-guest-client/client` (`@crm`) | **Stand-in, labelled as such in the file.** Hand-written after `bridge_gen/moonbit/tool.rs` for the MCP import `{ name: crm, prefix: crm }` whose tool `find_customer` has input `{ email: string }` (`additionalProperties: false`, so no extra-properties map parameter) and output schema `{ name: string, plan: string }`: `pub(all) struct CrmFindCustomerClient { client : @tool.ToolClient, inherited }`, `new()`, `drop()`, `crm_find_customer(email) -> Result[@tool.TypedToolInvocation[CrmFindCustomerResult, CrmFindCustomerError], @tool.ToolError[CrmFindCustomerError]]`, `CrmFindCustomerResult { structured : CrmFindCustomerStructured { name, plan }, content }`, `CrmFindCustomerError::McpToolError(String)`. The record type names and the `content` type are placeholders (the snippet names neither); `collect()` and `TypedToolInvocation` are the real SDK types. | `crm_find_customer` aborts at runtime. |
 
 To regenerate the two agent stubs: put `#derive.agent` structs with those
 constructors and methods (and `#derive.golem_schema pub(all) struct Facts`)
@@ -361,54 +391,82 @@ declaring the tool parameter as `@config.Secret[String]`, fails):
 
 ## Faithfulness notes
 
+- Highlights: each TS ` //@` line maps to the line carrying the same Golem
+  call or declaration (`#derive.*` attributes for TS options, the
+  `pub fn`/`fn` header for method declarations, `) -> @schema.AgentStream`
+  for `returns: s.stream(...)`, `wait()` lines for `await webhook`). A TS
+  line that MoonBit splits in two to stay within 68 characters is marked on
+  both lines (`agents/team`: `.gather()` and `.map(t => t.lookup_name())`).
+  In `tools/custom`, the two TS lines `toolDefinition('outline', {` and
+  `requiresFilesystem: true` map to one `#derive.tool(...)` line, marked
+  once.
+- Clients (`agents/team`, `agents/waits`, `tools/custom`, `tools/overview`,
+  `tools/publish`, `artifacts/routers`) are used inline without `drop()`,
+  mirroring the TS one-liners.
+- `agents/overview`: TS `id: { inbox }` is the constructor parameter, so
+  the identity comment and highlight are on `fn TriageAgent::new(inbox :
+  String)`. `z.record(z.string(), Label)` is `Map[String, Label]`.
+  `Label.parse(await classify(...))` is `classify(...)` returning the typed
+  `Label` (the harness stand-in), so there is no separate parse.
+- `agents/models`: the TS snippet shows three `import` lines; MoonBit source
+  has no imports (they live in `moon.pkg`), so the library is visible only
+  through the `@llm.` prefix.
+- `agents/team`: the comment keeps "a Rust ResearchAgent" (the call stays
+  cross-language). The cross-component clients are the generated
+  guest-client packages `@research` / `@slack`; TS `.post.trigger(...)` is
+  the generated `trigger_post(...)`. Method names come from
+  `AgentType::methods()` / `AgentMethod::name()`.
+- `agents/waits`: TS `setTimeout` sleep → `@monotonicClock.wait_for` in
+  nanoseconds; the cancelable schedule is `schedule_cancelable_remind`.
+- `agents/readonly`: TS `init: () => ({ units: 0 })` is `units: 0` in the
+  constructor; `z.int()` is `Int`.
+- `tools/overview`: TS `fetch(url)` + `.text()` is `@http.send(get(url))`
+  + `read_text` (harness builders, `util`); `ok(...)` is the plain return
+  value of a tool without errors. `summarize_text` is a harness stand-in.
+- `tools/requests`: `revealedKey` is `revealed_key`.
+- `tools/publish`: TS `description: '...'` is a `///` doc comment (the
+  MoonBit SDK's only way to set a method description); `check.sh` exempts
+  doc comments from the colon rule. The comment above it is the TS comment.
+  MoonBit's leaf method returns a `Result` (starting an invocation can fail
+  synchronously), so the start is `.unwrap()`ped as in `tools/custom`. TS
+  `if (result.status === 'rejected') throw result.reason` is `guard result
+  is Ok(found) else { fail("CRM lookup failed") }`: `@tool.ToolError[E]` is
+  not a MoonBit error type and cannot be raised. `const { name, plan } =
+  result.value.structured` is `let { name, plan } = found.structured`.
 - `tools/secrets`: TS's `config: { stripeKey: s.secret(z.string()) }` is a
   `#derive.config` struct with `stripe_key : @config.Secret[String]` plus the
   `Config[SupportConfig]` constructor parameter; the highlighted line is the
   field. The secret is forwarded through the shim above (one extra call
   compared with TS). The method returns the tool client's result with
   `.unwrap()` (as `tools/custom` does).
-- Highlights: each TS ` //@` line maps to the line carrying the same Golem
-  call or declaration (`#derive.*` attributes for TS options, the
-  `pub fn`/`fn` header for method declarations, `) -> @schema.AgentStream`
-  for `returns: s.stream(...)`, `wait()` lines for `await webhook`). In
-  `tools/custom`, the two TS lines `toolDefinition('outline', {` and
-  `requiresFilesystem: true` map to one `#derive.tool(...)` line, marked
-  once.
-- `tools/overview`: the TS comment names `apiKey`; MoonBit writes `api_key`,
-  the parameter's name in MoonBit.
-
-- `agents/models`: the TS snippet shows three `import` lines; MoonBit source
-  has no imports (they live in `moon.pkg`), so the library is visible only
-  through the `@llm.` prefix.
-- `agents/team`: the cross-component client is the generated guest-client
-  package `@research` (`golem-call-another-agent-moonbit`); TS's
-  `.post.trigger(...)` / `.refresh.schedule(at)` are the generated
-  `trigger_post(...)` / `schedule_refresh(at)`. MoonBit clients are
-  resources, so the snippet drops them (`defer ….drop()`).
-- `agents/waits`: TS `setTimeout` sleep → `@monotonicClock.wait_for` in
-  nanoseconds; the cancelable schedule is `schedule_cancelable_remind`.
-- `tools/custom`: the bash and outline tool clients are used inline without
-  `drop()`, mirroring the TS one-liners and keeping the snippet at 31 lines.
-- `tools/overview`: the tool error id is `http` (enum case `Http`); tool
-  argument names are kebab-case on the wire (`api-key`).
-- `artifacts/routes`: TS `init` is the `async fn ReportAgent::new(team)`
-  constructor (identity `{ team }` → the `team` path variable); its comment
-  sits on the first line of the constructor body. Two lines are split with
-  a `let page = …` (`front_end(team)`, `render(month)`) to stay within 68
-  characters; the highlighted write is the `/site/index.html` line.
-- `artifacts/routers`: TS `request.path.match(/^\/exports\/([\w-]+)\.csv$/)`
-  is a MoonBit string pattern `[.. "/exports/", .. id, .. ".csv"]` with the
-  guard `is_word(id)` (harness helper for `[\w-]+`). The natural MoonBit
-  regex form, `lexmatch request.path { re"^/exports/" + (re"[\w\-]+" as
-  id) + re"\.csv$" => … }`, compiles with moonc but the Golem code generator
-  cannot parse it (see the tools gap below). The id is a `StringView`, hence
-  `id.to_owned()`. The client is used inline without `drop()`, as TS
-  `Export.client.get({ id }).csv()` (and `tools/custom`). TS `empty()` and
-  `header(...)` are harness helpers of the same names.
-- `artifacts/stream`: the TS comment above `returns:` sits directly above the
+- `artifacts/overview`: TS `openai.responses.create(...).output_text` is
+  `@llm.generate_text(model=@llm.openai("gpt-4.1"), prompt=…)` (as in
+  `agents/stream`).
+- `artifacts/routes`: TS `init` is the `async fn BoardAgent::new(team)`
+  constructor (identity `{ team }` → the `team` path variable). The page is
+  a top-level `let board_page : String` written with MoonBit `#|` raw
+  string lines; the four lines of HTML/JS after `#|` are byte-identical to
+  the TS template literal (MoonBit joins `#|` lines with `\n` and adds no
+  trailing newline, as the template has none).
+- `artifacts/routers`: `const bytes = (text) => new TextEncoder().encode(text)`
+  is `fn bytes(s : String) -> Array[Byte] { @utf8.encode(s).to_array() }`
+  (`HttpHeader.value` is `Array[Byte]`). TS
+  `request.path.match(/^\/exports\/([\w-]+)\.csv$/)?.[1]` + `if (... || !id)`
+  is one `guard` with the string pattern `request.path is [.. "/exports/",
+  .. id, .. ".csv"]` and `is_word(id)` (harness helper for `[\w-]+`). The
+  natural MoonBit regex form, `lexmatch request.path { re"^/exports/" +
+  (re"[\w\-]+" as id) + re"\.csv$" => … }`, compiles with moonc but the
+  Golem code generator cannot parse it (see the tools gap above). The id is
+  a `StringView`, hence `id.to_owned()`. `AgentStream.from<Uint8Array>([])`
+  is `@schema.AgentStream::produce(async fn(_) { })`: the SDK has no
+  from-array constructor.
+- `artifacts/login`: `s.unstructuredBinary({ mimeTypes: ['application/pdf'] })`
+  is the phantom `struct Pdf {}` with its `AllowedMimeTypes` impl (3 lines);
+  `return undefined` is `None`; `fs.readFileSync` is `@fs.read_bytes(...)`
+  plus `Bytes::from_fixedarray`; `{ tag: 'inline', val, mimeType }` is
+  `Some(Inline(bytes~, mime_type=Some("application/pdf")))`.
+- `agents/stream`: the TS comment above `returns:` sits directly above the
   `) -> @schema.AgentStream[String]` line.
-- `artifacts/login`: TS `throw new Error(...)` → `fail(...)`; the method is
-  `-> Unit raise`.
 - Every `mkdirSync('/dir', { recursive: true })` is
   `root.create_directory_at("dir") |> ignore` (WASI has no recursive mkdir;
   "already exists" is ignored).
@@ -420,13 +478,17 @@ declaring the tool parameter as `@config.Secret[String]`, fails):
   and each module links into a valid component for the SDK's `agent-guest`
   world.
 - Not proven at runtime: nothing was deployed or invoked (including the
-  router's 404 path, forwarding the export stream as a response body, and
-  the files written by the `ReportAgent` constructor). The model calls
+  router's 404 path, forwarding the export stream as a response body, the
+  page written by the `BoardAgent` constructor and the PDF response). The model calls
   raise by design and the bash stub aborts. Webhook suspension, durable
   sleep, scheduled/cancelled calls, reflection results, permission-card
   derivation/installation/revocation, secret reveal, file exposure, router
-  handling, CORS/auth, durable streams and read-only caching were not
-  observed on a Golem server.
+  handling, auth, durable streams, read-only caching, MCP description
+  exposure and imported MCP tool calls were not observed on a Golem server.
+- The MCP tool client is a hand-written stand-in (the generator needs
+  `golem build` against a live MCP server); its method signature follows
+  the generator source and its MoonBit compile test, but was not produced
+  by the generator here.
 - The research/slack stubs are generated by the in-component generator, not
   by the cross-component bridge generator; the method signatures match, the
   internal codecs differ.

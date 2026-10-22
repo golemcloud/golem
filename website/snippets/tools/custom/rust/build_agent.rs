@@ -5,7 +5,6 @@ pub trait Outline { //@
 }
 #[tool_implementation]
 impl Outline for OutlineImpl {
-  // each call runs in a fresh WebAssembly VM:
   fn outline(&self, file: String) -> Result<Headings, AppError> {
     Ok(fs::read_to_string(file)?.lines()
       .filter(|l| l.starts_with('#')).map(Into::into).collect())

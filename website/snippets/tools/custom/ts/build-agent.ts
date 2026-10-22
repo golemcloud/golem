@@ -3,7 +3,6 @@ export const outline = toolDefinition('outline', { //@
   requiresFilesystem: true, //@
 }).body((b) => b.positional('file', z.string()).returns(Headings))
 outline.implement({
-  // each call runs in a fresh WebAssembly VM:
   outline: async ({ file }) => {
     const lines = fs.readFileSync(file, 'utf8').split('\n')
     return ok(lines.filter((line) => line.startsWith('#')))

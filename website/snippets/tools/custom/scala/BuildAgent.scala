@@ -7,7 +7,6 @@ trait Outline:
 
 @toolImplementation()
 final class OutlineImpl extends Outline:
-  // each call runs in a fresh WebAssembly VM:
   def outline(file: String): Headings =
     fs.readFileSync(file, "utf8").split('\n').toList
       .filter(_.startsWith("#"))

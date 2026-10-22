@@ -6,17 +6,14 @@ export const Planner = defineAgent({
   init: ({ id }) => ({ topic: id.topic }),
   methods: {
     async plan() {
-      // use a typed client generated for a Rust ResearchAgent:
-      const research = ResearchAgent.get(this.topic) //@
-      const facts = await research.gather()
+      // wait for a typed result from a Rust ResearchAgent:
+      const facts = await ResearchAgent.get(this.topic).gather() //@
       // send now, without waiting for a result:
       SlackAgent.get('ops').post.trigger(facts.summary) //@
-      // schedule a call for tomorrow:
-      research.refresh.schedule(inDays(1)) //@
-      // discover what other agents and tools offer:
-      const agents = reflection.getAllAgentTypes() //@
-        .map((a) => `${a.name} (${a.sourceLanguage})`)
-      const tools = reflection.getAllToolTypes().map((t) => t.name)
+      // discover agents, their methods, and available tools:
+      const agents = reflection.getAllAgentTypes().map((a) => //@
+        `${a.name}: ${a.methods.map((m) => m.name).join(', ')}`) //@
+      const tools = reflection.getAllToolTypes().map((t) => t.name) //@
       return { facts, agents, tools }
     },
   },

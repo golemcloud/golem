@@ -16,7 +16,7 @@ export const Drafter = defineAgent({
   init: ({ topic }) => Effect.succeed({ topic }),
   methods: ({ topic }) => ({
     write: ({ idea }) => Effect.gen(function* () {
-      // completed model calls are not repeated on recovery:
+      // draft with one provider, review with another:
       const draft = yield* LanguageModel.generateText({
         prompt: `Product update on ${topic}: ${idea}`,
       }).pipe(Effect.provide(OpenAiLanguageModel.model("gpt-4.1"))) //@

@@ -15,7 +15,7 @@ export const Checkout = defineAgent({
       const paid = createWebhook()
       await createPaymentLink(this.orderId, amount, paid.getUrl())
       // schedule a call on another agent for tomorrow:
-      const reminder = Mailer.client.get({ orderId: this.orderId })
+      const reminder = Mailer.client.get({ orderId: this.orderId }) //@
         .remind.schedule(inDays(1)) //@
       // it waits here for days if needed, using no CPU or memory:
       const event = PaymentEvent.parse((await paid).json()) //@

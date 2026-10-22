@@ -14,7 +14,7 @@ struct DraftAgentImpl { topic: String }
 impl DraftAgent for DraftAgentImpl {
   fn new(topic: String) -> Self { Self { topic } }
   async fn write(&self, idea: String) -> Result<Draft, AppError> {
-    // completed model calls are not repeated on recovery:
+    // draft with one provider, review with another:
     let draft = text(OpenAI::send( //@
       OpenAiConfig::from_env()?,
       vec![user(&format!("Product update on {}: {idea}",

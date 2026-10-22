@@ -2,13 +2,14 @@
 
 Each home-page feature has its own short snippet, displayed as is:
 `website/snippets/<chapter>/<feature>/ts/<display-filename>.ts`. A line ending
-in ` //@` (` #@` in YAML) is highlighted on the page while its snippet shows;
+in ` //@` is highlighted on the page while its snippet shows;
 the page and the harness strip the marker, so it never counts toward any rule.
 The harness reads these files in place (never a copy), strips markers,
 prepends a per-feature prelude holding the code the snippet omits, and
-type-checks the result with the in-tree SDK's strict `tsc`. It also validates
-the shared YAML file `website/snippets/tools/publish/golem.yaml` against the
-1.6.0 `golem.yaml` schema.
+type-checks the result with the in-tree SDK's strict `tsc`. Every feature,
+`tools/publish` included, is a `.ts` code file; there is no YAML snippet any
+more (the shared `tools/publish/golem.yaml` was replaced by
+`tools/publish/ts/account-agent.ts`).
 
 Re-run (from anywhere):
 
@@ -25,26 +26,23 @@ the rules on a scratch copy.
 
 | Display file | Prelude |
 |---|---|
-| `agents/overview/ts/support-agent.ts` | `prelude/agents-overview.ts` |
-| `agents/language/ts/cart-agent.ts` | `prelude/agents-language.ts` |
+| `agents/overview/ts/triage-agent.ts` | `prelude/agents-overview.ts` |
 | `agents/sqlite/ts/notes-agent.ts` | `prelude/agents-sqlite.ts` |
 | `agents/models/ts/draft-agent.ts` | `prelude/agents-models.ts` |
 | `agents/team/ts/planner-agent.ts` | `prelude/agents-team.ts` |
 | `agents/waits/ts/checkout-agent.ts` | `prelude/agents-waits.ts` |
-| `tools/overview/ts/refund-tool.ts` | `prelude/tools-overview.ts` |
+| `agents/stream/ts/writer-agent.ts` | `prelude/agents-stream.ts` |
+| `agents/readonly/ts/stock-agent.ts` | `prelude/agents-readonly.ts` |
+| `tools/overview/ts/digest-agent.ts` | `prelude/tools-overview.ts` |
 | `tools/custom/ts/build-agent.ts` | `prelude/tools-custom.ts` |
 | `tools/requests/ts/stripe-refund.ts` | `prelude/tools-requests.ts` |
 | `tools/permissions/ts/orders-access.ts` | `prelude/tools-permissions.ts` |
 | `tools/secrets/ts/support-agent.ts` | `prelude/tools-secrets.ts` |
-| `artifacts/overview/ts/site-agent.ts` | `prelude/artifacts-overview.ts` |
-| `artifacts/routes/ts/report-agent.ts` | `prelude/artifacts-routes.ts` |
+| `tools/publish/ts/account-agent.ts` | `prelude/tools-publish.ts` |
+| `artifacts/overview/ts/brief-agent.ts` | `prelude/artifacts-overview.ts` |
+| `artifacts/routes/ts/board-agent.ts` | `prelude/artifacts-routes.ts` |
 | `artifacts/routers/ts/exports-router.ts` | `prelude/artifacts-routers.ts` |
-| `artifacts/stream/ts/writer-agent.ts` | `prelude/artifacts-stream.ts` |
-| `artifacts/login/ts/notebook-agent.ts` | `prelude/artifacts-login.ts` |
-| `artifacts/readonly/ts/page-agent.ts` | `prelude/artifacts-readonly.ts` |
-
-`tools/publish/golem.yaml` is shared by all languages and is checked by rules
-plus schema only.
+| `artifacts/login/ts/payslip-agent.ts` | `prelude/artifacts-login.ts` |
 
 The prelude for `<chapter>/<feature>` is always `prelude/<chapter>-<feature>.ts`;
 the display filename is free (one `.ts` file per `ts/` directory).
@@ -62,20 +60,22 @@ the display filename is free (one `.ts` file per `ts/` directory).
   the check runs against stale `dist` types.
 - The harness's own `node_modules` (`npm ci` in this directory, from
   `package.json`/`package-lock.json`): `ai` 7.0.148, `@ai-sdk/openai`
-  4.0.99, `@ai-sdk/anthropic` 4.0.85, `openai` 6.7.0, `ajv` 8.20.0, `yaml`
-  2.9.1, `zod` 4.6.7 (the harness copy is unused by tsc, which maps `zod` to
-  the SDK's copy). `@anthropic-ai/sdk` 1.0.0 is installed but unused.
-- The schema `cli/schema.golem.cloud/app/golem/1.6.0/golem.schema.json`.
+  4.0.99, `@ai-sdk/anthropic` 4.0.85, `openai` 6.7.0, `zod` 4.6.7 (the
+  harness copy is unused by tsc, which maps `zod` to the SDK's copy).
+  `@anthropic-ai/sdk` 1.0.0, `ajv` 8.20.0 and `yaml` 2.9.1 are installed but
+  unused since the YAML check was dropped.
 
 ## Harness layout
 
 ```
 <repo>/.amp/in/snippets/ts/
-  check.sh        rules + splice + tsc per snippet + YAML schema; ALL_OK
+  check.sh        rules + splice + tsc per snippet; ALL_OK
   neg.sh          one planted wrong Golem API use per snippet; NEG_OK
   neg-cases.tsv   <chapter>-<feature> TAB exact text TAB replacement
   prelude/        <chapter>-<feature>.ts, one per snippet (see below)
   stubs/bash-tool-guest-client.ts   stand-in for a generated tool client
+  stubs/crm-find-customer-tool-guest-client.ts
+                  stand-in for a generated MCP-import tool client
   tsconfig.json   strict, noEmit, ES2022/ESNext, Bundler resolution,
                   skipLibCheck (the SDK dist types report TS2693 with library
                   checking on), noUnusedLocals off; paths (relative, so the
@@ -84,31 +84,34 @@ the display filename is free (one `.ts` file per `ts/` directory).
                     zod, zod/*               -> SDK node_modules/zod
                     openai, openai/*         -> ./node_modules/openai
                     bash-tool-guest-client   -> ./stubs/bash-tool-guest-client.ts
+                    crm-find-customer-tool-guest-client
+                      -> ./stubs/crm-find-customer-tool-guest-client.ts
                   typeRoots -> SDK node_modules/@types
                   (ai and @ai-sdk/* resolve from ./node_modules normally)
-  yaml-schema.cjs ajv validation of whole YAML files against the schema
   package.json, package-lock.json, node_modules/
   gen/            GENERATED each run: spliced sources, per-file tsconfigs,
                   tsc output, <f>.src (path of the display file used)
 ```
 
-The preludes, stub, tsconfig and node_modules come unchanged from the
-`synth-harness` type-check harness that was used while designing these
-snippets.
+The preludes, stubs, tsconfig and node_modules come from the
+`synth-harness` type-check harness (`.amp/in/feature-snippets/synth-harness/`)
+that was used while designing these snippets; the only local change is that
+`prelude/artifacts-routers.ts` drops the `header()`/`empty()` helpers the
+redesigned snippet no longer uses.
 
 ## What check.sh does
 
 1. Requires a `ts/` directory for each of the 17 features above, rejects
    unexpected feature directories, and requires exactly one `.ts` file in each.
-2. Strips highlight markers (`sed -E 's,[ ]+(//|#)@$,,'`) into
+2. Strips highlight markers (`sed -E 's,[ ]+//@$,,'`) into
    `gen/strip/`, printing `hl=<n>` (marked lines) per file, then applies the
    display rules to the stripped file (all lines count), after blanking string
    and template literals:
    - fail on any line over 68 characters or containing a tab;
    - fail on a `//` comment that does not end with `:`, any block comment,
-     and any comment that shares a line with code (TS `//`/`/*`, YAML `#`);
-   - fail on a TS snippet over 31 lines;
-   - print `lines=` and `max=` (longest line) for each file, YAML included.
+     and any comment that shares a line with code (`//` or `/*`);
+   - fail on a snippet over 31 lines;
+   - print `lines=` and `max=` (longest line) for each file.
 3. Splices: `gen/<f>.ts` = `prelude/<f>.ts`, a blank line, then the stripped
    display file. Imports a snippet shows itself (for example
    `ai` in `agents/models`, `node:sqlite` in `agents/sqlite`) are legal there
@@ -120,18 +123,14 @@ snippets.
    -p gen/tsconfig.<f>.json --pretty false`, where `gen/tsconfig.<f>.json`
    extends `../tsconfig.json` with `files: ["<f>.ts"]`. Errors (first 20
    lines) are shown; full output is in `gen/<f>.out`.
-5. Runs `node yaml-schema.cjs <schema> gen/strip/tools-publish-golem.yaml`
-   and prints its exit code.
-6. Prints `ALL_OK` and exits 0 only if every step passed.
+5. Prints `ALL_OK` and exits 0 only if every step passed.
 
 ## Preludes (what each snippet omits)
 
-- `agents-overview`: zod, `createWebhook`, `defineAgent`, `http`, `method`;
-  OpenAI client and `zodResponseFormat`; `Message` type; `Reply` and
-  `Approval` schemas; `readReply` (rejects non-`stop` finishes and empty
-  content); `notifyReviewer`, `refundOrder` (fetch helpers that throw on
-  non-2xx); `Ticket` input shape.
-- `agents-language`: `placeOrder(user, items)` fetch helper.
+- `agents-overview`: zod, `defineAgent`, `method`; OpenAI client;
+  `classify(body)` (asks the model for a label; the snippet parses it with
+  its own `Label` enum) and `applyLabel(inbox, id, label)` (fetch helper that
+  throws on non-2xx).
 - `agents-sqlite`: zod, `defineAgent`, `method`, `node:fs` (the snippet
   imports `DatabaseSync` from `node:sqlite` itself).
 - `agents-models`: zod, `defineAgent`, `method` (the snippet imports `ai`,
@@ -144,14 +143,15 @@ snippets.
   `inDays()` returning a `golem:agent/host` `Datetime`.
 - `agents-waits`: `PaymentEvent` schema; a real `MailerAgent` definition
   (`remind`); `inDays()`; `createPaymentLink`, `sendSurvey` fetch helpers.
-- `tools-overview`: `err`, `ok`, `s`, `toolDefinition`; `reveal` from
-  `golem:secrets/reveal@0.1.0`; `Refund` schema; `stringType` (a one-node
-  `string-type` `SchemaGraph`); `stringValue` (requires a `string-value` root
-  node); `stripeRefund` (the function shown by `tools/requests`).
+- `tools-overview`: zod, `defineAgent`, `method`, `ok`, `toolDefinition`;
+  OpenAI client; `Urls` (`z.array(z.string())`); `summarizeText(page)`.
 - `tools-custom`: `ok`, `toolDefinition`, `node:fs`, `BashClient` from the
   stub; `Headings` schema.
-- `tools-requests`: the `refund` tool definition and its helpers, so the
-  displayed `stripeRefund` sits in the same module as in `tools-overview`.
+- `tools-requests`: the `refund` tool definition plus `stringType` and
+  `stringValue` helpers (kept from the earlier design; the displayed
+  `stripeRefund` does not use them, only `fetch`).
+- `tools-publish`: zod, `defineAgent`, `method` (the snippet imports
+  `CrmFindCustomerClient` from the stub itself).
 - `tools-secrets`: the `refund` tool definition and `Refund` schema. It also
   holds two labelled type-only declarations. One brands the raw WIT `Secret`
   (an empty class, so any value would type-check). The other, a SHIM for an
@@ -165,22 +165,22 @@ snippets.
   handle (`src/config.ts:260-272`). The displayed code is the intended API.
 - `tools-permissions`: `permissions`; `AgentId` (parameter type of
   `permissions.Holder.agent`); `Card` union of permission card types.
-- `artifacts-overview`: `AgentStream`, `s`, `node:fs`, `node:path`;
-  `siteFiles()` walker (unused by the current snippet, kept from the design
-  harness); `streamPage()` async generator.
-- `artifacts-routes`: `defineAgent`, `http`, `method`, `node:fs`;
-  `frontEnd(team)` and `render(month)`.
+- `artifacts-overview`: zod, `defineAgent`, `http`, `method`, `node:fs`;
+  OpenAI client.
+- `artifacts-routes`: zod, `defineAgent`, `http`, `method`, `node:fs`.
 - `artifacts-routers`: `defineHttpRouter`, `AgentStream`, `s`; the
-  `ExportAgent` the router calls (`csv` returns a byte stream); `header()` and
-  `empty()` helpers for the raw response.
-- `artifacts-stream`: `AgentStream`, `s`; OpenAI client.
-- `artifacts-login`, `artifacts-readonly`: zod and SDK imports only.
+  `ExportAgent` the router calls (`csv` returns a byte stream). The snippet
+  builds headers and the empty 404 body itself.
+- `artifacts-login`: zod, `defineAgent`, `http`, `method`, `s`, `node:fs`.
+- `agents-stream`: `AgentStream`, `s`; OpenAI client.
+- `agents-readonly`: zod and SDK imports only.
 
 ## Invented libraries and stubs
 
 - Invented libraries: none. Every third-party library is real and installed:
   `ai` + `@ai-sdk/openai` + `@ai-sdk/anthropic` (agents/models), `openai`
-  (agents/overview, artifacts/stream), `node:sqlite` and `node:fs` typed by
+  (agents/overview, agents/stream, tools/overview, artifacts/overview),
+  `node:sqlite` and `node:fs` typed by
   the SDK's `@types/node`.
 - `stubs/bash-tool-guest-client.ts` (import path `bash-tool-guest-client`):
   declared `BashClient.newClient().run(script, cwd, timeout)` returning
@@ -188,6 +188,20 @@ snippets.
   generates for the built-in `bash@0.2.1` release, shaped after
   `docs/src/content/v1.6/how-to-guides/common/golem-generating-tool-clients.mdx`. Needed because the real one
   only exists inside a built application.
+- `stubs/crm-find-customer-tool-guest-client.ts` (import path
+  `crm-find-customer-tool-guest-client`), labelled in the file as a stand-in:
+  declared `CrmFindCustomerClient.newClient().crm_find_customer(email)`
+  returning the SDK's real `bridge.StartedToolInvocation<R>` with
+  `R = { structured: { name: string; plan: string }; content: unknown }`.
+  It models the client `golem build` generates for an MCP import `crm` whose
+  tool `find_customer` takes `{ email: string }` (`additionalProperties:
+  false`) and declares an output schema with string `name` and `plan`. Shape
+  after `cli/golem-cli/tests/bridge_gen/mcp_import.rs` (TypeScript cases:
+  positional fields, typed `result.structured`) and the TypeScript example in
+  `docs/src/content/v1.6/invoke/mcp.mdx` ("Call the imported tool":
+  `newClient().<prefix>_<tool>(...)`, `await invocation.collect()`,
+  `result.status === "rejected"`). `.collect()` and the settled-result type
+  are the SDK's own, so only the method name and `R` come from the stub.
 - `ResearchAgent`, `SlackAgent` (in `prelude/agents-team.ts`): `declare const`
   shapes of generated cross-component agent clients, for the same reason.
 
@@ -200,21 +214,23 @@ file, replaces it in memory, writes prelude + mutant to `gen/neg-<f>.ts`
 
 | Snippet | Planted change | Error |
 |---|---|---|
-| agents-language | `id.user` → `id.username` | TS2339 |
 | agents-models | `write({ idea })` → `write({ topic })` | TS2339 |
-| agents-overview | `approval.getUrl()` → `approval.url()` | TS2341 |
+| agents-overview | `id.inbox` → `id.mailbox` in `init` | TS2339 |
 | agents-sqlite | `add({ text })` → `add({ body })` | TS2339 |
 | agents-team | `reflection.getAllToolTypes()` → `getAllTools()` | TS2339 |
 | agents-waits | `reminder.cancel()` → `reminder.abort()` | TS2339 |
-| artifacts-login | `caller.sub` → `caller.subject` | TS2339 |
-| artifacts-overview | exposeFiles `path:` → `file:` | TS2769 |
-| artifacts-readonly | `readOnly: true` → `readOnly: 'yes'` | TS2769 |
-| artifacts-routes | router `.static(` → `.serve(` | TS2339 |
-| artifacts-stream | `AgentStream.from(` → `AgentStream.of(` | TS2339 |
+| agents-stream | `AgentStream.from(` → `AgentStream.of(` | TS2339 |
+| agents-readonly | `readOnly: true` → `readOnly: 'yes'` | TS2769 |
+| tools-overview | `summarize({ url })` → `summarize({ link: url })` | TS2353 |
 | tools-custom | `outline({ file })` → `outline({ path: file })` | TS2353 |
-| tools-overview | `reveal(apiKey, stringType)` → `reveal(apiKey)` | TS2554 |
+| tools-requests | `method: 'POST',` + `idempotencyKey: charge,` | TS2769 |
 | tools-permissions | `Lifespan.iso8601('PT1H')` → `'PT1H'` | TS2345 |
-| tools-requests | `method: 'POST',` + `idempotencyKey: key,` | TS2769 |
+| tools-secrets | `this.config.stripeKey` → `.stripeKey.get()` | TS2322 |
+| tools-publish | `result.status === 'rejected'` → `=== 'error'` | TS2367 |
+| artifacts-overview | exposeFiles `path:` → `file:` | TS2769 |
+| artifacts-routes | exposeFiles `path:` → `file:` | TS2769 |
+| artifacts-routers | header `value: bytes('text/csv')` → `'text/csv'` | TS2345 |
+| artifacts-login | `caller.sub` → `caller.subject` | TS2339 |
 
 `tools/requests` contains no Golem API call (Golem adds the idempotency key
 itself), so its control plants the tempting wrong usage of passing the key
@@ -226,12 +242,14 @@ its row so the text still occurs exactly once.
 - Only type-checking. Nothing is bundled, built into a component or run.
 - The raw host `Secret` type is structurally empty, so tsc accepts any object
   where a secret handle belongs; secret forwarding is not proven.
-- Generated clients (`BashClient`, `ResearchAgent`, `SlackAgent`) are stubs,
-  so calls on them are checked only against the stub shapes.
+- Generated clients (`BashClient`, `CrmFindCustomerClient`, `ResearchAgent`,
+  `SlackAgent`) are stubs, so calls on them are checked only against the stub
+  shapes. MCP import, the tool's JSON schemas and exposing `describe` as an
+  MCP tool are not exercised.
 - Not proven at runtime: webhook delivery, durable sleep and schedule
   behaviour, permission-card lifetimes, idempotency, gateway serving of
-  exposed files and static routes, principal checks, and whether
-  `node:sqlite`, `openai` and the `ai` SDK work inside the component.
-- The YAML validator does not check the `uuid` format.
+  exposed and live files, the board page's relative POST, principal
+  checks, read-only caching, and whether `node:sqlite`, `openai` and the
+  `ai` SDK work inside the component.
 - The 17-feature list in `check.sh` is hard-coded; add a feature there and a
   prelude plus a `neg-cases.tsv` row when the page gains one.

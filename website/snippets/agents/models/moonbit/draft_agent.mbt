@@ -15,7 +15,7 @@ fn DraftAgent::new(topic : String) -> DraftAgent {
 pub async fn DraftAgent::write(
   self : Self, idea : String,
 ) -> Draft {
-  // completed model calls are not repeated on recovery:
+  // draft with one provider, review with another:
   let draft = @llm.generate_text(
     model=@llm.openai("gpt-4.1"), //@
     prompt="Product update on \{self.topic}: \{idea}",

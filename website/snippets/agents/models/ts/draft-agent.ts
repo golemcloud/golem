@@ -14,7 +14,7 @@ export const Drafter = defineAgent({
   init: ({ id }) => ({ topic: id.topic }),
   methods: {
     async write({ idea }) {
-      // completed model calls are not repeated on recovery:
+      // draft with one provider, review with another:
       const draft = await generateText({
         model: openai('gpt-4.1'), //@
         prompt: `Product update on ${this.topic}: ${idea}`,

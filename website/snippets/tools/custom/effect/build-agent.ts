@@ -4,12 +4,12 @@ export const outline = Tool.toolDefinition("outline", { //@
 }).body((b) => b.positional("file", Schema.String)
   .returns(Headings))
 outline.implement({
-  // each call runs in a fresh WebAssembly VM:
   outline: ({ file }) => Effect.sync(() => {
     const lines = fs.readFileSync(file, "utf8").split("\n")
     return Tool.ok(lines.filter((line) => line.startsWith("#")))
   }),
 })
+
 export const Builder = defineAgent({
   name: "BuildAgent",
   id: { project: Schema.String },
