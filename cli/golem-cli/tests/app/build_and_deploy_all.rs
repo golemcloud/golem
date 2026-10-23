@@ -29,7 +29,6 @@ async fn build_and_deploy_all_templates_for_scala() {
 }
 
 #[test]
-#[test_r::tag(bridge_gen_rust)]
 async fn build_and_deploy_all_templates_for_rust() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::Rust).await;
 }
@@ -50,7 +49,6 @@ async fn go_streaming_template_builds() {
 }
 
 #[test]
-#[test_r::tag(bridge_gen_rust)]
 async fn rust_streaming_template_builds() {
     streaming_template_builds_for_lang(GuestLanguage::Rust).await;
 }

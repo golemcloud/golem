@@ -75,7 +75,7 @@ inherit_test_dep!(Tracing);
 tag_suite!(agents, agents);
 // Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
 // `deploy`.
-// The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+// The untagged remainder (`:tag:`), including SSH, is the `core` shard.
 tag_suite!(effect_source_conformance, agents_guest_bridge_sources);
 tag_suite!(mcp_import, agents_guest_bridge_sources);
 tag_suite!(mcp_oauth, agents_guest_bridge_sources);
@@ -99,7 +99,6 @@ tag_suite!(builtin_bash, deploy_runtime);
 tag_suite!(cards, deploy_runtime);
 tag_suite!(secrets, deploy_runtime);
 tag_suite!(self_identity, deploy_runtime);
-tag_suite!(ssh, deploy_runtime);
 tag_suite!(chunk_f_policy_boundary, deploy);
 tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_source_conformance, agents_guest_bridge);
@@ -131,7 +130,6 @@ tag_suite!(scala_tool_sources, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
 tag_suite!(secrets, deploy);
 tag_suite!(self_identity, deploy);
-tag_suite!(ssh, deploy);
 tag_suite!(tls_endpoint, agents);
 tag_suite!(tool_metadata_conformance, deploy);
 tag_suite!(tool_middleware, deploy);

@@ -49,7 +49,6 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-save-if: 'true'
-          cache-provider: 'blacksmith'
       # Test the build tooling (dev-tools/) first so a broken tool fails fast
       - name: Test build tools (dev-tools)
         run: cargo make --profile ci dev-tools-tests
@@ -196,7 +195,7 @@ jobs:
       - name: Test middleware components
         run: cargo make --profile ci test-component-middleware-unit-tests
 
-  builtin-artifacts-prepare:
+  builtin-artifacts:
     outputs:
       artifacts-disk-key: ${{ steps.publication-key.outputs.key }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
@@ -211,7 +210,6 @@ jobs:
           rust-targets: 'wasm32-wasip2'
           cache-shared-key: 'builtin-artifacts'
           cache-save-if: 'true'
-          cache-provider: 'blacksmith'
           install-cargo-binstall: 'true'
       - uses: ./.github/actions/setup-js-wasm-tools
         with:
@@ -245,6 +243,8 @@ jobs:
             test -s "$path"
             wasm-tools validate --features all "$path"
           done < <(jq -r '.[].path' builtin-artifacts.json)
+      - name: Test embedded local-install defaults and source overrides
+        run: cargo test --profile dev-ci -p golem-registry-service --lib --features embed-builtin-artifacts -- builtin_artifact --report-time
       - name: Identify built-in publication
         id: publication-key
         run: echo "key=${GITHUB_REPOSITORY}-builtin-artifacts-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
@@ -271,37 +271,13 @@ jobs:
           stat -c 'Built-in archive bytes=%s' builtin-artifacts.tar.zst
           printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
-  # Keep the existing required status, but do not make consumers wait for embedding tests.
-  builtin-artifacts:
-    needs: builtin-artifacts-prepare
-    runs-on: blacksmith-32vcpu-ubuntu-2204
-    env:
-      CARGO_BUILD_JOBS: 20
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-      - uses: ./.github/actions/setup-rust
-        with:
-          cache-shared-key: 'builtin-artifacts-embedding'
-          cache-save-if: 'true'
-          cache-provider: 'blacksmith'
-      - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
-      - name: Sync WIT dependencies
-        run: cargo make wit
-      - name: Test embedded local-install defaults and source overrides
-        run: cargo test --profile dev-ci -p golem-registry-service --lib --features embed-builtin-artifacts -- builtin_artifact --report-time
-
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
       - build-and-store
-      - builtin-artifacts-prepare
+      - builtin-artifacts
       - merge-test-components
     strategy:
       fail-fast: false
@@ -339,7 +315,7 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -355,7 +331,7 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     needs:
       - build-and-store
-      - builtin-artifacts-prepare
+      - builtin-artifacts
       - merge-test-components
     timeout-minutes: 45
     steps:
@@ -377,7 +353,7 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
       - name: Set up Lima
         id: lima
         env:
@@ -485,7 +461,6 @@ jobs:
         with:
           cache-shared-key: 'cli-dev-release-ci'
           cache-save-if: 'true'
-          cache-provider: 'blacksmith'
       - name: Build CLI test binaries
         env:
           QUIET: true
@@ -525,7 +500,7 @@ jobs:
     needs:
       - build-and-store
       - build-golem-ts
-      - builtin-artifacts-prepare
+      - builtin-artifacts
       - merge-test-components
     strategy:
       fail-fast: false
@@ -591,7 +566,7 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -616,7 +591,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
-      - builtin-artifacts-prepare
+      - builtin-artifacts
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -812,13 +787,13 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
 
       - name: List compiled CLI integration inventory
-        if: matrix.group.shard == 'core'
+        if: matrix.group.name == 'cli-integration-tests-core'
         run: cargo-test-r run --package golem-cli --test integration -- --list > tmp/cli-integration-inventory.txt
       - name: Upload compiled CLI integration inventory
-        if: matrix.group.shard == 'core'
+        if: matrix.group.name == 'cli-integration-tests-core'
         uses: actions/upload-artifact@v6
         with:
           name: cli-integration-inventory-attempt${{ github.run_attempt }}
@@ -856,7 +831,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
-      - builtin-artifacts-prepare
+      - builtin-artifacts
       - merge-test-components
     timeout-minutes: 30
     strategy:
@@ -876,7 +851,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
-      - builtin-artifacts-prepare
+      - builtin-artifacts
       - merge-test-components
     timeout-minutes: 30
     strategy:
@@ -896,14 +871,14 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
-      - builtin-artifacts-prepare
+      - builtin-artifacts
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         group:
           - { name: cli-integration-tests-deploy-runtime-baseline, shard: deploy_runtime }
-          - { name: cli-integration-tests-bridge-rust-baseline, shard: bridge_gen_rust }
+          - { name: cli-integration-tests-core-baseline, shard: core }
     steps: *cli-test-steps
 
   consolidate-test-reports:
@@ -958,7 +933,7 @@ jobs:
       - build-and-store
       - build-golem-ts
       - build-golem-scala
-      - builtin-artifacts-prepare
+      - builtin-artifacts
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -1007,7 +982,7 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
 
       - name: Restore built TS SDK
         uses: actions/download-artifact@v8
@@ -1881,7 +1856,6 @@ jobs:
       - build-and-store
       - build-cli-test-bins
       - builtin-artifacts
-      - builtin-artifacts-prepare
       - check-clippy-and-format
       - unit-tests-and-checks
       - config-checks
@@ -1922,7 +1896,7 @@ jobs:
           destination: target/dev-release-ci
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
-          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/check-published-sdks
         with:
