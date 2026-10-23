@@ -449,6 +449,10 @@ impl AttachmentController {
         state.producer_active || state.consumer_active || state.guest_watchers != 0
     }
 
+    pub(crate) fn owner_fenced(&self) -> bool {
+        self.attachment.state.lock().unwrap().owner_fenced
+    }
+
     pub(crate) fn restore_control(
         &self,
         transition: &golem_common::model::oplog::attachment::ToolAttachmentControl,
