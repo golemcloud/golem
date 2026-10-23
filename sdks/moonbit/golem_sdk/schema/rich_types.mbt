@@ -549,3 +549,76 @@ pub impl[U : QuantityUnit] WireSchema for Quantity[U] with fn append_wire_type(
     }),
   )
 }
+
+///|
+/// The `binary` kind with its optional MIME type. `Bytes` maps to the same
+/// kind but drops the MIME type.
+pub(all) struct AgentBinary {
+  bytes : Bytes
+  mime_type : String?
+} derive(Debug, Eq)
+
+///|
+pub impl IntoSchema for AgentBinary with fn type_id() {
+  "golem.core.AgentBinary"
+}
+
+///|
+pub impl IntoSchema for AgentBinary with fn register_in(_b) {
+  @model.schema_type(
+    Binary({ mime_types: None, min_bytes: None, max_bytes: None, }),
+  )
+}
+
+///|
+pub impl IntoSchema for AgentBinary with fn to_value(self) {
+  Binary(self.bytes.to_fixedarray(), self.mime_type)
+}
+
+///|
+pub impl FromSchema for AgentBinary with fn from_value(v) {
+  match v {
+    Binary(bytes, mime_type) =>
+      { bytes: Bytes::from_array(bytes[:]), mime_type, }
+    other =>
+      raise FromSchemaError::shape_mismatch(
+        "binary",
+        value_kind(other),
+        "AgentBinary",
+      )
+  }
+}
+
+///|
+pub impl IntoWire for AgentBinary with fn append_wire(self, encoder) {
+  let mime_type = match self.mime_type {
+    Some(mime_type) => Some(wire_text(mime_type, "MIME type"))
+    None => None
+  }
+  encoder.push(
+    @types.SchemaValueNode::BinaryValue({
+      bytes: self.bytes.to_fixedarray(),
+      mime_type,
+    }),
+  )
+}
+
+///|
+pub impl FromWire for AgentBinary with fn read_wire(reader, index) {
+  match wire_node(reader, index) {
+    @types.SchemaValueNode::BinaryValue(value) =>
+      { bytes: Bytes::from_array(value.bytes[:]), mime_type: value.mime_type, }
+    _ => raise WireError::Invalid("expected binary value")
+  }
+}
+
+///|
+pub impl WireSchema for AgentBinary with fn append_wire_type(encoder) {
+  encoder.push(
+    @types.SchemaTypeBody::BinaryType({
+      mime_types: None,
+      min_bytes: None,
+      max_bytes: None,
+    }),
+  )
+}

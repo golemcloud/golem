@@ -312,3 +312,30 @@ test "quantity constructor rejects disallowed unit" {
     ),
   )
 }
+
+///|
+test "agent binary keeps the MIME type through schema and wire codecs" {
+  let typed = AgentBinary::{ bytes: b"\x00\xff", mime_type: Some("image/png"), }
+  let bare = AgentBinary::{ bytes: b"", mime_type: None, }
+  assert_eq(rich_roundtrip(typed), typed)
+  assert_eq(rich_roundtrip(bare), bare)
+  let tree : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.SchemaValueNode::BinaryValue({
+        bytes: [0x00, 0xff],
+        mime_type: Some("image/png"),
+      }),
+    ],
+    root: 0,
+  }
+  let decoded : AgentBinary = from_wire(tree)
+  assert_eq(decoded, typed)
+  assert_eq(into_wire(decoded), tree)
+  let tag : TypeTag[AgentBinary] = type_tag()
+  assert_eq(
+    into_schema_graph(tag).root,
+    @model.schema_type(
+      Binary({ mime_types: None, min_bytes: None, max_bytes: None, }),
+    ),
+  )
+}

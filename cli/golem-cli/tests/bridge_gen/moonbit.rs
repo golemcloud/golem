@@ -35,7 +35,8 @@ use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, NumericBound, NumericRestrictions, PathDirection,
-    PathKind, PathSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    PathKind, PathSpec, QuantitySpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    VariantCaseType,
 };
 use golem_common::schema::tool::{
     CommandBody, CommandIndex, CommandNode, CommandTree, Doc, ErrorCase, ErrorKind, Formatter,
@@ -3436,4 +3437,341 @@ async test "invocation-owned stream rejects application cancellation" {
     )
     .unwrap();
     pkg.test_native();
+}
+
+fn kilograms() -> SchemaType {
+    SchemaType::quantity(QuantitySpec {
+        base_unit: "kg".into(),
+        allowed_suffixes: vec!["g".into(), "kg".into()],
+        min: None,
+        max: None,
+    })
+}
+
+fn meters() -> SchemaType {
+    SchemaType::quantity(QuantitySpec {
+        base_unit: "m".into(),
+        allowed_suffixes: vec![],
+        min: None,
+        max: None,
+    })
+}
+
+fn captions() -> SchemaType {
+    SchemaType::text(TextRestrictions {
+        languages: Some(vec!["en".into(), "de".into()]),
+        ..Default::default()
+    })
+}
+
+fn rich_def() -> SchemaTypeDef {
+    def(
+        "rich",
+        SchemaType::record(vec![
+            named_field("weight", kilograms()),
+            named_field("distance", meters()),
+            named_field("caption", captions()),
+            named_field("note", SchemaType::text(TextRestrictions::default())),
+            named_field("payload", SchemaType::binary(BinaryRestrictions::default())),
+            named_field("weights", SchemaType::list(SchemaType::option(kilograms()))),
+            named_field(
+                "image",
+                SchemaType::binary(BinaryRestrictions {
+                    mime_types: Some(vec!["image/png".into()]),
+                    ..Default::default()
+                }),
+            ),
+        ]),
+    )
+}
+
+/// An agent using the rich `quantity`, bare `text` and bare `binary` kinds.
+fn rich_agent() -> AgentTypeSchema {
+    agent(
+        "RichAgent",
+        "moonbit",
+        vec![field("unit", kilograms())],
+        vec![
+            method(
+                "measure",
+                vec![field("input", ref_to("rich"))],
+                Some(ref_to("rich")),
+            ),
+            method(
+                "label",
+                vec![field("text", SchemaType::text(TextRestrictions::default()))],
+                Some(captions()),
+            ),
+            method("weigh", vec![], Some(kilograms())),
+            method(
+                "blob",
+                vec![field(
+                    "data",
+                    SchemaType::binary(BinaryRestrictions::default()),
+                )],
+                Some(SchemaType::binary(BinaryRestrictions::default())),
+            ),
+        ],
+        vec![rich_def()],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn external_rich_kinds_round_trip_and_check_units_and_languages() {
+    let pkg = GeneratedPackage::new(rich_agent());
+    let client = pkg.client_source();
+    for expected in [
+        "pub(all) struct UnitKg {} derive(Debug, Eq)",
+        "pub impl @runtime.QuantityUnit for UnitKg with fn allowed_suffixes() {",
+        "pub(all) struct UnitM {} derive(Debug, Eq)",
+        "pub impl @runtime.TextSpec for TextSpec1 with fn languages() {",
+        "weight : @runtime.Quantity[UnitKg]",
+        "distance : @runtime.Quantity[UnitM]",
+        "caption : @runtime.Text[TextSpec1]",
+        "note : @runtime.Text[TextSpec0]",
+        "payload : @runtime.AgentBinary",
+        "weights : Array[@runtime.Quantity[UnitKg]?]",
+        "-> @runtime.Quantity[UnitKg] raise {",
+        "-> @runtime.Text[TextSpec1] raise {",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
+    let graph = SchemaGraph {
+        defs: vec![rich_def()],
+        root: ref_to("rich"),
+    };
+    let graph_json = serde_json::to_string(&serde_json::to_string(&graph).unwrap()).unwrap();
+    std::fs::write(
+        pkg.module_dir().join("client/rich_wbtest.mbt"),
+        r#"///|
+fn client_rejects(f : () -> Unit raise) -> Bool {
+  try f() catch {
+    _ => true
+  } noraise {
+    _ => false
+  }
+}
+
+///|
+fn rich_codec() -> @runtime.PublicValueCodec raise {
+  @runtime.public_value_codec(__GRAPH__)
+}
+
+///|
+fn sample() -> Rich raise {
+  {
+    weight: @runtime.Quantity::new(1500L, 3, "kg"),
+    distance: @runtime.Quantity::new(42L, 0, "m"),
+    caption: @runtime.Text::new("hello", language="en"),
+    note: @runtime.Text::new("plain"),
+    payload: { bytes: b"\x00\xff", mime_type: None },
+    weights: [Some(@runtime.Quantity::new(5L, 0, "g")), None],
+    image: { bytes: b"\x89", mime_type: Some("image/png") },
+  }
+}
+
+///|
+fn sample_value(weight_unit : String, language : String) -> @runtime.SchemaValue {
+  @runtime.RecordValue([
+    @runtime.QuantityValue(1L, 0, weight_unit),
+    @runtime.QuantityValue(1L, 0, "m"),
+    @runtime.TextValue("hello", Some(language)),
+    @runtime.TextValue("plain", None),
+    @runtime.BinaryValue(b"", None),
+    @runtime.ListValue([]),
+    @runtime.BinaryValue(b"", None),
+  ])
+}
+
+///|
+test "rich kinds round trip through the public codec" {
+  let codec = rich_codec()
+  let value = sample()
+  let json = codec.encode(encode_Rich(value))
+  assert_eq(decode_Rich(codec.decode(json)), value)
+}
+
+///|
+test "quantity constructor rejects a unit outside the schema" {
+  assert_true(
+    client_rejects(() => {
+      let _ : @runtime.Quantity[UnitKg] = @runtime.Quantity::new(1L, 0, "lb")
+    }),
+  )
+  assert_true(
+    client_rejects(() => {
+      let _ : @runtime.Quantity[UnitM] = @runtime.Quantity::new(1L, 0, "km")
+    }),
+  )
+}
+
+///|
+test "quantity unit outside the schema is rejected on encode and decode" {
+  let codec = rich_codec()
+  ignore(codec.encode(sample_value("g", "en")))
+  assert_true(client_rejects(() => ignore(codec.encode(sample_value("lb", "en")))))
+  let foreign = @runtime.schema_value_to_json(sample_value("lb", "en"))
+  assert_true(client_rejects(() => ignore(codec.decode(foreign))))
+  assert_true(client_rejects(() => ignore(decode_Rich(sample_value("lb", "en")))))
+}
+
+///|
+test "text language outside the schema is rejected on encode and decode" {
+  let codec = rich_codec()
+  assert_true(client_rejects(() => ignore(codec.encode(sample_value("kg", "fr")))))
+  let foreign = @runtime.schema_value_to_json(sample_value("kg", "fr"))
+  assert_true(client_rejects(() => ignore(codec.decode(foreign))))
+}
+"#
+        .replace("__GRAPH__", &graph_json),
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+#[test]
+fn guest_rich_kinds_use_sdk_types_and_check_units_and_languages() {
+    let guest = generate_without_check(rich_agent(), MoonBitBridgeMode::GuestWasmRpc);
+    let client = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    for expected in [
+        "pub impl @schema.QuantityUnit for UnitKg with fn base_unit() {",
+        "pub impl @schema.TextSpec for TextSpec1 with fn languages() {",
+        "weight : @schema.Quantity[UnitKg]",
+        "caption : @schema.Text[TextSpec1]",
+        "note : @schema.Text[TextSpec0]",
+        "payload : @schema.AgentBinary",
+        "image : @schema.AgentBinary",
+        "-> @schema.Quantity[UnitKg] {",
+        "-> @schema.AgentBinary {",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
+    std::fs::write(
+        guest.path().join("client/rich_wbtest.mbt"),
+        r#"///|
+fn sample(language : String, image_mime? : String = "image/png") -> Rich raise {
+  {
+    weight: @schema.Quantity::new(1500L, 3, "kg"),
+    distance: @schema.Quantity::new(42L, 0, "m"),
+    caption: @schema.Text::new("hello", language~),
+    note: @schema.Text::new("plain"),
+    payload: { bytes: b"\x00\xff", mime_type: Some("application/octet-stream") },
+    weights: [Some(@schema.Quantity::new(5L, 0, "g")), None],
+    image: { bytes: b"\x89", mime_type: Some(image_mime) },
+  }
+}
+
+///|
+fn sample_value(
+  weight_unit : String,
+  language : String,
+  image_mime? : String? = None,
+) -> @model.SchemaValue {
+  Record([
+    Quantity({ mantissa: 1L, scale: 0, unit: weight_unit }),
+    Quantity({ mantissa: 1L, scale: 0, unit: "m" }),
+    Text("hello", Some(language)),
+    Text("plain", None),
+    Binary([], None),
+    List([]),
+    Binary([], image_mime),
+  ])
+}
+
+///|
+fn assert_decode_rejected(value : @model.SchemaValue) -> Unit raise {
+  try decode_Rich(value) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError")
+  } noraise {
+    _ => fail("expected CodecError")
+  }
+}
+
+///|
+test "rich kinds round trip through the guest codec" {
+  let value = sample("en")
+  assert_true(decode_Rich(encode_Rich(value)) == value)
+  ignore(decode_Rich(sample_value("g", "de")))
+  ignore(decode_Rich(sample_value("g", "de", image_mime=Some("image/png"))))
+  match encode_Rich(value) {
+    Record(fields) =>
+      assert_true(fields[4] is Binary(_, Some("application/octet-stream")))
+    _ => fail("expected a record")
+  }
+}
+
+///|
+test "binary MIME type outside the schema is rejected on encode and decode" {
+  try encode_Rich(sample("en", image_mime="image/gif")) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for a disallowed MIME type")
+  } noraise {
+    _ => fail("expected CodecError for a disallowed MIME type")
+  }
+  assert_decode_rejected(
+    sample_value("kg", "en", image_mime=Some("image/gif")),
+  )
+}
+
+///|
+test "quantity unit outside the schema is rejected on decode" {
+  assert_decode_rejected(sample_value("lb", "en"))
+}
+
+///|
+test "text language outside the schema is rejected on encode and decode" {
+  let value = sample("fr")
+  try encode_Rich(value) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for a disallowed language")
+  } noraise {
+    _ => fail("expected CodecError for a disallowed language")
+  }
+  assert_decode_rejected(sample_value("kg", "fr"))
+}
+"#,
+    )
+    .unwrap();
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("test")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    moon_check_wasm(guest.path());
+}
+
+#[test]
+fn guest_tool_mode_moon_checks_rich_kinds() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut tool = phase_eight_tool();
+    let body = tool.commands.nodes[0].body.as_mut().unwrap();
+    body.positionals
+        .fixed
+        .push(tool_positional("weight", kilograms()));
+    body.positionals
+        .fixed
+        .push(tool_positional("caption", captions()));
+    body.positionals.fixed.push(tool_positional(
+        "payload",
+        SchemaType::binary(BinaryRestrictions::default()),
+    ));
+    let mut generator = MoonBitToolBridgeGenerator::new(tool, target, true).unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+    assert!(source.contains("@schema.Quantity[UnitKg]"), "{source}");
+    assert!(source.contains("@schema.Text[TextSpec0]"), "{source}");
+    moon_check_wasm(dir.path());
 }

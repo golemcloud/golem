@@ -104,6 +104,16 @@ pub(all) suberror WireError {
 } derive(Eq, @debug.Debug)
 
 // Types and methods
+pub(all) struct AgentBinary {
+  bytes : Bytes
+  mime_type : String?
+} derive(Eq, @debug.Debug)
+pub impl FromSchema for AgentBinary
+pub impl FromWire for AgentBinary
+pub impl IntoSchema for AgentBinary
+pub impl IntoWire for AgentBinary
+pub impl WireSchema for AgentBinary
+
 pub(all) struct AgentStream[T] {
   // private fields
 }
