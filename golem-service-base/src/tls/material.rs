@@ -109,6 +109,13 @@ impl TlsMaterial {
         self.current.load_full()
     }
 
+    /// Whether `loaded` is still the current material: one `ArcSwap` load and a pointer compare,
+    /// without a lock, so that a client can ask on every call. Only a reload that swaps in a
+    /// changed set stores a new value, so an unchanged or a rejected set never makes this false.
+    pub fn is_current(&self, loaded: &Arc<TlsLoaded>) -> bool {
+        Arc::ptr_eq(&self.current.load(), loaded)
+    }
+
     /// Whether any source is a file, and so can change.
     pub fn has_files(&self) -> bool {
         self.sources.all().iter().any(|s| s.is_file())

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::tls::material::{TLS_RELOAD_INTERVAL, TlsMaterial, TlsSources};
+use crate::tls::material::{TLS_RELOAD_INTERVAL, TlsLoaded, TlsMaterial, TlsSources};
 use crate::tls::pem::{PemSource, TlsError};
 use arc_swap::ArcSwap;
 use futures::FutureExt;
@@ -47,7 +47,7 @@ use crate::metrics::grpc::{
 fn build_endpoint(
     uri: Uri,
     config: &GrpcClientConfig,
-    tls: Option<&ClientTls>,
+    tls: Option<&TlsSnapshot>,
 ) -> Result<Endpoint, Status> {
     let ip_literal_host = ip_literal_tls_server_name(&uri);
     let endpoint = match tls {
@@ -77,7 +77,7 @@ fn build_endpoint(
 
     if let Some(tls) = tls {
         endpoint = endpoint
-            .tls_config(tls.tonic_config(ip_literal_host))
+            .tls_config(tls.tls.tonic_config(&tls.loaded, ip_literal_host))
             .map_err(|err| Status::from_error(Box::new(err)))?;
     }
 
@@ -86,7 +86,8 @@ fn build_endpoint(
 
 /// The TLS material of one client and the server name to check. The material is read again from
 /// its files while the client lives, and each new connection is built from what is current then;
-/// connections already open keep the certificate they were opened with.
+/// connections already open keep the certificate they were opened with. A connection built before
+/// a reload takes no new calls, because tonic would re-dial it with the old certificate.
 pub struct ClientTls {
     material: Arc<TlsMaterial>,
     server_domain_name: Option<String>,
@@ -118,12 +119,15 @@ impl ClientTls {
         &self.material
     }
 
-    /// The tonic configuration for a new connection, from the material current now. Without a
-    /// configured domain name, `ip_literal_server_name` is the name to check.
-    pub fn tonic_config(&self, ip_literal_server_name: Option<String>) -> ClientTlsConfig {
+    /// The tonic configuration for a new connection, built from `loaded`. Without a configured
+    /// domain name, `ip_literal_server_name` is the name to check.
+    pub fn tonic_config(
+        &self,
+        loaded: &TlsLoaded,
+        ip_literal_server_name: Option<String>,
+    ) -> ClientTlsConfig {
         use tonic::transport::{Certificate, Identity};
 
-        let loaded = self.material.current();
         let mut config = ClientTlsConfig::new()
             .ca_certificate(Certificate::from_pem(&loaded.ca_pem))
             .identity(Identity::from_pem(&loaded.cert_pem, &loaded.key_pem));
@@ -131,6 +135,29 @@ impl ClientTls {
             config = config.domain_name(name);
         }
         config
+    }
+}
+
+/// The TLS one connection is built with: the client's settings and the material that was current
+/// when the connection was made. The connection keeps it, so that a reload can be told apart.
+#[derive(Clone)]
+struct TlsSnapshot {
+    tls: Arc<ClientTls>,
+    loaded: Arc<TlsLoaded>,
+}
+
+impl TlsSnapshot {
+    /// Reads the current material once, so the connection is built from the very material it is
+    /// later compared by.
+    fn of(tls: Arc<ClientTls>) -> Self {
+        let loaded = tls.material.current();
+        Self { tls, loaded }
+    }
+
+    /// Whether no reload has replaced the material since. Asked on every call, so it takes no
+    /// lock.
+    fn is_current(&self) -> bool {
+        self.tls.material.is_current(&self.loaded)
     }
 }
 
@@ -421,17 +448,30 @@ pub struct GrpcClientConnection<T: Clone> {
     last_used: LastUsed,
     established: Instant,
     max_age: Duration,
+    /// What the connection's TLS was built from. `None` without TLS.
+    tls: Option<TlsSnapshot>,
 }
 
 impl<T: Clone> GrpcClientConnection<T> {
+    /// Whether a new call may be given this connection: it is not retired, not past its age, and
+    /// its TLS material is still the client's current one.
+    ///
+    /// tonic re-dials a lost connection inside the `Channel`, with the TLS configuration the
+    /// `Channel` was built with, so a `Channel` built before a reload would present the old
+    /// certificate on its next handshake, and a multi-target client never replaces one for its
+    /// age. A connection whose material a reload has replaced is therefore treated as one past
+    /// its age: the next call builds a new one from the current material, and the calls and
+    /// streams already riding it finish there.
     fn reusable(&self) -> bool {
         !self.retirement.is_retired()
             && (self.max_age.is_zero() || self.established.elapsed() < self.max_age)
+            && self.tls.as_ref().is_none_or(TlsSnapshot::is_current)
     }
 }
 
 fn connect_shared<T>(
     endpoint: Endpoint,
+    tls: Option<TlsSnapshot>,
     config: &GrpcClientConfig,
     build_client: ClientFactory<T>,
     max_connection_age: Duration,
@@ -463,6 +503,7 @@ where
                 // Rotate on use, independently per slot and caller process.
                 // Never extend the configured maximum age.
                 max_age: max_connection_age.mul_f64(rand::random_range(0.8..=1.0)),
+                tls,
             }),
             Ok(Err(err)) => Err(Status::unavailable(format!("tcp connect error: {err}"))),
             Err(_) => Err(Status::unavailable(format!(
@@ -560,8 +601,9 @@ where
             }
 
             // A caller that joined an attempt already under way can be handed a
-            // connection that has since expired or been retired. Recheck at
-            // handoff, so a waiter delayed past its lifetime gets a replacement.
+            // connection that has since expired, been retired, or had its TLS
+            // material replaced by a reload. Recheck at handoff, so a waiter
+            // delayed past its lifetime gets a replacement.
             attempts_left = attempts_left.saturating_sub(1);
             if attempts_left == 0 {
                 return Err(Status::unavailable(
@@ -612,13 +654,17 @@ where
         // Built outside the entry lock, so a rejected URI cannot leave an entry
         // behind and unrelated targets sharing a bucket do not serialise behind
         // this work.
-        let endpoint = match &self.tls {
+        let (endpoint, tls) = match &self.tls {
             Some(shared) => {
                 let tls = shared.current()?;
                 tls.material.start_reloader(TLS_RELOAD_INTERVAL);
-                build_endpoint(target.clone(), config, Some(&tls))?
+                let tls = TlsSnapshot::of(tls);
+                (
+                    build_endpoint(target.clone(), config, Some(&tls))?,
+                    Some(tls),
+                )
             }
-            None => build_endpoint(target.clone(), config, None)?,
+            None => (build_endpoint(target.clone(), config, None)?, None),
         };
 
         let attempt = match self.by_target.entry_async(target.clone()).await {
@@ -636,6 +682,7 @@ where
                 Some(_) => {
                     let attempt = connect_shared(
                         endpoint,
+                        tls,
                         config,
                         build_client.clone(),
                         self.max_connection_age,
@@ -648,6 +695,7 @@ where
             Entry::Vacant(entry) => {
                 let attempt = connect_shared(
                     endpoint,
+                    tls,
                     config,
                     build_client.clone(),
                     self.max_connection_age,
@@ -1958,6 +2006,7 @@ mod test {
     fn attempt_bounded_by(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnect<()> {
         connect_shared(
             endpoint,
+            None,
             &GrpcClientConfig {
                 connect_timeout,
                 ..GrpcClientConfig::default()
@@ -2781,6 +2830,7 @@ mod test {
                 last_used: LastUsed::now(),
                 established: Instant::now(),
                 max_age: Duration::ZERO,
+                tls: None,
             };
             connection.retirement.retire(true);
 
@@ -2969,10 +3019,10 @@ mod test {
             },
         )
         .unwrap();
-        let tls = ClientTls {
+        let tls = TlsSnapshot::of(Arc::new(ClientTls {
             material,
             server_domain_name: None,
-        };
+        }));
         let uri: Uri = "https://[::1]:1".parse().unwrap();
         assert_eq!(ip_literal_tls_server_name(&uri).as_deref(), Some("::1"));
         build_endpoint(uri, &GrpcClientConfig::default(), Some(&tls)).unwrap();

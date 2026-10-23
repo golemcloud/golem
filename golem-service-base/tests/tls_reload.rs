@@ -133,6 +133,8 @@ struct TestServer {
     remote_addrs: Arc<Mutex<Vec<Option<SocketAddr>>>>,
     /// SHA-256 of the client certificate of each accepted TLS connection, in order.
     client_certs: Arc<Mutex<Vec<String>>>,
+    /// Changes the status the health service reports, which reaches every open `watch` stream.
+    health: tonic_health::server::HealthReporter,
 }
 
 impl TestServer {
@@ -142,7 +144,7 @@ impl TestServer {
         let addr = listener.local_addr().unwrap();
         let remote_addrs = Arc::new(Mutex::new(Vec::new()));
         let recorded = remote_addrs.clone();
-        let (_, health) = tonic_health::server::health_reporter();
+        let (reporter, health) = tonic_health::server::health_reporter();
         let health = tonic::service::interceptor::InterceptedService::new(
             health,
             move |req: tonic::Request<()>| {
@@ -186,6 +188,7 @@ impl TestServer {
             task,
             remote_addrs,
             client_certs,
+            health: reporter,
         }
     }
 
@@ -714,5 +717,211 @@ async fn a_client_recovers_when_its_tls_files_appear_after_start() {
         *server.client_certs.lock().unwrap(),
         vec![pem_sha256(&pki.client_pem)]
     );
+    server.stop().await;
+}
+
+/// A TCP proxy in front of a server that can cut every connection open through it, as a network
+/// fault or a restarted load balancer would. Connections made after a cut are proxied as before.
+struct Proxy {
+    addr: SocketAddr,
+    connections: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Proxy {
+    async fn start(upstream: SocketAddr) -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connections = Arc::new(Mutex::new(Vec::new()));
+        let open = connections.clone();
+        let task = tokio::spawn(async move {
+            while let Ok((mut inbound, _)) = listener.accept().await {
+                let connection = tokio::spawn(async move {
+                    if let Ok(mut outbound) = TcpStream::connect(upstream).await {
+                        let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                    }
+                });
+                open.lock().unwrap().push(connection);
+            }
+        });
+        Self {
+            addr,
+            connections,
+            task,
+        }
+    }
+
+    /// Closes both sides of every connection open through the proxy now.
+    fn cut(&self) {
+        for connection in self.connections.lock().unwrap().drain(..) {
+            connection.abort();
+        }
+    }
+}
+
+impl Drop for Proxy {
+    fn drop(&mut self) {
+        self.task.abort();
+        self.cut();
+    }
+}
+
+type HealthOverGrpcClient = HealthClient<
+    tonic_tracing_opentelemetry::middleware::client::OtelGrpcService<tonic::transport::Channel>,
+>;
+
+async fn multi_target_check(
+    client: &golem_service_base::grpc::client::MultiTargetGrpcClient<HealthOverGrpcClient>,
+    target: &http::Uri,
+) -> Result<ServingStatus, tonic::Status> {
+    client
+        .call("check", target.clone(), |c| {
+            Box::pin(async move {
+                Ok(c.check(HealthCheckRequest { service: "".into() })
+                    .await?
+                    .into_inner()
+                    .status())
+            })
+        })
+        .await
+}
+
+/// tonic re-dials a lost connection inside the cached `Channel`, with the TLS configuration the
+/// `Channel` was built with, and a multi-target client never replaces its connections by age. So
+/// a reconnect after a renewal must not go through the channel cached before it.
+#[test]
+async fn a_reconnect_inside_a_cached_multi_target_channel_presents_the_renewed_certificate() {
+    use golem_service_base::grpc::client::MultiTargetGrpcClient;
+    let pki = Pki::new();
+    let files = Files::new(&pki);
+    let server_tls = tls_for(&files, NEVER);
+    let server = TestServer::start(Some(&server_tls)).await;
+    let proxy = Proxy::start(server.addr).await;
+
+    files.write("client.crt", &pki.client_pem);
+    files.write("client.key", &pki.client_key_pem);
+    files.write("client-ca.crt", &pki.ca_pem);
+    let client = MultiTargetGrpcClient::new(
+        "t",
+        |channel, _| HealthClient::new(channel),
+        client_config(&files, Duration::ZERO),
+    );
+    let target: http::Uri = format!("https://127.0.0.1:{}", proxy.addr.port())
+        .parse()
+        .unwrap();
+
+    assert_eq!(
+        multi_target_check(&client, &target).await.unwrap(),
+        ServingStatus::Serving
+    );
+    assert_eq!(
+        *server.client_certs.lock().unwrap(),
+        vec![pem_sha256(&pki.client_pem)]
+    );
+
+    // Renew: a new client certificate from the same CA.
+    let renewed = signed_by(&pki.ca, "client", ExtendedKeyUsagePurpose::ClientAuth);
+    files.write("client.crt", &renewed.0);
+    files.write("client.key", &renewed.1);
+    let material = client.tls_material().expect("TLS is enabled");
+    assert!(matches!(
+        material.reload_if_changed(),
+        ReloadOutcome::Reloaded
+    ));
+
+    // Cut the TCP connection under the cached channel, and give the client the moment it needs to
+    // see it closed, so that the next call finds a channel that re-dials rather than one whose
+    // request fails on a dead connection.
+    proxy.cut();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert_eq!(
+        multi_target_check(&client, &target).await.unwrap(),
+        ServingStatus::Serving
+    );
+    assert_eq!(
+        *server.client_certs.lock().unwrap(),
+        vec![pem_sha256(&pki.client_pem), pem_sha256(&renewed.0)],
+        "the connection made after the reload must present the renewed certificate"
+    );
+    server.stop().await;
+}
+
+/// A reload moves new calls to a new connection and leaves a call already in progress on the
+/// connection it started on. The fixed-target pool here keeps a connection for an hour, so only
+/// the reload can move the new call.
+#[test]
+async fn an_open_stream_keeps_its_connection_while_new_calls_present_the_renewed_certificate() {
+    use golem_service_base::grpc::client::GrpcClient;
+    let pki = Pki::new();
+    let files = Files::new(&pki);
+    let server_tls = tls_for(&files, NEVER);
+    let server = TestServer::start(Some(&server_tls)).await;
+
+    files.write("client.crt", &pki.client_pem);
+    files.write("client.key", &pki.client_key_pem);
+    files.write("client-ca.crt", &pki.ca_pem);
+    let client = GrpcClient::new(
+        "t",
+        |channel, _| HealthClient::new(channel),
+        format!("https://localhost:{}", server.addr.port())
+            .parse()
+            .unwrap(),
+        client_config(&files, Duration::from_secs(3600)),
+    );
+
+    let mut watch = client
+        .call_without_retry("watch", |c| {
+            Box::pin(async move {
+                Ok(c.watch(HealthCheckRequest { service: "".into() })
+                    .await?
+                    .into_inner())
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        watch.message().await.unwrap().unwrap().status(),
+        ServingStatus::Serving
+    );
+    assert_eq!(
+        *server.client_certs.lock().unwrap(),
+        vec![pem_sha256(&pki.client_pem)]
+    );
+
+    // Renew: a new client certificate from the same CA.
+    let renewed = signed_by(&pki.ca, "client", ExtendedKeyUsagePurpose::ClientAuth);
+    files.write("client.crt", &renewed.0);
+    files.write("client.key", &renewed.1);
+    let material = client.tls_material().expect("TLS is enabled");
+    assert!(matches!(
+        material.reload_if_changed(),
+        ReloadOutcome::Reloaded
+    ));
+
+    assert_eq!(client_check(&client).await.unwrap(), ServingStatus::Serving);
+    assert_eq!(
+        *server.client_certs.lock().unwrap(),
+        vec![pem_sha256(&pki.client_pem), pem_sha256(&renewed.0)],
+        "a call after the reload must open a connection with the renewed certificate"
+    );
+
+    // The stream opened before the reload still receives on its own connection.
+    server
+        .health
+        .set_service_status("", tonic_health::ServingStatus::NotServing)
+        .await;
+    let update = tokio::time::timeout(Duration::from_secs(5), watch.message())
+        .await
+        .expect("the stream opened before the reload stopped receiving")
+        .unwrap()
+        .unwrap();
+    assert_eq!(update.status(), ServingStatus::NotServing);
+    assert_eq!(
+        server.client_certs.lock().unwrap().len(),
+        2,
+        "the stream opened before the reload was moved to another connection"
+    );
+    drop(watch);
     server.stop().await;
 }
