@@ -382,6 +382,8 @@ func EncodeMap[K comparable, V any](m map[K]V, fk Encoder[K], fv Encoder[V]) sch
 	return schema.MapValue{Entries: entries}
 }
 
+// DecodeMap reads a map. A key named twice keeps its later entry, as the
+// host's validation and the Rust conversion do.
 func DecodeMap[K comparable, V any](sv schema.SchemaValue, fk Decoder[K], fv Decoder[V]) (map[K]V, error) {
 	v, ok := sv.(schema.MapValue)
 	if !ok {
@@ -392,9 +394,6 @@ func DecodeMap[K comparable, V any](sv schema.SchemaValue, fk Decoder[K], fv Dec
 		key, err := fk(entry.Key)
 		if err != nil {
 			return nil, fmt.Errorf("map key %d: %w", i, err)
-		}
-		if _, seen := out[key]; seen {
-			return nil, fmt.Errorf("map key %d: the key %v appears twice", i, key)
 		}
 		value, err := fv(entry.Value)
 		if err != nil {
@@ -478,7 +477,7 @@ func DecodePointer[T any](sv schema.SchemaValue, f Decoder[T]) (*T, error) {
 }
 
 // EncodeResult takes a nil encoder for an arm that carries no value, which the
-// generated type spells struct{}.
+// generated type spells values.Unit.
 func EncodeResult[O, E any](r values.Result[O, E], fo Encoder[O], fe Encoder[E]) schema.SchemaValue {
 	if r.IsErr() {
 		return schema.ResultValue{IsErr: true, Value: encodeArm(r.Err(), fe)}

@@ -15,9 +15,7 @@
 package golem
 
 import (
-	"fmt"
 	"reflect"
-	"slices"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
@@ -86,21 +84,6 @@ type instance struct {
 // initialize() has run. Unlike the definition state (see [definitions]) this is
 // per-worker runtime state, so it stays a standalone package var.
 var active *instance
-
-// paramsTypeProblem explains why t cannot carry a method's parameters, or
-// returns "". The parameters are t's exported fields, so t must be a struct,
-// and one with fields that are all unexported — a stream, an option, or any
-// other value type — would publish none.
-func paramsTypeProblem(t reflect.Type) string {
-	const want = "In must be a struct whose exported fields are the parameters (golem.Unit for none)"
-	if t.Kind() != reflect.Struct {
-		return fmt.Sprintf("%s, got %s", want, t)
-	}
-	if t.NumField() > 0 && !slices.ContainsFunc(reflect.VisibleFields(t), func(f reflect.StructField) bool { return f.IsExported() }) {
-		return fmt.Sprintf("%s; %s has none, so wrap it in a struct field", want, t)
-	}
-	return ""
-}
 
 // DefineAgent declares a config-less agent and returns its state-free
 // [AgentDefinition]. Put it in a package-level var in the agent's DEFINITION
@@ -398,7 +381,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	// Codecs are compiled once, here at registration — not per invocation.
 	inType := reflect.TypeFor[In]()
 	outType := reflect.TypeFor[Out]()
-	if problem := paramsTypeProblem(inType); problem != "" {
+	if problem := engine.ParamsTypeProblem("In", inType); problem != "" {
 		d.RecordErr(e.name, m.name, "method %q: %s", m.name, problem)
 	}
 	me := &methodEntry{name: m.name, desc: m.desc, hint: m.hint, inFields: d.StructFields(inType), endpoints: m.endpoints, readOnly: m.readOnly}

@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golemcloud/golem/sdks/go/core/values"
 )
@@ -137,6 +138,9 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 		}
 		return wireScalar("char", string(n.Value))
 	case StringValue:
+		if err := wireUTF8("string", n.Value); err != nil {
+			return wireNode{}, err
+		}
 		return wireScalar("string", n.Value)
 
 	case RecordValue:
@@ -217,20 +221,35 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 		return wireScalar("result", payload)
 
 	case TextValue:
+		if err := wireUTF8("text", n.Text); err != nil {
+			return wireNode{}, err
+		}
 		payload := map[string]any{"text": n.Text}
 		if n.Language != nil {
+			if err := wireUTF8("text language", *n.Language); err != nil {
+				return wireNode{}, err
+			}
 			payload["language"] = *n.Language
 		}
 		return wireScalar("text", payload)
 	case BinaryValue:
 		payload := map[string]any{"bytes": byteNumbers(n.Bytes)}
 		if n.MimeType != nil {
+			if err := wireUTF8("binary media type", *n.MimeType); err != nil {
+				return wireNode{}, err
+			}
 			payload["mimeType"] = *n.MimeType
 		}
 		return wireScalar("binary", payload)
 	case PathValue:
+		if err := wireUTF8("path", n.Value); err != nil {
+			return wireNode{}, err
+		}
 		return wireScalar("path", map[string]any{"path": n.Value})
 	case UrlValue:
+		if err := wireUTF8("url", n.Value); err != nil {
+			return wireNode{}, err
+		}
 		return wireScalar("url", map[string]any{"url": n.Value})
 	case DatetimeValue:
 		instant := time.Unix(n.Seconds, int64(n.Nanoseconds)).UTC()
@@ -240,12 +259,18 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 	case UUIDValue:
 		return wireScalar("uuid", n.Value.String())
 	case QuantityValueNode:
+		if err := wireUTF8("quantity unit", n.Value.Unit); err != nil {
+			return wireNode{}, err
+		}
 		return wireScalar("quantity", map[string]any{
 			"mantissa": strconv.FormatInt(n.Value.Mantissa, 10),
 			"scale":    n.Value.Scale,
 			"unit":     n.Value.Unit,
 		})
 	case UnionValue:
+		if err := wireUTF8("union tag", n.Tag); err != nil {
+			return wireNode{}, err
+		}
 		body, err := valueToWire(n.Body)
 		if err != nil {
 			return wireNode{}, err
@@ -270,6 +295,15 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 			"golem: %T is a handle to something the host holds, and does not travel over REST", v)
 	}
 	return wireNode{}, fmt.Errorf("golem: unsupported schema value %T", v)
+}
+
+// wireUTF8 refuses a string that is not valid UTF-8, which encoding/json would
+// otherwise send with U+FFFD in place of each invalid byte.
+func wireUTF8(kind, s string) error {
+	if !utf8.ValidString(s) {
+		return fmt.Errorf("golem: %s value is not valid UTF-8", kind)
+	}
+	return nil
 }
 
 func wireScalar(kind string, payload any) (wireNode, error) {

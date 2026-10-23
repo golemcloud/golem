@@ -29,8 +29,26 @@ impl crate::schema::wit::direct::WireSchema for ::chrono::Duration {
 }
 
 #[cfg(feature = "guest")]
+fn chrono_duration_nanoseconds(
+    duration: &::chrono::Duration,
+) -> Result<i64, crate::schema::wit::direct::WireError> {
+    duration
+        .num_nanoseconds()
+        .ok_or(crate::schema::wit::direct::WireError::Shape(
+            "duration within the i64 nanosecond range",
+        ))
+}
+
+#[cfg(feature = "guest")]
 impl crate::schema::wit::direct::IntoWire for ::chrono::Duration {
     const NEEDS_PREPARATION: bool = false;
+
+    fn preflight(
+        &self,
+        _resources: &mut crate::schema::wit::direct::WirePreflight,
+    ) -> Result<(), crate::schema::wit::direct::WireError> {
+        chrono_duration_nanoseconds(self).map(|_| ())
+    }
 
     fn write_wire(
         &self,
@@ -39,9 +57,7 @@ impl crate::schema::wit::direct::IntoWire for ::chrono::Duration {
         Ok(
             writer.push(crate::schema::wit::wire::SchemaValueNode::DurationValue(
                 crate::schema::wit::wire::DurationValuePayload {
-                    nanoseconds: self
-                        .num_nanoseconds()
-                        .unwrap_or(self.num_seconds() * 1_000_000_000),
+                    nanoseconds: chrono_duration_nanoseconds(self)?,
                 },
             )),
         )
@@ -70,12 +86,17 @@ impl IntoSchema for ::chrono::Duration {
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
         SchemaType::duration()
     }
+    // `to_value` cannot fail, so a duration outside the i64 nanosecond range
+    // saturates, like `std::time::Duration`. The wire encoder rejects it.
     fn to_value(&self) -> SchemaValue {
-        SchemaValue::Duration(DurationValuePayload {
-            nanoseconds: self
-                .num_nanoseconds()
-                .unwrap_or(self.num_seconds() * 1_000_000_000),
-        })
+        let nanoseconds = self
+            .num_nanoseconds()
+            .unwrap_or(if *self < ::chrono::Duration::zero() {
+                i64::MIN
+            } else {
+                i64::MAX
+            });
+        SchemaValue::Duration(DurationValuePayload { nanoseconds })
     }
 }
 

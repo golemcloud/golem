@@ -20,7 +20,7 @@
 // `.internal` wrapper). It does NOT `import 'arktype'`, so ArkType is never baked
 // into the SDK / WASM. The per-kind `t.*` / `v.*` shapes match the Zod walker.
 //
-// COVERAGE: primitives (string / number→f64 / bigint→u64 / boolean), array→list,
+// COVERAGE: primitives (string / number→f64 / bigint→s64 / boolean), array→list,
 // object→record, optional/nullable→option, tuple, string-literal union→enum,
 // single literal, and index-signature record→map. ArkType has no first-class
 // discriminated-union *carrier* distinct from a plain union, and it does not
@@ -88,8 +88,8 @@ function primitiveLiteral(lit: unknown): SchemaCodec {
       );
     case 'bigint':
       return leaf(
-        t.u64(),
-        () => v.u64(lit as bigint),
+        t.s64(),
+        () => v.s64(lit as bigint),
         () => lit,
       );
     default:
@@ -115,9 +115,9 @@ function primitiveDomain(domain: string): SchemaCodec {
       );
     case 'bigint':
       return leaf(
-        t.u64(),
-        (value) => v.u64(value as bigint),
-        (sv) => (sv as Extract<SchemaValue, { tag: 'u64' }>).value,
+        t.s64(),
+        (value) => v.s64(value as bigint),
+        (sv) => (sv as Extract<SchemaValue, { tag: 's64' }>).value,
       );
     case 'boolean':
       return leaf(

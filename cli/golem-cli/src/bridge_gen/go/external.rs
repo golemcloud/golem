@@ -154,6 +154,7 @@ impl<'g> Codecs<'g> {
             SchemaType::Datetime { .. } => leaf("Datetime"),
             SchemaType::Duration { .. } => leaf("Duration"),
             SchemaType::Uuid { .. } => leaf("UUID"),
+            SchemaType::Tuple { elements, .. } if elements.is_empty() => leaf("Unit"),
             SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Secret { .. } => anyhow::bail!(
@@ -316,7 +317,10 @@ impl<'g> Codecs<'g> {
                 self.generator.render(typ, &mut self.w)?,
                 self.func(dir, typ)?,
             )),
-            None => Ok(("struct{}".to_string(), "nil".to_string())),
+            None => {
+                self.w.import(type_ref::VALUES_PKG);
+                Ok((format!("{}.Unit", type_ref::VALUES), "nil".to_string()))
+            }
         }
     }
 

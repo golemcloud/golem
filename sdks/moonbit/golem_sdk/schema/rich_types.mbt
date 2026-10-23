@@ -455,7 +455,7 @@ pub impl[U : QuantityUnit] FromSchema for Quantity[U] with fn from_value(v) {
 
 ///|
 pub impl IntoWire for Url with fn append_wire(self, encoder) {
-  encoder.push(@types.UrlValue(self.value))
+  encoder.push(@types.UrlValue(wire_text(self.value, "url")))
 }
 
 ///|
@@ -473,7 +473,13 @@ pub impl WireSchema for Url with fn append_wire_type(encoder) {
 
 ///|
 pub impl[S] IntoWire for Text[S] with fn append_wire(self, encoder) {
-  encoder.push(@types.TextValue({ text: self.value, language: self.language, }))
+  let language = match self.language {
+    Some(language) => Some(wire_text(language, "text language"))
+    None => None
+  }
+  encoder.push(
+    @types.TextValue({ text: wire_text(self.value, "text"), language, }),
+  )
 }
 
 ///|
@@ -509,7 +515,9 @@ pub impl WireSchema for Duration with fn append_wire_type(encoder) {
 
 ///|
 pub impl[U] IntoWire for Quantity[U] with fn append_wire(self, encoder) {
-  encoder.push(@types.QuantityValueNode(self.value()))
+  let value = self.value()
+  ignore(wire_text(value.unit, "quantity unit"))
+  encoder.push(@types.QuantityValueNode(value))
 }
 
 ///|

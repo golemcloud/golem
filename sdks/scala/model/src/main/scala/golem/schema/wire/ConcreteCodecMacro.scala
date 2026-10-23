@@ -28,6 +28,11 @@ private[wire] object ConcreteCodecMacro {
     val unstructuredText   = Symbol.requiredClass("golem.schema.UnstructuredText")
     val unstructuredBinary = Symbol.requiredClass("golem.schema.UnstructuredBinary")
 
+    // SDK types whose wire form is a hand-written codec; the static metadata describes the same form.
+    val handWrittenTypes                    = Set("golem.host.PermissionsApi.PersistentCard")
+    def handWritten(tpe: TypeRepr): Boolean =
+      handWrittenTypes(tpe.typeSymbol.fullName.replace("$.", ".")) || handWrittenTypes(tpe.show)
+
     def build[T: Type](registry: Expr[ConcreteCodecs], active: Set[String]): Expr[ConcreteCodec[T]] = {
       val tpe = TypeRepr.of[T].dealias
       val key = golem.schema.StableTypeId.of(TypeRepr.of[T])
@@ -38,7 +43,16 @@ private[wire] object ConcreteCodecMacro {
         case '[t] => '{ ${ build[t](registry, next) }.asInstanceOf[ConcreteCodec[Any]] }
       }
 
+      // A pattern such as `'[Map[k, v]]` also matches subtypes, whose values the carrier codec cannot build.
+      def exact[C](what: String)(using Type[C]): Unit =
+        if (tpe.typeSymbol != TypeRepr.of[C].typeSymbol)
+          report.errorAndAbort(s"Unsupported wire type ${tpe.show}: use $what instead")
+
       val body: Expr[ConcreteCodec[?]] = Type.of[T] match {
+        case _ if handWritten(tpe) =>
+          Expr.summon[ConcreteCodec[T]].getOrElse {
+            report.errorAndAbort(s"Missing the concrete wire codec of ${tpe.show}")
+          }
         case '[Unit]                                 => '{ ConcreteCodec.unit }
         case '[Boolean]                              => '{ ConcreteCodec.boolean }
         case '[Byte]                                 => '{ ConcreteCodec.byte }
@@ -49,8 +63,8 @@ private[wire] object ConcreteCodecMacro {
         case '[Double]                               => '{ ConcreteCodec.double }
         case '[Char]                                 => '{ ConcreteCodec.char }
         case '[String]                               => '{ ConcreteCodec.string }
-        case '[BigInt]                               => '{ ConcreteCodec.string.xmap[BigInt](BigInt(_), _.toString) }
-        case '[BigDecimal]                           => '{ ConcreteCodec.string.xmap[BigDecimal](BigDecimal(_), _.toString) }
+        case '[BigInt]                               => '{ ConcreteCodec.bigInt }
+        case '[BigDecimal]                           => '{ ConcreteCodec.bigDecimal }
         case '[golem.schema.GolemPath]               => '{ ConcreteCodec.path }
         case '[golem.schema.Url]                     => '{ ConcreteCodec.url }
         case _ if tpe.typeSymbol == unstructuredText =>
@@ -76,28 +90,42 @@ private[wire] object ConcreteCodecMacro {
         case '[java.util.UUID]     => '{ ConcreteCodec.uuid }
         case '[java.time.Instant]  => '{ ConcreteCodec.instant }
         case '[java.time.Duration] => '{ ConcreteCodec.duration }
-        case '[Option[t]]          => '{ ConcreteCodec.option(${ build[t](registry, next) }) }
-        case '[List[t]]            => '{ ConcreteCodec.list(${ build[t](registry, next) }) }
-        case '[Vector[t]]          =>
+        case '[Option[t]]          =>
+          exact[Option[Any]]("Option[A]")
+          '{ ConcreteCodec.option(${ build[t](registry, next) }) }
+        case '[List[t]] =>
+          exact[List[Any]]("List[A]")
+          '{ ConcreteCodec.list(${ build[t](registry, next) }) }
+        case '[Vector[t]] =>
           '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Vector[t]](_.toVector, _.toList) }
-        case '[Set[t]]      => '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Set[t]](_.toSet, _.toList) }
-        case '[Seq[t]]      => '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Seq[t]](identity, _.toList) }
+        case '[Set[t]] =>
+          exact[Set[Any]]("Set[A]")
+          '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Set[t]](_.toSet, _.toList) }
+        case '[Seq[t]] =>
+          exact[Seq[Any]]("Seq[A], List[A] or Vector[A]")
+          '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Seq[t]](identity, _.toList) }
         case '[Array[Byte]] => '{ ConcreteCodec.bytes }
         case '[Array[t]]    =>
           val tag =
             Expr.summon[scala.reflect.ClassTag[t]].getOrElse(report.errorAndAbort(s"No ClassTag for ${Type.show[t]}"))
           '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Array[t]](_.toArray(using $tag), _.toList) }
-        case '[Map[k, v]]                   => '{ ConcreteCodec.map(${ build[k](registry, next) }, ${ build[v](registry, next) }) }
+        case '[Map[k, v]] =>
+          exact[Map[Any, Any]]("Map[K, V]")
+          '{ ConcreteCodec.map(${ build[k](registry, next) }, ${ build[v](registry, next) }) }
         case '[golem.schema.AgentStream[t]] =>
           '{ golem.schema.AgentStream.concreteCodec(${ build[t](registry, next) }) }
-        case '[Either[e, a]] => '{ ConcreteCodec.result(${ build[e](registry, next) }, ${ build[a](registry, next) }) }
-        case _               =>
+        case '[Either[e, a]] =>
+          exact[Either[Any, Any]]("Either[E, A]")
+          '{ ConcreteCodec.result(${ build[e](registry, next) }, ${ build[a](registry, next) }) }
+        case _ =>
           Expr.summon[Mirror.ProductOf[T]] match {
             case Some(mirror) =>
+              val tuple  = tpe <:< TypeRepr.of[Tuple]
               val fields = tpe.typeSymbol.caseFields
               val names  = Expr.ofList(fields.map(f => Expr(f.name)))
-              val codecs = Expr.ofList(fields.map(f => child(tpe.memberType(f))))
-              val tuple  = tpe <:< TypeRepr.of[Tuple]
+              val codecs =
+                if (tuple) Expr.ofList(golem.schema.TupleElements.of(tpe).map(child))
+                else Expr.ofList(fields.map(f => child(tpe.memberType(f))))
               '{
                 ConcreteCodec.product[T](
                   ${ Expr(key) },
@@ -124,7 +152,10 @@ private[wire] object ConcreteCodecMacro {
                   (if (c.isTerm) Ref(c) else Ref(c.companionModule)).asExprOf[T]
                 if (c.isTerm || c.flags.is(Flags.Module))
                   '{ ConcreteCodec.Case[T](${ Expr(caseName) }, None, _ => (), _ => $singleton) }
-                else
+                else if (c.flags.is(Flags.Sealed) && !c.flags.is(Flags.Case)) {
+                  val codec = child(caseTpe)
+                  '{ ConcreteCodec.Case[T](${ Expr(caseName) }, Some($codec), identity, _.asInstanceOf[T]) }
+                } else
                   caseTpe.asType match {
                     case '[s] =>
                       val product = Expr.summon[Mirror.ProductOf[s]].getOrElse {

@@ -48,7 +48,7 @@ describe('Valibot walker', () => {
     expect(num.fromValue(num.toValue(5))).toBe(5);
 
     expect(compileSchema(vb.boolean()).graph.root.body.tag).toBe('bool');
-    expect(compileSchema(vb.bigint()).graph.root.body.tag).toBe('u64');
+    expect(compileSchema(vb.bigint()).graph.root.body.tag).toBe('s64');
 
     const big = compileSchema(vb.bigint());
     expect(big.fromValue(big.toValue(42n))).toBe(42n);
@@ -176,7 +176,7 @@ describe('ArkType walker', () => {
     expect(bool.fromValue(bool.toValue(true))).toBe(true);
 
     const big = compileSchema(ark('bigint'));
-    expect(big.graph.root.body.tag).toBe('u64');
+    expect(big.graph.root.body.tag).toBe('s64');
     expect(big.fromValue(big.toValue(42n))).toBe(42n);
   });
 
@@ -292,7 +292,7 @@ describe('Effect Schema walker', () => {
     expect(compileSchema(std(Schema.Boolean)).graph.root.body.tag).toBe('bool');
 
     const big = compileSchema(std(Schema.BigIntFromSelf));
-    expect(big.graph.root.body.tag).toBe('u64');
+    expect(big.graph.root.body.tag).toBe('s64');
     expect(big.fromValue(big.toValue(42n))).toBe(42n);
   });
 

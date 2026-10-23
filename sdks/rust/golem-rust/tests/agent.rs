@@ -1117,6 +1117,24 @@ mod tests {
     }
 
     #[test]
+    fn agent_stream_type_ids_agree_on_the_schema_and_wire_paths() {
+        #[derive(IntoSchema, WireSchema)]
+        #[schema(named = "example.StreamHolder")]
+        struct Holder<T> {
+            stream: T,
+        }
+
+        assert_eq!(
+            <AgentStream<String> as WireSchema>::wire_type_id(),
+            <AgentStream<String> as IntoSchema>::type_id().0
+        );
+        assert_eq!(
+            <Holder<AgentStream<u32>> as WireSchema>::wire_type_id(),
+            <Holder<AgentStream<u32>> as IntoSchema>::type_id().0
+        );
+    }
+
+    #[test]
     async fn agent_stream_dispatch_rejects_missing_streams() {
         StreamingAgentImpl::__register_agent_type();
         let mut agent = StreamingAgentImpl::new();

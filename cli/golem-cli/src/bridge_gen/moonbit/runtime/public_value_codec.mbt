@@ -69,6 +69,7 @@ pub fn PublicValueCodec::encode_application(
   value : SchemaValue,
 ) -> Json raise {
   self.stream_elements.clear()
+  schema_value_check_text(value)
   self.encode_at(
     pvc_field(pvc_object(self.graph), "root"),
     value,

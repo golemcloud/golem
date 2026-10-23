@@ -2058,3 +2058,193 @@ func TestTheQuantityDefaultResolves(t *testing.T) {{
         ),
     );
 }
+
+/// Result arms without a value and the empty tuple, as a Rust callee publishes
+/// `Result<(), E>` and `()`.
+fn unit_shapes() -> SchemaType {
+    let unit_ok = SchemaType::result(ResultSpec {
+        ok: None,
+        err: Some(Box::new(SchemaType::string())),
+    });
+    let unit_err = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::string())),
+        err: None,
+    });
+    let unit_both = SchemaType::result(ResultSpec {
+        ok: None,
+        err: None,
+    });
+    SchemaType::record(vec![
+        named_field("done", unit_ok),
+        named_field("failed", unit_err),
+        named_field("either", unit_both),
+        named_field("nothing", SchemaType::tuple(vec![])),
+    ])
+}
+
+fn unit_shapes_agent() -> AgentTypeSchema {
+    agent(
+        "UnitShapes",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "finish",
+                vec![field("holder", ref_to("units.Holder"))],
+                Some(SchemaType::result(ResultSpec {
+                    ok: None,
+                    err: Some(Box::new(SchemaType::string())),
+                })),
+            ),
+            method(
+                "nothing",
+                vec![field("unit", SchemaType::tuple(vec![]))],
+                None,
+            ),
+        ],
+        vec![def("units.Holder", unit_shapes())],
+        AgentMode::Durable,
+    )
+}
+
+/// The callee's own schema for `units.Holder`, in the wire form a Go test reads.
+fn unit_shapes_graph() -> String {
+    let graph = golem_common::schema::graph::SchemaGraph {
+        defs: vec![],
+        root: unit_shapes(),
+    };
+    serde_json::to_string(&serde_json::to_string(&graph).unwrap()).unwrap()
+}
+
+/// A guest client sends a unit arm without a payload and the empty tuple as
+/// one, which is what the callee's schema says: the SDK publishes the callee's
+/// schema for the generated type, and its values pack against the callee's.
+#[test]
+fn go_guest_client_sends_unit_arms_without_a_payload(env: &GoEnv) {
+    let generated = GeneratedGo::guest(env, unit_shapes_agent());
+    let types = generated.read("types.go");
+    for expected in [
+        "Done    values.Result[values.Unit, string]",
+        "Failed  values.Result[string, values.Unit]",
+        "Either  values.Result[values.Unit, values.Unit]",
+        "Nothing values.Unit",
+    ] {
+        assert!(types.contains(expected), "missing {expected} in:\n{types}");
+    }
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_for_wasip1(env);
+    let package = generated.package();
+    let graph = unit_shapes_graph();
+    generated.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+func TestUnitShapesFollowTheCalleeSchema(t *testing.T) {{
+	if errs := golem.DefinitionErrors(); len(errs) > 0 {{
+		t.Fatalf("definition errors: %v", errs)
+	}}
+	graph, err := schema.UnmarshalWireGraph([]byte({graph}))
+	if err != nil {{
+		t.Fatal(err)
+	}}
+	callee := schema.NewRef(graph)
+	for _, in := range []UnitsHolder{{
+		{{Done: values.Ok[values.Unit, string](values.Unit{{}}), Failed: values.Err[string](values.Unit{{}}), Either: values.Ok[values.Unit, values.Unit](values.Unit{{}})}},
+		{{Done: values.Err[values.Unit]("boom"), Failed: values.Ok[string, values.Unit]("fine"), Either: values.Err[values.Unit](values.Unit{{}})}},
+	}} {{
+		tv := golem.EncodeTypedValue(in)
+		canonical, err := tv.JSON()
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		// The callee's schema accepts what the SDK sends.
+		if _, err := callee.PackJSON(canonical); err != nil {{
+			data, _ := json.Marshal(canonical)
+			t.Fatalf("the callee refuses %s: %v", data, err)
+		}}
+		// And what the callee sends decodes.
+		back, err := tv.WithJSON(canonical)
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		out, err := golem.DecodeTypedValue[UnitsHolder](back)
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		if !reflect.DeepEqual(in, out) {{
+			t.Fatalf("%#v round-tripped to %#v", in, out)
+		}}
+	}}
+}}
+"#
+        ),
+    );
+}
+
+/// An external client converts unit arms and the empty tuple to values the
+/// callee's schema accepts, and back.
+#[test]
+fn go_external_client_converts_unit_arms_and_the_empty_tuple(env: &GoEnv) {
+    let generated = GeneratedGo::external(env, unit_shapes_agent());
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_natively(env);
+    let package = generated.package();
+    let graph = unit_shapes_graph();
+    generated.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
+)
+
+func TestUnitShapesConvertThroughTheWire(t *testing.T) {{
+	graph, err := schema.UnmarshalWireGraph([]byte({graph}))
+	if err != nil {{
+		t.Fatal(err)
+	}}
+	callee := schema.NewRef(graph)
+	for _, in := range []UnitsHolder{{
+		{{Done: values.Ok[values.Unit, string](values.Unit{{}}), Failed: values.Err[string](values.Unit{{}}), Either: values.Ok[values.Unit, values.Unit](values.Unit{{}})}},
+		{{Done: values.Err[values.Unit]("boom"), Failed: values.Ok[string, values.Unit]("fine"), Either: values.Err[values.Unit](values.Unit{{}})}},
+	}} {{
+		data, err := schema.MarshalWireValue(encodeUnitsHolder(in))
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		sv, err := schema.UnmarshalWireValue(data)
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		if err := callee.Validate(sv); err != nil {{
+			t.Fatalf("the callee refuses %s: %v", data, err)
+		}}
+		out, err := decodeUnitsHolder(sv)
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		if !reflect.DeepEqual(in, out) {{
+			t.Fatalf("%#v round-tripped to %#v", in, out)
+		}}
+	}}
+}}
+"#
+        ),
+    );
+}

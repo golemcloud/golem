@@ -291,12 +291,13 @@ export const unionComplexArb: fc.Arbitrary<UnionComplexType> = fc.oneof(
   }),
 );
 
-// `bigintProp` maps to a WIT `u64`, so it must stay within the unsigned 64-bit
-// range; the component-model boundary rejects negative or oversized values.
-const U64_MAX = 2n ** 64n - 1n;
+// `bigintProp` maps to a WIT `s64`, so it must stay within the signed 64-bit
+// range; the component-model boundary rejects out-of-range values.
+const S64_MIN = -(2n ** 63n);
+const S64_MAX = 2n ** 63n - 1n;
 
 export const baseArb = fc.record({
-  bigintProp: fc.bigInt({ min: 0n, max: U64_MAX }),
+  bigintProp: fc.bigInt({ min: S64_MIN, max: S64_MAX }),
   booleanProp: fc.boolean(),
   falseProp: fc.constant(false),
   listObjectProp: listComplexArb,

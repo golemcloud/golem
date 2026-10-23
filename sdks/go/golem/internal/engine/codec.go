@@ -53,6 +53,9 @@ type Codec struct {
 	// building is true while this codec's children are being compiled. Re-entry
 	// while building is exactly what identifies a recursive type.
 	building bool
+	// record marks the codec of a struct compiled as the record of its
+	// exported fields.
+	record bool
 	// Invalid is non-empty when the type cannot be represented (unsupported
 	// kind, platform-dependent width, unregistered variant, …). Set by
 	// markInvalid instead of panicking; the schema builder collects these per
@@ -350,6 +353,20 @@ func isPrimitiveKind(k reflect.Kind) bool {
 		reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 		reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
+}
+
+// isMapKeyBody reports whether the host accepts a map keyed by a value of this
+// schema type: bool, an integer, a float, char or string.
+func isMapKeyBody(b types.SchemaTypeBody) bool {
+	switch b.Tag() {
+	case types.SchemaTypeBodyBoolType,
+		types.SchemaTypeBodyS8Type, types.SchemaTypeBodyS16Type, types.SchemaTypeBodyS32Type, types.SchemaTypeBodyS64Type,
+		types.SchemaTypeBodyU8Type, types.SchemaTypeBodyU16Type, types.SchemaTypeBodyU32Type, types.SchemaTypeBodyU64Type,
+		types.SchemaTypeBodyF32Type, types.SchemaTypeBodyF64Type,
+		types.SchemaTypeBodyCharType, types.SchemaTypeBodyStringType:
 		return true
 	}
 	return false

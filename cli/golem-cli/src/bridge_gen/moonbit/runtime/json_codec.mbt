@@ -86,7 +86,73 @@ fn obj(fields : Array[(String, Json)]) -> Json {
 // --- Encoding ------------------------------------------------------------
 
 ///|
-pub fn schema_value_render(value : SchemaValue) -> String {
+/// Rejects text that is not valid Unicode: a string with an unpaired surrogate
+/// or a char outside the Unicode scalar values.
+pub fn schema_value_check_text(value : SchemaValue) -> Unit raise {
+  fn text(value : String, what : String) raise {
+    let len = value.length()
+    let mut i = 0
+    while i < len {
+      let unit = value[i]
+      if unit.is_leading_surrogate() &&
+        i + 1 < len &&
+        value[i + 1].is_trailing_surrogate() {
+        i += 2
+      } else if unit.is_surrogate() {
+        raise BridgeError("\{what} contains an unpaired surrogate")
+      } else {
+        i += 1
+      }
+    }
+  }
+  fn optional(value : SchemaValue?) raise {
+    if value is Some(value) {
+      schema_value_check_text(value)
+    }
+  }
+  match value {
+    CharValue(v) =>
+      if !(v is (0..=0xD7FF) || v is (0xE000..=0x10FFFF)) {
+        raise BridgeError("char value is not a Unicode scalar value: \{v}")
+      }
+    StringValue(v) => text(v, "string value")
+    TextValue(v, language) => {
+      text(v, "text value")
+      if language is Some(language) {
+        text(language, "text language")
+      }
+    }
+    BinaryValue(_, Some(mime)) => text(mime, "mime type")
+    PathValue(v) => text(v, "path value")
+    UrlValue(v) => text(v, "url value")
+    QuantityValue(_, _, unit) => text(unit, "quantity unit")
+    RecordValue(values)
+    | TupleValue(values)
+    | ListValue(values)
+    | FixedListValue(values) =>
+      for value in values {
+        schema_value_check_text(value)
+      }
+    VariantValue(_, payload)
+    | OptionValue(payload)
+    | ResultValue(ResultOk(payload))
+    | ResultValue(ResultErr(payload)) => optional(payload)
+    MapValue(entries) =>
+      for entry in entries {
+        schema_value_check_text(entry.key)
+        schema_value_check_text(entry.value)
+      }
+    UnionValue(tag, body) => {
+      text(tag, "union tag")
+      schema_value_check_text(body)
+    }
+    _ => ()
+  }
+}
+
+///|
+pub fn schema_value_render(value : SchemaValue) -> String raise {
+  schema_value_check_text(value)
   let output = StringBuilder()
   schema_value_write_json(value, output)
   output.to_string()
@@ -298,7 +364,13 @@ fn schema_value_write_json(value : SchemaValue, output : StringBuilder) -> Unit 
 
 ///|
 /// Encodes a [SchemaValue] into the server's schema-native JSON wire form.
-pub fn schema_value_to_json(value : SchemaValue) -> Json {
+pub fn schema_value_to_json(value : SchemaValue) -> Json raise {
+  schema_value_check_text(value)
+  schema_value_json_node(value)
+}
+
+///|
+fn schema_value_json_node(value : SchemaValue) -> Json {
   match value {
     BoolValue(v) => node("bool", json_bool(v))
     S8Value(v) => node("s8", json_int(v))
@@ -318,12 +390,12 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
     RecordValue(fields) =>
       node(
         "record",
-        obj([("fields", Json::array(fields.map(schema_value_to_json)))]),
+        obj([("fields", Json::array(fields.map(schema_value_json_node)))]),
       )
     VariantValue(case_index, payload) => {
       let fields : Array[(String, Json)] = [("case", json_int(case_index))]
       match payload {
-        Some(p) => fields.push(("payload", schema_value_to_json(p)))
+        Some(p) => fields.push(("payload", schema_value_json_node(p)))
         None => ()
       }
       node("variant", obj(fields))
@@ -334,23 +406,23 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
     TupleValue(elements) =>
       node(
         "tuple",
-        obj([("elements", Json::array(elements.map(schema_value_to_json)))]),
+        obj([("elements", Json::array(elements.map(schema_value_json_node)))]),
       )
     ListValue(elements) =>
       node(
         "list",
-        obj([("elements", Json::array(elements.map(schema_value_to_json)))]),
+        obj([("elements", Json::array(elements.map(schema_value_json_node)))]),
       )
     FixedListValue(elements) =>
       node(
         "fixed-list",
-        obj([("elements", Json::array(elements.map(schema_value_to_json)))]),
+        obj([("elements", Json::array(elements.map(schema_value_json_node)))]),
       )
     MapValue(entries) => {
       let encoded : Array[Json] = entries.map(fn(entry) {
         Json::array([
-          schema_value_to_json(entry.key),
-          schema_value_to_json(entry.value),
+          schema_value_json_node(entry.key),
+          schema_value_json_node(entry.value),
         ])
       })
       node("map", obj([("entries", Json::array(encoded))]))
@@ -362,7 +434,7 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
           (
             "inner",
             match inner {
-              Some(v) => schema_value_to_json(v)
+              Some(v) => schema_value_json_node(v)
               None => Json::null()
             },
           ),
@@ -377,7 +449,7 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
             (
               "value",
               match v {
-                Some(x) => schema_value_to_json(x)
+                Some(x) => schema_value_json_node(x)
                 None => Json::null()
               },
             ),
@@ -389,7 +461,7 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
             (
               "value",
               match v {
-                Some(x) => schema_value_to_json(x)
+                Some(x) => schema_value_json_node(x)
                 None => Json::null()
               },
             ),
@@ -448,7 +520,7 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
     UnionValue(tag, body) =>
       node(
         "union",
-        obj([("body", schema_value_to_json(body)), ("tag", Json::string(tag))]),
+        obj([("body", schema_value_json_node(body)), ("tag", Json::string(tag))]),
       )
   }
 }
