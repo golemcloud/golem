@@ -53,6 +53,9 @@ type Codec struct {
 	// building is true while this codec's children are being compiled. Re-entry
 	// while building is exactly what identifies a recursive type.
 	building bool
+	// record marks the codec of a struct compiled as the record of its
+	// exported fields.
+	record bool
 	// Invalid is non-empty when the type cannot be represented (unsupported
 	// kind, platform-dependent width, unregistered variant, …). Set by
 	// markInvalid instead of panicking; the schema builder collects these per

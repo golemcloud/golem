@@ -70,6 +70,10 @@ type Engine struct {
 	Codecs   map[reflect.Type]*Codec // Compile memoization
 	Errs     []DefError              // registration-phase errors (derivation adds more)
 
+	// paramCodecs memoizes CompileParams for the types whose own codec is not
+	// a record.
+	paramCodecs map[reflect.Type]*Codec
+
 	// nameClashes holds the struct types already reported for two fields with
 	// one schema name, so each is reported once.
 	nameClashes map[reflect.Type]bool

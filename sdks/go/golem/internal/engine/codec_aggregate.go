@@ -30,6 +30,7 @@ import (
 // positional on the wire: declaration order is the order the schema reports and
 // the order values are written in.
 func (d *Engine) compileRecord(c *Codec) {
+	c.record = true
 	fields := d.StructFields(c.Typ)
 	if slices.ContainsFunc(fields, func(f Field) bool { return f.AutoInjected }) {
 		MarkInvalid(c, "%s", MisplacedPrincipal)
