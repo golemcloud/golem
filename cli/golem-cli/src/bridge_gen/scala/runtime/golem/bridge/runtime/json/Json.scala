@@ -27,8 +27,8 @@ import zio.blocks.schema.json.{Json => ZJson}
  * (accessors return `Either[String, T]`).
  *
  * zio-blocks represents JSON numbers as `BigDecimal`, so full-width `u64`
- * values and the two `u64` halves of a UUID round-trip without the precision
- * loss a `Double`-backed model would introduce. Object fields preserve
+ * values round-trip without the precision loss a `Double`-backed model would
+ * introduce. Object fields preserve
  * insertion order so encoded request bodies are deterministic.
  */
 final class Json private[json] (

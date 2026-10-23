@@ -86,15 +86,16 @@ pub fn fork() -> Result<ForkResult, AgentOperationError>;
 `fork` and `ForkResult` are available via `golem.HostApi`
 
 ```scala
-import golem.{HostApi, Uuid}
+import golem.HostApi
+import java.util.UUID
 
 sealed trait ForkResult {
-  def forkedPhantomId: Uuid
+  def forkedPhantomId: UUID
 }
 
 object ForkResult {
-  final case class Original(forkedPhantomId: Uuid) extends ForkResult
-  final case class Forked(forkedPhantomId: Uuid)   extends ForkResult
+  final case class Original(forkedPhantomId: UUID) extends ForkResult
+  final case class Forked(forkedPhantomId: UUID)   extends ForkResult
 }
 
 def fork(): ForkResult = HostApi.fork()

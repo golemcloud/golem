@@ -16,13 +16,13 @@
 
 package golem.schema.validation
 
-import golem.Uuid
 import golem.schema._
 import golem.schema.SchemaTypeBody._
 import golem.schema.SchemaValue._
 import golem.schema.validation.ValueError._
 import zio.test._
 
+import java.util.UUID
 import scala.collection.immutable.ListMap
 
 object ValueValidationSpec extends ZIOSpecDefault {
@@ -89,10 +89,11 @@ object ValueValidationSpec extends ZIOSpecDefault {
       val ty = SchemaType(U32Type(NumericRestrictions(min = Some(NumericBound.Unsigned(1))).normalize));
       assertTrue(validate(ty, U32Value(0)).left.exists(_.exists(_.isInstanceOf[NumericOutOfRange])))
     },
-    test("uuid halves outside the unsigned 64-bit range are rejected") {
+    test("uuid values match only uuid schema types") {
       assertTrue(
-        validate(t.uuid, UuidValue(Uuid(-1, 0))).isLeft,
-        validate(t.uuid, UuidValue(Uuid(0, BigInt(1) << 64))).isLeft
+        validate(t.uuid, UuidValue(new UUID(0L, 0L))).isRight,
+        validate(t.uuid, UuidValue(new UUID(-1L, -1L))).isRight,
+        validate(t.string, UuidValue(new UUID(0L, 0L))).left.exists(_.head.isInstanceOf[ShapeMismatch])
       )
     },
     test("permission-card values match only permission-card schema types") {

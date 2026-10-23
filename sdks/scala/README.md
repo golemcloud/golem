@@ -182,8 +182,9 @@ Today this is a one-liner:
 ```scala
 import golem.runtime.annotations.{DurabilityMode, agentDefinition, agentImplementation, description}
 import golem.runtime.autowire.{AgentDefinition, AgentImplementation}
-import golem.{AgentCompanion, BaseAgent, Uuid}
+import golem.{AgentCompanion, BaseAgent}
 
+import java.util.UUID
 import scala.concurrent.Future
 
 @agentDefinition(mode = DurabilityMode.Durable)
@@ -213,7 +214,7 @@ object ShardModule {
 
 object Example {
   val shard1 = Shard.get("a", 1)
-  val shard2 = Shard.getPhantom("a", 1, Uuid.random())
+  val shard2 = Shard.getPhantom("a", 1, UUID.randomUUID())
   // shard1.flatMap(_.set("a", "b")) ...
 }
 ```

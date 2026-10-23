@@ -21,6 +21,7 @@ import zio.ZIO
 import zio.blocks.schema.Schema
 import zio.test.*
 
+import java.util.UUID
 import scala.concurrent.Future
 import scala.util.Try
 
@@ -33,6 +34,8 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
     case Fields(name: String, count: Int)
   }
   object Choice { implicit val schema: Schema[Choice] = Schema.derived }
+  final case class UuidHolder(id: UUID, parent: Option[UUID], children: List[UUID])
+  object UuidHolder { implicit val schema: Schema[UuidHolder] = Schema.derived }
 
   override def spec = suite("ConcreteCodecSpec")(
     test("recursive concrete values and named descriptors match the wire contract") {
@@ -75,6 +78,28 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
         Try(
           datetime.decode(WitSchemaValueTree(Vector(WitSchemaValueNode.DatetimeValue(Datetime(0, 1000000000))), 0))
         ).isFailure
+      )
+    },
+    test("UUIDs use the native uuid node and match the schema-value path") {
+      val nil    = new UUID(0L, 0L)
+      val max    = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
+      val codec  = ConcreteCodec.derived[UuidHolder]
+      val holder = UuidHolder(max, Some(nil), List(nil, max))
+      val nested = codec.encode(holder)
+      assertTrue(
+        ConcreteCodec.uuid.graph == WitSchemaGraph(
+          Vector(WitSchemaTypeNode(WitSchemaTypeBody.UuidType, MetadataEnvelope.empty)),
+          Vector.empty,
+          0
+        ),
+        ConcreteCodec.uuid.encodeValue(max) == WitSchemaValueTree(Vector(WitSchemaValueNode.UuidValue(max)), 0),
+        ConcreteCodec.uuid.decode(ConcreteCodec.uuid.encodeValue(nil)) == nil,
+        ConcreteCodec.uuid.decode(ConcreteCodec.uuid.encodeValue(max)) == max,
+        SchemaWire.schemaGraphFromWit(ConcreteCodec.uuid.graph) == IntoSchema[UUID].graph,
+        codec.decode(nested.value) == holder,
+        SchemaWire.schemaGraphFromWit(nested.graph) == IntoSchema[UuidHolder].graph,
+        SchemaWire.schemaValueFromWit(nested.value) == IntoSchema[UuidHolder].toValue(holder),
+        FromSchema[UuidHolder].fromValue(SchemaWire.schemaValueFromWit(nested.value)) == Right(holder)
       )
     },
     test("sets use list carriers and decode with set semantics") {

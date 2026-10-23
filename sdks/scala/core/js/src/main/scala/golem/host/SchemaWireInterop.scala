@@ -755,10 +755,9 @@ object SchemaWireInterop {
       case TextValue(p)       => JsSchemaValueNode.textValue(JsTextValuePayload(p.text, p.language.orUndefined))
       case BinaryValue(p)     =>
         JsSchemaValueNode.binaryValue(JsBinaryValuePayload(bytesToJs(p.bytes), p.mimeType.orUndefined))
-      case PathValue(v) => JsSchemaValueNode.pathValue(v)
-      case UrlValue(v)  => JsSchemaValueNode.urlValue(v)
-      case UuidValue(v) =>
-        JsSchemaValueNode.uuidValue(JsUuid(js.BigInt(v.highBits.toString), js.BigInt(v.lowBits.toString)))
+      case PathValue(v)     => JsSchemaValueNode.pathValue(v)
+      case UrlValue(v)      => JsSchemaValueNode.urlValue(v)
+      case UuidValue(v)     => JsSchemaValueNode.uuidValue(JsUuid.fromUuid(v))
       case DatetimeValue(v) => JsSchemaValueNode.datetimeValue(datetimeToJs(v))
       case DurationValue(p) =>
         JsSchemaValueNode.durationValue(JsDurationValuePayload(js.BigInt(p.nanoseconds.toString)))
@@ -1068,11 +1067,9 @@ object SchemaWireInterop {
       case "binary-value" =>
         val p = valOf(j).asInstanceOf[JsBinaryValuePayload]
         BinaryValue(WitBinaryValuePayload(bytesFromJs(p.bytes), p.mimeType.toOption))
-      case "path-value" => PathValue(valOf(j).asInstanceOf[String])
-      case "url-value"  => UrlValue(valOf(j).asInstanceOf[String])
-      case "uuid-value" =>
-        val uuid = valOf(j).asInstanceOf[JsUuid]
-        UuidValue(golem.Uuid(BigInt(uuid.highBits.toString), BigInt(uuid.lowBits.toString)))
+      case "path-value"     => PathValue(valOf(j).asInstanceOf[String])
+      case "url-value"      => UrlValue(valOf(j).asInstanceOf[String])
+      case "uuid-value"     => UuidValue(JsUuid.toUuid(valOf(j).asInstanceOf[JsUuid]))
       case "datetime-value" => DatetimeValue(datetimeFromJs(valOf(j).asInstanceOf[JsDatetime]))
       case "duration-value" =>
         val p = valOf(j).asInstanceOf[JsDurationValuePayload]

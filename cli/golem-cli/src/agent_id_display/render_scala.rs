@@ -370,7 +370,7 @@ fn render_type_scala_inner(
         SchemaType::Binary { .. } => "binary".to_string(),
         SchemaType::Path { .. } => "path".to_string(),
         SchemaType::Url { .. } => "url".to_string(),
-        SchemaType::Uuid { .. } => "golem.Uuid".to_string(),
+        SchemaType::Uuid { .. } => "java.util.UUID".to_string(),
         SchemaType::Datetime { .. } => "datetime".to_string(),
         SchemaType::Duration { .. } => "duration".to_string(),
         SchemaType::Quantity { .. } => "quantity".to_string(),

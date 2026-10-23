@@ -280,9 +280,9 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
   }
 
   override def toolConformanceRoundTrip(principal: Principal): Future[String] = {
-    val input    = ScalaConformanceInput("left", Map("z" -> Seq(8L, 1L), "a" -> Seq(3L)))
-    val direct   = new ScalaReflectionTestToolImpl
-    val captured = new CapturingOutput
+    val input      = ScalaConformanceInput("left", Map("z" -> Seq(8L, 1L), "a" -> Seq(3L)))
+    val direct     = new ScalaReflectionTestToolImpl
+    val captured   = new CapturingOutput
     val definition = for {
       streamed <- direct.streaming("definition", captured)
       _        <- captured.finish()
@@ -376,8 +376,8 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
 
     for {
       definitionResult <- definition
-      generatedResult <- generated
-      reflectedResult <- reflected
+      generatedResult  <- generated
+      reflectedResult  <- reflected
     } yield s"definition=$definitionResult|generated=$generatedResult|reflected=$reflectedResult"
   }
 

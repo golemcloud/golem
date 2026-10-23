@@ -110,22 +110,17 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         case '[Url]                                => SchemaType(SchemaTypeBody.UrlType(Url.defaultRestrictions))
         case '[java.time.Instant]                  => SchemaType(SchemaTypeBody.DatetimeType)
         case '[java.time.Duration]                 => SchemaType(SchemaTypeBody.DurationType)
-        case '[golem.Uuid]                         =>
-          builder.register(
-            "uuid.Uuid",
-            () => t.record(List(t.field("high-bits", t.u64), t.field("low-bits", t.u64))),
-            Some("uuid")
-          )
-        case '[Array[Byte]]    => t.list(t.u8)
-        case '[Option[a]]      => t.option(body(TypeRepr.of[a]))
-        case '[Either[e, a]]   => t.result(Some(body(TypeRepr.of[a])), Some(body(TypeRepr.of[e])))
-        case '[Map[k, v]]      => t.map(body(TypeRepr.of[k]), body(TypeRepr.of[v]))
-        case '[List[a]]        => t.list(body(TypeRepr.of[a]))
-        case '[Vector[a]]      => t.list(body(TypeRepr.of[a]))
-        case '[Seq[a]]         => t.list(body(TypeRepr.of[a]))
-        case '[Array[a]]       => t.list(body(TypeRepr.of[a]))
-        case '[AgentStream[a]] => SchemaType(SchemaTypeBody.StreamType(Some(body(TypeRepr.of[a]))))
-        case _                 =>
+        case '[java.util.UUID]                     => t.uuid
+        case '[Array[Byte]]                        => t.list(t.u8)
+        case '[Option[a]]                          => t.option(body(TypeRepr.of[a]))
+        case '[Either[e, a]]                       => t.result(Some(body(TypeRepr.of[a])), Some(body(TypeRepr.of[e])))
+        case '[Map[k, v]]                          => t.map(body(TypeRepr.of[k]), body(TypeRepr.of[v]))
+        case '[List[a]]                            => t.list(body(TypeRepr.of[a]))
+        case '[Vector[a]]                          => t.list(body(TypeRepr.of[a]))
+        case '[Seq[a]]                             => t.list(body(TypeRepr.of[a]))
+        case '[Array[a]]                           => t.list(body(TypeRepr.of[a]))
+        case '[AgentStream[a]]                     => SchemaType(SchemaTypeBody.StreamType(Some(body(TypeRepr.of[a]))))
+        case _                                     =>
           if (ty <:< TypeRepr.of[Tuple]) t.tuple(ty.typeArgs.map(body))
           else {
             val sym = ty.typeSymbol

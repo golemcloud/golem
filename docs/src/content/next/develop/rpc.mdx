@@ -665,9 +665,9 @@ If we know the **phantom ID** of an agent, we can create a client targeting an e
   </Tabs.Tab>
   <Tabs.Tab>
     ```scala
-    import golem.Uuid
+    import java.util.UUID
 
-    val phantomId = Uuid(BigInt(42), BigInt(99))
+    val phantomId = UUID.fromString("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
     val samePhantomAgent = WeatherAgentClient.getPhantom("London", phantomId)
     ```
   </Tabs.Tab>

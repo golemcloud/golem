@@ -50,22 +50,6 @@ object DatetimeCompileSpec extends ZIOSpecDefault {
     test("Datetime is a value type (AnyVal)") {
       val d: Datetime = Datetime.fromEpochMillis(0.0)
       assertTrue(d.epochMillis == 0.0)
-    },
-    test("Uuid construction and field access") {
-      val u = Uuid(BigInt(123456789L), BigInt(987654321L))
-      assertTrue(
-        u.highBits == BigInt(123456789L),
-        u.lowBits == BigInt(987654321L)
-      )
-    },
-    test("Uuid equality") {
-      val a = Uuid(BigInt(1), BigInt(2))
-      val b = Uuid(BigInt(1), BigInt(2))
-      val c = Uuid(BigInt(1), BigInt(3))
-      assertTrue(
-        a == b,
-        a != c
-      )
     }
   )
 }

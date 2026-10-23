@@ -18,6 +18,8 @@ package golem
 
 import zio.blocks.schema.Schema
 
+import java.util.UUID
+
 sealed trait Principal extends Product with Serializable
 
 object Principal {
@@ -35,12 +37,12 @@ object Principal {
   ) extends Principal
 
   final case class Agent(
-    componentId: Uuid,
+    componentId: UUID,
     agentId: String
   ) extends Principal
 
   final case class GolemUser(
-    accountId: Uuid
+    accountId: UUID
   ) extends Principal
 
   case object Anonymous extends Principal

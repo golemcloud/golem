@@ -16,6 +16,7 @@
 
 package golem.host.js
 
+import java.util.UUID
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSName
 
@@ -32,6 +33,23 @@ sealed trait JsUuid extends js.Object {
 object JsUuid {
   def apply(highBits: js.BigInt, lowBits: js.BigInt): JsUuid =
     js.Dynamic.literal("highBits" -> highBits, "lowBits" -> lowBits).asInstanceOf[JsUuid]
+
+  def fromUuid(uuid: UUID): JsUuid =
+    apply(unsignedBits(uuid.getMostSignificantBits), unsignedBits(uuid.getLeastSignificantBits))
+
+  def toUuid(uuid: JsUuid): UUID =
+    fromBits(uuid.highBits, uuid.lowBits)
+
+  /** Builds a UUID from the two `u64` halves of a WIT `uuid` record. */
+  private[golem] def fromBits(highBits: js.BigInt, lowBits: js.BigInt): UUID =
+    new UUID(signedBits(highBits), signedBits(lowBits))
+
+  /** The `u64` value of the raw bits of one UUID half. */
+  private[golem] def unsignedBits(bits: Long): js.BigInt =
+    js.BigInt.asUintN(64, js.BigInt(bits.toString))
+
+  private def signedBits(value: js.BigInt): Long =
+    js.BigInt.asIntN(64, value).toString.toLong
 }
 
 @js.native

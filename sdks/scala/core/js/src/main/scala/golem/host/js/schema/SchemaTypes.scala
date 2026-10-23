@@ -47,6 +47,15 @@ sealed trait JsUuid extends js.Object {
 object JsUuid {
   def apply(highBits: js.BigInt, lowBits: js.BigInt): JsUuid =
     js.Dynamic.literal("highBits" -> highBits, "lowBits" -> lowBits).asInstanceOf[JsUuid]
+
+  def fromUuid(uuid: java.util.UUID): JsUuid =
+    apply(
+      golem.host.js.JsUuid.unsignedBits(uuid.getMostSignificantBits),
+      golem.host.js.JsUuid.unsignedBits(uuid.getLeastSignificantBits)
+    )
+
+  def toUuid(uuid: JsUuid): java.util.UUID =
+    golem.host.js.JsUuid.fromBits(uuid.highBits, uuid.lowBits)
 }
 
 @js.native

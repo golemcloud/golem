@@ -42,10 +42,6 @@ impl Display for TypeScriptTypeName {
 }
 
 impl TypeName for TypeScriptTypeName {
-    fn from_schema_type(_typ: &SchemaType) -> Option<Self> {
-        None
-    }
-
     fn from_owner_and_name(
         owner: Option<impl AsRef<str>>,
         name: impl AsRef<str>,

@@ -17,7 +17,6 @@
 package golem.host
 
 import golem.HostApi
-import golem.Uuid
 import golem.host.js._
 import golem.schema.{
   FromSchema,
@@ -33,6 +32,7 @@ import golem.schema.{
 }
 import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody, WitSchemaValueNode}
 
+import java.util.UUID
 import scala.collection.immutable.ListMap
 import scala.concurrent.duration.FiniteDuration
 import scala.util.control.NonFatal
@@ -228,8 +228,8 @@ object PermissionsApi {
   sealed trait Holder extends Product with Serializable
 
   object Holder {
-    final case class Account(accountId: Uuid)               extends Holder
-    final case class App(appId: Uuid)                       extends Holder
+    final case class Account(accountId: UUID)               extends Holder
+    final case class App(appId: UUID)                       extends Holder
     final case class Agent(agentId: HostApi.AgentIdLiteral) extends Holder
 
     /** An agent holder from a component id and an agent id string. */
@@ -238,13 +238,10 @@ object PermissionsApi {
 
     private[PermissionsApi] def toJs(holder: Holder): JsHolder =
       holder match {
-        case Account(uuid) => JsHolder.account(uuidToJs(uuid))
-        case App(uuid)     => JsHolder.app(uuidToJs(uuid))
+        case Account(uuid) => JsHolder.account(JsUuid.fromUuid(uuid))
+        case App(uuid)     => JsHolder.app(JsUuid.fromUuid(uuid))
         case Agent(id)     => JsHolder.agent(id)
       }
-
-    private def uuidToJs(uuid: Uuid): JsUuid =
-      JsUuid(js.BigInt(uuid.highBits.toString), js.BigInt(uuid.lowBits.toString))
   }
 
   // --- WIT: permission-error ---
