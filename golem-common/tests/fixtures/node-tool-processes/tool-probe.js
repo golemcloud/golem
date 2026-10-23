@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { sdkOverflowControl } from "golem-tool-process-sdk-control";
 import process from "node:process";
-import { runJavaScript } from "wasm-rquickjs:execution";
+import { runJavaScript, runIsolatedChild } from "wasm-rquickjs:execution";
 import {
   ok,
   processExitStatusSchema,
@@ -200,6 +200,7 @@ probe.implement({
     const control = execution === "fresh-stream-control";
     const nativeControl = execution.endsWith("native-cancel");
     const sdkControl = execution === "fresh-sdk-overflow";
+    const isolatedChild = ["child-sync", "child-async"].includes(execution);
     const synchronous = [
       "all",
       "main-sync",
@@ -252,6 +253,33 @@ probe.implement({
         : undefined;
     if (nativeControl) await cancelNative(native);
     if (sdkControl) value = await sdkOverflowControl();
+    if (isolatedChild) {
+      const result = JSON.parse(runIsolatedChild(`
+        (async () => {
+          const backend = await import('node:child_process');
+          const effectUrl = ${JSON.stringify(effectUrl)};
+          if (effectUrl) {
+            const response = await fetch(effectUrl + '/' + ${JSON.stringify(mode)} + '-job', {
+              method: 'POST',
+            });
+            await response.arrayBuffer();
+          }
+          const summarize = ${summarize.toString()};
+          const startCapture = ${startCapture.toString()};
+          const args = ${JSON.stringify(args)};
+          const result = ${JSON.stringify(execution)} === 'child-sync'
+            ? backend.spawnSync('streaming', args, { maxBuffer: 4096 })
+            : await startCapture(backend, args).done;
+          process.stdout.write(summarize(result));
+        })().catch(error => {
+          process.stderr.write(String(error));
+          process.exitCode = 1;
+        });
+      `));
+      assert.equal(result.status, 0, JSON.stringify(result));
+      assert.equal(result.stderr, "");
+      value = result.stdout;
+    }
     if (synchronous) {
       value = summarize(
         backend.spawnSync("streaming", args, {

@@ -237,6 +237,8 @@ async fn node_guest_tool_process_bridge(
             | "fresh-native-cancel"
             | "fresh-sdk-overflow"
             | "fresh-stream-control"
+            | "child-sync"
+            | "child-async"
     ));
     let replay_probe = std::env::var_os("GOLEM_NODE_TOOL_STREAM_REPLAY_PROBE").is_some();
     anyhow::ensure!(cases.split(',').all(|mode| matches!(
