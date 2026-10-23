@@ -174,7 +174,7 @@ function snippets(chapter: string): ChapterSnippets {
 
 export const agentsChapter = {
   eyebrow: "Agents",
-  heading: "Agents are your own arbitrary code, not prompts",
+  heading: "Agents are your own typed code, not prompts",
   snippets: snippets("agents"),
   // Shown instead of a snippet in languages that lack the feature.
   missing: {
@@ -184,38 +184,38 @@ export const agentsChapter = {
   items: [
     {
       id: "overview",
-      title: "Overview",
-      body: "Agents are typed code in TypeScript, Effect, Rust, Scala, MoonBit or Go, each in its own WebAssembly VM. After a crash or restart, execution resumes mid-function.",
+      title: "Same guarantees and primitives",
+      body: "Code in TypeScript, Effect, Rust, Scala, MoonBit or Go resumes mid-function with memory and files after a crash.",
     },
     {
       id: "sqlite",
       title: "Per-agent databases",
-      body: "Each agent has its own durable file system, so an embedded database such as SQLite keeps its file there, beside the agent: no database server to run or connect to.",
+      body: "Each agent's durable file system can hold an embedded database such as SQLite: no server to run or connect to.",
     },
     {
       id: "models",
       title: "Any model, with your libraries",
-      body: "Call any model with the libraries you already use, such as the OpenAI and Anthropic SDKs, Vercel AI SDK, TanStack AI or Effect AI, or a provider's own HTTP API.",
+      body: "Model calls can use OpenAI or Anthropic SDKs, Vercel AI SDK, TanStack AI, Effect AI or a provider's own HTTP API.",
     },
     {
       id: "team",
       title: "Agents working together",
-      body: "Typed calls between agents, across languages: wait for the result or send and move on. Agents can also discover which other agents and tools exist and what they offer.",
+      body: "Agents make typed cross-language calls, wait or move on, and discover what other agents and tools offer.",
     },
     {
       id: "waits",
-      title: "Awaitable webhooks, timers and schedules",
-      body: "Approvals and payment callbacks become promises your code awaits. Sleeps, timers and scheduled calls fire on time across restarts, with no idle cost.",
+      title: "Awaitable webhooks, timers, schedules",
+      body: "Approval and payment webhooks are promises. Sleeps and scheduled calls fire on time across restarts, at no idle cost.",
     },
     {
       id: "stream",
-      title: "Durable streaming",
-      body: "Streaming endpoints become resumable streams: clients that reload or reconnect pick up an agent's output where it left off, even after a crash.",
+      title: "Resumable streaming endpoints",
+      body: "Clients that reload or reconnect pick up an agent's streamed output where they left off, even after a crash.",
     },
     {
       id: "readonly",
-      title: "Read-only methods",
-      body: "Golem caches the results of methods marked read-only and answers repeat calls without loading the agent, until a regular method succeeds. Outgoing calls in them fail.",
+      title: "Cached read-only methods",
+      body: "Repeat calls skip loading the agent until a regular method succeeds. Outgoing HTTP and agent calls fail.",
     },
   ] as ChapterItem[],
 };
@@ -228,60 +228,80 @@ export const toolsChapter = {
     {
       id: "overview",
       title: "Overview",
-      body: "Golem runs each tool call in a fresh VM that can't read the agent's memory. An interrupted call replays with recorded results, without repeating completed effects.",
+      body: "Each call's fresh VM can't read agent memory. Recovery reuses recorded results rather than repeating those calls.",
     },
     {
       id: "custom",
-      title: "Bundled and custom tools",
-      body: "Shell, Git, Node.js, npm and TypeScript come bundled, and can work on the agent's own files. Build your own tools with any Golem SDK; no separate sandbox service needed.",
+      title: "Tools without a sandbox service",
+      body: "Shell, Git, Node.js, npm and TypeScript are bundled and can use the agent's files. Custom tools use any Golem SDK.",
     },
     {
       id: "requests",
-      title: "Retries that take effect once",
-      body: "Golem retries interrupted HTTP requests from agents and tools with an idempotency key it adds, so they take effect once where the API honors such keys, as Stripe does.",
+      title: "HTTP retries from agents and tools",
+      body: "Golem retries interrupted requests with an idempotency key it adds; APIs that honor it, like Stripe, act once.",
     },
     {
       id: "permissions",
       title: "Delegated, revocable permissions",
-      body: "Share a narrow slice of an agent's access, such as the orders API only for one hour, with another agent and the tools it calls. Revoking it revokes every derived copy.",
+      body: "One agent lends another and its tools only the orders API for an hour. Revoking it revokes every derived copy.",
+    },
+    {
+      id: "middleware",
+      title: "Middleware agent code can't bypass",
+      body: "Hooks can wrap every tool call to reject by argument, hold refunds for human approval, redact, audit and rate-limit.",
     },
     {
       id: "secrets",
       title: "Secrets",
-      body: "Agents pass API keys to tools as opaque handles. Revealing a value takes a grant and is recorded, and a binding can forbid a tool to reveal any.",
+      body: "Agents pass API keys to tools as opaque handles. Reveals need a grant and are recorded; bindings can forbid them.",
     },
     {
       id: "publish",
-      title: "MCP and tool releases",
-      body: "Call existing MCP servers through generated clients typed by their schemas. Expose agents and tools over MCP, and publish tools as versioned releases others can use.",
+      title: "Serve agents and tools over MCP",
+      body: "Typed MCP clients get tool-call guarantees. Grant opt-in immutable releases across environments and accounts.",
     },
   ] as ChapterItem[],
 };
 
 export const artifactsChapter = {
   eyebrow: "Artifacts",
-  heading: "Pages, apps and files your agents build for people",
+  heading: "Charts, pages and apps your agents make on request",
   snippets: snippets("artifacts"),
   items: [
     {
       id: "overview",
       title: "Overview",
-      body: "An agent writes a page, report or app into its own files, and Golem serves it from that agent at a URL declared in its code. A file is never served half-written.",
+      body: "Asked for a sales graph, a tool writes a PNG and HTML page in agent files. Golem serves both, never half-written.",
     },
     {
       id: "routes",
-      title: "Interactive apps",
-      body: "A page's buttons call HTTP endpoints declared on agent methods. The URL names the agent, so each user or team gets its own durable agent behind the same app.",
+      title: "Apps for one user's request, no deploy",
+      body: "A tool saves the model's small app in agent files. Buttons call endpoints running durable code in the agent's own VM.",
+    },
+    {
+      id: "peruser",
+      title: "One agent per user, from the URL",
+      body: "Ana's first request to /dashboards/ana creates her agent. Pages and files it makes for her appear under her path.",
+    },
+    {
+      id: "files",
+      title: "Images and PDFs as the reply",
+      body: "An agent can reply with a PNG or PDF it just made: bytes with their MIME type over HTTP, binary content over MCP.",
     },
     {
       id: "routers",
-      title: "Reports and downloads",
-      body: "Serve agent output in any format. A router sets content types and download headers, and streams a CSV, PDF or other file from the agent that builds it.",
+      title: "CSV downloads through a router",
+      body: "A router matches path and method, sets status, content type and download headers, and streams the agent's CSV.",
+    },
+    {
+      id: "signin",
+      title: "OAuth2 sign-in with PKCE",
+      body: "Login uses Google, GitLab or any OpenID Connect provider. Golem checks its short-lived token before agent code runs.",
     },
     {
       id: "login",
-      title: "Private to the right people",
-      body: "Users sign in with Google, GitLab or any OpenID Connect provider. Golem checks the token before agent code runs, and the agent decides what each caller may open.",
+      title: "Only for the person who asked",
+      body: "Sign-in says who asks, not what they may see. The agent records who asked for each chart; others get a 404.",
     },
   ] as ChapterItem[],
 };
@@ -425,14 +445,14 @@ export const faq = {
         "Workflow engines usually ask you to split work into activities they record. In Golem, ordinary code is durable as it runs, with no restructuring, and each agent also gets its own VM, with a durable file system, and runtime-checked permissions.",
     },
     {
+      q: "Does showing an artifact need a build or deploy step?",
+      aHtml:
+        "No. The agent makes a new chart, page, file or small app for one user's request and shows it to that user. Golem serves it directly from the agent. The agent does not change an existing app and needs no access to your build or deploy infrastructure.",
+    },
+    {
       q: "Is Golem open source?",
       aHtml:
         "Yes. Golem uses the BUSL-1.1 license, which converts to Apache-2.0 after four years. Self-hosting for production workloads is permitted.",
-    },
-    {
-      q: "Can I keep my existing web app?",
-      aHtml:
-        "Yes. Its server can call agents through a generated client or the REST API, and it keeps its own front-end and hosting. Serving artifacts from Golem is an option, not a requirement.",
     },
   ],
 };

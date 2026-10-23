@@ -1,31 +1,31 @@
-fn bytes(s : String) -> Array[Byte] { @utf8.encode(s).to_array() }
-
+// asked to export results as CSV, the agent replies with a link:
+// the link is /exports/<chat>/<random id>.csv, for that user only:
 #derive.http_router
 #derive.mount("/exports")
 struct ExportsRouter {}
-
 fn ExportsRouter::new() -> ExportsRouter { ExportsRouter::{ } }
 
 #derive.http_handler
 pub async fn ExportsRouter::serve(
   _self : Self, request : @http.HttpRequest,
 ) -> @http.HttpResponse {
-  guard request.method == "GET" &&
-    request.path is [.. "/exports/", .. id, .. ".csv"] &&
-    is_word(id) else {
-    let body = @schema.AgentStream::produce(async fn(_) {  })
-    return { status: 404, headers: [], body }
+  guard request.method == "GET" && //@
+    request.path is [.. "/exports/", .. rest, .. ".csv"] && //@
+    rest.split("/").collect() is [chat, id] &&
+    is_word(chat) && is_word(id) && id.length() == 36 else {
+    return { status: 404, headers: [], body: empty() } //@
   }
-  // stream the CSV from the agent that builds this export:
-  let rows = ExportAgentClient::get(id.to_owned()).csv() //@
+  // that user's agent builds the CSV now and streams it:
+  let csv = AnalystAgentClient::get(chat.to_string()) //@
+    .export_csv(id.to_string())
   {
     status: 200,
     headers: [
-      { name: "content-type", value: bytes("text/csv") }, //@
-      // browsers save it as a file instead of opening it:
-      { name: "content-disposition", value: bytes( //@
-        "attachment; filename=\"\{id}.csv\"") }, //@
+      header("content-type", "text/csv"), //@
+      // the browser saves it as a download:
+      header("content-disposition", //@
+        "attachment; filename=\"results.csv\""), //@
     ],
-    body: rows,
+    body: csv, //@
   }
 }

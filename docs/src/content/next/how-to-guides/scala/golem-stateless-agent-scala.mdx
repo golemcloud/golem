@@ -5,7 +5,7 @@
 An **ephemeral agent** is a Golem agent that gets a **fresh instance for every invocation**. Unlike the default durable agents, ephemeral agents:
 
 - **No shared state**: Each invocation starts from a fresh constructor call — field values set in one call are gone by the next
-- **No method recovery**: An oplog is recorded lazily for inspection. Initialization can replay, but failed methods do not recover by replay.
+- **No method recovery**: An oplog is recorded lazily for inspection. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - **No persistence**: The agent's memory is discarded after each invocation completes
 - **Logical identity**: Constructor parameters address a logical target; each invocation receives a final per-call ephemeral identity.
 
@@ -134,4 +134,4 @@ Both POST endpoints expect a structured JSON body such as `{"input":"Hello"}`, n
 - Ephemeral mode is set at the **agent type level** — all instances of the type are ephemeral
 - Constructor parameters still define identity — you can have multiple ephemeral agents with different parameters
 - Ephemeral agents can call other agents and make HTTP requests, but do not support every durable API. Promise waits and sleeps are bounded by the configured maximum sleep; ephemeral methods cannot actively suspend for durable recovery.
-- The oplog is recorded lazily for inspection. Initialization can replay; failed methods have no replay recovery.
+- The oplog is recorded lazily for inspection. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.

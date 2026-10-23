@@ -349,6 +349,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         }
     };
     store.data().durable_ctx().entity_body_finalization.begin();
+    let finish = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await;
     let locally_cancelled = match &result {
         Ok(Err(error))
         | Err(GuestCallSettlementError::Interrupted(error))
@@ -359,6 +360,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         _ => false,
     };
     if locally_cancelled && !operation.has_pending_live_admission_rejection().await {
+        finish?;
         operation.claim_local_cancellation_interruption();
         drop(cancellation_epoch);
         return Ok(EntityBodyOutcome::Cancelled);
@@ -379,6 +381,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             .is_none()
         && !operation.has_pending_live_admission_rejection().await
     {
+        finish?;
         // A successful encoded body terminal requests Store destruction in the entity runner.
         // Its original host context, not the poisoned guest scheduler, drains admitted work.
         let response = encode_tool_terminal(
@@ -414,7 +417,6 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     if !matches!(&result, Ok(Ok(_))) {
         durability::abort_producer_disposals(store.data_mut().durable_ctx_mut()).await;
     }
-    let finish = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await;
     let mut parent_end = prepare_tool_parent_end(&mut store, parent).await;
     if matches!(&result, Ok(Ok(_))) && finish.is_ok() && parent_end.is_ok() {
         parent_end = store
