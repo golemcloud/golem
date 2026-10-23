@@ -7,7 +7,7 @@ description: "Using webhooks in a Rust Golem agent. Use when the user asks to cr
 
 ## Overview
 
-Golem webhooks let an agent generate a temporary public URL that, when POSTed to by an external system, delivers the request body to the agent. Under the hood, a webhook is backed by a Golem promise — the agent is durably suspended while waiting for the callback, consuming no resources.
+Golem webhooks let an agent generate a public callback URL that delivers the first POST body to the agent. A webhook is backed by a Golem promise. Creating it does not suspend execution. Awaiting an incomplete promise can durably suspend the agent after the runtime's suspension delay. Suspension releases guest execution resources; persisted state remains.
 
 This is useful for:
 - Integrating with webhook-driven APIs (payment gateways, CI/CD, GitHub, Stripe, etc.)
@@ -28,11 +28,11 @@ The agent type **must** be deployed via an HTTP API mount (`mount = "/..."` on `
 
 ## API
 
-All functions are in the `golem_rust` crate:
+Import these APIs from `golem_rust::agentic`:
 
 | Function / Type | Description |
 |---|---|
-| `create_webhook()` | Creates a webhook (promise + public URL) and returns a `WebhookHandler` |
+| `create_webhook()` | Creates a webhook (promise + public URL); returns `Result<WebhookHandler, WebhookError>` |
 | `WebhookHandler::url()` | Returns the public URL to share with external systems |
 | `WebhookHandler` (await) | Implements `IntoFuture` — use `.await` to get the `WebhookRequestPayload` |
 | `WebhookRequestPayload::json::<T>()` | Decodes the POST body as JSON (`T: DeserializeOwned`) |
@@ -41,7 +41,7 @@ All functions are in the `golem_rust` crate:
 ## Imports
 
 ```rust
-use golem_rust::create_webhook;
+use golem_rust::agentic::create_webhook;
 ```
 
 ## Webhook URL Structure
@@ -78,10 +78,11 @@ pub trait OrderAgent {
 }
 ```
 
-Path variables in `{braces}` are also supported in `webhook_suffix`:
+System variables such as `{agent-type}` are supported in `webhook_suffix`; ordinary constructor
+variables such as `{name}` are not:
 
 ```rust
-#[agent_definition(mount = "/api/events/{name}", webhook_suffix = "/{agent-type}/callbacks/{name}")]
+#[agent_definition(mount = "/api/events/{name}", webhook_suffix = "/{agent-type}/callbacks")]
 ```
 
 ## Usage Pattern
@@ -89,11 +90,11 @@ Path variables in `{braces}` are also supported in `webhook_suffix`:
 ### 1. Create a Webhook, Share the URL, and Await the Callback
 
 ```rust
-let webhook = create_webhook();
+let webhook = create_webhook().expect("webhook creation failed");
 let url = webhook.url().to_string();
 
 // Share `url` with an external service (e.g., register it as a callback URL)
-// The agent is durably suspended here until the external service POSTs to the URL
+// Awaiting below can suspend if the callback has not arrived.
 
 let payload = webhook.await;
 ```
@@ -109,16 +110,19 @@ struct PaymentEvent {
     amount: u64,
 }
 
-let webhook = create_webhook();
+let webhook = create_webhook().expect("webhook creation failed");
 // ... share webhook.url() ...
 let payload = webhook.await;
-let event: PaymentEvent = payload.json().expect("Invalid payload");
+let event: PaymentEvent = payload.json().map_err(|e| format!("Invalid payload: {e}"))?;
 ```
+
+Use this fragment inside an async function returning `Result` so malformed external JSON returns
+an error rather than panicking. Completion is first-write-wins; a second POST cannot repair it.
 
 ### 3. Use Raw Bytes
 
 ```rust
-let webhook = create_webhook();
+let webhook = create_webhook().expect("webhook creation failed");
 // ... share webhook.url() ...
 let payload = webhook.await;
 let raw: Vec<u8> = payload.raw_data();
@@ -127,7 +131,8 @@ let raw: Vec<u8> = payload.raw_data();
 ## Complete Example
 
 ```rust
-use golem_rust::{agent_definition, agent_implementation, endpoint, Schema, create_webhook};
+use golem_rust::{agent_definition, agent_implementation, endpoint};
+use golem_rust::agentic::create_webhook;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -140,8 +145,10 @@ struct WebhookEvent {
 pub trait IntegrationAgent {
     fn new(name: String) -> Self;
 
-    async fn register_and_wait(&mut self) -> String;
+    #[endpoint(post = "/register")]
+    async fn register_and_wait(&mut self) -> Result<String, String>;
 
+    #[endpoint(get = "/last-event")]
     fn get_last_event(&self) -> String;
 }
 
@@ -159,25 +166,32 @@ impl IntegrationAgent for IntegrationAgentImpl {
         }
     }
 
-    #[endpoint(post = "/register")]
-    async fn register_and_wait(&mut self) -> String {
+    async fn register_and_wait(&mut self) -> Result<String, String> {
         // 1. Create a webhook
-        let webhook = create_webhook();
+        let webhook = create_webhook().expect("webhook creation failed");
         let url = webhook.url().to_string();
 
-        // 2. In a real scenario, you would register `url` with an external service here.
-        //    For this example, the URL is returned so the caller can POST to it.
-        //    The agent is durably suspended while awaiting.
+        // The external service must accept this registration and POST the event later.
+        let request = golem_rust::http::Request::post("https://events.example.com/register")
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_vec(&serde_json::json!({"callback_url": url}))
+                .map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let response = golem_rust::http::send(request).await.map_err(|e| e.to_string())?;
+        let status = response.status();
+        let _ = golem_rust::http::response_bytes(response).await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(format!("Registration failed: {status}"));
+        }
 
         // 3. Wait for the external POST
         let payload = webhook.await;
-        let event: WebhookEvent = payload.json().expect("Invalid webhook payload");
+        let event: WebhookEvent = payload.json().map_err(|e| format!("Invalid webhook payload: {e}"))?;
 
         self.last_event = format!("{}: {}", event.event_type, event.data);
-        self.last_event.clone()
+        Ok(self.last_event.clone())
     }
 
-    #[endpoint(get = "/last-event")]
     fn get_last_event(&self) -> String {
         self.last_event.clone()
     }
@@ -187,7 +201,7 @@ impl IntegrationAgent for IntegrationAgentImpl {
 ## Key Constraints
 
 - The agent **must** have an HTTP mount (`mount = "..."` on `#[agent_definition]`) and be deployed via `httpApi` in `golem.yaml`
-- The webhook URL is a one-time-use URL — once POSTed to, the promise is completed and the URL becomes invalid
+- The first POST completes the promise. Duplicate POSTs return HTTP 204 without replacing the first payload; the URL is not invalidated by completion.
 - Only `POST` requests to the webhook URL will complete the promise
 - `WebhookHandler` implements `IntoFuture`, so use `.await` to wait for the callback
-- The agent is durably suspended while waiting — it survives failures, restarts, and updates
+- Use a durable agent for waits that must survive restarts; ephemeral waits are bounded and cannot durably suspend.

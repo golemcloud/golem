@@ -59,7 +59,7 @@ Do not use `config`, `getId`, `getPhantomId`, or `getPrincipal` as top-level sta
 
 ## Custom Types
 
-Describe parameter and return shapes with schemas. For object types, define a schema once and derive the TypeScript type from it with `z.infer`. **TypeScript enums are not supported** — use a string-literal union (`z.enum([...])`) instead:
+Describe parameter and return shapes with schemas. For object types, define a schema once and derive the TypeScript type from it with `z.infer`. Use `z.enum([...])` for string-literal unions. String-valued TypeScript enums also work when backed by `z.enum(MyEnum)` in Zod 4 or `z.nativeEnum(MyEnum)` in Zod 3; this does not promise numeric-enum support:
 
 ```typescript
 const Coordinates = z.object({ lat: z.number(), lon: z.number() });
@@ -143,7 +143,7 @@ If the throw happens **after** a durable side effect has completed, it does not 
 - Every agent is declared with `defineAgent({...})` and given behaviour with `<Def>.implement({...})`
 - The `id` record fields define agent identity — they must be serializable schema types
 - State is the object returned by `init()` and is accessed through `this` in the handlers — do not use class fields
-- TypeScript **enums are not supported** — use `z.enum([...])` / string-literal unions instead
+- String enums need a schema: use `z.enum(MyEnum)` (Zod 4) or `z.nativeEnum(MyEnum)` (Zod 3), or use `z.enum([...])` for string-literal unions
 - Agents are created implicitly on first invocation — no separate creation step
-- Invocations are processed sequentially in a single thread — no concurrency within a single agent
+- Invocations are processed sequentially; async work within one invocation can overlap cooperatively, without CPU-thread parallelism
 - Each method's `input` is a record of one schema per named parameter; `returns` is the success-value schema (use `z.void()` for no return value)

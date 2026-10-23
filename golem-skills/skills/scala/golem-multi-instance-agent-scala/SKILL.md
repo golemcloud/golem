@@ -23,17 +23,17 @@ agent-type(param1, param2)
 
 ## Creating and Addressing Phantom Agents (RPC)
 
-The Golem Scala SDK code generator produces a companion client object for each agent with these constructor methods:
+The native definition-derived Scala SDK client extends `AgentCompanionBase` and provides the following synchronous factories. This section and its UUID recipes describe native SDK clients, not CLI-generated bridges.
 
 | Method | Description |
 |--------|-------------|
 | `Client.get(params...)` | Get or create a **non-phantom** (durable) agent identified solely by its parameters |
-| `Client.newPhantom(params...)` | Create a **new phantom** agent with a freshly generated UUID |
+| `Client.newPhantom(params...)` | Select a fresh phantom invocation/instance according to the agent mode |
 | `Client.getPhantom(params..., phantom)` | Get or create a phantom agent with a **specific** UUID |
 
 **Note:** Ephemeral agents only get `getPhantom` and `newPhantom` — they do not have a `get` method.
 
-### Example
+### Example (Durable Counter)
 
 ```scala
 import golem.Uuid
@@ -41,7 +41,7 @@ import golem.Uuid
 // Non-phantom: always the same agent for the same name
 val counter = CounterClient.get("shared")
 
-// New phantom: creates a brand new independent instance
+// New logical phantom proxy: instance creation happens on first invocation
 val phantom1 = CounterClient.newPhantom("shared")
 val phantom2 = CounterClient.newPhantom("shared")
 // phantom1 and phantom2 are different agents, both with name="shared"
@@ -58,11 +58,21 @@ phantom1.increment().map { result =>
 
 ### WithConfig Variants
 
-If the agent has config fields, additional methods are generated:
+If the agent has config fields, additional methods are generated (`getWithConfig` only for durable targets):
 
 - `Client.getWithConfig(params..., configFields...)`
 - `Client.newPhantomWithConfig(params..., configFields...)`
 - `Client.getPhantomWithConfig(params..., phantom, configFields...)`
+
+Each generated config argument is positional `Option[T] = None`. Supply `Some(value)`
+to override a field, and `None` to retain its configured value.
+
+CLI-generated guest/JVM bridge clients do not extend `AgentCompanionBase`.
+Durable bridges expose `get`, `getPhantom`, and `newPhantom`; ephemeral bridges
+expose only `newPhantom`, a logical proxy whose final invocation identity is
+assigned on invocation. Guest factories are synchronous; external JVM factories
+return `Future` and use bridge UUID types rather than native `golem.Uuid` /
+`publicUuid` recipes. See `golem-call-from-external-scala`.
 
 ## Method Signature Differences
 
@@ -72,19 +82,19 @@ Note that in the Scala SDK, `getPhantom` takes the phantom UUID as the **last** 
 // getPhantom: constructor params first, then phantom UUID
 CounterClient.getPhantom("counter-name", phantomUuid)
 
-// newPhantom: constructor params only (UUID generated internally)
+// newPhantom: constructor params only
 CounterClient.newPhantom("counter-name")
 
-// newPhantom delegates to getPhantom with a generated idempotency key:
+// For DURABLE agents, newPhantom delegates with a generated idempotency key:
 // def newPhantom(name: String): CounterRemote =
 //   getPhantom(name, HostApi.generateIdempotencyKey())
 ```
 
 ## Key Points
 
-- Phantom agents are **fully durable** — they persist just like regular agents.
+- Phantom identity and durability mode are independent. Durable phantom agents persist just like regular durable agents; ephemeral invocations discard their memory. If the executor restarts while preparing an ephemeral invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - The phantom ID is a `golem.Uuid` (high/low `BigInt` pair).
-- `newPhantom` generates the UUID internally via `HostApi.generateIdempotencyKey()`.
-- `getPhantom` is idempotent: calling it with the same UUID and parameters always returns the same agent.
+- For durable targets, `newPhantom` generates a UUID via `HostApi.generateIdempotencyKey()`. For ephemeral targets it resolves without a phantom override; invocation metadata supplies the actual identity. Factory construction is synchronous in both cases.
+- For durable targets, `getPhantom` with the same UUID and parameters addresses the same persistent agent. For ephemeral targets it selects an invocation identity, not reusable persistent state.
 - Phantom and non-phantom agents with the same constructor parameters are **different agents** — they do not share state.
 - Durable agents get `get`, `getPhantom`, and `newPhantom`; ephemeral agents get only `getPhantom` and `newPhantom`.

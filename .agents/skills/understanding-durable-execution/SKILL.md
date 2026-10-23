@@ -2502,8 +2502,11 @@ failure table in the executor walkthrough.
 
 Recorded async events reach the guest only at a blocked wait, at most one event per block,
 live and replay alike. Native stream items and terminals (including producer cancellation),
-timers and accessor completions share `RuntimeStore::await_guest_blocked` in the consuming
-Store; an entity body uses its own Store, not the owner's. The gate consumes one unconsumed
+timers, accessor completions and tool results share `RuntimeStore::await_guest_blocked` in the
+consuming Store; an entity body uses its own Store, not the owner's. A tool result reaches the
+guest through `golem::tool::internal::await-invoke-results` (`tool/execution.rs::observe_tool_invoke_plans`),
+a guest-facing durable call that the host records around the result await; it is not a WIT import. Its `CompletionDelivered` marker records
+the guest's receipt; the entity terminal records only how the body ended. The gate consumes one unconsumed
 `DriverBlocked` edge, promoted only after the outer driver returns Pending. A delivery that
 becomes ready after the guest blocked consumes that already-published edge immediately.
 Waking the waiting host future invalidates the blocked generation, so checking the current
@@ -2748,7 +2751,19 @@ cursor (`OwnerExecution`, `worker/instance/mod.rs`).
   `body_execution: Skipped` is returned without invoking the export.
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
   every completed body has validated (`primary_publication_requires_completed_reconstruction_validation`).
-- A body trap fails the owner invocation without inventing entity terminals.
+- `worker/invocation.rs::permanent_tool_guest_trap` isolates only its fixed Wasm
+  instruction-trap allowlist. The tool terminal has `body_execution: Trapped` and
+  `RemoteInternalError`. Typed quotas, policy exhaustion, `WorkerOutOfMemory`, infrastructure
+  and lifecycle failures retain owner recovery even when the retry decision is exhausted.
+  Physical Wasmtime Store destruction retains the original `Ctx` for cleanup. Supervisors
+  independent of the caller Store cancel a failed parent's descendants while preserving selected
+  outcomes and unrelated siblings. Replay re-executes trapped bodies and recorded host calls to
+  reconstruct shared filesystem effects and partial stdout, then validates the exact terminal
+  and descendants without repeating completed external effects. Stream completion is independent
+  of the structured result; already-completed streams remain completed.
+  Allocation-dependent `memory.grow` backing refusal returning -1 and leading to panic is a
+  separate preexisting nondeterminism limitation. This contract provides no universal isolation
+  guarantee and introduces no fork or snapshot recovery.
 - Entity and native-tool invocation spans open on the invocation `Start` and close on its
   `End`/`Cancelled` terminal. `set_entity_invocation_scope` restores the recorded invocation
   context before the body runs; keep this reconstruction boundary covered.

@@ -9,7 +9,7 @@ Both `golem` and `golem-cli` can be used — all commands below work with either
 
 ## Overview
 
-Redeploying an agent means **deleting** it and **recreating** it with the same name, environment variables, and configuration, but using the latest deployed component version. Unlike an in-place update, redeployment destroys all agent state — the operation log (oplog), internal WASM state, and any data stored in Golem's key-value storage for that agent are permanently lost. The agent starts fresh as if it were newly created.
+Redeploying an agent means **deleting** it and **recreating** it with the same name and stored per-agent environment and local configuration overrides, but using the currently deployed component version. Defaults come from that component, so effective environment variables and configuration can change. Unlike an in-place update, redeployment destroys the agent's execution state, including its operation log (oplog) and internal WASM state. Guest key-value storage is scoped by environment, bucket, and key, not by the agent lifecycle: redeploy and reset do not clear it. Clean up application KV data separately when a fully clean start is required.
 
 Use redeployment when:
 
@@ -27,17 +27,17 @@ The simplest approach — pass `--redeploy-agents` to `golem deploy`:
 golem deploy --yes --redeploy-agents
 ```
 
-This deploys the new component version and then, for every existing agent of each affected component:
+This applies deployment changes, if any, and then processes existing **durable** agents across **all components in the resulting deployment**, including unchanged components. Redeployment also runs when there is no deployment diff. Ephemeral agents are not enumerated for redeployment.
 
-1. Lists all agents of the component.
+1. Lists the durable agents of each deployed component.
 2. Deletes each agent (destroying its oplog and stored state).
-3. Recreates each agent with the same name, environment variables, and WASI configuration, pointing to the latest component version.
+3. Recreates each agent with the same name and stored per-agent environment and local configuration overrides, using the currently deployed component and its defaults.
 
 ### Comparison with Other Post-Deploy Flags
 
 | Flag | Behavior |
 |------|----------|
-| `--redeploy-agents` | Delete and recreate agents (loses all state) |
+| `--redeploy-agents` | Delete and recreate agents (loses execution state, retains guest KV data) |
 | `--update-agents <MODE>` | Update agents in-place via oplog replay (`auto`) or snapshots (`manual`) — preserves state |
 | `--reset` | Deploy, then delete existing agents of the deployed components; their state is lost, and the environment is retained |
 
@@ -63,13 +63,13 @@ With this configuration, every `golem deploy` targeting the `local` environment 
 | Aspect | Preserved? |
 |--------|------------|
 | Agent name (identity) | ✅ Yes |
-| Environment variables | ✅ Yes |
-| WASI configuration | ✅ Yes |
-| Component configuration | ✅ Yes |
+| Stored per-agent environment overrides | ✅ Yes — effective defaults can change |
+| Stored per-agent local configuration overrides | ✅ Yes — effective defaults can change |
+| Component configuration defaults | ❌ No — taken from the currently deployed component |
 | Component version | ❌ No — upgraded to latest |
 | Operation log (oplog) | ❌ No — deleted |
 | Internal WASM state | ❌ No — reset |
-| KV storage data | ❌ No — deleted |
+| Guest KV storage data | ✅ Yes — separate application cleanup is required |
 
 ## When to Use Redeploy vs. Update vs. Reset
 

@@ -86,7 +86,9 @@ pub use call::*;
 #[cfg(test)]
 use call::{BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost};
 pub(in crate::durable_host) use context::AccessorContext;
-pub(crate) use context::{DurableAccess, DurableContext, SharedDurableContext};
+pub(crate) use context::{
+    DurableAccess, DurableContext, EntitySettlementContext, SharedDurableContext,
+};
 pub use delivery::*;
 pub(crate) use demand_stream::*;
 #[cfg(test)]

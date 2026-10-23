@@ -73,9 +73,9 @@ use endpoints::create_underlying_stdin;
 use endpoints::materialize_output_writer;
 use endpoints::native_output_handles;
 use endpoints::reject_output;
-use execution::await_tool_invoke_plans;
 pub use execution::fence_tool_operations_for_jump;
 use execution::get_tool_invoke_results;
+use execution::observe_tool_invoke_plans;
 pub(crate) use execution::prepare_tool_parent_end;
 pub(crate) use execution::prepare_tool_parent_end_owned;
 pub(crate) use execution::settle_tool_children;
@@ -129,9 +129,9 @@ use crate::durable_host::durable_session::{
 };
 use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::entity::{
-    EntityInvocationDurability, EntityInvocationKeyContext, IncompleteLiveRepairBeforeBody,
-    RecordedEntityTerminal, ToolInvocationReplayOutcome, encode_tool_terminal,
-    record_tool_rejection_access,
+    EntityInvocationDurability, EntityInvocationKeyContext, EntitySettlementContext,
+    IncompleteLiveRepairBeforeBody, RecordedEntityTerminal, ToolInvocationReplayOutcome,
+    encode_tool_terminal, record_tool_rejection_access,
 };
 use crate::durable_host::secrets::secret_hold_targets_for_value;
 use crate::durable_host::stream_transport::{
@@ -167,11 +167,12 @@ use crate::services::environment_state::{
 };
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::{HasActiveAgents, HasNativeToolCatalog, HasWorker};
+use crate::worker::entity_invocation::{EntityBodyFinalization, EntityBodyOutcome};
 use crate::worker::entity_invocation::{RetainedEntityStore, RetainedNativeContext};
 use crate::worker::instance::EntityInvocationBody;
 use crate::worker::invocation::{
     GuestCallSettlementError, InvokeResult, finish_invocation_and_get_fuel_consumption,
-    prepare_guest_call, run_guest_call_settled,
+    permanent_tool_guest_trap, prepare_guest_call, run_guest_call_settled,
 };
 use crate::workerctx::WorkerCtx;
 use crate::workerctx::WorkerCtxExecutable;
@@ -374,7 +375,6 @@ enum FutureToolInvokeGet {
 struct ToolExecutionState {
     result: Option<ToolInvokeResponse>,
     failure: Option<String>,
-    producer: Option<wasmtime::component::RuntimeActivityId>,
 }
 
 struct ToolExecution {
@@ -388,18 +388,10 @@ struct ToolExecution {
     changed: Notify,
     get_active: AtomicBool,
     cancel: tokio_util::sync::CancellationToken,
+    producer: Option<std::sync::Weak<crate::worker::suspension::ExternalActivity>>,
 }
 
 struct ToolExecutionGetGuard(Arc<ToolExecution>);
-
-struct ToolExecutionTask<Ctx: WorkerCtx> {
-    accepted: AcceptedToolCall,
-    stdout: Option<Resource<ToolOutputEntry>>,
-    stderr: Option<Resource<ToolOutputEntry>>,
-    execution: Arc<ToolExecution>,
-    completed_supervisor_started: Option<oneshot::Sender<()>>,
-    _ctx: std::marker::PhantomData<fn() -> Ctx>,
-}
 
 struct FailedRetainedEntityResources {
     resources: crate::worker::entity_invocation::EntityInvocationResources,
@@ -442,6 +434,58 @@ struct AcceptedToolCall {
     deferred_admission_inserted: bool,
     incapable_lane_ticket: Option<crate::worker::owner_lane::OwnerInvocationTicket>,
     attachment_counterparty: ToolAttachmentCounterparty,
+}
+
+/// Caller protocol handles, not a second guest context. Accepted work retains these before
+/// returning to the guest so destruction of its Store cannot discard a child's settlement.
+struct ToolCaller<Ctx: WorkerCtx> {
+    settlement: EntitySettlementContext<Ctx>,
+    primary: Arc<crate::worker::Worker<Ctx>>,
+    execution: Arc<crate::worker::instance::OwnerExecution>,
+    metadata: Arc<golem_service_base::model::component::Component>,
+    revision: golem_common::model::component::ComponentRevision,
+    publication_failure: durability::PublicationFailureContext<Ctx>,
+    tracker: crate::durable_host::tail_work::TailWorkTracker,
+    counter: Arc<std::sync::atomic::AtomicUsize>,
+    mode: Option<InvocationExecutionMode>,
+    local_live: Arc<AtomicBool>,
+    suppressed: bool,
+}
+
+impl<Ctx: WorkerCtx> ToolCaller<Ctx> {
+    fn capture<U: Send + 'static>(accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>) -> Self {
+        let settlement = EntitySettlementContext::capture(accessor, accessor.getter());
+        accessor.with(|mut access| {
+            let ctx = access.get();
+            Self {
+                settlement,
+                primary: ctx.public_state.worker(),
+                execution: ctx.owner_execution.clone(),
+                metadata: Arc::new(ctx.owner_component_metadata().clone()),
+                revision: ctx.component_metadata().revision,
+                publication_failure: durability::PublicationFailureContext::new(ctx),
+                tracker: ctx.tail_work_tracker(),
+                counter: ctx.state.live_host_call_counter(),
+                mode: ctx.entity_invocation_scope().map(|scope| scope.mode()),
+                local_live: ctx.state.local_live_tail(),
+                suppressed: ctx.state.durability_is_suppressed(),
+            }
+        })
+    }
+
+    fn is_live(&self) -> bool {
+        crate::durable_host::store_is_live(
+            self.mode,
+            self.local_live.load(Ordering::Acquire),
+            self.settlement.replay.is_live_published(),
+        )
+    }
+}
+
+struct OwnedToolEndpoints {
+    stdin: Option<ToolBodyStdin>,
+    stdout: Option<ToolOutputWriterEntry>,
+    stderr: Option<ToolOutputWriterEntry>,
 }
 
 enum ToolCallDispatch {
@@ -490,6 +534,7 @@ struct EntityCancellationEpochTask(tokio::task::JoinHandle<()>);
 
 struct UnderlyingToolRevocationGuard(UnderlyingToolEntry);
 
+#[cfg(test)]
 struct SkippedToolAttachmentEndpoints {
     stdin: Option<ToolStdinEntry>,
     stdout: Option<ToolOutputWriterEntry>,

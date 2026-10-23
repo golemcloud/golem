@@ -10,7 +10,7 @@ use super::attachment::{
 };
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessorContext, Cancellable, CompletionDelivery,
-    DeferredCallReplayOutcome, DurableAccess, DurableCallSession, DurableContext,
+    DeferredCallReplayOutcome, DurableAccess, DurableCallSession, DurableContext, OrderedAppend,
     PreparedContextStart, SharedDurableContext,
 };
 use crate::durable_host::durability::{
@@ -37,6 +37,20 @@ use std::future::Future;
 use std::pin::Pin;
 use wasmtime::component::{Accessor, AccessorTask, HasData, HasSelf};
 
+pub(super) fn is_entity_cancellation(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<InterruptKind>(),
+            Some(InterruptKind::EntityCancellation)
+        ) || matches!(
+            cause.downcast_ref::<WorkerExecutorError>(),
+            Some(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::EntityCancellation
+            })
+        )
+    })
+}
+
 pub(crate) fn native_host_failure<Ctx: WorkerCtx>(
     context: &DurableWorkerCtx<Ctx>,
     error: anyhow::Error,
@@ -55,21 +69,24 @@ pub(crate) fn native_host_failure<Ctx: WorkerCtx>(
         InFunctionRetryHost::current_retry_point(context),
         context.agent_mode(),
     );
-    let completed = context.entity_invocation_scope().is_some_and(|scope| {
-        scope.mode() == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
-    });
-    let operation = context.entity_tool_operation().filter(|_| !completed);
-    let cancellation = context.entity_cancellation();
+    let operation = context.entity_tool_operation();
+    let locally_cancelled = is_entity_cancellation(&error);
+    context.entity_body_finalization.begin();
     async move {
         if let Some(error) = infrastructure {
             return error;
         }
         if let Some(operation) = operation {
-            let locally_cancelled = cancellation.is_some_and(|token| token.is_cancelled())
-                && operation.claim_local_cancellation_interruption();
-            if !locally_cancelled {
+            if locally_cancelled {
+                operation.claim_local_cancellation_interruption();
+            } else {
                 operation.select_trap(trap.clone()).await;
             }
+        }
+        if locally_cancelled {
+            return WorkerExecutorError::Interrupted {
+                kind: InterruptKind::EntityCancellation,
+            };
         }
         trap.as_golem_error("")
             .unwrap_or_else(|| WorkerExecutorError::runtime("native tool invocation interrupted"))
@@ -973,20 +990,15 @@ fn error_to_model(error: &StreamWriteError) -> model::StreamWriteError {
     }
 }
 
-type ProducerTerminalRecorder = Box<
-    dyn FnOnce() -> Result<
-            Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
-            WorkerExecutorError,
-        > + Send
-        + Sync,
->;
+type ProducerTerminalRecorder =
+    Box<dyn FnOnce() -> Result<Option<OrderedAppend>, WorkerExecutorError> + Send + Sync>;
 
 pub struct ProducerDisposal {
     controller: AttachmentController,
     primary_transition: bool,
     admission_error: Option<WorkerExecutorError>,
     record: Option<ProducerTerminalRecorder>,
-    pending: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+    pending: Option<OrderedAppend>,
     no_body: bool,
     _permit: Option<crate::durable_host::concurrent::LiveCallPermit>,
 }
@@ -1399,7 +1411,9 @@ pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
                     "tool attachment cancellation",
                 );
                 tokio::spawn(failed);
-                tokio::spawn(async move { Err(error) })
+                let (sent, receipt) = tokio::sync::oneshot::channel();
+                let _ = sent.send(Err(error));
+                OrderedAppend::Receipt(receipt)
             }
         };
         let (done, receipt) = tokio::sync::oneshot::channel();

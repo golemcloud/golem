@@ -6,9 +6,11 @@ description: "Using golem:rdbms/postgres from a TypeScript Golem agent. Use when
 # Using PostgreSQL from a TypeScript Agent
 
 The TypeScript SDK ships a typed PostgreSQL helper built on the
-`golem:rdbms/postgres@1.5.0` host interface. Every operation returns a `Promise`
-and throws a typed `PostgresError` on failure, so use normal `try` / `catch`
-handling when needed.
+`golem:rdbms/postgres@1.5.0` host interface. Connection queries and transaction
+commit/rollback return promises. Transaction `query`, `queryValues`, `execute`,
+and `run` are synchronous. Connection `close()` is currently a synchronous no-op;
+resources are GC-managed, not deterministically released by `close()`. Failures throw a typed
+`PostgresError`; use normal `try` / `catch` handling when needed.
 
 ## Imports
 
@@ -56,20 +58,12 @@ const affected = await conn.execute(
 
 ## Transactions
 
-Run a block inside a transaction — it commits on success and rolls back if the
-callback throws:
+Run a block inside a transaction — it commits on success and attempts rollback if
+the callback or commit fails, preserving the original error even if rollback fails:
 
 ```ts
 await conn.transaction(async (tx) => {
   tx.execute("UPDATE notes SET body = $1 WHERE id = $2", ["updated", 1]);
   tx.execute("INSERT INTO audit (note_id) VALUES ($1)", [1]);
 });
-```
-
-Or drive it manually with `begin()` / `commit()` / `rollback()`:
-
-```ts
-const tx = await conn.begin();
-tx.execute("UPDATE notes SET body = $1 WHERE id = $2", ["updated", 1]);
-await tx.commit();
 ```

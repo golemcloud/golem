@@ -246,8 +246,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// while reserving the unpublished effect and invoking `enqueue(reservation)`. Returning
     /// without invoking `enqueue` rejects the candidate. Rejection returns the
     /// unfinished call and response, so the caller can select another terminal or retry.
-    /// Publication owns the reservation until the End append and DurableOnly commit succeed;
-    /// it must be infallible after acceptance.
+    /// Publication owns the reservation until the End append succeeds and, for a `WriteRemote`
+    /// call, its DurableOnly commit; other calls leave the End to the next owner-oplog commit,
+    /// as [`end_durable_function_access`] does. Publication must be infallible after acceptance.
     /// `failed` must synchronously fence observers before returning the owner cleanup future.
     /// The owned coordinator resolves the terminal receipt before polling that future, so
     /// cleanup may join the receipt without depending on itself. Runtime replacement and
@@ -282,7 +283,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         .await
     }
 
-    /// Shared commit-before-publication protocol; see [`Self::complete_access_deferred_with_effect`].
+    /// Shared append-before-publication protocol; see [`Self::complete_access_deferred_with_effect`].
     pub(crate) async fn complete_deferred_with_effect<Ctx, R, A, F, E, EF>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
@@ -349,13 +350,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             ));
         };
         let tasks = worker.tasks.clone();
+        let commits = *self.retry.function_type() == DurableFunctionType::WriteRemote;
         let coordinator = prepare_access_terminal_effect(
             &tasks,
             recording,
             async move {
-                worker
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await?;
+                if commits {
+                    worker
+                        .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                        .await?;
+                }
                 Ok(())
             },
             publish,
@@ -373,7 +377,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             self.drop_sink.clone(),
             self.cleanup_sink.clone(),
             self.teardown_probe(),
-        );
+        )
+        .with_tool_trap_disposal(self.tool_trap_disposal.clone());
         let accepted = accept_access_terminal_effect(&response, &oplog, end, accept);
         let (reservation, append) = match accepted {
             Some(accepted) => accepted,
@@ -509,37 +514,60 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     }),
                 )
             });
-            let mut guard = AccessTerminalGuard::<P>::new(
-                self.dropped_call_snapshot(self.live_call_permit.clone()),
-                self.drop_sink.clone(),
-                self.cleanup_sink.clone(),
-                self.teardown_probe(),
-            );
-            self.finished = true;
-            let persist_result: Result<Pair::Resp, WorkerExecutorError> = if self.persisted {
-                Self::persist_access_terminal(
+            let (response, mut guard) = self
+                .persist_guarded_terminal(
                     oplog,
                     completion_marker_recorder,
-                    &mut guard,
-                    self.start_idx,
                     response,
                     span_finished,
                 )
-                .await
-            } else {
-                Ok(response)
-            };
-
-            let response = match persist_result {
-                Ok(response) => response,
-                Err(err) => {
-                    guard.disarm();
-                    return Err(err);
-                }
-            };
+                .await?;
             self.finish_terminal_scope(access, &mut guard).await?;
             Ok((response, guard))
         }
+    }
+
+    /// Common terminal guard ownership for Store-bound and owned internal completions.
+    pub(super) async fn persist_guarded_terminal(
+        &mut self,
+        oplog: Arc<dyn Oplog>,
+        recorder: Option<CompletionMarkerRecorder>,
+        response: Pair::Resp,
+        span: Option<golem_common::model::oplog::SpanFinished>,
+    ) -> Result<(Pair::Resp, AccessTerminalGuard<P>), WorkerExecutorError> {
+        let mut guard = self.terminal_guard();
+        let result = if self.persisted {
+            Self::persist_access_terminal(
+                oplog,
+                recorder,
+                &mut guard,
+                self.start_idx,
+                response,
+                span,
+            )
+            .await
+        } else {
+            Ok(response)
+        };
+        match result {
+            Ok(response) => Ok((response, guard)),
+            Err(error) => {
+                guard.disarm();
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn terminal_guard(&mut self) -> AccessTerminalGuard<P> {
+        let guard = AccessTerminalGuard::<P>::new(
+            self.dropped_call_snapshot(self.live_call_permit.clone()),
+            self.drop_sink.clone(),
+            self.cleanup_sink.clone(),
+            self.teardown_probe(),
+        )
+        .with_tool_trap_disposal(self.tool_trap_disposal.clone());
+        self.finished = true;
+        guard
     }
 
     async fn finish_terminal_scope<Ctx: WorkerCtx>(
@@ -734,6 +762,10 @@ pub(super) fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseP3SocketsTcpReceiveChunk>(),
         TypeId::of::<HostResponseGolemApiCard>(),
         TypeId::of::<HostResponseGolemApiOplogEntries>(),
+        TypeId::of::<HostResponseToolAttachmentCreated>(),
+        TypeId::of::<HostResponseToolAttachmentWrite>(),
+        TypeId::of::<HostResponseToolAttachmentTerminalResult>(),
+        TypeId::of::<HostResponseToolAttachmentClosed>(),
         TypeId::of::<HostResponseConfigGetResponse>(),
         TypeId::of::<HostResponseConfigGetAllResponse>(),
         TypeId::of::<HostResponseCliEnvironmentGetEnvironment>(),

@@ -1346,6 +1346,8 @@ pub enum InterruptKind {
     Restart,
     Suspend(Timestamp),
     Jump,
+    /// Cooperative cancellation of one transient entity body, not its owning agent.
+    EntityCancellation,
     /// This executor no longer owns the agent's shard. Terminal here: the agent is stopped
     /// without writing to its oplog or its status, dropped from the executor, and left for the
     /// worker service to resume on the shard's owner. Never a restart in place - that would
@@ -1360,6 +1362,7 @@ impl Display for InterruptKind {
             InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
             InterruptKind::Suspend(_) => write!(f, "Suspended"),
             InterruptKind::Jump => write!(f, "Jumping back in time"),
+            InterruptKind::EntityCancellation => write!(f, "Entity invocation cancelled"),
             InterruptKind::ShardLost => {
                 write!(f, "This executor no longer owns the agent's shard")
             }

@@ -5,10 +5,13 @@ description: "Calling another agent and awaiting its typed result in an Effect-b
 
 # Calling Another Agent from an Effect Golem Agent
 
-Every value returned by `defineAgent(...)` has a typed `client`. Obtain a remote handle by yielding
+Every value returned by `defineAgent(...)` has a typed `client`. For durable targets, obtain a remote handle by yielding
 `Target.client.get(id)`, then invoke one of its methods with the declared named-input
 record. Both operations return Effects; do not translate Promise-based SDK examples or invent an
 additional `.await()` call.
+
+Ephemeral clients have no `get`: use `newPhantom` or `getPhantom`. Their awaited calls return
+`{ value, metadata }`, not the durable method's bare success value.
 
 ```typescript
 const registerCount = (name: string, count: number) =>
@@ -114,11 +117,12 @@ increment: () =>
 
     const registry = yield* GlobalRegistry.client.get({});
     return yield* registry.register({ name, count });
-  }).pipe(Effect.orDie),
+  }).pipe(Effect.scoped, Effect.orDie),
 ```
 
 Here `increment` can declare `success: Schema.Boolean`: the returned boolean is the awaited result
-of `register`. `Effect.orDie` removes typed client/transport failures from this public method's
+of `register`. `Effect.scoped` owns the remote handle through the complete operation.
+`Effect.orDie` removes typed client/transport failures from this public method's
 error channel by converting them to defects. Use that only when an RPC infrastructure failure
 should fail the invocation. If the caller should recover, use `Effect.catch` to return a fallback
 or map the failure into a domain error declared by the caller method.
@@ -138,11 +142,41 @@ use `try`/`catch` around an unexecuted Effect.
 
 ## SDK Boundary
 
-In the pinned Effect SDK, the typed invocation API is attached to an imported agent definition.
-There is no public helper that turns a component reference, component URN/URI, or an `AgentId` from
-`Agents.resolveAgentId` into this typed RPC client. Do not invent `getAgent`, `fromUrn`, or
-`clientForComponent`. If a task requires selecting an explicitly named separately deployed
-component, verify a newer SDK or generated bridge API before claiming it is supported.
+An encoded agent identity can be parsed once and bound to a typed definition:
+
+```typescript
+import { AgentIdentity, Client } from "@golemcloud/effect-golem";
+
+const bindCounter = (encoded: string) => Effect.gen(function* () {
+  const identity = yield* AgentIdentity.parse(encoded);
+  return yield* identity.client(CounterAgent);
+  // Equivalent: yield* Client.bind(identity, CounterAgent)
+});
+```
+
+Full-definition binding validates the type name and constructor schema, and rejects binding an
+existing identity to an ephemeral definition. Method-only bindings do not validate a constructor
+or type name. Binding is not remote schema discovery and does not grant permissions: invocation
+still requires host authorization. Handle parse, binding, and invocation errors deliberately.
+
+For a separately deployed component, declare an agent dependency in the consuming component:
+
+```yaml
+components:
+  my-app:consumer:
+    dir: consumer
+    templates: effect
+    dependencies:
+      agents:
+        - my-app:provider/TsPeer
+```
+
+Run `golem build` to generate the Effect guest bridge, then import its exported class, for
+example `import { TsPeer } from "ts-peer-guest-client"`. Unlike definition-owned clients, generated
+guest bridges use positional arguments: `const peer = yield* TsPeer.get("peer")`, then, for
+example, `yield* peer.echo("hello")`. These calls return Effects, not Promises. Read the generated
+declarations for the exact identity, method, and configuration shapes; do not edit generated files.
+This guest bridge is distinct from the external REST bridge used by Node.js applications.
 
 Avoid awaited RPC cycles such as A waiting for B while B waits for A; sequential durable agents can
 deadlock. Use the real remote method's `.trigger(input)` form only when fire-and-forget semantics are

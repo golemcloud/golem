@@ -2,7 +2,7 @@
 
 Phantom agents give otherwise identical agent id fields an additional UUID identity. A
 regular durable agent is addressed only by its agent id fields, so repeated `client.get`
-calls reach the same instance. Each `client.newPhantom` call generates a fresh UUID and therefore
+calls reach the same instance. Each durable `client.newPhantom` call generates a fresh UUID and therefore
 addresses an independent instance with its own state.
 
 ```text
@@ -15,7 +15,7 @@ The bracketed UUID is part of the agent ID. The regular and phantom IDs above ne
 ## Typed Client API
 
 Every value returned by `defineAgent(...)` exposes a typed `client`. Effect clients use named
-agent id records and return `Effect` values:
+agent id records and return `Effect` values. This table describes durable targets:
 
 | API | Meaning |
 | --- | --- |
@@ -122,7 +122,7 @@ export const PhantomCoordinator = defineAgent({
         yield* collector.addValue({ value: 10 });
         yield* collector.addValue({ value: 20 });
         return yield* collector.getTotal({});
-      }).pipe(Effect.orDie),
+      }).pipe(Effect.scoped, Effect.orDie),
 
     spawnTwoPhantoms: () =>
       Effect.gen(function* () {
@@ -135,13 +135,13 @@ export const PhantomCoordinator = defineAgent({
         const firstTotal = yield* first.getTotal({});
         const secondTotal = yield* second.getTotal({});
         return [firstTotal, secondTotal];
-      }).pipe(Effect.orDie),
+      }).pipe(Effect.scoped, Effect.orDie),
 
     readNonPhantomCollector: () =>
       Effect.gen(function* () {
         const collector = yield* Collector.client.get({ name });
         return yield* collector.getTotal({});
-      }).pipe(Effect.orDie),
+      }).pipe(Effect.scoped, Effect.orDie),
   }),
 });
 ```
@@ -167,15 +167,41 @@ const values = yield* sameInstance.getValues({});
 ```
 
 Calling `getPhantom` again with the same agent id record and UUID is idempotent. No UUID helper
-is needed: `newPhantom` already returns the format accepted by `getPhantom`. The pinned SDK does not
-expose a public implementation-side API for querying the current instance's own phantom UUID, so
-capture `remote.phantomId` on the caller side when creating the phantom.
+is needed: `newPhantom` already returns the format accepted by `getPhantom`. The caller can capture
+`remote.phantomId`. Inside the implementation, read the self identity and parse its encoded ID:
+
+```typescript
+import { AgentIdentity, SelfAgentId } from "@golemcloud/effect-golem";
+
+const ownPhantomId = Effect.gen(function* () {
+  const self = yield* SelfAgentId.SelfAgentId;
+  const identity = yield* AgentIdentity.parse(self.agentId);
+  return identity.phantomId; // undefined for a regular identity
+});
+```
+
+Self metadata reads require view permission on the running agent, not merely an identity-only
+grant. `Agents.getSelfMetadata` exposes the same identity plus full metadata, including stored
+environment and config fields. Handle parse errors; self host failures through `SelfAgentId` are
+defects. Read again after a fork rather than relying on a previously saved identity.
 
 ## Ephemeral and HTTP Cases
 
 - A durable agent client exposes `get`, `newPhantom`, and `getPhantom`.
 - An ephemeral agent client exposes only `newPhantom` and `getPhantom`; it cannot be addressed by
-  agent id fields alone and its state is not durable.
+  agent id fields alone and its state is not durable. Unlike durable `newPhantom`, ephemeral
+  `newPhantom` returns an `EphemeralRemoteAgent` directly, without a `phantomId` property. Its
+  awaited method calls return `{ value, metadata }`. Do not use the durable save-and-reconnect
+  example to capture a UUID from an ephemeral handle.
+
+```typescript
+const ephemeralCall = Effect.gen(function* () {
+  const remote = yield* EphemeralWorker.client.newPhantom({ name: "task" });
+  const { value, metadata } = yield* remote.run({});
+  return { value, metadata };
+});
+```
+
 - To route every HTTP request to a fresh phantom instance, use the mount option:
 
 ```typescript

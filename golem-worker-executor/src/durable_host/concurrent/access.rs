@@ -35,7 +35,7 @@ where
 
 type TerminalEffectHandoff<R> = (
     oneshot::Sender<(R, crate::services::oplog::OplogAddReceipt)>,
-    tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+    OrderedAppend,
 );
 
 pub(in crate::durable_host) fn prepare_access_terminal_effect<R, C, F, E, EF>(
@@ -82,14 +82,7 @@ where
             }
         })
         .map_err(WorkerExecutorError::runtime)?;
-    let receipt = tokio::spawn(async move {
-        completed.await.map_err(|error| {
-            WorkerExecutorError::runtime(format!(
-                "durable effect coordinator stopped without a receipt: {error}"
-            ))
-        })?
-    });
-    Ok((accept, receipt))
+    Ok((accept, OrderedAppend::Receipt(completed)))
 }
 
 enum AccessTerminalGuardState {
@@ -99,7 +92,7 @@ enum AccessTerminalGuardState {
     CleanupAfterTerminal {
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
-        terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+        terminal: Option<OrderedAppend>,
         trap_context: DurableCallTrapContext,
         /// Moved out of the armed [`DroppedCall`] when the terminal is handed to an owned task,
         /// so the call stays counted as in flight while the append is still pending.
@@ -114,6 +107,7 @@ enum AccessTerminalGuardState {
 pub(super) struct AccessTerminalGuard<P: DropPolicy> {
     state: AccessTerminalGuardState,
     teardown: TeardownProbe,
+    tool_trap_disposal: Arc<std::sync::atomic::AtomicBool>,
     /// Policy-controlled sink for unfinished drops (`BeforeTerminal`): `None` for policies (e.g.
     /// `NotCancellable`) that treat an unfinished drop as a programming error instead of queueing
     /// a cancellation.
@@ -135,6 +129,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         Self {
             state: AccessTerminalGuardState::BeforeTerminal { call },
             teardown,
+            tool_trap_disposal: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sink,
             cleanup_sink,
             _phantom: PhantomData,
@@ -148,12 +143,20 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         }
     }
 
+    pub(super) fn with_tool_trap_disposal(
+        mut self,
+        marker: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.tool_trap_disposal = marker;
+        self
+    }
+
     /// Hands the terminal append to an owned task. `discard_marker` must be `Some` only on the
     /// successful-`End` path (a torn drop from that state means the guest silently discarded the
     /// persisted completion); cancellation terminals pass `None`.
     pub(super) fn cleanup_after_terminal(
         &mut self,
-        terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+        terminal: impl Into<OrderedAppend>,
         discard_marker: Option<CompletionMarkerRecord>,
     ) {
         let call = match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
@@ -163,7 +166,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         self.state = AccessTerminalGuardState::CleanupAfterTerminal {
             function_type: call.function_type().clone(),
             durable_begin_index: call.begin_index(),
-            terminal: Some(terminal),
+            terminal: Some(terminal.into()),
             trap_context: call.trap_context(),
             // The permit moves with the state transition: the call remains counted as in flight
             // while the owned terminal append is pending.
@@ -225,7 +228,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
                     // Normally already joined (`wait_terminal`) by the time the guard is
                     // converted; chained defensively so a still-pending terminal append can never
                     // be overtaken by a marker append.
-                    pending_append: terminal.map(OrderedAppend::Task),
+                    pending_append: terminal,
                     teardown: self.teardown.clone(),
                 })),
             },
@@ -238,7 +241,9 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { mut call } => {
-                if self.teardown.is_executor_shutting_down() {
+                if P::CANCEL_ON_TOOL_TRAP && self.tool_trap_disposal.load(Ordering::Acquire) {
+                    Cancellable::unfinished_drop(call, self.cleanup_sink.as_ref());
+                } else if self.teardown.is_executor_shutting_down() {
                     tracing::debug!(
                         start_idx = %call.start_idx(),
                         "durable call terminal abandoned during executor shutdown"
@@ -268,12 +273,12 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 // runtime teardown is not a guest discard: the `End` stays markerless so replay
                 // delivers it (see [`TeardownProbe`]).
                 let terminal = match discard_marker {
-                    Some(marker) if !self.teardown.is_tearing_down() => {
-                        Some(task_for_marker_receipt(marker.record(
-                            CompletionMarkerKind::Discarded,
-                            terminal.map(OrderedAppend::Task),
-                        )))
-                    }
+                    Some(marker) if !self.teardown.is_tearing_down() => Some(
+                        task_for_marker_receipt(
+                            marker.record(CompletionMarkerKind::Discarded, terminal),
+                        )
+                        .into(),
+                    ),
                     Some(marker) => {
                         tracing::debug!(
                             start_idx = %marker.start_idx,

@@ -47,6 +47,9 @@ impl NotesAgent for NotesAgentImpl {
         std::fs::create_dir_all("/data").expect("failed to create database directory");
         let connection = Connection::open("/data/notes.db").expect("failed to open SQLite");
         connection
+            .execute_batch("PRAGMA temp_store=MEMORY;")
+            .expect("failed to configure temporary storage");
+        connection
             .execute(
                 "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT NOT NULL)",
                 (),
@@ -82,8 +85,11 @@ impl NotesAgent for NotesAgentImpl {
 
 Use `Connection::open_in_memory()` when the database should live in linear memory. Rust snapshot
 handling does not automatically serialize a `Connection`; explicitly serialize and restore the
-database with the `serialize` feature when implementing custom snapshots. A file-backed database
-survives ordinary crash recovery, but manual updates must save and restore its file contents.
+database with the `serialize` feature when implementing custom snapshots. For file-backed databases,
+enable executor filesystem snapshots for snapshot-based manual updates. Golem captures and restores
+the files before `load_snapshot`; do not copy database files into the memory snapshot or write them
+from the read-only restoration hook. Without filesystem snapshots, changed files prevent a
+snapshot-based manual update. See `golem-custom-snapshot-rust` for executor setup and restoration rules.
 
 ## Resource and runtime limits
 

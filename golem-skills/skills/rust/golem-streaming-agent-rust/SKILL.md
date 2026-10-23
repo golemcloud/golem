@@ -45,9 +45,15 @@ async fn sum_stream(mut values: AgentStream<u32>) -> Result<u32, String> {
 fn doubled_stream(mut input: AgentStream<u32>) -> AgentStream<u32> {
     let (mut writer, output) = AgentStream::new();
     spawn_local(async move {
-        while let Ok(Some(value)) = input.next().await {
-            if writer.write_one(value * 2).await.is_err() {
-                break; // the reader dropped; stop producing
+        loop {
+            match input.next().await {
+                Ok(Some(value)) => {
+                    if writer.write_one(value * 2).await.is_err() {
+                        break; // the reader dropped; stop producing
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => panic!("Input stream failed: {error}"),
             }
         }
         // Dropping writer closes output normally.
@@ -70,8 +76,8 @@ fn forward(input: AgentStream<String>) -> AgentStream<String> {
 ```
 
 Streams are affine. Passing one into RPC, returning it, or forwarding it transfers ownership. Do
-not read, send, or clone aliases afterward. A partially consumed stream cannot be directly
-forwarded. `AgentStream::collect` is convenient only for bounded streams; preserve streaming for
+not read, send, or clone aliases afterward. A partially consumed stream can be forwarded; the
+receiver reads its unread remainder. `AgentStream::collect` is convenient only for bounded streams; preserve streaming for
 large or unbounded data.
 
 ## Ordering and Errors
@@ -106,9 +112,10 @@ while let Some(value) = output.next().await? {
 
 Generated guest clients provide schema-specific stream factories when a Rust type alone cannot
 identify the exact schema occurrence. Use those generated factories rather than constructing an
-ambiguous stream manually. Stream-bearing methods are awaited only: generated clients omit
-trigger and scheduling variants, and stream-bearing constructors are rejected because client
-construction is synchronous.
+ambiguous stream manually. Use awaited calls for stream-bearing methods. Definition-derived clients
+still expose trigger and scheduling helpers, but invoking them with streams is rejected at runtime
+(fallible paths return errors). CLI-generated guest clients omit these helpers for streaming
+methods. Stream-bearing constructors are rejected because client construction is synchronous.
 
 For a native external application, declare `bridge.rust.external` in `golem.yaml` as described by
 the `golem-call-from-external-rust` guide. The generated client uses its exported affine
@@ -132,7 +139,8 @@ contain agent streams. Keep an MCP-facing method stream-free or add a bounded ad
 Start from the runnable Rust template, then build and invoke it:
 
 ```shell
-golem new --yes --language rust streaming-agent
+golem new --yes --template rust/streaming streaming-agent
+cd streaming-agent
 golem build
 golem deploy --yes
 ```

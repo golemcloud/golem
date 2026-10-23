@@ -13,6 +13,73 @@
 // limitations under the License.
 
 use super::*;
+
+/// Retains an accepted replay claim independently of the Store task that requested it.
+pub(super) async fn owned_access_claim<T, D, Ctx>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    recorded_start_required: bool,
+    claim: impl Future<Output = Result<ReplayStartClaimOutcome, WorkerExecutorError>> + Send + 'static,
+) -> Result<ReplayStartClaimOutcome, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (tasks, sink, context) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.public_state.worker().tasks.clone(),
+            ctx.state.dropped_call_event_sender(),
+            ambient_trap_context(ctx),
+        )
+    });
+    let (send, receive) = oneshot::channel();
+    let (settled, settlement) = oneshot::channel();
+    drop(
+        tasks
+            .spawn_metadata(async move {
+                let result = claim.await.and_then(|outcome| {
+                    if recorded_start_required
+                        && !matches!(outcome, ReplayStartClaimOutcome::Claimed { .. })
+                    {
+                        Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "recorded accessor Start",
+                            "replay ended before the required claim",
+                        ))
+                    } else {
+                        Ok(outcome)
+                    }
+                });
+                let completion = result.as_ref().map(|_| ()).map_err(Clone::clone);
+                let _ = send.send(result);
+                let _ = settled.send(completion);
+            })
+            .map_err(WorkerExecutorError::runtime)?,
+    );
+    // Publish the join only if the caller disappears. An active claim can require sibling
+    // guest progress; putting its receipt in their cleanup drain would deadlock that progress.
+    let mut cleanup = sink.map(|sink| {
+        AccessDropEventDrainGuard::new(
+            sink,
+            vec![DropEvent::AwaitCompletionMarker {
+                receipt: Some(MarkerReceipt::pending(settlement)),
+                trap_context: context,
+                live_call_permit: None,
+            }],
+        )
+    });
+    let result = receive
+        .await
+        .map_err(|_| WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump,
+        })?;
+    if let Some(cleanup) = &mut cleanup {
+        cleanup.disarm();
+    }
+    result
+}
+
 pub(crate) fn admission_refusal_before_start(
     claim: &StartClaim,
     initiating_function: &str,
@@ -150,7 +217,8 @@ where
         store.with(|mut access| {
             get_ctx(access.data_mut())
                 .state
-                .authoritative_replay_failure = true
+                .authoritative_replay_failure
+                .store(true, Ordering::Release)
         });
         return Err(error);
     }
@@ -394,16 +462,23 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let store_continued_live = prepared.store_continued_live();
         let execution_scope = prepared.execution_scope;
         let retry = prepared.retry;
-        match replay_state
-            .claim_start_for_store_with_admission(
-                claim,
-                store_continued_live,
-                |_, _| {},
-                tool_operation
-                    .clone()
-                    .map(|operation| (operation, Pair::FQFN.to_string())),
-            )
-            .await?
+        let claiming = replay_state.clone();
+        let admission = tool_operation
+            .clone()
+            .map(|operation| (operation, Pair::FQFN.to_string()));
+        let recorded_start_required = prepared.claim_options.require_recorded_start
+            || (!prepared.replaying_incomplete_entity && !prepared.primary_runtime);
+        match owned_access_claim(store, get_ctx, recorded_start_required, async move {
+            claiming
+                .claim_start_for_store_with_admission(
+                    claim,
+                    store_continued_live,
+                    |_, _| {},
+                    admission,
+                )
+                .await
+        })
+        .await?
         {
             ReplayStartClaimOutcome::Claimed { handle, .. } => {
                 let start_idx = handle.start_idx();
@@ -683,7 +758,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         if let Err(error) = self.prepare_incomplete_live_repair(|| counter).await {
             let replay = access.with_ctx(|ctx| ctx.state.replay_state.clone());
             replay.abandon_replay_for_failure().await?;
-            access.with_ctx(|ctx| ctx.state.authoritative_replay_failure = true);
+            access.with_ctx(|ctx| {
+                ctx.state
+                    .authoritative_replay_failure
+                    .store(true, Ordering::Release)
+            });
             return Err(error);
         }
         Ok(())

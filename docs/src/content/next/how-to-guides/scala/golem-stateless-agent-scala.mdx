@@ -5,9 +5,9 @@
 An **ephemeral agent** is a Golem agent that gets a **fresh instance for every invocation**. Unlike the default durable agents, ephemeral agents:
 
 - **No shared state**: Each invocation starts from a fresh constructor call — field values set in one call are gone by the next
-- **No replay**: An oplog is still recorded lazily (useful for debugging via `golem agent oplog`), but it is never used for replay — no automatic recovery on failure
+- **No method recovery**: An oplog is recorded lazily for inspection. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - **No persistence**: The agent's memory is discarded after each invocation completes
-- **Same identity model**: The agent is still addressed by its constructor parameters, but every call behaves as if the agent was just created
+- **Logical identity**: Constructor parameters address a logical target; each invocation receives a final per-call ephemeral identity.
 
 This makes ephemeral agents ideal for **pure request handlers**, **stateless transformers**, **adapters**, and **serverless-style functions** where each call is independent.
 
@@ -23,6 +23,7 @@ import scala.concurrent.Future
 
 @agentDefinition(mode = DurabilityMode.Ephemeral)
 trait RequestHandler extends BaseAgent {
+  class Id()
   def handle(input: String): Future[String]
 }
 
@@ -92,11 +93,11 @@ import scala.concurrent.Future
 trait ConverterAgent extends BaseAgent {
   class Id(val name: String)
 
-  @post("/to-upper")
-  def toUpper(@body input: String): Future[String]
+  @endpoint(method = "POST", path = "/to-upper")
+  def toUpper(input: String): Future[String]
 
-  @post("/to-lower")
-  def toLower(@body input: String): Future[String]
+  @endpoint(method = "POST", path = "/to-lower")
+  def toLower(input: String): Future[String]
 }
 
 @agentImplementation()
@@ -110,6 +111,8 @@ final class ConverterAgentImpl(private val name: String) extends ConverterAgent 
 ```
 
 ## When to Use Ephemeral Agents
+
+Both POST endpoints expect a structured JSON body such as `{"input":"Hello"}`, not a bare string.
 
 | Use Case | Why Ephemeral? |
 |----------|---------------|
@@ -130,5 +133,5 @@ final class ConverterAgentImpl(private val name: String) extends ConverterAgent 
 
 - Ephemeral mode is set at the **agent type level** — all instances of the type are ephemeral
 - Constructor parameters still define identity — you can have multiple ephemeral agents with different parameters
-- Ephemeral agents can still call other agents via RPC, make HTTP requests, and use all Golem APIs
-- The oplog is still recorded lazily, so you can inspect what an ephemeral agent did via `golem agent oplog` — but it is never replayed
+- Ephemeral agents can call other agents and make HTTP requests, but do not support every durable API. Promise waits and sleeps are bounded by the configured maximum sleep; ephemeral methods cannot actively suspend for durable recovery.
+- The oplog is recorded lazily for inspection. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.

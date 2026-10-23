@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use golem_common::model::oplog::{OplogEntry, OplogErrorKind, PublicOplogEntryWithIndex};
+use golem_common::model::oplog::{OplogEntry, PublicOplogEntryWithIndex};
 use golem_worker_executor::services::HasOplogService;
 use test_r::test;
 
@@ -158,7 +158,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
         data_value!(),
     );
     tokio::pin!(invocation);
-    let silent_peer = tokio::select! {
+    let mut silent_peer = tokio::select! {
         result = invocation.as_mut() => anyhow::bail!("invocation ended before the primary connected: {result:?}"),
         accepted = tokio::time::timeout(std::time::Duration::from_secs(30), silent_listener.accept()) => accepted??.0,
     };
@@ -227,68 +227,73 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
         .release
         .send(())
         .expect("release independently trapping child");
-    let result =
-        tokio::time::timeout(std::time::Duration::from_secs(20), invocation.as_mut()).await;
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            if has_end(&oplog, child)
+                && worker.owner_execution().tool_operation_metadata().operations.is_empty()
+            {
+                break Ok::<_, anyhow::Error>(oplog);
+            }
+            tokio::select! {
+                result = invocation.as_mut() => anyhow::bail!("primary ended before isolated child settlement: {result:?}"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {},
+            }
+        }
+    }).await;
+    let oplog = match settled {
+        Ok(oplog) => oplog?,
+        Err(_) => {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            anyhow::bail!(
+                "isolated child settlement stalled: child_end={} operations={:?} oplog={oplog:#?}",
+                has_end(&oplog, child),
+                worker.owner_execution().tool_operation_metadata()
+            );
+        }
+    };
     let operations = worker.owner_execution().tool_operation_metadata();
-    let active = executor.active_entity_metadata(&owned).await;
-    eprintln!(
-        "SILENT_PRIMARY_OUTCOME caller={result:#?} status={metadata:#?} operations={operations:#?} active={active:#?} silent_peer_still_open={:?}",
-        silent_peer.peer_addr()
-    );
-    let tip = worker
-        .oplog_service()
-        .get_last_index(&owned, AgentMode::Durable)
-        .await
-        .unwrap();
-    let committed = worker
-        .oplog_service()
-        .read_exact(
-            &owned,
-            AgentMode::Durable,
-            OplogIndex::INITIAL,
-            tip.as_u64(),
-        )
-        .await
-        .unwrap();
-    let failures: Vec<_> = oplog
+    assert_eq!(operations.owner_failure, None);
+    assert!(operations.operations.is_empty());
+    let terminal = oplog
         .iter()
-        .filter(|entry| {
-            matches!(&entry.entry,
-                PublicOplogEntry::Error(p) if p.kind == OplogErrorKind::Invocation)
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == child => end.response.as_ref(),
+            _ => None,
         })
-        .collect();
-    eprintln!("SILENT_PRIMARY_COMMITTED tip={tip:?} invocation_errors={failures:#?}");
+        .expect("isolated child has a durable terminal response");
+    let terminal = SerializableToolOperationTerminal::from_value(terminal.value())?;
     assert_eq!(
-        operations.owner_failure,
-        Some(ToolOwnerFailureMetadata::Trap),
-        "the nested child must select Trap, not merely leave the primary waiting"
+        terminal.body_execution,
+        SerializableEntityBodyExecution::Trapped
     );
+    assert!(terminal.result.is_err());
     assert!(has_end(&oplog, parent));
-    assert_incomplete(&oplog, child);
-    for start in primary_waits {
-        assert_incomplete(&oplog, start);
+    for start in &primary_waits {
+        assert_incomplete(&oplog, *start);
     }
-    let result = result.map_err(|_| anyhow::anyhow!("external caller hung for 20s after nested leaf release while primary silent TCP peer remained open; selected={:?}; status={:?}", operations.owner_failure, metadata.status))?;
-    let error = result.expect_err("nested child trap must fail the external invocation");
-    assert!(
-        error
-            .to_string()
-            .contains("nested middleware child trap after parent return"),
-        "must report the original selected trap: {error:#?}"
-    );
-    assert_eq!(metadata.status, AgentStatus::Failed);
-    assert_eq!(failures.len(), 1);
-    assert!(matches!(
-        committed.get(&failures[0].oplog_index),
-        Some(OplogEntry::Error {
-            kind: OplogErrorKind::Invocation,
-            ..
-        })
-    ));
     assert!(!oplog.iter().any(|entry| entry.oplog_index > parent
         && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))));
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+    );
+    tokio::io::AsyncWriteExt::write_all(&mut silent_peer, &[1]).await?;
+    tokio::io::AsyncWriteExt::shutdown(&mut silent_peer).await?;
+    invocation.await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    for start in primary_waits {
+        assert!(has_end(&oplog, start));
+    }
+    assert!(oplog.iter().any(|entry| entry.oplog_index > child
+        && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))));
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+    );
     drop(silent_peer);
     Ok(())
 }

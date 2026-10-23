@@ -341,7 +341,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         if store.as_context().data().durable_ctx().state.snapshot_replay_purpose
                                             != SnapshotReplayPurpose::None
                                             && !store.as_context().data().durable_ctx().is_live()
-                                            && !store.as_context().data().durable_ctx().state.authoritative_replay_failure =>
+                                            && !store.as_context().data().durable_ctx().state.authoritative_replay_failure.load(Ordering::Acquire) =>
                                     {
                                         // Speculative reconstruction failures, after a snapshot or
                                         // in the replay for a pending automatic update, must not
@@ -401,7 +401,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                                 && !shard_lost
                                                 && (matches!(trap_type, TrapType::Interrupt(_))
                                                     || store.as_context().data().durable_ctx().is_live()
-                                                    || store.as_context().data().durable_ctx().state.authoritative_replay_failure)
+                                                    || store.as_context().data().durable_ctx().state.authoritative_replay_failure.load(Ordering::Acquire))
                                             {
                                                 // A refused write means the shard has moved:
                                                 // record it before the startup result is published.

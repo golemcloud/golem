@@ -143,7 +143,6 @@ jobs:
           rust-targets: ${{ matrix.cfg.rust-target }}
           cache-shared-key: 'release-${{ matrix.cfg.rust-target }}'
           cache-save-if: 'true'
-          install-protoc: 'true'
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Set version for all packages

@@ -53,7 +53,6 @@ jobs:
         with:
           fetch-tag: 'true'
           rust-targets: ${{ matrix.platform.target }}
-          install-protoc: 'true'
 
       - name: Prepare
         run: |
@@ -112,7 +111,6 @@ jobs:
         with:
           fetch-tag: 'true'
           rust-targets: ${{ matrix.platform.target }}
-          install-protoc: 'true'
 
       - name: Prepare
         run: |
