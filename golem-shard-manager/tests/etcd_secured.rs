@@ -792,8 +792,9 @@ async fn a_running_replica_uses_renewed_tls_files_without_a_restart(
         DockerEtcd::new_with_options(old_pki.mtls_etcd_options().with_host_port(port)).await;
     let mut config = tls_config(&old_etcd.client_url(), old_pki.mtls());
     if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
-        // The files are looked at every `retry_max_delay`.
         etcd.retry_max_delay = Duration::from_secs(1);
+        // The files are looked at every second instead of every minute.
+        etcd.test_tls_reload_interval = Some(Duration::from_secs(1));
     }
     let (leader, leader_details) = spawn_replica(config.clone());
     started(leader_details).await;
@@ -1142,8 +1143,9 @@ async fn a_standby_keeps_campaigning_after_its_election_connection_meets_a_refus
             tls: Some(tls),
             username: Some(USER.to_string()),
             password: Some(EtcdPassword::from(PASSWORD)),
-            // The files are looked at every `retry_max_delay`.
             retry_max_delay: Duration::from_secs(1),
+            // The files are looked at every second instead of every minute.
+            test_tls_reload_interval: Some(Duration::from_secs(1)),
             ..EtcdConfig::default()
         })
     };
@@ -1206,6 +1208,7 @@ async fn a_replica_keeps_its_clients_while_etcd_refuses_the_renewed_files(
     let mut config = tls_config(&etcd.client_url(), pki.mtls());
     if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
         etcd.retry_max_delay = Duration::from_secs(1);
+        etcd.test_tls_reload_interval = Some(Duration::from_secs(1));
     }
     let (leader_task, leader_details) = spawn_replica(config.clone());
     let leader = started(leader_details).await;
@@ -1273,6 +1276,7 @@ async fn a_replica_with_renewed_files_keeps_running_while_etcds_certificate_has_
     let mut config = tls_config(&etcd.client_url(), pki.mtls());
     if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
         etcd.retry_max_delay = Duration::from_secs(1);
+        etcd.test_tls_reload_interval = Some(Duration::from_secs(1));
     }
     let (_leader, leader_details) = spawn_replica(config.clone());
     started(leader_details).await;

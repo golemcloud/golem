@@ -163,7 +163,7 @@ volumes:
 
 ### Renew certificates
 
-A service reloads renewed files without a restart. It polls the files of every `_file` setting every 10 seconds. When the bytes of a certificate, key or CA change, the service checks the new set and then uses it:
+A service reloads renewed files without a restart. It polls the files of every `_file` setting every 60 seconds, which matches how often the kubelet updates a mounted Secret. When the bytes of a certificate, key or CA change, the service checks the new set and then uses it:
 
 - A server uses the new set for every TLS handshake that starts after the reload. It requires a client certificate in every handshake, and drops a handshake that takes longer than 10 seconds.
 - A client uses the new set for every new connection. A connection that is open keeps the old certificate until it closes, so a renewal does not interrupt a call or a stream.
@@ -171,7 +171,7 @@ A service reloads renewed files without a restart. It polls the files of every `
 
 A set that fails the check is not used. The service goes on with the old one, logs the error "Changed TLS files cannot be used; keeping the current certificate" once for each distinct set of files, and counts it in `golem_tls_certificate_reload_failures_total`. It checks the same files again on every poll. A successful reload logs "TLS certificate reloaded" with the subject, the end of validity and the SHA-256 fingerprint.
 
-A client whose files cannot be loaded at startup, for example because the Secret is not mounted yet, starts anyway. Its calls fail with a TLS configuration error, and it tries to load the files again, at most every 10 seconds, until they load. A server refuses to start with a bad set.
+A client whose files cannot be loaded at startup, for example because the Secret is not mounted yet, starts anyway. Its calls fail with a TLS configuration error, and it tries to load the files again, at most every 60 seconds, until they load. A server refuses to start with a bad set.
 
 Two metrics help to watch the renewal. `golem_tls_certificate_not_after_seconds{use}` is the Unix time at which the certificate in use expires; alert when it comes close to the current time. `golem_tls_certificate_reload_failures_total{use}` rises when changed files cannot be used. The `use` label names the user of the certificate: `grpc server`, `<target> client` for a gRPC client (for example `registry client` or `worker_executor client`), and `etcd client` for the [shard manager's etcd connection](/next/operate/shard-manager#secure-the-etcd-connection). See [Metrics](/next/operate/metrics).
 

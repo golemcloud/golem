@@ -2007,6 +2007,7 @@ async fn a_standby_that_cannot_reach_etcd_does_not_export_itself_as_the_leader(
         password: None,
         password_file: None,
         test_version: None,
+        test_tls_reload_interval: None,
     });
 
     let shutdown = CancellationToken::new();

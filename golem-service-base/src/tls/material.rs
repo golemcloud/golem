@@ -23,8 +23,10 @@ use std::time::{Duration, SystemTime};
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 
-/// How often the gRPC servers and clients look at their TLS files.
-pub const TLS_RELOAD_INTERVAL: Duration = Duration::from_secs(10);
+/// How often the gRPC servers and clients, and the shard manager's etcd clients, look at their TLS
+/// files. The kubelet rewrites a mounted Secret only on its own pod sync, once a minute, so a
+/// faster poll would mostly read files that have not changed yet.
+pub const TLS_RELOAD_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug)]
 pub struct TlsSources {

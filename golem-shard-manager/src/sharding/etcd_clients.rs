@@ -29,6 +29,7 @@ use crate::sharding::etcd_connection::{
 };
 use arc_swap::ArcSwap;
 use etcd_client::Client;
+use golem_service_base::tls::material::TLS_RELOAD_INTERVAL;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
@@ -281,11 +282,15 @@ impl EtcdClients {
         Report { log, count }
     }
 
-    /// Runs for the life of the process: every `retry_max_delay` it looks at the files, so that
-    /// a renewed certificate is in use by the next connection without a restart.
+    /// Runs for the life of the process: every [`TLS_RELOAD_INTERVAL`] it looks at the files, so
+    /// that a renewed certificate is in use by the next connection without a restart.
     pub async fn reload_on_change(self: Arc<Self>) -> anyhow::Result<()> {
+        let interval = self
+            .config
+            .test_tls_reload_interval
+            .unwrap_or(TLS_RELOAD_INTERVAL);
         loop {
-            tokio::time::sleep(self.config.retry_max_delay).await;
+            tokio::time::sleep(interval).await;
             self.reload_if_files_changed().await;
         }
     }
