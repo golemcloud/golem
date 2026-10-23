@@ -169,9 +169,16 @@ struct SharedClientTls {
     config: GrpcClientTlsConfig,
     state: ArcSwap<Result<Arc<ClientTls>, TlsError>>,
     /// When the load was last attempted after the start; taken only while the state is an error.
-    /// Held while that load runs, so that concurrent connects wait for it without blocking a
-    /// thread, and do not start loads of their own.
+    /// Held while a connect waits for that load, so that concurrent connects wait for it without
+    /// blocking a thread, and do not start loads of their own. A connect that stops waiting lets
+    /// it go while its load goes on.
     last_attempt: tokio::sync::Mutex<Option<Instant>>,
+    /// Lets one load at a time read the files and store its result. Taken only by the load, on its
+    /// blocking thread, so it stays held after the connect that started the load stops waiting.
+    load_lock: std::sync::Mutex<()>,
+    /// Test-only seam: called once a load has read the files, before its result is stored.
+    #[cfg(test)]
+    after_read: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// Absent when TLS is off.
@@ -190,6 +197,9 @@ fn client_tls_state(config: &GrpcClientTlsConfig, use_name: &str) -> ClientTlsSt
         config: config.clone(),
         state: ArcSwap::from_pointee(loaded),
         last_attempt: tokio::sync::Mutex::new(Some(Instant::now())),
+        load_lock: std::sync::Mutex::new(()),
+        #[cfg(test)]
+        after_read: std::sync::Mutex::new(None),
     }))
 }
 
@@ -208,7 +218,8 @@ impl SharedClientTls {
         if last_attempt.is_none_or(|at| at.elapsed() >= TLS_RELOAD_INTERVAL) {
             *last_attempt = Some(Instant::now());
             // The load reads files, so it runs on the blocking pool. It stores its result itself,
-            // so a connect that stops waiting does not throw away a load that finishes.
+            // so a connect that stops waiting does not throw away a load that finishes, and it
+            // takes `load_lock` itself, so such a load still ends before the next one reads.
             let shared = self.clone();
             if let Err(err) = tokio::task::spawn_blocking(move || shared.load_again()).await {
                 warn!(
@@ -225,9 +236,31 @@ impl SharedClientTls {
         }
     }
 
-    /// Loads the settings again and keeps the result. Blocks: it reads the files.
+    /// Loads the settings again and keeps the result, unless they are loaded already. Blocks: it
+    /// waits for any other load and reads the files.
     fn load_again(&self) {
+        let _serialized = self
+            .load_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A later load may have loaded the settings since this one started: one whose connect came
+        // after this one's had stopped waiting. A success is never replaced, so an older load
+        // cannot undo it.
+        if self.state.load().is_ok() {
+            return;
+        }
         if let Some(loaded) = ClientTls::from_config(&self.config, &self.use_name) {
+            #[cfg(test)]
+            {
+                let hook = self
+                    .after_read
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(hook) = hook {
+                    hook();
+                }
+            }
             match &loaded {
                 Ok(_) => debug!(
                     "TLS settings of {} loaded after an earlier failure",
@@ -3096,5 +3129,71 @@ mod test {
             both.sources(),
             Err(crate::tls::pem::TlsError::BothSet { name }) if name == "client_key"
         ));
+    }
+
+    /// A TLS load keeps running on its blocking thread after its caller stops waiting. When it
+    /// ends, it must not store its older result over a later load that succeeded.
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn a_cancelled_tls_load_does_not_overwrite_a_later_recovery() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| dir.path().join(name);
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        std::fs::write(path("tls.crt"), certified.cert.pem()).unwrap();
+        std::fs::write(path("ca.crt"), certified.cert.pem()).unwrap();
+        // tls.key does not exist yet, so the client starts without TLS material.
+        let config = GrpcClientTlsConfig::Enabled(parse_enabled(serde_json::json!({
+            "client_cert_file": path("tls.crt"),
+            "client_key_file": path("tls.key"),
+            "server_ca_cert_file": path("ca.crt"),
+        })));
+        let shared = client_tls_state(&config, "test client").unwrap();
+        assert!(shared.material().is_none());
+
+        // The first retry reads the files while the key is still missing, and is held before it
+        // stores its result.
+        let (parked_tx, parked_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = std::sync::Mutex::new(release_rx);
+        *shared.after_read.lock().unwrap() = Some(Arc::new(move || {
+            parked_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+        }));
+        let connect =
+            |shared: Arc<SharedClientTls>| tokio::spawn(async move { shared.current().await });
+        shared.retry_now().await;
+        let first = connect(shared.clone());
+        tokio::task::spawn_blocking(move || parked_rx.recv().unwrap())
+            .await
+            .unwrap();
+        // Its caller stops waiting; the load goes on.
+        first.abort();
+        assert!(matches!(first.await, Err(err) if err.is_cancelled()));
+
+        // The key appears, and the next connect retries at once.
+        std::fs::write(path("tls.key"), certified.signing_key.serialize_pem()).unwrap();
+        shared.retry_now().await;
+        let second = connect(shared.clone());
+        // Time for the second load to end while the first is held, if nothing makes it wait.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        release_tx.send(()).unwrap();
+        let recovered = second
+            .await
+            .unwrap()
+            .expect("the retry after the key appeared did not load the TLS settings");
+
+        // The held load holds the client TLS until it ends.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Arc::strong_count(&shared) > 1 {
+            assert!(Instant::now() < deadline, "the held load never ended");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let current = shared
+            .current()
+            .await
+            .expect("the held load stored its older failure over the recovery");
+        assert!(Arc::ptr_eq(&current, &recovered));
     }
 }
