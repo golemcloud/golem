@@ -164,6 +164,8 @@ impl RustToolBridgeGenerator {
         let multimodals = self.inner.multimodals()?;
         let languages = self.inner.languages_module();
         let mimetypes = self.inner.mimetypes_module();
+        let units = self.inner.units_module();
+        let helper_types = self.inner.guest_helper_types();
         let schema_graphs = self.schema_graphs.definitions();
 
         Ok(quote! {
@@ -205,6 +207,10 @@ impl RustToolBridgeGenerator {
             #languages
 
             #mimetypes
+
+            #units
+
+            #helper_types
         })
     }
 

@@ -515,9 +515,33 @@ impl RustBridgeGenerator {
                 golem_rust::schema::wit::direct::IntoWire::write_wire(#val, __writer)
                     .map_err(|__error| __error.to_string())
             },
-            SchemaType::Text { .. } => bail!("Bare text rich scalars have no Rust bridge surface"),
-            SchemaType::Binary { .. } => {
-                bail!("Bare binary rich scalars have no guest Rust bridge surface")
+            SchemaType::Text { .. } => push(quote! {
+                __wire::SchemaValueNode::TextValue(__wire::TextValuePayload {
+                    text: #val.text.clone(),
+                    language: #val.language.clone(),
+                })
+            }),
+            SchemaType::Binary { .. } => push(quote! {
+                __wire::SchemaValueNode::BinaryValue(__wire::BinaryValuePayload {
+                    bytes: #val.bytes.clone(),
+                    mime_type: #val.mime_type.clone(),
+                })
+            }),
+            SchemaType::Quantity { spec, .. } => {
+                let (allowed, message) =
+                    Self::quantity_unit_check(spec, quote! { __q.unit.as_str() });
+                quote! {{
+                    let __q = #val.as_quantity_value();
+                    if #allowed {
+                        Ok(__writer.push(__wire::SchemaValueNode::QuantityValueNode(__wire::QuantityValue {
+                            mantissa: __q.mantissa,
+                            scale: __q.scale,
+                            unit: __q.unit.clone(),
+                        })))
+                    } else {
+                        Err(#message)
+                    }
+                }}
             }
             SchemaType::Ref { .. }
             | SchemaType::Record { .. }
@@ -527,7 +551,7 @@ impl RustBridgeGenerator {
             | SchemaType::Union { .. } => {
                 bail!("Expected a generated type name for {typ:?} during wire encoding")
             }
-            SchemaType::Quantity { .. } | SchemaType::Future { .. } => {
+            SchemaType::Future { .. } => {
                 bail!("SchemaType variant has no guest wire encoding yet; type = {typ:?}")
             }
         })
@@ -734,9 +758,38 @@ impl RustBridgeGenerator {
                     }))
                 }}
             }
-            SchemaType::Text { .. } => bail!("Bare text rich scalars have no Rust bridge surface"),
+            SchemaType::Text { .. } => {
+                quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
+                    __wire::SchemaValueNode::TextValue(__value) => Ok(crate::__golem_bridge_types::AgentText {
+                        text: __value.text,
+                        language: __value.language,
+                    }),
+                    __other => Err(format!("Expected text value, got {:?}", __other)),
+                }}
+            }
             SchemaType::Binary { .. } => {
-                bail!("Bare binary rich scalars have no guest Rust bridge surface")
+                quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
+                    __wire::SchemaValueNode::BinaryValue(__value) => Ok(crate::__golem_bridge_types::AgentBinary {
+                        bytes: __value.bytes,
+                        mime_type: __value.mime_type,
+                    }),
+                    __other => Err(format!("Expected binary value, got {:?}", __other)),
+                }}
+            }
+            SchemaType::Quantity { spec, .. } => {
+                let ty = self.quantity_type(spec);
+                let (allowed, message) =
+                    Self::quantity_unit_check(spec, quote! { __q.unit.as_str() });
+                quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
+                    __wire::SchemaValueNode::QuantityValueNode(__q) => {
+                        if #allowed {
+                            <#ty>::new(__q.mantissa, __q.scale, __q.unit).map_err(|__error| __error.to_string())
+                        } else {
+                            Err(#message)
+                        }
+                    }
+                    __other => Err(format!("Expected quantity value, got {:?}", __other)),
+                }}
             }
             SchemaType::Ref { .. }
             | SchemaType::Record { .. }
@@ -746,7 +799,7 @@ impl RustBridgeGenerator {
             | SchemaType::Union { .. } => {
                 bail!("Expected a generated type name for {typ:?} during wire decoding")
             }
-            SchemaType::Quantity { .. } | SchemaType::Future { .. } => {
+            SchemaType::Future { .. } => {
                 bail!("SchemaType variant has no guest wire decoding yet; type = {typ:?}")
             }
         })
