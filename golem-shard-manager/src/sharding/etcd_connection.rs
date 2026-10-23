@@ -27,8 +27,8 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-use tracing::{error, info, warn};
+use std::time::{Duration, SystemTime};
+use tracing::{info, warn};
 use x509_parser::time::ASN1Time;
 
 /// How often a quiet etcd connection is probed. etcd closes a connection that pings faster than
@@ -134,9 +134,10 @@ enum Pem {
     PrivateKey,
 }
 
-/// A TLS file as it was read at startup.
-#[derive(Clone)]
-struct ReadFile {
+/// A TLS file as it was read: where, and what it held. A file that could not be read has no
+/// content.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ReadFile {
     path: PathBuf,
     content: Vec<u8>,
 }
@@ -218,8 +219,23 @@ pub(crate) fn sha256_hex(der: &[u8]) -> String {
     hex::encode(Sha256::digest(der))
 }
 
-/// Logs each certificate of `item` - subject, end of validity and SHA-256 fingerprint - so that an
-/// operator can see which certificate a replica loaded and when it expires, and returns them.
+/// A certificate of the TLS items, as [`check_certificates`] found it. Kept so that its line in the
+/// log - and the expiry gauge - can be written when the settings are put to use, and not while a
+/// reload still has to find out whether etcd accepts them.
+#[derive(Clone)]
+struct CertificateReport {
+    source: String,
+    subject: String,
+    not_after: ASN1Time,
+    sha256: String,
+    expired: bool,
+    /// This replica's own certificate: the first one of its client certificate item.
+    own_leaf: bool,
+}
+
+/// Collects each certificate of `item` - subject, end of validity and SHA-256 fingerprint - into
+/// `reports`, so that an operator can see which certificate a replica loaded and when it expires,
+/// and returns them.
 ///
 /// For this replica's own certificate (`own`), the first one must be valid now - not expired, and
 /// not dated ahead of this node's clock: etcd would refuse it with a generic alert that looks like
@@ -229,6 +245,7 @@ pub(crate) fn sha256_hex(der: &[u8]) -> String {
 fn check_certificates(
     item: &Item,
     own: bool,
+    reports: &mut Vec<CertificateReport>,
 ) -> Result<Vec<CertificateDer<'static>>, ShardManagerError> {
     let certificates: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&item.pem)
         .filter_map(Result::ok)
@@ -246,13 +263,17 @@ fn check_certificates(
         let not_before = certificate.validity().not_before;
         let not_after = certificate.validity().not_after;
         let expired = not_after.timestamp() < now;
-        let sha256 = sha256_hex(der);
-        if expired {
-            warn!(source = item.source, subject, %not_after, sha256, "etcd TLS certificate has expired");
-        } else {
-            info!(source = item.source, subject, %not_after, sha256, "etcd TLS certificate");
+        if !expired {
             valid += 1;
         }
+        reports.push(CertificateReport {
+            source: item.source.clone(),
+            subject: subject.clone(),
+            not_after,
+            sha256: sha256_hex(der),
+            expired,
+            own_leaf: own && index == 0,
+        });
         if own && index == 0 && expired {
             return Err(invalid_config(format!(
                 "{}: the certificate of {subject} expired at {not_after}",
@@ -304,6 +325,7 @@ fn check_key_matches(
 fn tls_options(
     tls: &EtcdTlsConfig,
     read_files: &mut Vec<ReadFile>,
+    reports: &mut Vec<CertificateReport>,
 ) -> Result<TlsOptions, ShardManagerError> {
     let ca = read_item(
         ("ca_cert_file", tls.ca_cert_file.as_deref()),
@@ -321,7 +343,7 @@ fn tls_options(
                 .to_string(),
         )
     })?;
-    check_certificates(&ca, false)?;
+    check_certificates(&ca, false, reports)?;
     let mut options = TlsOptions::new().ca_certificate(Certificate::from_pem(ca.pem));
     let cert = read_item(
         ("client_cert_file", tls.client_cert_file.as_deref()),
@@ -343,7 +365,7 @@ fn tls_options(
     )?;
     match (cert, key) {
         (Some(cert), Some(key)) => {
-            let certificates = check_certificates(&cert, true)?;
+            let certificates = check_certificates(&cert, true, reports)?;
             check_key_matches(certificates, &cert, &key)?;
             options = options.identity(Identity::from_pem(cert.pem, key.pem));
         }
@@ -364,24 +386,36 @@ fn tls_options(
 }
 
 /// What both etcd clients connect with - the TLS material and the credentials - read and checked
-/// once, before the campaign. Both clients get the same certificates even when a file changes
-/// between their connects, and [`Self::tls_files_changed`] tells whether a TLS file on disk now
-/// differs from what was read.
+/// together, so that both clients get the same certificates even when a file changes between
+/// their connects. [`Self::tls_files_changed`] tells whether a TLS file on disk now differs from
+/// what was read.
 #[derive(Clone)]
 pub struct EtcdConnectSettings {
     options: ConnectOptions,
     tls_files: Vec<ReadFile>,
+    certificates: Vec<CertificateReport>,
 }
 
 impl EtcdConnectSettings {
+    /// Reads and checks the settings, and logs each certificate in them. Use this at startup.
     pub fn load(config: &EtcdConfig) -> Result<Self, ShardManagerError> {
+        let settings = Self::load_quietly(config)?;
+        settings.log_certificates();
+        Ok(settings)
+    }
+
+    /// [`Self::load`] without the log lines and the expiry gauge: for a reload, which has yet to
+    /// learn whether etcd accepts these settings, and may read the same rejected files every few
+    /// seconds.
+    pub(crate) fn load_quietly(config: &EtcdConfig) -> Result<Self, ShardManagerError> {
         check_endpoints(config)?;
         check_credentials(config)?;
 
         let mut tls_files = Vec::new();
+        let mut certificates = Vec::new();
         let mut options = ConnectOptions::new().with_connect_timeout(config.connect_timeout);
         if let Some(tls) = &config.tls {
-            options = options.with_tls(tls_options(tls, &mut tls_files)?);
+            options = options.with_tls(tls_options(tls, &mut tls_files, &mut certificates)?);
         }
         let password = match (&config.password, &config.password_file) {
             (Some(password), _) => Some(password.expose().to_string()),
@@ -399,7 +433,47 @@ impl EtcdConnectSettings {
                 .with_user(username, password)
                 .with_auto_token_refresh(true);
         }
-        Ok(Self { options, tls_files })
+        Ok(Self {
+            options,
+            tls_files,
+            certificates,
+        })
+    }
+
+    /// Logs each certificate of these settings at `info`, or at `warn` once expired, and sets the
+    /// gauge of this replica's own certificate to its end of validity: the certificate in use.
+    pub(crate) fn log_certificates(&self) {
+        for report in &self.certificates {
+            let CertificateReport {
+                source,
+                subject,
+                not_after,
+                sha256,
+                expired,
+                own_leaf,
+            } = report;
+            if *expired {
+                warn!(source, subject, %not_after, sha256, "etcd TLS certificate has expired");
+            } else {
+                info!(source, subject, %not_after, sha256, "etcd TLS certificate");
+            }
+            if *own_leaf {
+                let seconds = not_after.timestamp();
+                let not_after = match u64::try_from(seconds) {
+                    Ok(seconds) => SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
+                    Err(_) => SystemTime::UNIX_EPOCH - Duration::from_secs(seconds.unsigned_abs()),
+                };
+                golem_service_base::metrics::tls::record_certificate_not_after(
+                    "etcd client",
+                    not_after,
+                );
+            }
+        }
+    }
+
+    /// Whether these settings were read from at least one TLS file, which can be renewed.
+    pub fn has_tls_files(&self) -> bool {
+        !self.tls_files.is_empty()
     }
 
     /// Whether a TLS file on disk now differs from what [`Self::load`] read; a file that can no
@@ -409,45 +483,51 @@ impl EtcdConnectSettings {
             .iter()
             .any(|file| std::fs::read(&file.path).map_or(true, |content| content != file.content))
     }
+
+    /// Every TLS file `config` names, as it is on disk now; a file that cannot be read has no
+    /// content. Names a rejected set of files, so that it is reported once.
+    pub(crate) fn snapshot_of_files(config: &EtcdConfig) -> Vec<ReadFile> {
+        let Some(tls) = &config.tls else {
+            return Vec::new();
+        };
+        [
+            &tls.ca_cert_file,
+            &tls.client_cert_file,
+            &tls.client_key_file,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|path| ReadFile {
+            path: path.clone(),
+            content: std::fs::read(path).unwrap_or_default(),
+        })
+        .collect()
+    }
 }
 
-/// What etcd makes of the TLS files as they are on disk now.
-enum FilesOnDisk {
-    /// etcd completed the handshake: a restart that reads these files can connect.
-    Accepted,
-    /// etcd refused them too, or they cannot be used: a restart would not help.
+/// Why a new etcd client was not accepted.
+pub(crate) enum ProbeRefusal {
+    /// etcd answered with a TLS failure about the certificates.
     Refused(String),
-    /// No answer, such as while etcd is down.
-    Unknown(String),
+    /// etcd did not answer: down, or too slow.
+    NoAnswer(String),
 }
 
-/// Reads the TLS files again, with the startup checks, and tries them on a fresh connection that
-/// sends no login - the handshake is the question, and a login costs etcd a password check.
-async fn try_files_on_disk(config: &EtcdConfig) -> FilesOnDisk {
-    let Some(tls) = &config.tls else {
-        return FilesOnDisk::Unknown("persistence.config.tls is not set".to_string());
-    };
-    let options = match tls_options(tls, &mut Vec::new()) {
-        Ok(tls) => ConnectOptions::new()
-            .with_connect_timeout(config.connect_timeout)
-            .with_timeout(config.request_timeout)
-            .with_tls(tls),
-        Err(err) => return FilesOnDisk::Refused(err.to_string()),
-    };
-    let client = match Client::connect(&config.endpoints, Some(options)).await {
-        Ok(client) => client,
-        Err(err) => return FilesOnDisk::Unknown(err.to_string()),
-    };
-    match client
-        .kv_client()
-        .get(STATE_KEY, Some(GetOptions::new().with_count_only()))
-        .await
-    {
-        Ok(_) => FilesOnDisk::Accepted,
-        Err(err) if is_certificate_failure(&err) => FilesOnDisk::Refused(err.to_string()),
-        // etcd answered, so the handshake passed; with authentication enabled, it refuses the
-        // read itself, which carries no login.
-        Err(etcd_client::Error::GRpcStatus(status))
+/// Asks etcd a question on `client` that costs it one count-only read, within `request_timeout`:
+/// whether the handshake with these TLS files passes. Also on the election client, which has no
+/// request timeout of its own.
+pub(crate) async fn probe_handshake(
+    client: &Client,
+    request_timeout: Duration,
+) -> Result<(), ProbeRefusal> {
+    let mut kv = client.kv_client();
+    let read = kv.get(STATE_KEY, Some(GetOptions::new().with_count_only()));
+    match tokio::time::timeout(request_timeout, read).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(err)) if is_certificate_failure(&err) => Err(ProbeRefusal::Refused(err.to_string())),
+        // etcd answered, so the handshake passed; with authentication enabled, it refuses a read
+        // that carries no login.
+        Ok(Err(etcd_client::Error::GRpcStatus(status)))
             if matches!(
                 status.code(),
                 tonic::Code::InvalidArgument
@@ -455,78 +535,12 @@ async fn try_files_on_disk(config: &EtcdConfig) -> FilesOnDisk {
                     | tonic::Code::Unauthenticated
             ) =>
         {
-            FilesOnDisk::Accepted
+            Ok(())
         }
-        Err(err) => FilesOnDisk::Unknown(err.to_string()),
-    }
-}
-
-/// A count-only read through `client`, bounded by `request_timeout` also on the election client,
-/// which has no request timeout of its own; `None` when it passed or ran out of time.
-async fn refusal_on(client: &Client, request_timeout: Duration) -> Option<etcd_client::Error> {
-    let mut kv = client.kv_client();
-    let read = kv.get(STATE_KEY, Some(GetOptions::new().with_count_only()));
-    match tokio::time::timeout(request_timeout, read).await {
-        Ok(Err(err)) if is_certificate_failure(&err) => Some(err),
-        _ => None,
-    }
-}
-
-/// Watches, while the replica runs, for etcd refusing a certificate. Such a refusal is retried like
-/// a network fault, because etcd's own certificate can be fixed on etcd's side; but renewed files
-/// take effect only on a restart.
-///
-/// Every `retry_max_delay` it reads through both clients: they hold separate connections, and the
-/// one that reconnects first may be either. When etcd refuses a certificate, the TLS files have
-/// changed since startup, and etcd accepts the files as they are on disk now, this returns an
-/// error, which stops the replica so that its restart reads them. Otherwise a restart would not
-/// help - the files are the same, or etcd refuses the new ones too, as when etcd's own
-/// certificate has expired - so it logs the refusal and goes on.
-pub(crate) async fn watch_refused_certificates(
-    config: EtcdConfig,
-    settings: EtcdConnectSettings,
-    requests: Client,
-    election: Client,
-) -> anyhow::Result<()> {
-    loop {
-        tokio::time::sleep(config.retry_max_delay).await;
-        let refused = match refusal_on(&requests, config.request_timeout).await {
-            Some(err) => err,
-            None => match refusal_on(&election, config.request_timeout).await {
-                Some(err) => err,
-                None => continue,
-            },
-        };
-        if !settings.tls_files_changed() {
-            error!(
-                error = %refused,
-                "etcd refuses the TLS certificates, and the TLS files have not changed; retrying"
-            );
-            continue;
-        }
-        match try_files_on_disk(&config).await {
-            FilesOnDisk::Accepted => {
-                return Err(
-                    anyhow::Error::new(ShardManagerError::TlsHandshakeFailed(refused)).context(
-                        "etcd refuses the TLS certificates read at startup, and the TLS files \
-                         have changed since then and etcd accepts them: stopping, so that a \
-                         restart reads them",
-                    ),
-                );
-            }
-            FilesOnDisk::Refused(files_error) => error!(
-                error = %refused,
-                files_error,
-                "etcd refuses the TLS certificates read at startup and the TLS files on disk \
-                 alike, so a restart would not help; retrying"
-            ),
-            FilesOnDisk::Unknown(files_error) => warn!(
-                error = %refused,
-                files_error,
-                "etcd refuses the TLS certificates read at startup, and the TLS files on disk \
-                 cannot be tried now; retrying"
-            ),
-        }
+        Ok(Err(err)) => Err(ProbeRefusal::NoAnswer(err.to_string())),
+        Err(_) => Err(ProbeRefusal::NoAnswer(format!(
+            "no answer within {request_timeout:?}"
+        ))),
     }
 }
 
@@ -994,6 +1008,22 @@ mod tests {
         let renewed = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         std::fs::write(files.path("cert.pem"), renewed.cert.pem()).unwrap();
         assert!(settings.tls_files_changed());
+    }
+
+    #[test]
+    fn settings_without_files_have_no_tls_files() {
+        let files = PemFiles::new();
+        let inline =
+            EtcdConnectSettings::load(&config("https://etcd:2379", Some(files.inline_mtls())))
+                .expect("inline mTLS is accepted");
+        assert!(!inline.has_tls_files());
+        let plaintext = EtcdConnectSettings::load(&config("http://etcd:2379", None))
+            .expect("plaintext is accepted");
+        assert!(!plaintext.has_tls_files());
+        let from_files =
+            EtcdConnectSettings::load(&config("https://etcd:2379", Some(files.mtls())))
+                .expect("mTLS is accepted");
+        assert!(from_files.has_tls_files());
     }
 
     /// A PEM block with `label` around `der`.
