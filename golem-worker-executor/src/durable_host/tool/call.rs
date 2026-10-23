@@ -27,11 +27,11 @@ use super::{
     ToolInvokeResponse, ToolName, ToolOutputContract, ToolOutputEntry, ToolOwnerPattern,
     ToolRpcEntry, ToolRpcOwnerContext, ToolStdinEntry, TypedSchemaValue, UnderlyingToolEntry,
     WorkerCtx, WorkerExecutorError, admit_tool_response_secret_holds, anyhow,
-    authorize_live_permissions_at_serialized_access, await_tool_invoke_plans,
-    classify_tool_discovery_error, cleanup_failed_tool_dispatch, close_stdin, decode_tool_terminal,
-    decode_typed_tool_value, durability, join_or_park_at_runtime_shutdown, mcp, oneshot, operation,
-    record_tool_rejection_access, reject_output, resolve_tool_command, run_guest_call_settled,
-    spawn_tool_execution, tool_target, validate_stream_attachments,
+    authorize_live_permissions_at_serialized_access, classify_tool_discovery_error,
+    cleanup_failed_tool_dispatch, close_stdin, decode_tool_terminal, decode_typed_tool_value,
+    durability, join_or_park_at_runtime_shutdown, mcp, observe_tool_invoke_plans, oneshot,
+    operation, record_tool_rejection_access, reject_output, resolve_tool_command,
+    run_guest_call_settled, spawn_tool_execution, tool_target, validate_stream_attachments,
 };
 
 impl UnderlyingToolEntry {
@@ -998,9 +998,15 @@ where
             ToolCallDispatch::Accepted(accepted) => {
                 let execution = spawn_tool_execution(accessor, *accepted, stdout, stderr).await?;
                 drop(admission_activity);
-                let mut results =
-                    await_tool_invoke_plans(accessor, vec![execution.get_plan()]).await?;
-                results.pop().expect("one tool invocation has one result")
+                return observe_tool_invoke_plans(
+                    accessor,
+                    vec![execution.get_plan()],
+                    async |mut results| {
+                        let response = results.pop().expect("one tool invocation has one result");
+                        admit_tool_response_secret_holds(accessor, response).await
+                    },
+                )
+                .await;
             }
         },
     };

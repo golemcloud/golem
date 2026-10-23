@@ -42,7 +42,6 @@ packages=(
     lld
     openjdk-17-jdk-headless
     pkg-config
-    protobuf-compiler
     redis-server
     xz-utils
 )

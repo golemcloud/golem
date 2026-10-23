@@ -25,4 +25,5 @@ trait AppAgent extends BaseAgent:
 
 @agentImplementation()
 final class AppAgentImpl(chat: String) extends AppAgent:
-  def sales(region: String): Future[List[Row]] = querySales(region)
+  // each click runs this as durable code in the agent's own VM:
+  def sales(region: String): Future[List[Row]] = querySales(region) //@

@@ -6,7 +6,7 @@ export const Analyst = defineAgent({
   name: "AnalystAgent",
   id: { chat: Schema.String },
   http: Http.mount("/chats/{chat}", {
-    // Golem serves the files this agent creates, once written:
+    // Golem serves files this agent writes, never half-written:
     exposeFiles: [{ route: "/*", path: "/out/$1" }], //@
   }),
   methods: { ask: method({ input: { question: Schema.String },
@@ -18,10 +18,11 @@ export const Analyst = defineAgent({
       // the model calls this tool when a user asks for a graph:
       const tools = Charts.toLayer({ chart: ({ quarter: q }) => //@
         Effect.promise(async () => {
+          const name = crypto.randomUUID()
           fs.mkdirSync("/out", { recursive: true })
-          fs.writeFileSync(`/out/${q}.png`, await chartPng(q)) //@
-          fs.writeFileSync(`/out/${q}.html`, pageFor(q)) //@
-          return `/chats/${chat}/${q}.html`
+          fs.writeFileSync(`/out/${name}.png`, await chartPng(q)) //@
+          fs.writeFileSync(`/out/${name}.html`, pageFor(q, name)) //@
+          return `/chats/${chat}/${name}.html`
         }) })
       return yield* answer(question, Charts)
         .pipe(Effect.provide(tools))

@@ -13,9 +13,6 @@ Once a maintainer vouches for you, you can open pull requests normally.
 To work on **Golem** you need to install (via package installers or manually) the following tools:
 
 - [rustup](https://rustup.rs/)
-- [Protobuf](https://github.com/protocolbuffers/protobuf#protobuf-compiler-installation)
-  - The [prost crate](https://crates.io/crates/prost) requires `protoc`
-  - Requires **version 28** or later
 - For integration tests
   - [redis](https://redis.io/downloads/)
   - [docker](https://www.docker.com)
@@ -25,7 +22,7 @@ To work on **Golem** you need to install (via package installers or manually) th
 
 ### OSX
 ```sh
-brew install rustup protobuf redis docker lnav nginx
+brew install rustup redis docker lnav nginx
 ```
 
 ## Rust Installation

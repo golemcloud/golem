@@ -196,23 +196,33 @@ async fn mcp_session_replace_does_not_revive_a_record(
 }
 
 /// Idle 4 s: a session created at t0 and read at t0 + 0.6 s is still live at t0 + 4.3 s.
+///
+/// The last read proves the refresh only when it ends less than `idle` after the refresh started.
+/// A stalled runner can delay it past that point, so the test tries again with a new session.
 #[test]
 #[timeout("30s")]
 async fn mcp_session_never_expires_before_the_idle_timeout(
     #[dimension(mcp_store)] store: &Arc<dyn McpSessionStore>,
 ) -> anyhow::Result<()> {
     let idle = Duration::from_secs(4);
-    let id = new_id();
     let session = record(EnvironmentId::new(), 1);
 
-    let t0 = Instant::now();
-    assert!(store.create(id, &session, idle).await?);
-    sleep_until(t0 + Duration::from_millis(600)).await;
-    assert_eq!(store.get(id, Some(idle)).await?, Some(session.clone()));
+    for _ in 0..3 {
+        let id = new_id();
+        assert!(store.create(id, &session, idle).await?);
+        let t0 = Instant::now();
+        sleep_until(t0 + Duration::from_millis(600)).await;
+        let refreshed = Instant::now();
+        assert_eq!(store.get(id, Some(idle)).await?, Some(session.clone()));
 
-    sleep_until(t0 + Duration::from_millis(4300)).await;
-    assert_eq!(store.get(id, None).await?, Some(session));
-    Ok(())
+        sleep_until(t0 + Duration::from_millis(4300)).await;
+        let read = store.get(id, None).await?;
+        if refreshed.elapsed() < idle {
+            assert_eq!(read, Some(session));
+            return Ok(());
+        }
+    }
+    anyhow::bail!("every attempt read the session after its refreshed expiry")
 }
 
 const EXPIRING: Duration = Duration::from_secs(1);

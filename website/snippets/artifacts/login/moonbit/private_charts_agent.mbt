@@ -5,8 +5,7 @@ impl @schema.AllowedMimeTypes for Png with fn mime_types() {
 
 #derive.agent
 #derive.mount("/private/{team}")
-// Golem checks sign-in before the HTTP call reaches the agent:
-#derive.mount_auth(true) //@
+#derive.mount_auth(true)
 struct PrivateChartsAgent { team : String; charts : Array[Chart] }
 
 fn PrivateChartsAgent::new(team : String) -> PrivateChartsAgent {
@@ -26,6 +25,7 @@ pub async fn PrivateChartsAgent::ask(self : Self, question : String,
 pub async fn PrivateChartsAgent::open(self : Self, n : Int,
   caller : @common.Principal) -> @schema.UnstructuredBinary[Png]? {
   guard self.charts.get(n - 1) is Some(made) else { return None }
+  // anyone else, even signed in, gets a 404:
   guard made.asked_by == user_key(caller) else { return None } //@
   Some(Inline(bytes=made.png, mime_type=Some("image/png")))
 }

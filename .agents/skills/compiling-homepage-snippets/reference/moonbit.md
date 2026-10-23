@@ -15,12 +15,12 @@ Everything is reproducible from the repository root
 
 ```sh
 bash .amp/in/snippets/moonbit/check.sh   # static checks, codegen, build, link; ends with ALL_OK
-bash .amp/in/snippets/moonbit/neg.sh     # 16 negative controls + a clean run; ends with NEG_ALL_OK
+bash .amp/in/snippets/moonbit/neg.sh     # 20 negative controls + a clean run; ends with NEG_ALL_OK
 ```
 
-A warm `check.sh` run takes about 15 s (32 code-generator runs, one
-`moon build`, 16 component links); `neg.sh` runs `check.sh` 17 times, about
-8 minutes. The first run is longer while Moon compiles the SDK and the
+A warm `check.sh` run takes about 20 s (40 code-generator runs, one
+`moon build`, 20 component links); `neg.sh` runs `check.sh` 21 times, about
+10 minutes. The first run is longer while Moon compiles the SDK and the
 generator.
 
 ## Display files
@@ -43,10 +43,14 @@ generator.
 | `artifacts/routes/moonbit/app_tool.mbt` | `harness/artifacts_routes` |
 | `artifacts/files/moonbit/chart_agent.mbt` | `harness/artifacts_files` |
 | `artifacts/login/moonbit/private_charts_agent.mbt` | `harness/artifacts_login` |
+| `tools/middleware/moonbit/refund_policy.mbt` | `harness/tools_middleware` |
+| `artifacts/peruser/moonbit/dashboard_agent.mbt` | `harness/artifacts_peruser` |
+| `artifacts/routers/moonbit/exports_router.mbt` | `harness/artifacts_routers` |
+| `artifacts/signin/moonbit/billing_agent.mbt` | `harness/artifacts_signin` |
 
 There is no `agents/sqlite/moonbit` (owner's decision: MoonBit has no
 embedded SQLite; the page shows a note). `check.sh` fails if that folder
-appears. So the page's 17 features have 16 MoonBit display files.
+appears. So the page's 21 features (7 per chapter) have 20 MoonBit display files.
 `tools/publish` is a code snippet (`account_agent.mbt`); the shared
 `golem.yaml` it replaced is gone and nothing checks it any more.
 
@@ -133,6 +137,10 @@ What each `harness.mbt` supplies:
 | `artifacts_routes` | `#derive.golem_schema pub(all) struct Row { week, total : Double }`, `query_sales(region)` |
 | `artifacts_files` | `SaleRow`, `query_sales(team, quarter)`, `draw_chart(rows) -> Bytes` |
 | `artifacts_login` | `Chart { asked_by, png : Bytes }`, `answer_with_chart(question) -> Bytes`, `user_key(caller) -> String raise` (OIDC `[issuer, sub]` as JSON; fails for non-OIDC callers, as the TS prelude's `userKey`) |
+| `tools_middleware` | the Secrets `refund` tool (same name, version, positional `charge`, `amount`, `api_key : @secrets.SecretHandle[String]`, error `RefundError::Http`) with `customer_email` in `RefundResult` and a host-injected `principal : @tool.Principal` parameter (see "SDK gap: caller principal in typed middleware"); `check_rate_limit(principal) -> Result[Unit, @toolMiddleware.ToolInvokeError[E]]` (a constraint violation over 10 calls per principal, as the TS prelude's `checkRateLimit`), `ask_finance(approval, charge, amount)`, `approved(verdict : Bytes)` (`{"approved": true}`), `audit(charge, amount, refund_id)`. The middleware must be in the tool's package (`#derive.tool_middleware` resolves `presented=` same-package only, `golem_sdk_tools/lib/tool_middleware.mbt:308-331`) |
+| `artifacts_peruser` | `dashboard_for(user, request) -> String` (the model loop that builds the dashboard) |
+| `artifacts_routers` | the user's `#derive.agent struct AnalystAgent(chat)` with `export_csv(id) -> @schema.AgentStream[Array[Byte]]` (so the generator emits `AnalystAgentClient` in this component; the TS prelude declares it the same way, "defined elsewhere in the app"), `is_word` (the `[\w-]+` class), `header(name, value) -> @http.HttpHeader`, `empty()` (the TS prelude's `header`/`empty`) |
+| `artifacts_signin` | `Invoice`, `invoices_of(org, issuer, sub)`, `page_for(question, invoices)` |
 | `tools_secrets` | a `refund` tool (same signature as the Requests harness, trivial body) and `RefundResult`, so the generator emits the typed tool client `RefundClient` in this component |
 | `agents_stream`, `agents_readonly` | nothing |
 
@@ -216,10 +224,14 @@ control; a final clean run must print `ALL_OK`.
 | stripe_refund | drop `.unwrap()` after `@http.send(...)` | moonc: type mismatch (`Result` vs `@http.Response`) |
 | orders_access | `lifespan=@permissions.Lifespan::iso8601("PT1H")` → `lifespan="PT1H"` | moonc: type mismatch |
 | account_agent | drop `.unwrap()` after `.crm_find_customer(email)` | moonc: `Result[@tool.TypedToolInvocation[…], @tool.ToolError[…]] has no method collect` |
+| refund_policy (middleware) | `@api.await_promise(approval)` → `@api.get_promise(approval)` | moonc: type mismatch (`@api.PromiseResult` vs `Bytes` at `approved(verdict)`) |
+| dashboard_agent | `fn DashboardAgent::new(user : String)` → `(name : String)` | golem_sdk_tools: `AgentParseError` (mount variable `{user}` is not a constructor parameter) |
+| exports_router | `AnalystAgentClient::get(` → `AnalystAgent::get(` | moonc: `Type AnalystAgent has no method get` |
+| billing_agent | `caller : @common.Principal` → `caller : String` | moonc: `The value identifier Oidc is unbound` |
 | support_agent (secrets) | pass `self.config.stripe_key` (a `@config.Secret[String]`) straight to `RefundClient::refund` | moonc: type mismatch (`@config.Secret[String]` vs `@secrets.SecretHandle[String]`) |
 
 The code generator prints only the error type (`AgentParseError`), not its
-message, so those five controls are identified by the failing
+message, so those six controls are identified by the failing
 `agents <package>` step.
 
 ## Real SDK APIs used by the snippets
@@ -271,7 +283,59 @@ message, so those five controls are identified by the failing
   key), generated typed tool client `RefundClient::new().refund(charge,
   amount, api_key)` → `Result[RefundResult, @tool.ToolError[RefundError]]`,
   `.unwrap()` as in `tools/custom`.
-- Artifacts (all four are made on request, nothing is pre-built):
+- Tool middleware (`tools/middleware`): `#derive.tool_middleware("refund-policy",
+  presented="Refund")` on an empty struct (parsed at
+  `golem_sdk_tools/lib/tool_middleware.mbt:91,147`; documented in
+  `docs/src/content/v1.6/how-to-guides/moonbit/golem-tools-middleware-moonbit.mdx`;
+  SDK sample `golem_sdk/tool-middleware-authoring-test/authoring.mbt:76,136-148`),
+  with a `pub async fn RefundPolicy::refund(underlying : RefundUnderlying,
+  <the tool's parameters>, principal : @tool.Principal)` handler whose
+  parameters and return type `Result[RefundResult,
+  @toolMiddleware.ToolInvokeError[RefundError]]` the generator checks
+  (`tool_middleware.mbt:742-797`). The generated
+  `RefundUnderlying::refund(charge, amount, api_key)` returns the same
+  `Result` (`harness/tools_middleware/golem_tool_middlewares.mbt:283`), and
+  the generated dispatcher passes `__golem_invocation.principal()` to the
+  handler (same file, line 475). Rejections are
+  `@toolMiddleware.ToolInvokeError::ConstraintViolation(String)`
+  (`golem_sdk/tool-middleware/runtime.mbt:2`), the TS
+  `ToolInvokeError({ tag: 'constraint-violation' })`.
+- Promises (`tools/middleware`): `@api.create_promise() -> @api.PromiseId`
+  (`golem_sdk/api/promises.mbt:13`) and `@api.await_promise(id) -> Bytes`
+  (`promises.mbt:51`, "the agent is durably suspended … until the promise
+  is fulfilled"), as in `docs/src/content/v1.6/develop/promises.mdx`
+  (MoonBit tabs).
+- HTTP router (`artifacts/routers`): `#derive.http_router` +
+  `#derive.mount("/exports")` on an empty struct with `fn new()`, and a
+  `#derive.http_handler pub async fn serve(_self, request :
+  @http.HttpRequest) -> @http.HttpResponse`
+  (`golem_sdk_tools/lib/agents.mbt:1295,1469`; `HttpHeader`, `HttpRequest`,
+  `HttpResponse` at `golem_sdk/http/handler.mbt:3,11,24`; body
+  `@schema.AgentStream[Array[Byte]]`), as in
+  `docs/src/content/v1.6/invoke/making-custom-apis/http-routers.mdx` and
+  `golem_sdk_example1/golem_moonbit_examples/http_router.mbt:3-50`. The
+  router calls the agent through the generated client
+  `AnalystAgentClient::get(chat)` / `export_csv(id) ->
+  @schema.AgentStream[Array[Byte]]`
+  (`harness/artifacts_routers/golem_clients.mbt:11,97`), the router-to-agent
+  form in the same doc ("Make the handler `pub async fn` before awaiting
+  the generated client"), and returns the stream as the response body.
+- Per-user agents (`artifacts/peruser`): the mount variable `{user}` is the
+  constructor parameter (the generator rejects a mount variable that is
+  not one); `#derive.mount_auth(true)` as in `signin`;
+  `#derive.expose_files("/*", "/out/$1")` as below; each dashboard file
+  is named by a fresh UUID from `@api.generate_idempotency_key_string()`
+  (`golem_sdk/api/idempotency.mbt:11`, a host-generated UUID that is
+  persisted and never replayed, as `@types.uuid_to_string`; the MoonBit
+  tab of `docs/src/content/v1.6/develop/additional.mdx:48` shows
+  `@api.generate_idempotency_key()`). `harness/artifacts_peruser/moon.pkg.in`
+  imports `golemcloud/golem_sdk/api` for it.
+- Sign-in (`artifacts/signin`): `#derive.mount_auth(true)`
+  (`golem_sdk_tools/lib/agents.mbt:798`) and a host-injected `caller :
+  @common.Principal` parameter; `guard caller is Oidc(oidc)` then `let {
+  issuer, sub, .. } = oidc` (`OidcPrincipal`,
+  `golem_sdk/interface/golem/agent/common/top.mbt:207,220`).
+- Artifacts (all four older ones are made on request, nothing is pre-built):
   `#derive.expose_files("/*", "/out/$1")` on a mounted agent (live-file
   binding, generated as `@common.FileMapping::Subtree({ public_prefix: [],
   filesystem_root: "/out" })`; the generator requires the `/$1` target for
@@ -384,10 +448,40 @@ declaring the tool parameter as `@config.Secret[String]`, fails):
   implement `IntoSchema`/`WireSchema`/`IntoWire` for `@config.Secret[T]`
   so lowering loads a fresh owned handle from the config key.
 
-## Tools gap: `lexmatch` with captures is rejected by the code generator (found with the old Routers snippet)
+## SDK gap: caller principal in typed middleware (Middleware snippet)
 
-No current display file uses a regex; `artifacts/overview` validates the
-quarter with the harness helper `is_quarter` for this reason.
+TS gives every typed middleware handler the caller in its context
+(`refund: async (args, { underlying, principal })`). MoonBit typed
+middleware handlers receive the caller principal only when the presented
+tool itself declares a host-injected `principal : @tool.Principal`
+parameter.
+
+- Where: `sdks/moonbit/golem_sdk_tools/lib/tool_middleware.mbt:366-390`
+  (`projected_middleware_param`: a `Hidden(Principal)` tool parameter
+  becomes the handler's `@tool.Principal` parameter; nothing else adds
+  one) and `:1110` (`middleware_surfaces(presented, …, true)`), checked by
+  `validate_handler_signature` (`:750-797`, exact parameter list).
+- What fails: with the Secrets `refund` tool exactly as it is (no
+  principal parameter), a handler `RefundPolicy::refund(underlying, charge,
+  amount, api_key, principal : @tool.Principal)` makes both generator
+  commands fail with `AgentParseError` (tried by temporarily removing the
+  parameter from `harness/tools_middleware/harness.mbt`; restored).
+- Workaround used: the harness's `refund` tool declares `principal :
+  @tool.Principal` (a real SDK feature; the host injects it, so callers and
+  the generated `RefundClient` still pass only `charge, amount, api_key`).
+  The display file is the natural code.
+- Fix: always offer the invocation principal to typed handlers (the
+  generated dispatcher already has it: `__golem_invocation.principal()`,
+  `golem_sdk/tool-middleware/raw.mbt:440`), e.g. as an optional trailing
+  `principal : @tool.Principal` handler parameter.
+
+## Tools gap: `lexmatch` with captures is rejected by the code generator (found with the Routers snippet)
+
+`artifacts/routers` therefore matches the path with string patterns
+(`request.path is [.. "/exports/", .. rest, .. ".csv"]`, a split into
+`[chat, id]`, `is_word` and `id.length() == 36`) instead of the TS regex;
+`artifacts/overview` validates the quarter with the harness helper
+`is_quarter` for the same reason.
 
 - What fails: a component whose source contains the current `lexmatch`
   capture syntax, e.g.
@@ -429,8 +523,8 @@ quarter with the harness helper `is_quarter` for this reason.
   `tools/publish`) are used inline without `drop()`,
   mirroring the TS one-liners.
 - `agents/overview`: TS `id: { inbox }` is the constructor parameter, so
-  the identity comment and highlight are on `fn TriageAgent::new(inbox :
-  String)`. `z.record(z.string(), Label)` is `Map[String, Label]`.
+  the identity comment is above `fn TriageAgent::new(inbox : String)`
+  (not highlighted, as the TS `id` line). `z.record(z.string(), Label)` is `Map[String, Label]`.
   `Label.parse(await classify(...))` is `classify(...)` returning the typed
   `Label` (the harness stand-in), so there is no separate parse.
 - `agents/models`: the TS snippet shows three `import` lines; MoonBit source
@@ -485,7 +579,11 @@ quarter with the harness helper `is_quarter` for this reason.
   (the regex is visible here, off-screen in TS; the arguments keep the
   default scope, as in `tools/custom`). `ok(\`${name}.html\`)` is the plain
   `String` result. `init: () => ({})` is the identity constructor
-  `AppAgent::new(chat)`; the struct is written on one line to fit.
+  `AppAgent::new(chat)`; the struct is written on one line to fit. TS
+  declares and implements `sales` separately; MoonBit has one function,
+  so the TS comment and highlight on the implementation are on its body
+  line `query_sales(region)` (the endpoint line keeps its own). The blank
+  line between the tool and the agent is gone, as in TS.
 - `artifacts/files`: the TS `description:` is the `///` doc comment, placed
   under the TS comment and above `#derive.endpoint`; the TS comment above
   `returns: Png` sits above the `) -> @schema.UnstructuredBinary[Png]`
@@ -493,14 +591,59 @@ quarter with the harness helper `is_quarter` for this reason.
   the 4-line phantom `Png` + `AllowedMimeTypes` impl. `{ tag: 'inline',
   val, mimeType }` is `Inline(bytes~, mime_type=Some("image/png"))`.
 - `artifacts/login`: `http.mount(..., { auth: true })` is
-  `#derive.mount("/private/{team}")` + `#derive.mount_auth(true)` (the
-  comment and highlight on the auth line). `charts: Chart[]` is a field
+  `#derive.mount("/private/{team}")` + `#derive.mount_auth(true)` (no
+  comment or highlight, as in TS; sign-in moved to `signin`). The TS
+  comment above the owner check sits above the highlighted owner guard. `charts: Chart[]` is a field
   initialised in `new`; the struct is on one line, and the `ask`/`open`
   signatures wrap after the first parameters, to fit 31 lines.
   `this.charts.length` is `self.charts.length()` (1-based number, as TS).
   `this.charts[n - 1]` + `made?.askedBy !== userKey(caller)` is two guards
   (`get(n - 1) is Some(made)` and the highlighted owner check); `return
   undefined` is `return None` (404).
+- `tools/publish`: the three-line comment above the client call is the TS
+  one, verbatim.
+- `tools/middleware`: TS `refund.middleware({ name: 'refund-policy',
+  implementation: { refund } })` is `#derive.tool_middleware("refund-policy",
+  presented="Refund")` + `struct RefundPolicy {}` + the `refund` handler
+  (highlight on the attribute). `refuse` is a 3-line generic function
+  returning `ConstraintViolation(val)`; every TS `throw refuse(...)` is
+  `return Err(refuse(...))`. TS `args` are the positional parameters
+  (`args.amount` → `amount`); `principal` is the handler parameter (see the
+  gap above). `await checkRateLimit(principal)` (throws a constraint
+  violation) is `if check_rate_limit(principal) is Err(e) { return Err(e)
+  }`. `createPromise()` / `awaitPromise(approval)` are
+  `@api.create_promise()` / `@api.await_promise(approval)`. `await
+  underlying.refund(args)` (throw propagates) is `let forwarded =
+  underlying.refund(…)` + `guard forwarded is Ok(receipt) else { return
+  forwarded }` (the unhighlighted TS line becomes two unhighlighted lines).
+  `{ ...receipt, customerEmail: '[redacted]' }` is `Ok({ ..receipt,
+  customer_email: "[redacted]" })`. The handler signature takes 5 lines
+  (parameters and a wrapped return type) to stay within 68 characters.
+- `artifacts/peruser`: `http.mount('/dashboards/{user}', { auth: true,
+  exposeFiles })` is `#derive.mount(...)` (highlighted, its comment
+  above), `#derive.mount_auth(true)` (no comment or highlight, as in TS)
+  and `#derive.expose_files("/*", "/out/$1")`. `init: ({ id }) => ({ user:
+  id.user })` is the highlighted constructor `fn DashboardAgent::new(user)`
+  with its comment above. `const name = crypto.randomUUID()` is `let name
+  = @api.generate_idempotency_key_string()` (no comment, as in TS); the
+  file is `/out/<name>.html` and the result
+  `/dashboards/<user>/<name>.html`. The write wraps over two lines.
+- `artifacts/routers`: `defineHttpRouter('ExportsRouter').mount('/exports')
+  .implementRaw(...)` is `#derive.http_router` + `#derive.mount` + struct +
+  `fn new()` + `#derive.http_handler pub async fn serve`. The regex match
+  (see the lexmatch gap) is one `guard`: highlighted lines are the method
+  check (`if (request.method !== 'GET' …)`), the path pattern
+  (`request.path.match(path)`) and the 404 `return`; the split/length lines
+  stand for the unhighlighted regex line. `empty()` and `header()` are
+  off-screen helpers, as in the TS prelude. `Analyst.client.get({ chat })
+  .exportCsv({ id })` is `AnalystAgentClient::get(chat.to_string())
+  .export_csv(id.to_string())` (highlight on the first line, as TS).
+- `artifacts/signin`: `{ auth: true }` is `#derive.mount_auth(true)`
+  (highlighted, comment above); `caller: s.principal()` is the highlighted
+  `caller : @common.Principal` parameter with its comment above. `if
+  (caller.tag !== 'oidc') throw` is `guard caller is Oidc(oidc) else {
+  fail("sign-in required") }`; `const { issuer, sub } = caller` is the
+  highlighted `let { issuer, sub, .. } = oidc`.
 - `agents/stream`: the TS comment above `returns:` sits directly above the
   `) -> @schema.AgentStream[String]` line.
 - Every `mkdirSync('/dir', { recursive: true })` is
@@ -519,7 +662,8 @@ quarter with the harness helper `is_quarter` for this reason.
   user). The `@llm` model calls raise by design and the bash stub aborts. Webhook suspension, durable
   sleep, scheduled/cancelled calls, reflection results, permission-card
   derivation/installation/revocation, secret reveal, file exposure, auth, durable streams, read-only caching, MCP description
-  exposure and imported MCP tool calls were not observed on a Golem server.
+  exposure, imported MCP tool calls, middleware interception, promise
+  suspension and router responses were not observed on a Golem server.
 - The MCP tool client is a hand-written stand-in (the generator needs
   `golem build` against a live MCP server); its method signature follows
   the generator source and its MoonBit compile test, but was not produced
@@ -533,3 +677,7 @@ quarter with the harness helper `is_quarter` for this reason.
 - Compiler warnings (unused fields such as `ticket`/`project`, unused
   `self`, structs never constructed for tool structs, and warnings in
   generated code) are expected and do not fail the build.
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `let name = @api.generate_idempotency_key_string()`; `harness/artifacts_overview/moon.pkg.in` imports `golemcloud/golem_sdk/api`. The HTML write is wrapped onto two highlighted lines to fit 68 columns. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

@@ -3,8 +3,7 @@ const Png = s.unstructuredBinary({ mimeTypes: ['image/png'] })
 export const PrivateCharts = defineAgent({
   name: 'PrivateChartsAgent',
   id: { team: z.string() },
-  // Golem checks sign-in before the HTTP call reaches the agent:
-  http: http.mount('/private/{team}', { auth: true }), //@
+  http: http.mount('/private/{team}', { auth: true }),
   methods: {
     ask: method({
       input: { question: z.string(), caller: s.principal() },
@@ -24,6 +23,7 @@ export const PrivateCharts = defineAgent({
     },
     open({ n, caller }) {
       const made = this.charts[n - 1]
+      // anyone else, even signed in, gets a 404:
       if (made?.askedBy !== userKey(caller)) return undefined //@
       return { tag: 'inline', val: made.png, mimeType: 'image/png' }
     },

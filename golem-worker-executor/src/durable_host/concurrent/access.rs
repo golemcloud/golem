@@ -35,7 +35,7 @@ where
 
 type TerminalEffectHandoff<R> = (
     oneshot::Sender<(R, crate::services::oplog::OplogAddReceipt)>,
-    tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+    OrderedAppend,
 );
 
 pub(in crate::durable_host) fn prepare_access_terminal_effect<R, C, F, E, EF>(
@@ -82,14 +82,7 @@ where
             }
         })
         .map_err(WorkerExecutorError::runtime)?;
-    let receipt = tokio::spawn(async move {
-        completed.await.map_err(|error| {
-            WorkerExecutorError::runtime(format!(
-                "durable effect coordinator stopped without a receipt: {error}"
-            ))
-        })?
-    });
-    Ok((accept, receipt))
+    Ok((accept, OrderedAppend::Receipt(completed)))
 }
 
 enum AccessTerminalGuardState {
@@ -99,7 +92,7 @@ enum AccessTerminalGuardState {
     CleanupAfterTerminal {
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
-        terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+        terminal: Option<OrderedAppend>,
         trap_context: DurableCallTrapContext,
         /// Moved out of the armed [`DroppedCall`] when the terminal is handed to an owned task,
         /// so the call stays counted as in flight while the append is still pending.
@@ -163,7 +156,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
     /// persisted completion); cancellation terminals pass `None`.
     pub(super) fn cleanup_after_terminal(
         &mut self,
-        terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+        terminal: impl Into<OrderedAppend>,
         discard_marker: Option<CompletionMarkerRecord>,
     ) {
         let call = match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
@@ -173,7 +166,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         self.state = AccessTerminalGuardState::CleanupAfterTerminal {
             function_type: call.function_type().clone(),
             durable_begin_index: call.begin_index(),
-            terminal: Some(terminal),
+            terminal: Some(terminal.into()),
             trap_context: call.trap_context(),
             // The permit moves with the state transition: the call remains counted as in flight
             // while the owned terminal append is pending.
@@ -235,7 +228,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
                     // Normally already joined (`wait_terminal`) by the time the guard is
                     // converted; chained defensively so a still-pending terminal append can never
                     // be overtaken by a marker append.
-                    pending_append: terminal.map(OrderedAppend::Task),
+                    pending_append: terminal,
                     teardown: self.teardown.clone(),
                 })),
             },
@@ -280,12 +273,12 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 // runtime teardown is not a guest discard: the `End` stays markerless so replay
                 // delivers it (see [`TeardownProbe`]).
                 let terminal = match discard_marker {
-                    Some(marker) if !self.teardown.is_tearing_down() => {
-                        Some(task_for_marker_receipt(marker.record(
-                            CompletionMarkerKind::Discarded,
-                            terminal.map(OrderedAppend::Task),
-                        )))
-                    }
+                    Some(marker) if !self.teardown.is_tearing_down() => Some(
+                        task_for_marker_receipt(
+                            marker.record(CompletionMarkerKind::Discarded, terminal),
+                        )
+                        .into(),
+                    ),
                     Some(marker) => {
                         tracing::debug!(
                             start_idx = %marker.start_idx,

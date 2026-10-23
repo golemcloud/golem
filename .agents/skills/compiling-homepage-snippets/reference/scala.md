@@ -9,7 +9,14 @@ after the chapter reorganization: durable streaming and read-only methods
 moved to Agents, "Your language" dropped, new TypeScript designs ported,
 and `tools/publish` became a code snippet; re-verified again Oct 22 2026
 after the Artifacts chapter redesign: artifacts are made on request,
-`artifacts/routers` was replaced by `artifacts/files`) on macOS arm64.
+`artifacts/routers` was replaced by `artifacts/files`; re-verified again
+Oct 22 2026 after the 7 + 7 + 7 reorganization: new `tools/middleware`,
+`artifacts/peruser`, `artifacts/routers` (a raw router again) and
+`artifacts/signin`, small edits to agents/overview, tools/publish,
+artifacts/overview, artifacts/routes and artifacts/login; re-verified
+again Oct 22 2026 after artifacts/peruser gained `auth = true` and UUID
+file names: `check.sh` ALL_OK, `neg.sh artifacts-peruser` NEG_OK) on
+macOS arm64.
 
 ## Display files (the only inputs; read in place, never copied by hand)
 
@@ -28,18 +35,23 @@ after the Artifacts chapter redesign: artifacts are made on request,
 | tools | requests | `website/snippets/tools/requests/scala/StripeRefund.scala` |
 | tools | permissions | `website/snippets/tools/permissions/scala/OrdersAccess.scala` |
 | tools | secrets | `website/snippets/tools/secrets/scala/SupportAgent.scala` |
+| tools | middleware | `website/snippets/tools/middleware/scala/RefundPolicy.scala` |
 | tools | publish | `website/snippets/tools/publish/scala/AccountAgent.scala` |
 | artifacts | overview | `website/snippets/artifacts/overview/scala/AnalystAgent.scala` |
 | artifacts | routes | `website/snippets/artifacts/routes/scala/AppAgent.scala` |
+| artifacts | peruser | `website/snippets/artifacts/peruser/scala/DashboardAgent.scala` |
 | artifacts | files | `website/snippets/artifacts/files/scala/ChartAgent.scala` |
+| artifacts | routers | `website/snippets/artifacts/routers/scala/ExportsRouter.scala` |
+| artifacts | signin | `website/snippets/artifacts/signin/scala/BillingAgent.scala` |
 | artifacts | login | `website/snippets/artifacts/login/scala/PrivateChartsAgent.scala` |
 
 There is deliberately no `agents/sqlite/scala` (Scala agents have no embedded
 SQLite; the page shows the chapter's `missing.sqlite` note), so the Scala set
-is the 17 TypeScript features minus sqlite: 16 files. The Scala names match
+is the 21 TypeScript features minus sqlite: 20 files. The Scala names match
 the TypeScript agent/tool names (`TriageAgent`, `StockAgent`, tool
 `summarize` + `DigestAgent`, `AccountAgent`, `AnalystAgent`, tool
-`present` + `AppAgent`, `ChartAgent`, `PrivateChartsAgent`, ...).
+`present` + `AppAgent`, `ChartAgent`, `PrivateChartsAgent`, middleware
+`refund-policy`, `DashboardAgent`, `ExportsRouter`, `BillingAgent`, ...).
 
 ### Highlight markers
 
@@ -138,7 +150,7 @@ was clean.
    prints each file's line count, longest line and marker count. A marker
    left anywhere but at the end of a line fails the own-line comment check.
 2. Checks the feature set equals the TypeScript originals'
-   (`*/*/ts/*.ts`, 17 features) minus `agents/sqlite`, with exactly one
+   (`*/*/ts/*.ts`, 21 features) minus `agents/sqlite`, with exactly one
    Scala file per feature and no `agents/sqlite/scala`. There is no YAML
    display file any more (`tools/publish` is code).
 3. Writes `src/main/scala/check/<chapter>/<feature>/<DisplayName>.scala` =
@@ -190,7 +202,17 @@ and `MailerAgent` (agents/waits), and the refund tool `RefundTool` that
 tools/secrets calls (`harness/extra/tools-secrets.scala`; `Refund` and
 `stripeRefund` are in that snippet's prelude, since the refund tool is no
 longer a display snippet). Both tools/overview and tools/secrets are
-self-contained packages.
+self-contained packages. tools/middleware wraps an identical copy of that
+refund tool (`harness/extra/tools-middleware.scala`, its own package):
+`refund(charge, amount, apiKey: GuestSecretHandle, caller: Principal)`
+returning `Refund(id, status, customerEmail)` or `RefundError.Http`. The
+`caller: Principal` parameter is injected by Golem and is not part of the
+tool's input or of the generated client (`RefundToolClient().refund(charge,
+amount, handle)` is unchanged); it is how a Scala typed middleware sees the
+caller principal (see "Departures"). artifacts/routers calls the user's
+`AnalystAgent` (`harness/extra/artifacts-routers.scala`, `class Id(val chat:
+String)`, `def exportCsv(id: String): AgentStream[Array[Byte]]`), from which
+the codegen generates `AnalystAgentClient`.
 
 Prelude helpers shown without definition, as in the TS preludes: `classify`
 (returns the label name, parsed with `Label.valueOf` as TS uses
@@ -204,7 +226,14 @@ any other quarter before it reaches a path), `chartPng`, `pageFor`
 `BadName` (the tool's usage error enum), `Row`, `querySales` (artifacts
 routes); `SaleRow`, `querySales`, `drawChart` (artifacts files); `Chart`,
 `answerWithChart`, `userKey` (OIDC issuer + subject as a JSON array, as in
-TS; throws for non-OIDC callers) (artifacts login); `Headings` (custom);
+TS; throws for non-OIDC callers) (artifacts login); `Refused` (an
+exception carrying a `ToolInvokeError[Nothing]`), `askFinance`,
+`approved` (decodes the promise payload's JSON `approved` flag),
+`checkRateLimit` (fails with `Refused(ConstraintViolation(...))` over the
+caller's limit), `audit` (tools middleware); `dashboardFor` (artifacts
+peruser); `empty()` (an empty `AgentStream[Array[Byte]]`) and the
+package-level `AgentStream` alias (artifacts routers); `Invoice`,
+`invoicesOf`, `pageFor` (artifacts signin); `Headings` (custom);
 `summarizeText` and `Urls` (tools overview); `AgentId` =
 `HostApi.AgentIdLiteral` (permissions); `orThrow` (secrets, custom, team,
 permissions, tools overview, publish).
@@ -247,6 +276,65 @@ parameter, `Secret[String].handle()` for an owned handle without revealing),
 and `golem.host.PermissionsApi.{PatternGrant, Bounds,
 deriveFromWallet, PersistentCard.derive/install/revoke, Lifespan.iso8601,
 Holder.Agent}`.
+
+New in the 7 + 7 + 7 round:
+
+- **Typed tool middleware** (tools/middleware):
+  `@toolMiddleware(name = "refund-policy")`
+  (`sdks/scala/model/src/main/scala/golem/runtime/annotations/ToolAnnotations.scala:39`)
+  on a no-argument class extending the codegen-generated
+  `RefundToolMiddleware` (`sdks/scala/codegen/src/main/scala/golem/codegen/rpc/ToolMiddlewareCodegen.scala:164-170`;
+  docs `docs/src/content/v1.6/how-to-guides/scala/golem-tools-middleware-scala.mdx:12-18`).
+  The handler is `refund(underlying: RefundToolUnderlying, charge, amount,
+  apiKey, caller: Principal): Future[Either[ToolInvokeError[RefundError],
+  Refund]]`; the principal is decoded from the invocation context
+  (`sdks/scala/model/src/main/scala/golem/tool/ToolMiddleware.scala:305`)
+  and dropped from the underlying's parameters
+  (`sdks/scala/codegen/src/main/scala/golem/codegen/rpc/ToolProjectionIR.scala:547`).
+  Forwarding is `underlying.refund(charge, amount, apiKey).toMiddlewareResult`
+  (`ToolMiddleware.scala:148`); rejection is
+  `ToolInvokeError.ConstraintViolation(message)`
+  (`sdks/scala/model/src/main/scala/golem/tool/ToolInvoke.scala:53`).
+  Auto-registration emits
+  `ToolMiddlewareImplementation.registerTransparent[RefundTool,
+  RefundToolUnderlying, RefundToolMiddleware, RefundPolicy]`
+  (`sdks/scala/core/js/src/main/scala-3/golem/runtime/autowire/ToolMiddlewareImplementation.scala:36`).
+- **Promises** (tools/middleware): `HostApi.createPromise(): PromiseId` and
+  `HostApi.awaitPromise(id): Future[Array[Byte]]`
+  (`sdks/scala/core/js/src/main/scala/golem/HostApi.scala:299,315`; docs
+  `docs/src/content/v1.6/develop/promises.mdx:54-60`).
+- **Raw HTTP router** (artifacts/routers): `@httpRouter(typeName, mount)`
+  and `@httpHandler`
+  (`sdks/scala/model/src/main/scala/golem/runtime/annotations/HttpRouter.scala:11,21`)
+  on a trait extending `BaseAgent`, implemented by an
+  `@agentImplementation` class;
+  `golem.runtime.http.{HttpRequest, HttpResponse, HttpHeader.ascii}`
+  (`sdks/scala/model/src/main/scala/golem/runtime/http/HttpExchange.scala:14,40,52`;
+  body `AgentStream[Array[Byte]]`); docs
+  `docs/src/content/v1.6/invoke/making-custom-apis/http-routers.mdx:118-133`
+  (router), `:297-304` (`HttpHeader.ascii`), `:736-741` (calling an
+  agent's generated client from a router and mapping its result).
+  The router-to-agent call is the codegen-generated
+  `AnalystAgentClient.get(chat).exportCsv(id)` returning
+  `Future[AgentStream[Array[Byte]]]`, passed through as the response body.
+- **Per-user agent from the URL** (artifacts/peruser): `mount =
+  "/dashboards/{user}"` bound to `class Id(val user: String)` with
+  `auth = true` and `exposeFiles = Array(("/*", "/out/$1"))`, as in
+  artifacts/overview. Each dashboard's file name is a UUID from the
+  host's durable generator `HostApi.generateIdempotencyKey(): Uuid`
+  (`sdks/scala/core/js/src/main/scala/golem/HostApi.scala:176`; docs
+  `docs/src/content/v1.6/develop/additional.mdx:40-44`), rendered with
+  `Uuid.toStandardString`
+  (`sdks/scala/model/src/main/scala/golem/Uuid.scala:41`), as the SDK's
+  own `DurableStreams.newProducer` does
+  (`sdks/scala/core/js/src/main/scala/golem/streams/DurableStreams.scala:66`).
+  It is the counterpart of the TS `crypto.randomUUID()`; being a host
+  call, it is recorded in the oplog and replays to the same name.
+  `java.util.UUID.randomUUID()` is not used: on Scala.js it needs a
+  `java.security.SecureRandom` the harness does not provide.
+- **Sign-in** (artifacts/signin): `auth = true` and `Principal` injection,
+  matched on `Principal.Oidc` (`issuer`, `sub`;
+  `sdks/scala/model/src/main/scala/golem/Principal.scala:24-35`).
 
 ## Scala-specific workarounds
 
@@ -316,20 +404,73 @@ Holder.Agent}`.
   drawChart(rows)`; the return type marker sits on `def chart(...):
   Future[Png]` (after the two annotations), as the TS marks `returns: Png`.
   `Png` is a type alias like the TS `const Png`.
-- artifacts/login: the TS auth marker covers `http.mount(..., { auth: true
-  })`; Scala puts `mount = ..., auth = true` on one marked line. The
+- artifacts/routes: the newly marked TS `methods: { sales: ... }` line is
+  the marked `def sales(...) = querySales(region)` in `AppAgentImpl`.
+- artifacts/login: the mount is unmarked and uncommented, as in TS, and
+  `@agentDefinition(mount = ..., auth = true)` fits one line. The
   charts are a `private val ArrayBuffer[Chart]`, and the TS
   `if (made?.askedBy !== userKey(caller)) return undefined` is the marked
   `.filter(_.askedBy == userKey(caller))` on `charts.lift(n - 1)` (no
-  chart, or another user's chart, gives `None` → 404).
+  chart, or another user's chart, gives `None` → 404). The TS comment
+  "anyone else, even signed in, gets a 404:" sits above `charts.lift(n -
+  1)`, the first line of that expression, one line above the marked
+  `.filter`.
+- agents/overview: the `class Id` line is no longer marked (TS `id:` line
+  unmarked).
+- tools/middleware: TS throws `ToolInvokeError`s; Scala handlers return
+  `Future[Either[ToolInvokeError[E], A]]`, so refusals are failed Futures
+  carrying the error (`refuse(why)` = `Future.failed(Refused(
+  ConstraintViolation(why)))`, shown like the TS `refuse`) and one final
+  `done.recover { case Refused(error) => Left(error) }` turns them into
+  the handler's `Left`. `checkRateLimit` fails the same way. The sequence
+  is a `for` over Futures; the TS `if (amount > 10_000) { ... }` is an
+  `if ... then Future.unit else` generator holding the nested promise
+  `for`. TS's `await underlying.refund(args)` throws on a tool error; Scala
+  keeps the underlying's `Either` (`forwarded`), audits only a `Right`
+  (`forwarded.fold(_ => Future.unit, r => audit(...))`) and redacts with
+  `forwarded.map(_.copy(customerEmail = "[redacted]"))`, so the tool's own
+  errors pass through unchanged. TS reads `principal` from the middleware
+  context; the Scala typed middleware receives it only as a parameter the
+  tool declares (`caller: Principal`, injected by Golem, not part of the
+  tool's input), so the harness refund tool declares it (in both
+  tools/middleware and tools/secrets, so the two stay identical).
+  The `@toolMiddleware` line is the counterpart of the marked TS
+  `refund.middleware({` line.
+- artifacts/peruser: Scala agents have no `init`; the marked init
+  counterpart is the constructor line `final class
+  DashboardAgentImpl(user: String) extends DashboardAgent:` (the id is
+  the constructor parameter; the agent keeps no other state). The TS
+  init comment sits above `@agentImplementation()`. TS's one-line
+  `const name = crypto.randomUUID()` is two lines (`val key =
+  HostApi.generateIdempotencyKey()`, `val name =
+  Uuid.toStandardString(key)`) to fit 68 columns; `auth = true` is its
+  own unmarked line, as in TS. The write happens in `.map` on
+  `dashboardFor(...)` after `mkdirSync`.
+- artifacts/routers: TS matches the regex, then returns 404 first; Scala
+  pattern-matches `(request.method, request.path)` (marked, the
+  counterpart of `request.path.match(path)`) with `case ("GET",
+  Csv(chat, id))` first and the 404 as `case _ =>` (marked, the
+  counterpart of the TS `if`) last. TS's prelude `header(...)` helper is
+  the SDK's own `HttpHeader.ascii`; TS `empty()` is a prelude `empty()`.
+  The marked `body: csv` is the marked `), csv)` closing the response.
+- artifacts/signin: the TS early `throw` for non-OIDC callers is the last
+  match arm `case _ => Future.failed(Exception("sign-in required"))`; the
+  marked TS destructuring `const { issuer, sub } = caller` is the marked
+  `val (issuer, sub) = (user.issuer, user.sub)` inside `case user:
+  Principal.Oidc =>`. The TS input marker (`caller: s.principal()`) is on
+  the `def ask(question: String, caller: Principal)` signature; the
+  comment above it sits between `@endpoint(...)` and `def`. TS
+  `pageFor` returns a promise, so the page is built in `.flatMap`.
 
-## Artifacts: no SDK gap, no shim
+## Artifacts and middleware: no SDK gap, no shim
 
-All four artifacts snippets compile against the published SDK as written:
-the live-file mapping, query-variable endpoints, `@description` with an
-endpoint, `UnstructuredBinary["image/png"]` (plain, and in `Option`),
-`auth = true` with `Principal` injection, and a `requiresFilesystem` tool
-with a usage error enum. The only non-Golem pieces are the `openai`
+All seven artifacts snippets and tools/middleware compile against the
+published SDK as written: the live-file mapping, query-variable endpoints,
+`@description` with an endpoint, `UnstructuredBinary["image/png"]` (plain,
+and in `Option`), `auth = true` with `Principal` injection, a
+`requiresFilesystem` tool with a usage error enum, a raw `@httpRouter`
+calling an agent's generated client that returns a byte stream, and a typed
+`@toolMiddleware` using host promises. The only non-Golem pieces are the `openai`
 facade (real npm client) and the `node:fs` facade.
 
 ## Secrets: no SDK bug of the TypeScript kind (read source and compiled)
@@ -355,7 +496,7 @@ mutation per snippet (an exact-text replacement that must match), runs
 with a compiler error located in that snippet's spliced file. It then reruns
 `check.sh` on the real files to restore `src/`. About 30 s per case.
 
-Result of the recorded run (Oct 22 2026): all 16 fail as expected, `NEG_OK`; the
+Result of the recorded run (Oct 22 2026, 7 + 7 + 7 round): all 20 fail as expected, `NEG_OK`; the
 restore run ends `ALL_OK`. "Located in" is where the compiler reports it:
 Golem macro validations fire where the codegen expands the macro (the
 generated auto-registration or RPC client for that snippet's package), which
@@ -379,6 +520,10 @@ generated auto-registration or RPC client for that snippet's package), which
 | tools/publish | `call.collect()` → `call.drain()` | E008 not a member of `golem.tool.ToolInvocation` (spliced file) |
 | tools/requests | `HttpMethod.POST` → `HttpMethod.SEND` | E008 not a member of `org.scalajs.dom.HttpMethod` (spliced file); this snippet uses no Golem API |
 | tools/secrets | `config.value.stripeKey.handle()` → `config.value.stripeKey.get` | E007: found `String`, required `golem.schema.GuestSecretHandle` (spliced file) |
+| tools/middleware | `underlying.refund(charge, amount, apiKey)` → `underlying.refund(charge, amount, apiKey, caller)` | too many arguments for generated `RefundToolUnderlying.refund(charge, amount, apiKey)`: the principal is injected, never forwarded (spliced file) |
+| artifacts/peruser | `mount = "/dashboards/{user}"` → `"/dashboards/{name}"` | Golem macro: mount path variable `name` is not defined in the agent constructor (generated auto-registration) |
+| artifacts/routers | `HttpHeader.ascii("content-type", "text/csv")` → `HttpHeader("content-type", "text/csv")` | E007: found `String`, required `Array[Byte]` (header values are bytes) (spliced file) |
+| artifacts/signin | `case user: Principal.Oidc =>` → `case user: Principal.GolemUser =>` | E008: `issuer` / `sub` are not members of `golem.Principal.GolemUser` (spliced file) |
 
 Two candidate controls compiled and were dropped: removing `derives Schema`
 from `Draft` (the Golem macro derives the schema itself) and removing
@@ -411,8 +556,12 @@ from `Draft` (the Golem macro derives the schema itself) and removing
 
 ```shell
 .amp/in/snippets/scala/check.sh   # ends with ALL_OK (about 20–30 s warm)
-.amp/in/snippets/scala/neg.sh     # 16 controls, ends with NEG_OK (about 8 min)
+.amp/in/snippets/scala/neg.sh     # 20 controls, ends with NEG_OK (about 10 min)
 ```
 
 Re-publish the SDK first (see above) if `sdks/scala` changed since the last
 local publication.
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `val key = HostApi.generateIdempotencyKey()` and `val name = Uuid.toStandardString(key)`, as in artifacts/peruser (imports in `harness/pre/artifacts-overview.scala`). To stay within 31 lines, `name = "chart"` moves onto the `FunctionTool(` line, as Rust does with `ToolDefinition`. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

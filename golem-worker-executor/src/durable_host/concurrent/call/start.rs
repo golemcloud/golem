@@ -329,7 +329,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         } else {
             None
         };
-        if capture.is_none() && prepared.is_live && !prepared.unpersisted {
+        let synchronized_at_admission =
+            capture.is_none() && prepared.is_live && !prepared.unpersisted;
+        if synchronized_at_admission {
             let _boundary_guard =
                 lock_synchronized_card_event_boundary_access(store, get_ctx).await?;
         }
@@ -646,15 +648,42 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         get_ctx(access.data_mut()).tail_work_tracker().activity()
                     })
                 });
-                let (owner, worker, inputs) = store.with(|mut access| {
+                let (owner, worker, inputs, adopted) = store.with(|mut access| {
                     let ctx = get_ctx(access.data_mut());
                     (
                         ctx.state.owner_wallet.clone(),
                         ctx.public_state.worker().clone(),
                         ctx.authority_scope_inputs(),
+                        // The authority this call synchronized at admission. The boundary check
+                        // below accepts it only if nothing was published since; otherwise the
+                        // owner synchronizes again.
+                        synchronized_at_admission.then(|| {
+                            (
+                                ctx.state.processed_authority_generation,
+                                ctx.state.authority_wallet.clone(),
+                            )
+                        }),
                     )
                 });
-                let work = owner.synchronize(worker.clone(), inputs.clone(), false, true);
+                let synchronize = {
+                    let (owner, worker, inputs) = (owner.clone(), worker.clone(), inputs.clone());
+                    move || {
+                        let work = owner.synchronize(worker.clone(), inputs.clone(), false, true);
+                        async move {
+                            let observation = work
+                                .await?
+                                .expect("unrestricted synchronization returns a snapshot");
+                            Ok::<_, WorkerExecutorError>((
+                                observation.generation,
+                                observation.wallet,
+                            ))
+                        }
+                    }
+                };
+                let first_attempt = match adopted {
+                    Some(adopted) => Ok(adopted),
+                    None => Err(synchronize()),
+                };
                 let oplog = prepared.oplog.clone();
                 let tasks = worker.tasks.clone();
                 let (marker, teardown, initiation_context) = store.with(|mut access| {
@@ -677,33 +706,28 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let (settled, settlement) = tokio::sync::oneshot::channel();
                 let initiation = tasks.spawn_metadata(async move {
                     let result = async {
-                        let mut observation = work
-                            .await?
-                            .expect("unrestricted synchronization returns a snapshot");
+                        let (mut generation, mut wallet) = match first_attempt {
+                            Ok(adopted) => adopted,
+                            Err(work) => work.await?,
+                        };
                         let boundary = loop {
                             let boundary = owner.lock_boundary().await?;
                             if let Some(application) = owner.pending_replay_finalization() {
                                 drop(boundary);
                                 application.result.clone().await?;
-                                observation = owner
-                                    .synchronize(worker.clone(), inputs.clone(), false, true)
-                                    .await?
-                                    .expect("unrestricted synchronization returns a snapshot");
+                                (generation, wallet) = synchronize().await?;
                                 continue;
                             }
-                            if observation.generation
+                            if generation
                                 == worker
                                     .published_authority_generation()
                                     .load(std::sync::atomic::Ordering::Acquire)
-                                && Arc::ptr_eq(&observation.wallet, &owner.snapshot())
+                                && Arc::ptr_eq(&wallet, &owner.snapshot())
                             {
                                 break boundary;
                             }
                             drop(boundary);
-                            observation = owner
-                                .synchronize(worker.clone(), inputs.clone(), false, true)
-                                .await?
-                                .expect("unrestricted synchronization returns a snapshot");
+                            (generation, wallet) = synchronize().await?;
                         };
                         let result = oplog
                             .add_start_with_indexed_reserved_payload(

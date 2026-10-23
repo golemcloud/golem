@@ -49,7 +49,6 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-save-if: 'true'
-          install-protoc: 'true'
       # Test the build tooling (dev-tools/) first so a broken tool fails fast
       - name: Test build tools (dev-tools)
         run: cargo make --profile ci dev-tools-tests
@@ -103,8 +102,6 @@ jobs:
         with:
           fetch-depth: 1
       - uses: ./.github/actions/setup-rust
-        with:
-          install-protoc: 'true'
 
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
@@ -123,7 +120,6 @@ jobs:
         with:
           use-cache: 'false'
           install-cargo-binstall: 'true'
-          install-protoc: 'true'
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
@@ -175,7 +171,6 @@ jobs:
         with:
           use-cache: 'false'
           install-cargo-binstall: 'true'
-          install-protoc: 'true'
       - uses: ./.github/actions/restore-binaries
         with:
           disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
@@ -466,7 +461,6 @@ jobs:
         with:
           cache-shared-key: 'cli-dev-release-ci'
           cache-save-if: 'true'
-          install-protoc: 'true'
       - name: Build CLI test binaries
         env:
           QUIET: true
@@ -1827,7 +1821,6 @@ jobs:
         with:
           cache-shared-key: 'builtin-artifacts-release-tests'
           cache-save-if: 'true'
-          install-protoc: 'true'
       - name: Test download-and-cache release defaults and reject release embedding
         run: cargo make --profile ci builtin-artifacts-release-tests
 

@@ -15,7 +15,6 @@ impl Present for PresentImpl {
     Ok(format!("{name}.html"))
   }
 }
-
 #[agent_definition(mount = "/apps/{chat}",
   filesystem_bindings = [("/*", "/out/$1")])]
 pub trait AppAgent {
@@ -27,5 +26,6 @@ pub trait AppAgent {
 #[agent_implementation]
 impl AppAgent for AppAgentImpl {
   fn new(_chat: String) -> Self { Self }
-  fn sales(&self, region: String) -> Rows { query_sales(&region) }
+  // each click runs this as durable code in the agent's own VM:
+  fn sales(&self, region: String) -> Rows { query_sales(&region) } //@
 }

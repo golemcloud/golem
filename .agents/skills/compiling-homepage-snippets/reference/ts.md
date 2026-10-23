@@ -38,10 +38,14 @@ the rules on a scratch copy.
 | `tools/requests/ts/stripe-refund.ts` | `prelude/tools-requests.ts` |
 | `tools/permissions/ts/orders-access.ts` | `prelude/tools-permissions.ts` |
 | `tools/secrets/ts/support-agent.ts` | `prelude/tools-secrets.ts` |
+| `tools/middleware/ts/refund-policy.ts` | `prelude/tools-middleware.ts` |
 | `tools/publish/ts/account-agent.ts` | `prelude/tools-publish.ts` |
 | `artifacts/overview/ts/analyst-agent.ts` | `prelude/artifacts-overview.ts` |
 | `artifacts/routes/ts/app-tool.ts` | `prelude/artifacts-routes.ts` |
+| `artifacts/peruser/ts/dashboard-agent.ts` | `prelude/artifacts-peruser.ts` |
 | `artifacts/files/ts/chart-agent.ts` | `prelude/artifacts-files.ts` |
+| `artifacts/routers/ts/export-router.ts` | `prelude/artifacts-routers.ts` |
+| `artifacts/signin/ts/billing-agent.ts` | `prelude/artifacts-signin.ts` |
 | `artifacts/login/ts/private-chart-agent.ts` | `prelude/artifacts-login.ts` |
 
 The prelude for `<chapter>/<feature>` is always `prelude/<chapter>-<feature>.ts`;
@@ -100,7 +104,7 @@ are copied unchanged from it.
 
 ## What check.sh does
 
-1. Requires a `ts/` directory for each of the 17 features above, rejects
+1. Requires a `ts/` directory for each of the 21 features above, rejects
    unexpected feature directories, and requires exactly one `.ts` file in each.
 2. Strips highlight markers (`sed -E 's,[ ]+//@$,,'`) into
    `gen/strip/`, printing `hl=<n>` (marked lines) per file, then applies the
@@ -171,6 +175,13 @@ are copied unchanged from it.
   `toolDefinition`, `node:fs`; the `Name` slug schema, `Row`, `querySales`.
 - `artifacts-files`: zod, `defineAgent`, `http`, `method`, `s`;
   `querySales(team, quarter)` and `drawChart`.
+- `tools-middleware`: the `refund` tool (same shape as `tools-secrets`, plus
+  `customerEmail` in `Refund`), `ToolInvokeError`, `createPromise`/`awaitPromise`;
+  application helpers `askFinance`, `approved`, `checkRateLimit(principal)`, `audit`.
+- `artifacts-peruser`: zod, `defineAgent`, `http`, `method`, `node:fs`; `dashboardFor`.
+- `artifacts-routers`: `defineHttpRouter`, `AgentStream`, `s`; the `AnalystAgent`
+  whose `exportCsv({ id })` streams an export as CSV; `header` and `empty` helpers.
+- `artifacts-signin`: zod, `defineAgent`, `http`, `method`, `s`; `invoicesOf`, `pageFor`.
 - `artifacts-login`: zod, `defineAgent`, `http`, `method`, `s`, `Principal`;
   the `Chart` type, `answerWithChart`, and `userKey` (OIDC issuer + sub).
 - `agents-stream`: `AgentStream`, `s`; OpenAI client.
@@ -232,6 +243,10 @@ file, replaces it in memory, writes prelude + mutant to `gen/neg-<f>.ts`
 | artifacts-routes | tool `html` positional `z.string()` → `z.number()` | TS2345 |
 | artifacts-files | inline return `tag: 'inline'` → `'raw'` | TS2322 |
 | artifacts-login | `made?.askedBy` → `made?.asked` | TS2551 |
+| tools-middleware | `checkRateLimit(principal)` → `(args.charge)` | TS2345 |
+| artifacts-peruser | `id.user` → `id.users` | TS2551 |
+| artifacts-routers | `exportCsv({ id })` → `({ n })` | TS2353 |
+| artifacts-signin | `{ issuer, sub }` → `{ issuer, subject }` | TS2339 |
 
 `tools/requests` contains no Golem API call (Golem adds the idempotency key
 itself), so its control plants the tempting wrong usage of passing the key
@@ -252,5 +267,9 @@ its row so the text still occurs exactly once.
   exposed and live files, the board page's relative POST, principal
   checks, read-only caching, and whether `node:sqlite`, `openai` and the
   `ai` SDK work inside the component.
-- The 17-feature list in `check.sh` is hard-coded; add a feature there and a
+- The 21-feature list in `check.sh` is hard-coded; add a feature there and a
   prelude plus a `neg-cases.tsv` row when the page gains one.
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `const name = crypto.randomUUID()`. To stay within 31 lines, the `methods` block of the agent definition is folded onto two lines, as in the Effect snippet. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

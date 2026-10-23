@@ -9,7 +9,7 @@ struct TriageAgent {
 }
 
 // each inbox gets its own agent, in its own WebAssembly VM:
-fn TriageAgent::new(inbox : String) -> TriageAgent { //@
+fn TriageAgent::new(inbox : String) -> TriageAgent {
   { inbox, }
 }
 
@@ -20,7 +20,7 @@ pub async fn TriageAgent::triage(
   let labels : Map[String, Label] = {}
   for email in emails {
     let label = classify(email.body)
-    // after a crash or restart, it resumes inside this loop:
+    // it resumes here after a crash, with memory and files:
     apply_label(self.inbox, email.id, label) //@
     labels[email.id] = label
   }
