@@ -209,8 +209,7 @@ clean_current_app() {
   esac
 
   local clean_failed=false
-  # The Cargo target resolved above is the only intentional cleanup path outside the repository.
-  if ! CARGO_TARGET_DIR="$TARGET_DIR" "$GOLEM_CLI" clean; then
+  if ! "$GOLEM_CLI" clean --yes; then
     clean_failed=true
   fi
 
@@ -223,6 +222,20 @@ clean_current_app() {
     fi
   fi
 }
+
+if [ "$clean_only" = true ] && [ "$single_group" = false ]; then
+  for app_manifest in "$SCRIPT_DIR"/*/golem.yaml; do
+    [ -f "$app_manifest" ] || continue
+    pushd "$(dirname "$app_manifest")"
+    clean_current_app
+    popd
+  done
+  if [ "$clean_failures" -gt 0 ]; then
+    echo "Failed to clean ${clean_failures} test component application(s)" >&2
+    exit 1
+  fi
+  exit 0
+fi
 
 build_rust_apps() {
   local apps=("$@")
@@ -275,7 +288,7 @@ build_go_apps() {
 
     if should_clean; then
       echo "Cleaning $subdir..."
-      "$GOLEM_CLI" clean
+      clean_current_app
     fi
 
     if [ "$check_only" = true ]; then
