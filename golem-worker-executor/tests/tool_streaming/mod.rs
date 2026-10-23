@@ -22331,7 +22331,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 ReplayAdmissionStage::AfterToolOutputAccepted,
             )
         });
-        let failure_gate = storage_failure.then(|| {
+        let mut failure_gate = storage_failure.then(|| {
             executor.gate_next_oplog_function_end(
                 &worker,
                 golem_common::model::oplog::host_functions::HostFunctionName::GolemToolOutputWrite,
@@ -22348,7 +22348,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         let synchronize = async {
             let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
-            if let Some((entered, release)) = failure_gate {
+            if let Some((entered, _)) = failure_gate.as_mut() {
                 tokio::time::timeout(Duration::from_secs(30), entered).await??;
                 executor
                     .complete_promise(
@@ -22371,10 +22371,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                         tokio::task::yield_now().await;
                     }
                 }).await??;
-                release
-                    .send(())
-                    .expect("output End receipt remains owned after guest cancellation");
-                return Ok(());
+                return Ok(None);
             }
             let accepted = if let Some(acceptance) = acceptance.as_mut() {
                 tokio::time::timeout(Duration::from_secs(30), acceptance.entered()).await?;
@@ -22528,20 +22525,24 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 }
                 regeneration.release();
             }
-            executor
-                .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: after.oplog_idx,
-                    },
-                    Vec::new(),
-                )
-                .await?;
-            Ok::<(), anyhow::Error>(())
+            Ok::<_, anyhow::Error>(Some(PromiseId {
+                agent_id: worker.clone(),
+                oplog_idx: after.oplog_idx,
+            }))
         };
-        tokio::select! {
+        let after = tokio::select! {
             result = invocation.as_mut() => panic!("invocation settled before unread checkpoint: {result:?}"),
             checkpoint = synchronize => checkpoint?,
+        };
+        // Releasing either gate can settle the invocation before the release returns.
+        // Only race invocation completion against reaching the checkpoint, not releasing it.
+        if let Some(after) = after {
+            executor.complete_promise(&after, Vec::new()).await?;
+        }
+        if let Some((_, release)) = failure_gate {
+            release
+                .send(())
+                .expect("output End receipt remains owned after guest cancellation");
         }
         let result = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut()).await?;
         if storage_failure {
