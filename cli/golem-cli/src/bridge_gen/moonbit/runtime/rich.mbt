@@ -13,6 +13,39 @@
 // limitations under the License.
 
 ///|
+/// The rich `path` kind: a path in the agent's file system.
+pub(all) struct Path {
+  value : String
+} derive(Debug, Eq, Hash)
+
+///|
+pub fn Path::new(value : String) -> Path {
+  { value, }
+}
+
+///|
+/// The rich `url` kind.
+pub(all) struct Url {
+  value : String
+} derive(Debug, Eq, Hash)
+
+///|
+pub fn Url::new(value : String) -> Url {
+  { value, }
+}
+
+///|
+/// The rich `duration` kind: a signed number of nanoseconds.
+pub(all) struct Duration {
+  nanoseconds : Int64
+} derive(Debug, Eq, Hash)
+
+///|
+pub fn Duration::new(nanoseconds : Int64) -> Duration {
+  { nanoseconds, }
+}
+
+///|
 /// The restrictions of a `text` kind, carried by the marker type of [Text].
 pub(open) trait TextSpec {
   fn type_id() -> String

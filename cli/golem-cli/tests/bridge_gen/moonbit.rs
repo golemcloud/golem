@@ -326,7 +326,7 @@ test "generated batch release traverses failing fields and unconverted items" {
       { first: endpoint(), narrow: 2, last: [endpoint()] },
     ]
     try writer.write_all(items) catch {
-      CodecError(message) => assert_eq(message, "s8 value out of range")
+      CodecError(message) => assert_eq(message, "s8 value out of range: 128")
       error => fail(repr(error))
     } noraise { _ => fail("expected encoding failure") }
     assert_eq(drops.val, 5)
@@ -3774,4 +3774,302 @@ fn guest_tool_mode_moon_checks_rich_kinds() {
     assert!(source.contains("@schema.Quantity[UnitKg]"), "{source}");
     assert!(source.contains("@schema.Text[TextSpec0]"), "{source}");
     moon_check_wasm(dir.path());
+}
+
+fn times_def() -> SchemaTypeDef {
+    def(
+        "times",
+        SchemaType::record(vec![
+            named_field("at", SchemaType::datetime()),
+            named_field("later", SchemaType::option(SchemaType::datetime())),
+            named_field("wait", SchemaType::duration()),
+            named_field(
+                "home",
+                SchemaType::path(PathSpec {
+                    direction: PathDirection::InOut,
+                    kind: PathKind::Any,
+                    allowed_mime_types: None,
+                    allowed_extensions: None,
+                }),
+            ),
+            named_field("site", SchemaType::url(UrlRestrictions::default())),
+            named_field("tiny", SchemaType::s8()),
+            named_field("small", SchemaType::s16()),
+            named_field("port", SchemaType::u16()),
+            named_field("pair", SchemaType::fixed_list(SchemaType::u32(), 2)),
+        ]),
+    )
+}
+
+/// An agent using the datetime, duration, path, url, small integer and
+/// fixed-list kinds.
+fn times_agent() -> AgentTypeSchema {
+    agent(
+        "TimesAgent",
+        "moonbit",
+        vec![field("start", SchemaType::datetime())],
+        vec![
+            method(
+                "echo",
+                vec![field("input", ref_to("times"))],
+                Some(ref_to("times")),
+            ),
+            method("now", vec![], Some(SchemaType::datetime())),
+            method(
+                "sleep",
+                vec![field("wait", SchemaType::duration())],
+                Some(SchemaType::fixed_list(SchemaType::u16(), 3)),
+            ),
+        ],
+        vec![times_def()],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn external_time_path_url_and_small_kinds_use_runtime_types() {
+    let pkg = GeneratedPackage::new(times_agent());
+    let client = pkg.client_source();
+    for expected in [
+        "at : @runtime.Datetime",
+        "later : @runtime.Datetime?",
+        "wait : @runtime.Duration",
+        "home : @runtime.Path",
+        "site : @runtime.Url",
+        "tiny : Int",
+        "small : Int16",
+        "port : UInt16",
+        "pair : FixedArray[UInt]",
+        "-> @runtime.Datetime raise {",
+        "-> FixedArray[UInt16] raise {",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
+    let graph = SchemaGraph {
+        defs: vec![times_def()],
+        root: ref_to("times"),
+    };
+    let graph_json = serde_json::to_string(&serde_json::to_string(&graph).unwrap()).unwrap();
+    std::fs::write(
+        pkg.module_dir().join("client/times_wbtest.mbt"),
+        r#"///|
+fn client_rejects(f : () -> Unit raise) -> Bool {
+  try f() catch {
+    _ => true
+  } noraise {
+    _ => false
+  }
+}
+
+///|
+fn times_codec() -> @runtime.PublicValueCodec raise {
+  @runtime.public_value_codec(__GRAPH__)
+}
+
+///|
+fn sample(tiny? : Int = -128, pair? : FixedArray[UInt] = [1U, 2U]) -> Times raise {
+  {
+    at: @runtime.Datetime::parse("2024-01-01T12:30:00.25+02:00"),
+    later: Some(@runtime.Datetime::new(-1L, 5U)),
+    wait: @runtime.Duration::new(-1_500_000_000L),
+    home: @runtime.Path::new("/data/in.txt"),
+    site: @runtime.Url::new("https://example.com/a"),
+    tiny,
+    small: Int16::from_int(-32768),
+    port: (65535).to_uint16(),
+    pair,
+  }
+}
+
+///|
+fn sample_value(
+  at~ : String,
+  port? : Int = 1,
+  pair? : Array[@runtime.SchemaValue] = [@runtime.U32Value(1U), @runtime.U32Value(2U)],
+) -> @runtime.SchemaValue {
+  @runtime.RecordValue([
+    @runtime.DatetimeValue(at),
+    @runtime.OptionValue(None),
+    @runtime.DurationValue(0L),
+    @runtime.PathValue("/x"),
+    @runtime.UrlValue("https://example.com"),
+    @runtime.S8Value(0),
+    @runtime.S16Value(0),
+    @runtime.U16Value(port),
+    @runtime.FixedListValue(pair),
+  ])
+}
+
+///|
+test "time, path, url and small kinds round trip through the public codec" {
+  let codec = times_codec()
+  let value = sample()
+  let json = codec.encode(encode_Times(value))
+  assert_eq(decode_Times(codec.decode(json)), value)
+  let text = json.stringify()
+  assert_true(text.contains("\"2024-01-01T10:30:00.25Z\""), msg=text)
+  assert_true(text.contains("\"1969-12-31T23:59:59.000000005Z\""), msg=text)
+}
+
+///|
+test "runtime datetime prints canonical UTC and parses any offset" {
+  inspect(@runtime.Datetime::new(0L, 0U), content="1970-01-01T00:00:00Z")
+  inspect(
+    @runtime.Datetime::parse("2023-12-31T23:30:00.123456789-01:30"),
+    content="2024-01-01T01:00:00.123456789Z",
+  )
+  assert_true(
+    @runtime.Datetime::parse("2024-01-01T00:00:00Z") >
+    @runtime.Datetime::parse("2023-12-31T23:59:59.999999999Z"),
+  )
+}
+
+///|
+test "runtime datetime rejects years outside 0000..9999 and bad text" {
+  for
+    text in [
+      "0000-01-01T00:00:00+00:01", "9999-12-31T23:59:59-00:01", "2024-02-30T00:00:00Z",
+      "2024-01-01T00:00:00", "2024-01-01T00:00:00.1234567890Z",
+    ] {
+    assert_true(client_rejects(() => ignore(@runtime.Datetime::parse(text))), msg=text)
+  }
+  assert_true(client_rejects(() => ignore(@runtime.Datetime::new(253402300800L, 0U))))
+  assert_true(client_rejects(() => ignore(decode_Times(sample_value(at="2024-01-01")))))
+}
+
+///|
+test "s8 range and fixed-list length are checked" {
+  let codec = times_codec()
+  ignore(codec.encode(encode_Times(sample(tiny=127))))
+  assert_true(client_rejects(() => ignore(codec.encode(encode_Times(sample(tiny=128))))))
+  assert_true(client_rejects(() => ignore(codec.encode(encode_Times(sample(tiny=-129))))))
+  assert_true(client_rejects(() => ignore(codec.encode(encode_Times(sample(pair=[1U]))))))
+  ignore(decode_Times(sample_value(at="2024-01-01T00:00:00Z")))
+  assert_true(
+    client_rejects(() => ignore(decode_Times(sample_value(at="2024-01-01T00:00:00Z", pair=[])))),
+  )
+  assert_true(
+    client_rejects(() => ignore(decode_Times(sample_value(at="2024-01-01T00:00:00Z", port=65536)))),
+  )
+}
+"#
+        .replace("__GRAPH__", &graph_json),
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+#[test]
+fn guest_time_path_url_and_small_kinds_use_sdk_types() {
+    let guest = generate_without_check(times_agent(), MoonBitBridgeMode::GuestWasmRpc);
+    let client = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    for expected in [
+        "at : @schema.Datetime",
+        "later : @schema.Datetime?",
+        "wait : @schema.Duration",
+        "home : @schema.Path",
+        "site : @schema.Url",
+        "tiny : Int",
+        "small : Int16",
+        "port : UInt16",
+        "pair : FixedArray[UInt]",
+        "-> @schema.Datetime {",
+        "-> FixedArray[UInt16] {",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
+    assert!(!client.contains("@types.Datetime"), "{client}");
+    std::fs::write(
+        guest.path().join("client/times_wbtest.mbt"),
+        r#"///|
+fn sample(tiny? : Int = 127, pair? : FixedArray[UInt] = [1U, 2U]) -> Times raise {
+  {
+    at: @schema.Datetime::parse("2024-01-01T12:30:00.25+02:00"),
+    later: None,
+    wait: @schema.Duration::new(42L),
+    home: @schema.Path::new("/data/in.txt"),
+    site: @schema.Url::new("https://example.com/a"),
+    tiny,
+    small: Int16::from_int(32767),
+    port: (0).to_uint16(),
+    pair,
+  }
+}
+
+///|
+fn sample_value(
+  at? : @types.Datetime = { seconds: 0L, nanoseconds: 0U },
+  port? : UInt = 1U,
+  pair? : Array[@model.SchemaValue] = [U32(1U), U32(2U)],
+) -> @model.SchemaValue {
+  Record([
+    Datetime(at),
+    Option(None),
+    Duration(0L),
+    Path("/x"),
+    Url("https://example.com"),
+    S8(0),
+    S16(0),
+    U16(port),
+    FixedList(pair),
+  ])
+}
+
+///|
+fn assert_rejected(f : () -> Unit raise) -> Unit raise {
+  try f() catch {
+    CodecError(_) => ()
+    error => fail("expected CodecError, got \{repr(error)}")
+  } noraise {
+    _ => fail("expected CodecError")
+  }
+}
+
+///|
+test "time, path, url and small kinds round trip through the guest codec" {
+  let value = sample()
+  let encoded = encode_Times(value)
+  assert_true(decode_Times(encoded) == value)
+  match encoded {
+    Record(fields) => {
+      assert_true(fields[0] is Datetime({ seconds: 1704105000L, nanoseconds: 250000000U }))
+      assert_true(fields[2] is Duration(42L))
+      assert_true(fields[3] is Path("/data/in.txt"))
+      assert_true(fields[6] is S16(32767))
+      assert_true(fields[8] is FixedList([U32(1U), U32(2U)]))
+    }
+    _ => fail("expected a record")
+  }
+  inspect(value.at, content="2024-01-01T10:30:00.25Z")
+}
+
+///|
+test "s8 range, fixed-list length and datetime range are checked" {
+  assert_rejected(() => ignore(encode_Times(sample(tiny=128))))
+  assert_rejected(() => ignore(encode_Times(sample(pair=[1U, 2U, 3U]))))
+  ignore(decode_Times(sample_value()))
+  assert_rejected(() => ignore(decode_Times(sample_value(pair=[U32(1U)]))))
+  assert_rejected(() => ignore(decode_Times(sample_value(port=65536U))))
+  assert_rejected(() => {
+    ignore(decode_Times(sample_value(at={ seconds: 253402300800L, nanoseconds: 0U })))
+  })
+}
+"#,
+    )
+    .unwrap();
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("test")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    moon_check_wasm(guest.path());
 }
