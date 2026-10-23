@@ -271,7 +271,7 @@ jobs:
 
   # Preserve the required status even when artifact preparation fails.
   builtin-artifacts:
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     needs: builtin-artifacts-prepare
     runs-on: blacksmith-32vcpu-ubuntu-2204
     env:
