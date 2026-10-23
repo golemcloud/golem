@@ -1009,7 +1009,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-deploy-runtime]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts"]
-description = "Runs the it-cli 'deploy_runtime' shard (account, secrets, bash, and templates)"
+description = "Runs the it-cli 'deploy_runtime' shard (SSH, account, secrets, bash, and templates)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -1018,27 +1018,11 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-core]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "ensure-builtin-artifacts", "prepare-git-differential-tests"]
-description = "Runs the it-cli 'core' shard (untagged application, SSH, and Git differential tests)"
+description = "Runs the it-cli 'core' shard (untagged application and Git differential tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-deploy-runtime-baseline]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy_runtime" "app::ssh::" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-core-baseline]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "ensure-builtin-artifacts", "prepare-git-differential-tests"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:" -- --skip "app::ssh::" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-update-golden-files]

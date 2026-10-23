@@ -195,7 +195,7 @@ jobs:
       - name: Test middleware components
         run: cargo make --profile ci test-component-middleware-unit-tests
 
-  builtin-artifacts:
+  builtin-artifacts-prepare:
     outputs:
       artifacts-disk-key: ${{ steps.publication-key.outputs.key }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
@@ -243,8 +243,6 @@ jobs:
             test -s "$path"
             wasm-tools validate --features all "$path"
           done < <(jq -r '.[].path' builtin-artifacts.json)
-      - name: Test embedded local-install defaults and source overrides
-        run: cargo test --profile dev-ci -p golem-registry-service --lib --features embed-builtin-artifacts -- builtin_artifact --report-time
       - name: Identify built-in publication
         id: publication-key
         run: echo "key=${GITHUB_REPOSITORY}-builtin-artifacts-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
@@ -271,13 +269,41 @@ jobs:
           stat -c 'Built-in archive bytes=%s' builtin-artifacts.tar.zst
           printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
+  # Preserve the required status even when artifact preparation fails.
+  builtin-artifacts:
+    if: ${{ always() }}
+    needs: builtin-artifacts-prepare
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    env:
+      CARGO_BUILD_JOBS: 20
+    steps:
+      - name: Require validated artifact publication
+        env:
+          PREPARATION_RESULT: ${{ needs.builtin-artifacts-prepare.result }}
+        run: test "$PREPARATION_RESULT" = success
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: 'builtin-artifacts-embedding'
+          cache-save-if: 'true'
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
+      - name: Sync WIT dependencies
+        run: cargo make wit
+      - name: Test embedded local-install defaults and source overrides
+        run: cargo test --profile dev-ci -p golem-registry-service --lib --features embed-builtin-artifacts -- builtin_artifact --report-time
+
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
       - build-and-store
-      - builtin-artifacts
+      - builtin-artifacts-prepare
       - merge-test-components
     strategy:
       fail-fast: false
@@ -315,7 +341,7 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -331,7 +357,7 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     needs:
       - build-and-store
-      - builtin-artifacts
+      - builtin-artifacts-prepare
       - merge-test-components
     timeout-minutes: 45
     steps:
@@ -353,7 +379,7 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
       - name: Set up Lima
         id: lima
         env:
@@ -500,7 +526,7 @@ jobs:
     needs:
       - build-and-store
       - build-golem-ts
-      - builtin-artifacts
+      - builtin-artifacts-prepare
       - merge-test-components
     strategy:
       fail-fast: false
@@ -566,7 +592,7 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -591,7 +617,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
-      - builtin-artifacts
+      - builtin-artifacts-prepare
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -787,17 +813,7 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
-
-      - name: List compiled CLI integration inventory
-        if: matrix.group.name == 'cli-integration-tests-core'
-        run: cargo-test-r run --package golem-cli --test integration -- --list > tmp/cli-integration-inventory.txt
-      - name: Upload compiled CLI integration inventory
-        if: matrix.group.name == 'cli-integration-tests-core'
-        uses: actions/upload-artifact@v6
-        with:
-          name: cli-integration-inventory-attempt${{ github.run_attempt }}
-          path: tmp/cli-integration-inventory.txt
+          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -831,7 +847,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
-      - builtin-artifacts
+      - builtin-artifacts-prepare
       - merge-test-components
     timeout-minutes: 30
     strategy:
@@ -851,7 +867,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
-      - builtin-artifacts
+      - builtin-artifacts-prepare
       - merge-test-components
     timeout-minutes: 30
     strategy:
@@ -861,31 +877,12 @@ jobs:
           - { name: cli-integration-tests-agents-streaming, shard: agents_streaming }
     steps: *cli-test-steps
 
-  it-cli-regrouping-baseline:
-    name: regrouping baseline (${{ matrix.group.shard }})
-    env: *cli-test-env
-    runs-on: blacksmith-32vcpu-ubuntu-2204
-    needs:
-      - build-and-store
-      - build-golem-effect
-      - build-golem-ts
-      - build-cli-test-bins
-      - build-golem-scala
-      - builtin-artifacts
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        group:
-          - { name: cli-integration-tests-deploy-runtime-baseline, shard: deploy_runtime }
-          - { name: cli-integration-tests-core-baseline, shard: core }
-    steps: *cli-test-steps
-
   consolidate-test-reports:
     name: consolidate-test-reports
     if: ${{ always() }}
     runs-on: ubuntu-latest
     needs:
+      - builtin-artifacts
       - unit-tests-and-checks
       - worker-tests
       - it
@@ -933,7 +930,7 @@ jobs:
       - build-and-store
       - build-golem-ts
       - build-golem-scala
-      - builtin-artifacts
+      - builtin-artifacts-prepare
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -982,7 +979,7 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           run-id: ${{ github.run_id }}
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
 
       - name: Restore built TS SDK
         uses: actions/download-artifact@v8
@@ -1856,6 +1853,7 @@ jobs:
       - build-and-store
       - build-cli-test-bins
       - builtin-artifacts
+      - builtin-artifacts-prepare
       - check-clippy-and-format
       - unit-tests-and-checks
       - config-checks
@@ -1896,7 +1894,7 @@ jobs:
           destination: target/dev-release-ci
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
-          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          disk-key: ${{ needs.builtin-artifacts-prepare.outputs.artifacts-disk-key }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/check-published-sdks
         with:
