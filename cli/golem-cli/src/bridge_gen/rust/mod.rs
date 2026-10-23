@@ -112,7 +112,30 @@ impl RustRuntimeConfig {
         self
     }
 
+    /// Datetimes outside the four-digit, non-negative RFC 3339 year range have no
+    /// canonical text form, and a `TimeDelta` can exceed the s64 nanosecond range of a
+    /// `duration` value, so both codecs check these before encoding and after decoding.
+    fn scalar_checks() -> TokenStream {
+        quote! {
+            pub fn check_datetime(value: &chrono::DateTime<chrono::Utc>) -> Result<chrono::DateTime<chrono::Utc>, String> {
+                let year = chrono::Datelike::year(value);
+                if (0..=9999).contains(&year) {
+                    Ok(*value)
+                } else {
+                    Err(format!("Datetime {value:?} has year {year}, outside the supported range 0..=9999"))
+                }
+            }
+
+            pub fn duration_nanoseconds(value: &chrono::TimeDelta) -> Result<i64, String> {
+                value.num_nanoseconds().ok_or_else(|| {
+                    format!("Duration {value} does not fit the signed 64-bit nanosecond range")
+                })
+            }
+        }
+    }
+
     fn generated_prelude(&self) -> TokenStream {
+        let scalar_checks = Self::scalar_checks();
         match self.mode {
             RustBridgeMode::ExternalRest => {
                 let root_golem_server_reexport = self
@@ -125,6 +148,8 @@ impl RustRuntimeConfig {
                     pub mod __golem_bridge_runtime {
                     pub use golem_client::bridge::ClientError;
                     pub use golem_client::bridge::GolemServer;
+
+                    #scalar_checks
 
                     #[derive(Debug, Clone)]
                     pub struct EphemeralInvocationResult<T> {
@@ -153,6 +178,8 @@ impl RustRuntimeConfig {
                 use golem_rust::schema::wit::wire as __wire;
                 pub mod __golem_bridge_runtime {
                     pub use golem_rust::agentic::EphemeralInvocationResult;
+
+                    #scalar_checks
 
                     #[derive(Debug, Clone)]
                     pub enum ClientError {
@@ -400,7 +427,6 @@ impl RustBridgeGenerator {
                 doc["features"] = Item::Table(Table::default());
                 doc["features"]["default"] = string_array(&["client"]);
                 doc["features"]["client"] = string_array(&[
-                    "dep:chrono",
                     "dep:golem-client",
                     "dep:golem-common",
                     "dep:reqwest",
@@ -408,9 +434,10 @@ impl RustBridgeGenerator {
                     "dep:serde_json",
                     "uuid/v4",
                 ]);
-                doc["features"]["serde"] = string_array(&["dep:serde", "uuid/serde"]);
+                doc["features"]["serde"] =
+                    string_array(&["dep:serde", "chrono/serde", "url/serde", "uuid/serde"]);
 
-                doc["dependencies"]["chrono"] = optional_dep("0.4", &[]);
+                doc["dependencies"]["chrono"] = dep("0.4.44", &[]);
                 doc["dependencies"]["golem-client"] =
                     optional(golem_source.dep_item("golem-client", &[])?)?;
                 doc["dependencies"]["golem-common"] =
@@ -419,6 +446,7 @@ impl RustBridgeGenerator {
                 doc["dependencies"]["reqwest-middleware"] = optional_dep("0.5", &[]);
                 doc["dependencies"]["serde"] = optional_dep("1", &["derive", "std"]);
                 doc["dependencies"]["serde_json"] = optional_dep("1", &[]);
+                doc["dependencies"]["url"] = dep("2.5.7", &[]);
                 doc["dependencies"]["uuid"] = dep("1.18.1", &[]);
             }
             RustBridgeMode::GuestWasmRpc => {
@@ -427,10 +455,11 @@ impl RustBridgeGenerator {
                 } else {
                     sdk_overrides()?.golem_rust_dependency()
                 };
-                doc["dependencies"]["chrono"] = dep("0.4", &[]);
+                doc["dependencies"]["chrono"] = dep("0.4.42", &[]);
                 doc["dependencies"]["golem-rust"] =
                     sdk_dependency.as_toml_item(&["export_golem_agentic", "macro"])?;
                 doc["dependencies"]["serde"] = dep("1", &["derive"]);
+                doc["dependencies"]["url"] = dep("2.5.7", &[]);
                 doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
             }
         }
@@ -3856,20 +3885,22 @@ impl RustBridgeGenerator {
                 quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Path { path: #val }) }
             }
             SchemaType::Url { .. } => {
-                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Url { url: #val }) }
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Url { url: String::from(#val) }) }
             }
             SchemaType::Uuid { .. } => {
                 quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Uuid(#val)) }
             }
             SchemaType::Datetime { .. } => {
                 quote! {
-                    chrono::DateTime::parse_from_rfc3339(&#val)
-                        .map(|__dt| crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value: __dt.with_timezone(&chrono::Utc) })
-                        .map_err(|__err| format!("Invalid RFC3339 datetime: {__err}"))
+                    crate::__golem_bridge_runtime::check_datetime(&#val)
+                        .map(|__dt| crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value: __dt })
                 }
             }
             SchemaType::Duration { .. } => {
-                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Duration(crate::__golem_bridge_runtime::schema::DurationValuePayload { nanoseconds: #val })) }
+                quote! {
+                    crate::__golem_bridge_runtime::duration_nanoseconds(&#val)
+                        .map(|__nanoseconds| crate::__golem_bridge_runtime::schema::SchemaValue::Duration(crate::__golem_bridge_runtime::schema::DurationValuePayload { nanoseconds: __nanoseconds }))
+                }
             }
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
                 quote! { Ok(<golem_rust::secrets::GuestSecretHandle as golem_rust::IntoSchema>::to_value(&#val)) }
@@ -4207,16 +4238,16 @@ impl RustBridgeGenerator {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Path { path } => Ok(path), __other => Err(format!("Expected path value, got {:?}", __other)) }
             },
             SchemaType::Url { .. } => quote! {
-                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Url { url } => Ok(url), __other => Err(format!("Expected url value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Url { url } => url::Url::parse(&url).map_err(|__error| format!("Invalid url {url:?}: {__error}")), __other => Err(format!("Expected url value, got {:?}", __other)) }
             },
             SchemaType::Uuid { .. } => quote! {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Uuid(uuid) => Ok(uuid), __other => Err(format!("Expected UUID value, got {:?}", __other)) }
             },
             SchemaType::Datetime { .. } => quote! {
-                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value } => Ok(value.to_rfc3339()), __other => Err(format!("Expected datetime value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value } => crate::__golem_bridge_runtime::check_datetime(&value), __other => Err(format!("Expected datetime value, got {:?}", __other)) }
             },
             SchemaType::Duration { .. } => quote! {
-                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Duration(__p) => Ok(__p.nanoseconds), __other => Err(format!("Expected duration value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Duration(__p) => Ok(chrono::TimeDelta::nanoseconds(__p.nanoseconds)), __other => Err(format!("Expected duration value, got {:?}", __other)) }
             },
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => quote! {
                 <golem_rust::secrets::GuestSecretHandle as golem_rust::FromSchema>::from_value(&#val)
@@ -4354,6 +4385,9 @@ impl RustBridgeGenerator {
                 let inner = self.type_reference(element, false)?;
                 Ok(quote! { Vec<#inner> })
             }
+            // A `map` value is a list of key-value pairs. The Vec keeps the pairs as they
+            // arrive, order included, works for every key kind (float keys too), and lets
+            // the caller collect into whichever map type it wants.
             SchemaType::Map { key, value, .. } => {
                 let k = self.type_reference(key, false)?;
                 let v = self.type_reference(value, false)?;
@@ -4384,11 +4418,14 @@ impl RustBridgeGenerator {
             SchemaType::Text { .. } => Ok(quote! { crate::__golem_bridge_types::AgentText }),
             SchemaType::Binary { .. } => Ok(quote! { crate::__golem_bridge_types::AgentBinary }),
             SchemaType::Quantity { spec, .. } => Ok(self.quantity_type(spec)),
+            // A `path` value is a path in the agent's file system, so a caller-side `PathBuf`
+            // would invite local file-system calls on the wrong machine; a `String` also
+            // cannot fail to encode.
             SchemaType::Path { .. } => Ok(quote! { String }),
-            SchemaType::Url { .. } => Ok(quote! { String }),
+            SchemaType::Url { .. } => Ok(quote! { url::Url }),
             SchemaType::Uuid { .. } => Ok(self.uuid_type_tokens()),
-            SchemaType::Datetime { .. } => Ok(quote! { String }),
-            SchemaType::Duration { .. } => Ok(quote! { i64 }),
+            SchemaType::Datetime { .. } => Ok(quote! { chrono::DateTime<chrono::Utc> }),
+            SchemaType::Duration { .. } => Ok(quote! { chrono::TimeDelta }),
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
                 Ok(quote! { golem_rust::secrets::GuestSecretHandle })
             }
@@ -4978,6 +5015,7 @@ mod tests {
             "reqwest",
             "reqwest-middleware",
             "serde_json",
+            "url",
             "uuid",
         ] {
             assert!(
@@ -4987,7 +5025,11 @@ mod tests {
         }
         assert!(cargo_toml.contains("[features]"));
         assert!(cargo_toml.contains("default = [\"client\"]"));
-        assert!(cargo_toml.contains("serde = [\"dep:serde\", \"uuid/serde\"]"));
+        assert!(
+            cargo_toml.contains(
+                "serde = [\"dep:serde\", \"chrono/serde\", \"url/serde\", \"uuid/serde\"]"
+            )
+        );
         assert!(cargo_toml.contains("uuid = \"1.18.1\""));
         assert!(cargo_toml.contains("\"uuid/v4\""));
         assert!(cargo_toml.contains("optional = true"));
