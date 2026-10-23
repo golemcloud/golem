@@ -480,3 +480,67 @@ func TestInvalidUTF8IsRefused(t *testing.T) {
 		t.Error("a text language that is not UTF-8 was marshalled")
 	}
 }
+
+// TestUnpackedValuesPackBack: PackJSON takes the ordinary Go values UnpackJSON
+// renders, not only what encoding/json decodes, so a caller can rewrite a value
+// it unpacked without serialising it first.
+func TestUnpackedValuesPackBack(t *testing.T) {
+	u32 := func(n uint32) *SchemaValue { var v SchemaValue = U32Value{Value: n}; return &v }
+	root := typ(RecordType{Fields: []NamedField{
+		{Name: "u8", Body: typ(U8Type{})},
+		{Name: "u16", Body: typ(U16Type{})},
+		{Name: "u32", Body: typ(U32Type{})},
+		{Name: "u64", Body: typ(U64Type{})},
+		{Name: "s8", Body: typ(S8Type{})},
+		{Name: "f32", Body: typ(F32Type{})},
+		{Name: "list", Body: typ(ListType{Element: typ(U16Type{})})},
+		{Name: "fixed", Body: typ(FixedListType{Element: typ(FixedListType{Element: typ(U8Type{}), Length: 1}), Length: 1})},
+		{Name: "option", Body: typ(OptionType{Inner: typ(U32Type{})})},
+		{Name: "tuple", Body: typ(TupleType{Elements: []SchemaType{typ(U8Type{}), typ(U64Type{})}})},
+		{Name: "map", Body: typ(MapType{Key: typ(U8Type{}), Value: typ(U32Type{})})},
+		{Name: "result", Body: typ(ResultType{Ok: &SchemaType{Body: U32Type{}}})},
+		{Name: "duration", Body: typ(DurationType{})},
+		{Name: "quantity", Body: typ(QuantityType{Spec: QuantitySpec{BaseUnit: "B"}})},
+		{Name: "union", Body: typ(UnionType{Branches: []UnionBranch{
+			{Tag: "sized", Body: typ(RecordType{Fields: []NamedField{{Name: "side", Body: typ(U32Type{})}}}), Discriminator: FieldAbsentRule{FieldName: "kind"}},
+		}})},
+	}})
+	in := RecordValue{Fields: []SchemaValue{
+		U8Value{Value: 255},
+		U16Value{Value: 65535},
+		U32Value{Value: 4294967295},
+		U64Value{Value: 18446744073709551615},
+		S8Value{Value: -128},
+		F32Value{Value: 0.5},
+		ListValue{Items: []SchemaValue{U16Value{Value: 1}}},
+		FixedListValue{Items: []SchemaValue{FixedListValue{Items: []SchemaValue{U8Value{Value: 2}}}}},
+		OptionValue{Value: u32(3)},
+		TupleValue{Elements: []SchemaValue{U8Value{Value: 4}, U64Value{Value: 5}}},
+		MapValue{Entries: []MapEntry{{Key: U8Value{Value: 6}, Value: U32Value{Value: 7}}}},
+		ResultValue{Value: u32(8)},
+		DurationValue{Nanoseconds: 9},
+		QuantityValueNode{Value: QuantityValue{Mantissa: 10, Scale: 1, Unit: "B"}},
+		UnionValue{Tag: "sized", Body: RecordValue{Fields: []SchemaValue{U32Value{Value: 11}}}},
+	}}
+	r := NewRef(SchemaGraph{Root: root})
+	unpacked, err := r.UnpackJSON(in)
+	if err != nil {
+		t.Fatalf("UnpackJSON: %v", err)
+	}
+	out, err := r.PackJSON(unpacked)
+	if err != nil {
+		t.Fatalf("PackJSON(%#v): %v", unpacked, err)
+	}
+	if !reflect.DeepEqual(out, SchemaValue(in)) {
+		t.Errorf("%#v packed back to %#v", in, out)
+	}
+	mustRejectValue := func(root SchemaType, value any, wantMsg string) {
+		t.Helper()
+		_, err := NewRef(SchemaGraph{Root: root}).PackJSON(value)
+		if err == nil || !strings.Contains(err.Error(), wantMsg) {
+			t.Errorf("packing %#v: got %v, want a failure mentioning %q", value, err, wantMsg)
+		}
+	}
+	mustRejectValue(typ(U8Type{}), uint64(256), "outside the range")
+	mustRejectValue(typ(S32Type{}), uint64(1<<63), "outside the range")
+}

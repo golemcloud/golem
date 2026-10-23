@@ -132,7 +132,7 @@ func EncodeBinary(v values.Binary) schema.SchemaValue {
 	return schema.BinaryValue{Bytes: []byte(v)}
 }
 func DecodeBinary(sv schema.SchemaValue) (values.Binary, error) {
-	return decodeAs("binary", sv, func(v schema.BinaryValue) values.Binary { return values.Binary(v.Bytes) })
+	return decodeAs("binary", sv, func(v schema.BinaryValue) values.Binary { return append(values.Binary{}, v.Bytes...) })
 }
 
 func EncodePath(v values.Path) schema.SchemaValue { return schema.PathValue{Value: string(v)} }
@@ -275,7 +275,7 @@ func DecodeUnstructuredBinary[M values.MimeTypes](sv schema.SchemaValue) (values
 		if which != 0 {
 			break
 		}
-		out.Data = p.Bytes
+		out.Data = append([]byte{}, p.Bytes...)
 		if p.MimeType != nil {
 			var m M
 			if allowed := m.MimeTypes(); len(allowed) > 0 && !slices.Contains(allowed, *p.MimeType) {

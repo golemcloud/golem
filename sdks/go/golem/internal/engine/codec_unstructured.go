@@ -163,7 +163,7 @@ func compileUnstructuredBinary(c *Codec, mimeTypes []string) {
 		switch {
 		case which == 0 && payload.Tag() == types.SchemaValueNodeBinaryValue:
 			data := payload.BinaryValue()
-			dst.FieldByName("Data").SetBytes(append([]byte(nil), data.Bytes...))
+			dst.FieldByName("Data").SetBytes(append([]byte{}, data.Bytes...))
 			if data.MimeType.IsSome() {
 				m := data.MimeType.Some()
 				if len(mimeTypes) > 0 && !slices.Contains(mimeTypes, m) {

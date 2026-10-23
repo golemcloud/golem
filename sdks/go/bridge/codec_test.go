@@ -55,6 +55,14 @@ func TestLeavesRoundTrip(t *testing.T) {
 	throughTheWire(t, "char", values.Char('✓'), EncodeChar, DecodeChar)
 	throughTheWire(t, "text", values.Text("prose"), EncodeText, DecodeText)
 	throughTheWire(t, "binary", values.Binary{0, 127, 255}, EncodeBinary, DecodeBinary)
+	throughTheWire(t, "empty binary", values.Binary{}, EncodeBinary, DecodeBinary)
+	if out, err := DecodeBinary(schema.BinaryValue{}); err != nil || out == nil {
+		t.Fatalf("an empty binary decoded to %#v, %v; want an empty, non-nil value", out, err)
+	}
+	inline := EncodeUnstructuredBinary(values.UnstructuredBinary[values.AnyMimeType]{})
+	if out, err := DecodeUnstructuredBinary[values.AnyMimeType](inline); err != nil || out.Data == nil {
+		t.Fatalf("empty inline data decoded to %#v, %v; want an empty, non-nil value", out, err)
+	}
 	throughTheWire(t, "path", values.Path("/tmp/x"), EncodePath, DecodePath)
 	throughTheWire(t, "url", values.URL("https://example.test"), EncodeURL, DecodeURL)
 	throughTheWire(t, "datetime",

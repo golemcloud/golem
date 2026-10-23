@@ -1022,6 +1022,15 @@ func jsonInt(value any, path string, min, max int64) (int64, error) {
 		return boundsCheck(v, min, max, path)
 	case int:
 		return boundsCheck(int64(v), min, max, path)
+	case int32:
+		return boundsCheck(int64(v), min, max, path)
+	// UnpackJSON renders an unsigned integer as uint64, which PackJSON takes
+	// back.
+	case uint64:
+		if v > math.MaxInt64 {
+			return 0, fmt.Errorf("%s: %d is outside the range [%d, %d]", pathOrRoot(path), v, min, max)
+		}
+		return boundsCheck(int64(v), min, max, path)
 	default:
 		return 0, typeErr(path, "integer", value)
 	}
