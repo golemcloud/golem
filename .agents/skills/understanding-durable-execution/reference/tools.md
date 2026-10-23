@@ -647,6 +647,9 @@ capable call after its caller resumes.
 Owner failure selection is a runtime teardown boundary, like executor loss: unfinished durable
 calls remain incomplete rather than applying guest cancellation or non-cancellable-drop policies.
 This also prevents a pending producer from recording a false EOF while its Store is discarded.
+An attachment write or terminal that the owner fence rejects abandons its call
+(`abandon_if_owner_fenced` in `durable_host/tool/durability.rs`): the fence's `Cancelled` is not
+the call's outcome, so the next generation repairs the `Start` in place.
 
 Typed stream projection requests read admission from its owning Store before receiving durable
 items. Recorded observations replay from the consumer journal; opening a source waits for the

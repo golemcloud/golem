@@ -2232,10 +2232,31 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn collect(&self, mode: String, input: Vec<u8>, fragment_size: u32) -> StreamEvidence {
+        let checkpointed =
+            mode == "large" && std::env::var("CALLER_PROMISE_CHECKPOINT_PORT").is_ok();
         let invocation = StreamingClient::default()
             .run(mode, input_stream(chunks(input, fragment_size)))
             .await
             .expect("start streaming tool");
+        if checkpointed {
+            let result = invocation.result();
+            let mut stdout = invocation.stdout.expect("streaming tool has stdout");
+            let read = async move {
+                let mut output = Vec::new();
+                let mut chunks = 0;
+                while let Some(chunk) = stdout.next().await {
+                    output.extend(chunk.expect("large output chunk"));
+                    chunks += 1;
+                    if [16, 128, 320].contains(&chunks) {
+                        wait_at_promise_checkpoint(&format!("large-output-consumed-{chunks}"))
+                            .await;
+                    }
+                }
+                output
+            };
+            let (result, output) = (result, read).join().await;
+            return evidence(result, output);
+        }
         let collected = invocation.collect().await;
         match collected.stderr {
             Ok(None) => {}

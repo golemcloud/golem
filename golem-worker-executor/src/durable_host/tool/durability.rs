@@ -579,6 +579,9 @@ where
         Ok(Some(prepared)) => prepared,
         result => {
             let result = result.map(|_| ());
+            if result.is_err() {
+                abandon_if_owner_fenced(&mut call, &controller)?;
+            }
             let outcome = outcome_for_result(&result, request.length == 0);
             let (_, delivery) = call
                 .complete_deferred(context, HostResponseToolAttachmentWrite { outcome })
@@ -628,7 +631,10 @@ where
                 return complete_resource_exhaustion(context, call, prepared, controller).await;
             }
             Ok(AttachmentWriteAcceptance::Discarded) => Ok(()),
-            Err(error) => Err(error),
+            Err(error) => {
+                abandon_if_owner_fenced(&mut call, &controller)?;
+                Err(error)
+            }
             Ok(AttachmentWriteAcceptance::Accepted(())) => {
                 unreachable!("accepted write owns its End")
             }
@@ -653,7 +659,7 @@ where
             Resp = HostResponseToolAttachmentWrite,
         >,
 {
-    let failed = publication_failure(context, controller, Pair::FQFN);
+    let failed = publication_failure(context, controller.clone(), Pair::FQFN);
     let mut selection = None;
     let interrupt = context.with_ctx(|ctx| ctx.create_interrupt_signal());
     let completing = call.complete_deferred_with_effect(
@@ -680,7 +686,10 @@ where
     }
     let error = match selection.expect("exhaustion acceptance must select an outcome") {
         Ok(None) => exhausted,
-        Err(error) => error,
+        Err(error) => {
+            abandon_if_owner_fenced(&mut call, &controller)?;
+            error
+        }
         Ok(Some(())) => unreachable!("selected exhaustion owns its End"),
     };
     let (_, delivery) = call
@@ -914,7 +923,7 @@ where
     let prepared = writer.prepare_terminal(cause);
     let outcome = match prepared {
         Ok(Ok(prepared)) if call.is_persisted() => {
-            let failed = publication_failure(context, controller, Pair::FQFN);
+            let failed = publication_failure(context, controller.clone(), Pair::FQFN);
             let mut selection = None;
             let interrupt = context.with_ctx(|ctx| ctx.create_interrupt_signal());
             let completing = call.complete_deferred_with_effect(
@@ -954,6 +963,9 @@ where
         Ok(Err(())) => ToolAttachmentTerminalOutcome::Unchanged,
         Err(error) => ToolAttachmentTerminalOutcome::Rejected(error_to_model(&error)),
     };
+    if matches!(outcome, ToolAttachmentTerminalOutcome::Rejected(_)) {
+        abandon_if_owner_fenced(&mut call, &controller)?;
+    }
     let result = outcome.result().map_err(write_error_from_model);
     let (_, delivery) = call
         .complete_deferred(
@@ -1548,6 +1560,19 @@ impl<Ctx: WorkerCtx> PublicationFailureContext<Ctx> {
                 let _ = cleanup.await;
             }
         })
+    }
+}
+
+/// An owner fence ends the generation that issued this call, so a rejection it causes is not
+/// the call's outcome. The `Start` stays incomplete and the next generation repairs it in place.
+fn abandon_if_owner_fenced<Pair: golem_common::model::oplog::HostPayloadPair>(
+    call: &mut DurableCallSession<Pair, Cancellable>,
+    controller: &AttachmentController,
+) -> anyhow::Result<()> {
+    if controller.owner_fenced() {
+        Err(call.trap(anyhow::anyhow!("owner generation fenced tool attachment")))
+    } else {
+        Ok(())
     }
 }
 

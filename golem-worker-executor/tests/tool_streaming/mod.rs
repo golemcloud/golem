@@ -8743,9 +8743,19 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
             metadata.tools,
         )),
     );
+    let (checkpoint_port, _checkpoint_server, mut checkpoints) =
+        start_promise_checkpoint_server().await;
     let agent = agent_id!("ToolStreamingCaller", "crash-while-consumed");
     let worker = executor
-        .start_agent(&caller_component.id, agent.clone())
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([(
+                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                checkpoint_port.to_string(),
+            )]),
+            Vec::new(),
+        )
         .await?;
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
@@ -8755,25 +8765,49 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
     );
     tokio::pin!(invocation);
     let crashes = async {
-        for reads_before_crash in [16_usize, 128, 320] {
-            tokio::time::timeout(Duration::from_secs(60), async {
+        for chunks_before_crash in [16, 128, 320] {
+            let checkpoint = next_promise_checkpoint(
+                &mut checkpoints,
+                &format!("large-output-consumed-{chunks_before_crash}"),
+            )
+            .await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+            // The paused consumer leaves the producer in a write without an End.
+            tokio::time::timeout(Duration::from_secs(30), async {
                 loop {
                     executor.commit_oplog(&worker).await?;
                     let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-                    let reads = entries
+                    let ended = entries
                         .iter()
-                        .filter(|entry| {
-                            matches!(entry.entry, PublicOplogEntry::ToolAttachmentRead(_))
+                        .filter_map(|entry| match &entry.entry {
+                            PublicOplogEntry::End(end) => Some(end.start_index),
+                            _ => None,
                         })
-                        .count();
-                    if reads >= reads_before_crash {
-                        return Ok::<(), anyhow::Error>(());
+                        .collect::<BTreeSet<_>>();
+                    if entries.iter().any(|entry| {
+                        matches!(
+                            &entry.entry,
+                            PublicOplogEntry::Start(start)
+                                if start.function_name
+                                    == "golem::tool::streams::tool-output-writer::write"
+                        ) && !ended.contains(&entry.oplog_index)
+                    }) {
+                        return Ok::<_, anyhow::Error>(());
                     }
-                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    tokio::task::yield_now().await;
                 }
             })
             .await??;
             executor.simulated_crash(&worker).await?;
+            executor
+                .complete_promise(
+                    &PromiseId {
+                        agent_id: worker.clone(),
+                        oplog_idx: checkpoint.oplog_idx,
+                    },
+                    Vec::new(),
+                )
+                .await?;
         }
         Ok::<(), anyhow::Error>(())
     };
