@@ -991,7 +991,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-bridge-rust]
 dependencies = ["build-cli-test-bins-non-ci", "ensure-builtin-artifacts"]
-description = "Runs the it-cli 'bridge_gen_rust' shard (bridge_gen::rust)"
+description = "Runs the it-cli 'bridge_gen_rust' shard (Rust bridge checks and Rust templates)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -1009,11 +1009,11 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-deploy-runtime]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts"]
-description = "Runs the it-cli 'deploy_runtime' shard (SSH, account, secrets, bash, and templates)"
+description = "Runs the it-cli 'deploy_runtime' shard (SSH, account, secrets, bash, and non-Rust templates)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy_runtime" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy_runtime" -- --skip ":tag:bridge_gen_rust" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-core]

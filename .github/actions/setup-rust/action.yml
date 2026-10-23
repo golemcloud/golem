@@ -19,6 +19,9 @@ inputs:
   cache-save-if:
     description: 'Whether to save rust cache'
     default: 'false'
+  cache-provider:
+    description: 'Rust dependency cache transport (github or blacksmith)'
+    default: 'github'
   install-cargo-make:
     description: 'Whether to install cargo-make'
     default: 'true'
@@ -41,8 +44,9 @@ runs:
         done
     - name: Setup Rust cache
       if: inputs.use-cache == 'true'
-      uses: Swatinem/rust-cache@v2
+      uses: useblacksmith/rust-cache@v3
       with:
+        cache-provider: ${{ inputs.cache-provider }}
         prefix-key: ${{ inputs.cache-prefix-key }}
         shared-key: ${{ inputs.cache-shared-key }}
         cache-all-crates: true

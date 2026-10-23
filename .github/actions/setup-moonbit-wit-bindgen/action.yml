@@ -1,0 +1,25 @@
+name: 'Setup Golem MoonBit wit-bindgen'
+description: 'Reuse the generator installation for the exact source revision and Rust compiler'
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve generator source and compiler
+      id: identity
+      shell: bash
+      run: |
+        revision=$(sdks/moonbit/golem_sdk/scripts/install-wit-bindgen.sh --resolve-revision)
+        compiler=$(rustc -vV | sha256sum | cut -d' ' -f1)
+        echo "revision=$revision" >> "$GITHUB_OUTPUT"
+        echo "compiler=$compiler" >> "$GITHUB_OUTPUT"
+        echo "$RUNNER_TEMP/moonbit-wit-bindgen/bin" >> "$GITHUB_PATH"
+    - name: Restore generator installation
+      uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/moonbit-wit-bindgen
+        key: moonbit-wit-bindgen-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.revision }}-${{ steps.identity.outputs.compiler }}-${{ hashFiles('sdks/moonbit/golem_sdk/scripts/install-wit-bindgen.sh') }}
+    - name: Install and check generator version
+      shell: bash
+      env:
+        WIT_BINDGEN_REV: ${{ steps.identity.outputs.revision }}
+        CARGO_INSTALL_ROOT: ${{ runner.temp }}/moonbit-wit-bindgen
+      run: sdks/moonbit/golem_sdk/scripts/install-wit-bindgen.sh
