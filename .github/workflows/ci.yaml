@@ -882,7 +882,6 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     needs:
-      - builtin-artifacts
       - unit-tests-and-checks
       - worker-tests
       - it
