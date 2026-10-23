@@ -628,6 +628,41 @@ async fn a_client_presents_the_certificate_current_at_each_new_connection() {
 }
 
 #[test]
+async fn a_client_first_used_after_a_renewal_presents_the_renewed_certificate() {
+    use golem_service_base::grpc::client::GrpcClient;
+    let pki = Pki::new();
+    let files = Files::new(&pki);
+    let server_tls = tls_for(&files, NEVER);
+    let server = TestServer::start(Some(&server_tls)).await;
+
+    files.write("client.crt", &pki.client_pem);
+    files.write("client.key", &pki.client_key_pem);
+    files.write("client-ca.crt", &pki.ca_pem);
+    let client = GrpcClient::new(
+        "t",
+        |channel, _| HealthClient::new(channel),
+        format!("https://localhost:{}", server.addr.port())
+            .parse()
+            .unwrap(),
+        client_config(&files, Duration::from_secs(60)),
+    );
+
+    // The certificate is renewed while the client has not connected yet: its poller has not
+    // started, so nothing has looked at the files since the client was built.
+    let renewed = signed_by(&pki.ca, "client", ExtendedKeyUsagePurpose::ClientAuth);
+    files.write("client.crt", &renewed.0);
+    files.write("client.key", &renewed.1);
+
+    assert_eq!(client_check(&client).await.unwrap(), ServingStatus::Serving);
+    assert_eq!(
+        *server.client_certs.lock().unwrap(),
+        vec![pem_sha256(&renewed.0)],
+        "the first connection must present the renewed certificate"
+    );
+    server.stop().await;
+}
+
+#[test]
 async fn a_client_with_a_bad_tls_file_fails_fast_with_the_setting_name() {
     use golem_service_base::grpc::client::GrpcClient;
     let pki = Pki::new();

@@ -197,11 +197,16 @@ impl TlsMaterial {
 
     /// Spawns, once, a task that calls `reload_if_changed` every `interval` while any `Arc` of
     /// this value lives. Spawns nothing when no source is a file. Needs a Tokio runtime.
+    ///
+    /// Looks at the files once before it spawns: a client starts its reloader at its first
+    /// connection, which can come long after the files were loaded, and that connection must not
+    /// wait a whole interval for a certificate that was renewed in the meantime.
     pub fn start_reloader(self: &Arc<Self>, interval: Duration) {
         if !self.has_files() {
             return;
         }
         self.reloader.get_or_init(|| {
+            self.reload_if_changed();
             let weak = Arc::downgrade(self);
             tokio::spawn(async move {
                 loop {
