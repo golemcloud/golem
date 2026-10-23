@@ -25,3 +25,18 @@ if [[ -e "$WIT_BINDGEN_WAS_INVOKED" ]]; then
   echo "non-Golem Git build passed the fork validation and was invoked" >&2
   exit 1
 fi
+
+mkdir -p "$tmp_dir/sdk/scripts"
+cp "$sdk_root/scripts/install-wit-bindgen.sh" "$tmp_dir/sdk/scripts/"
+cat >"$tmp_dir/cargo" <<'EOF'
+#!/usr/bin/env bash
+# Keep the installed generator in place to exercise the cache-hit version check.
+exit 0
+EOF
+chmod +x "$tmp_dir/cargo"
+
+if PATH="$tmp_dir:$PATH" WIT_BINDGEN_REV=0123456789abcdef0123456789abcdef01234567 \
+  "$tmp_dir/sdk/scripts/install-wit-bindgen.sh" >/dev/null 2>&1; then
+  echo "installation accepted a generator from a different source revision" >&2
+  exit 1
+fi

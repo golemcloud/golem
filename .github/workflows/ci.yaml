@@ -886,6 +886,26 @@ jobs:
           - { name: cli-integration-tests-agents-streaming, shard: agents_streaming }
     steps: *cli-test-steps
 
+  it-cli-regrouping-baseline:
+    name: regrouping baseline (${{ matrix.group.shard }})
+    env: *cli-test-env
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    needs:
+      - build-and-store
+      - build-golem-effect
+      - build-golem-ts
+      - build-cli-test-bins
+      - build-golem-scala
+      - builtin-artifacts-prepare
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - { name: cli-integration-tests-deploy-runtime-baseline, shard: deploy_runtime }
+          - { name: cli-integration-tests-bridge-rust-baseline, shard: bridge_gen_rust }
+    steps: *cli-test-steps
+
   consolidate-test-reports:
     name: consolidate-test-reports
     if: ${{ always() }}

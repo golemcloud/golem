@@ -19,8 +19,12 @@ cargo install --locked \
   wit-bindgen-cli
 
 wit_bindgen_version="$(wit-bindgen --version)"
-if [[ ! "$wit_bindgen_version" =~ 0\.59\.0\ \([0-9a-f]{9,40}\ [0-9]{4}-[0-9]{2}-[0-9]{2}\) ]]; then
+if [[ ! "$wit_bindgen_version" =~ 0\.59\.0\ \(([0-9a-f]{9,40})\ [0-9]{4}-[0-9]{2}-[0-9]{2}\) ]]; then
   echo "ERROR: installed wit-bindgen did not report the expected Git version: $wit_bindgen_version" >&2
+  exit 1
+fi
+if [[ "$WIT_BINDGEN_REV" != "${BASH_REMATCH[1]}"* ]]; then
+  echo "ERROR: installed wit-bindgen does not match source revision $WIT_BINDGEN_REV: $wit_bindgen_version" >&2
   exit 1
 fi
 printf '%s\n' "$wit_bindgen_version" >"$SDK_ROOT/.wit-bindgen-version"

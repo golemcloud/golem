@@ -8,7 +8,7 @@ inputs:
     description: 'Additional Rust targets to add (space-separated)'
     default: ''
   use-cache:
-    description: 'Whether to use Swatinem/rust-cache'
+    description: 'Whether to use the Rust dependency cache'
     default: 'true'
   cache-prefix-key:
     description: 'Rust cache prefix key'
@@ -43,10 +43,17 @@ runs:
           rustup target add "$target"
         done
     - name: Setup Rust cache
-      if: inputs.use-cache == 'true'
+      if: inputs.use-cache == 'true' && inputs.cache-provider == 'github'
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: ${{ inputs.cache-prefix-key }}
+        shared-key: ${{ inputs.cache-shared-key }}
+        cache-all-crates: true
+        save-if: ${{ inputs.cache-save-if }}
+    - name: Setup Blacksmith Rust cache
+      if: inputs.use-cache == 'true' && inputs.cache-provider == 'blacksmith'
       uses: useblacksmith/rust-cache@v3
       with:
-        cache-provider: ${{ inputs.cache-provider }}
         prefix-key: ${{ inputs.cache-prefix-key }}
         shared-key: ${{ inputs.cache-shared-key }}
         cache-all-crates: true
