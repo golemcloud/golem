@@ -169,7 +169,9 @@ struct SharedClientTls {
     config: GrpcClientTlsConfig,
     state: ArcSwap<Result<Arc<ClientTls>, TlsError>>,
     /// When the load was last attempted after the start; taken only while the state is an error.
-    last_attempt: std::sync::Mutex<Option<Instant>>,
+    /// Held while that load runs, so that concurrent connects wait for it without blocking a
+    /// thread, and do not start loads of their own.
+    last_attempt: tokio::sync::Mutex<Option<Instant>>,
 }
 
 /// Absent when TLS is off.
@@ -187,38 +189,32 @@ fn client_tls_state(config: &GrpcClientTlsConfig, use_name: &str) -> ClientTlsSt
         use_name: use_name.to_string(),
         config: config.clone(),
         state: ArcSwap::from_pointee(loaded),
-        last_attempt: std::sync::Mutex::new(Some(Instant::now())),
+        last_attempt: tokio::sync::Mutex::new(Some(Instant::now())),
     }))
 }
 
 impl SharedClientTls {
-    /// The TLS to connect with, or the reason there is none.
-    fn current(&self) -> Result<Arc<ClientTls>, Status> {
+    /// The TLS to connect with, or the reason there is none. Once the settings are loaded, this
+    /// is one `ArcSwap` load and takes no lock.
+    async fn current(self: &Arc<Self>) -> Result<Arc<ClientTls>, Status> {
         if let Ok(tls) = &**self.state.load() {
             return Ok(tls.clone());
         }
-        let mut last_attempt = self
-            .last_attempt
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last_attempt = self.last_attempt.lock().await;
         // Another connect may have loaded it while this one waited for the lock.
         if let Ok(tls) = &**self.state.load() {
             return Ok(tls.clone());
         }
         if last_attempt.is_none_or(|at| at.elapsed() >= TLS_RELOAD_INTERVAL) {
             *last_attempt = Some(Instant::now());
-            if let Some(loaded) = ClientTls::from_config(&self.config, &self.use_name) {
-                match &loaded {
-                    Ok(_) => debug!(
-                        "TLS settings of {} loaded after an earlier failure",
-                        self.use_name
-                    ),
-                    Err(err) => warn!(
-                        "TLS settings of {} still cannot be loaded: {err}",
-                        self.use_name
-                    ),
-                }
-                self.state.store(Arc::new(loaded));
+            // The load reads files, so it runs on the blocking pool. It stores its result itself,
+            // so a connect that stops waiting does not throw away a load that finishes.
+            let shared = self.clone();
+            if let Err(err) = tokio::task::spawn_blocking(move || shared.load_again()).await {
+                warn!(
+                    "Loading the TLS settings of {} failed: {err}",
+                    self.use_name
+                );
             }
         }
         match &**self.state.load() {
@@ -229,6 +225,23 @@ impl SharedClientTls {
         }
     }
 
+    /// Loads the settings again and keeps the result. Blocks: it reads the files.
+    fn load_again(&self) {
+        if let Some(loaded) = ClientTls::from_config(&self.config, &self.use_name) {
+            match &loaded {
+                Ok(_) => debug!(
+                    "TLS settings of {} loaded after an earlier failure",
+                    self.use_name
+                ),
+                Err(err) => warn!(
+                    "TLS settings of {} still cannot be loaded: {err}",
+                    self.use_name
+                ),
+            }
+            self.state.store(Arc::new(loaded));
+        }
+    }
+
     fn material(&self) -> Option<Arc<TlsMaterial>> {
         match &**self.state.load() {
             Ok(tls) => Some(tls.material.clone()),
@@ -236,12 +249,9 @@ impl SharedClientTls {
         }
     }
 
-    /// Lets the next connect try the load again at once.
-    fn retry_now(&self) {
-        *self
-            .last_attempt
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    /// Lets the next connect try the load again at once. Waits for a load in progress.
+    async fn retry_now(&self) {
+        *self.last_attempt.lock().await = None;
     }
 }
 
@@ -278,7 +288,8 @@ type ClientFactory<T> = Arc<dyn Fn(OtelGrpcService<Channel>, usize) -> T + Send 
 /// reconnect, which is why this is generous rather than tight.
 ///
 /// A client with one fixed target uses `Duration::MAX` instead. Its pool slots
-/// rotate by connection age rather than by idle time.
+/// are replaced by connection age, or after a TLS reload, rather than by idle
+/// time.
 const IDLE_CONNECTION_TTL: Duration = Duration::from_secs(600);
 
 /// How often connections to targets nobody is calling are dropped.
@@ -656,8 +667,12 @@ where
         // this work.
         let (endpoint, tls) = match &self.tls {
             Some(shared) => {
-                let tls = shared.current()?;
-                tls.material.start_reloader(TLS_RELOAD_INTERVAL);
+                let tls = shared.current().await?;
+                // The first connection waits for one look at the files, so that it presents a
+                // certificate renewed since the client was built.
+                tls.material
+                    .start_reloader_checked(TLS_RELOAD_INTERVAL)
+                    .await;
                 let tls = TlsSnapshot::of(tls);
                 (
                     build_endpoint(target.clone(), config, Some(&tls))?,
@@ -847,8 +862,8 @@ where
 
     /// Lets the next connect try loading the TLS settings again at once.
     #[doc(hidden)]
-    pub fn retry_tls_load_now(&self) {
-        self.pool[0].retry_tls_load_now()
+    pub async fn retry_tls_load_now(&self) {
+        self.pool[0].retry_tls_load_now().await
     }
 
     fn select(&self) -> &MultiTargetGrpcClient<T> {
@@ -1106,9 +1121,9 @@ where
 
     /// Lets the next connect try loading the TLS settings again at once.
     #[doc(hidden)]
-    pub fn retry_tls_load_now(&self) {
+    pub async fn retry_tls_load_now(&self) {
         if let Some(tls) = &self.connections.tls {
-            tls.retry_now();
+            tls.retry_now().await;
         }
     }
 

@@ -107,11 +107,18 @@ enum RejectionKind {
     NoAnswer,
 }
 
+/// TLS files that differ from what the clients in use were built from: the files as they are now,
+/// and the settings read and checked from them.
+struct ChangedFiles {
+    files: Vec<ReadFile>,
+    settings: Result<EtcdConnectSettings, ShardManagerError>,
+}
+
 /// Rebuilds both etcd clients from the TLS files (and the password file) when they change.
 pub struct EtcdClients {
-    config: EtcdConfig,
+    config: Arc<EtcdConfig>,
     /// What the clients in use were built from. Never held across an await.
-    settings: Mutex<EtcdConnectSettings>,
+    settings: Mutex<Arc<EtcdConnectSettings>>,
     /// The last turned-down set of files. Never held across an await.
     rejected: Mutex<Option<Rejection>>,
     requests: RequestClient,
@@ -126,8 +133,8 @@ impl EtcdClients {
         election: ElectionClient,
     ) -> Arc<Self> {
         Arc::new(Self {
-            config,
-            settings: Mutex::new(settings),
+            config: Arc::new(config),
+            settings: Mutex::new(Arc::new(settings)),
             rejected: Mutex::new(None),
             requests,
             election,
@@ -151,22 +158,30 @@ impl EtcdClients {
     /// without its bytes changing: etcd may start to trust its CA, and a certificate that is not
     /// valid yet becomes valid with time. Only the log and the failure counter are limited to one
     /// per distinct set of files.
+    ///
+    /// The file reads and the checks run on Tokio's blocking pool; the probe and the client builds
+    /// run here.
     pub async fn reload_if_files_changed(&self) -> TlsReload {
-        if !self
-            .settings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .tls_files_changed()
-        {
-            *self
-                .rejected
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-            return TlsReload::Unchanged;
-        }
-        let files = EtcdConnectSettings::snapshot_of_files(&self.config);
+        let (files, settings) = match self.look_at_files().await {
+            Ok(None) => {
+                *self
+                    .rejected
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                return TlsReload::Unchanged;
+            }
+            Ok(Some(ChangedFiles { files, settings })) => (files, settings),
+            Err(err) => {
+                error!(
+                    error = %err,
+                    "Reading the etcd TLS files failed; the etcd clients keep the files they have, \
+                     and the files are read again at the next poll"
+                );
+                return TlsReload::Rejected(format!("reading the TLS files failed: {err}"));
+            }
+        };
 
-        let settings = match EtcdConnectSettings::load_quietly(&self.config) {
+        let settings = match settings {
             Ok(settings) => settings,
             Err(err) => {
                 let reason = err.to_string();
@@ -219,13 +234,34 @@ impl EtcdClients {
         *self
             .settings
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = settings;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(settings);
         *self
             .rejected
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         info!("etcd TLS files reloaded; new connections use them");
         TlsReload::Reloaded
+    }
+
+    /// The TLS files when they differ from what the clients in use were built from; `None` when
+    /// they do not. Reads the files on Tokio's blocking pool. A panic there is the `JoinError`.
+    async fn look_at_files(&self) -> Result<Option<ChangedFiles>, tokio::task::JoinError> {
+        let in_use = self
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let config = self.config.clone();
+        tokio::task::spawn_blocking(move || {
+            if !in_use.tls_files_changed() {
+                return None;
+            }
+            Some(ChangedFiles {
+                files: EtcdConnectSettings::snapshot_of_files(&config),
+                settings: EtcdConnectSettings::load_quietly(&config),
+            })
+        })
+        .await
     }
 
     /// Builds both clients from `settings` and probes etcd with the request client. The two are
@@ -456,5 +492,119 @@ mod tests {
         let other = EtcdConnectSettings::snapshot_of_files(&clients.config);
         let fresh = clients.first_report(other, RejectionKind::Refused);
         assert!(fresh.log && fresh.count);
+    }
+
+    /// A file whose read blocks until the test lets it through: the path becomes a symbolic link
+    /// to a FIFO, and opening a FIFO for reading waits for a writer. A thread lets the read through
+    /// once the test has seen its runtime run another task, or after 3 s, so that a runtime blocked
+    /// by the read fails the test instead of hanging it.
+    #[cfg(unix)]
+    struct SlowRead {
+        progressed: Arc<std::sync::atomic::AtomicBool>,
+        releaser: std::thread::JoinHandle<(bool, bool)>,
+    }
+
+    #[cfg(unix)]
+    impl SlowRead {
+        /// From the release on, `path` is an ordinary file that holds `content`, and the read
+        /// blocked on the FIFO gets the same `content`.
+        fn start(path: &std::path::Path, content: &[u8]) -> Self {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            let beside = |suffix: &str| {
+                let mut name = path.file_name().unwrap().to_os_string();
+                name.push(suffix);
+                path.with_file_name(name)
+            };
+            let fifo = beside(".fifo");
+            let staged = beside(".staged");
+            let made = std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap();
+            assert!(made.success(), "mkfifo failed");
+            let _ = std::fs::remove_file(path);
+            std::os::unix::fs::symlink(&fifo, path).unwrap();
+            let progressed = Arc::new(AtomicBool::new(false));
+            let releaser = std::thread::spawn({
+                let progressed = progressed.clone();
+                let path = path.to_path_buf();
+                let content = content.to_vec();
+                move || {
+                    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                    while !progressed.load(Ordering::SeqCst) && std::time::Instant::now() < deadline
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    let in_time = progressed.load(Ordering::SeqCst);
+                    std::fs::write(&staged, &content).unwrap();
+                    std::fs::rename(&staged, &path).unwrap();
+                    // Opening the FIFO for writing waits for the read that is blocked on it.
+                    let (written, was_written) = std::sync::mpsc::channel();
+                    let writer = std::thread::spawn({
+                        let fifo = fifo.clone();
+                        move || {
+                            let _ = std::fs::write(&fifo, &content);
+                            let _ = written.send(());
+                        }
+                    });
+                    let was_read = was_written.recv_timeout(Duration::from_secs(5)).is_ok();
+                    if !was_read {
+                        // Nothing reads the FIFO: open it here, so that the writer ends.
+                        let _ = std::fs::File::open(&fifo);
+                    }
+                    writer.join().unwrap();
+                    (in_time, was_read)
+                }
+            });
+            Self {
+                progressed,
+                releaser,
+            }
+        }
+
+        /// Records that the runtime ran another task while the read was blocked.
+        fn progressed(&self) {
+            self.progressed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn finish(self) {
+            let (in_time, was_read) = self.releaser.join().unwrap();
+            assert!(was_read, "nothing read the slow file");
+            assert!(
+                in_time,
+                "the runtime ran no other task while a TLS file read was blocked"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_slow_tls_file_read_does_not_block_the_runtime() {
+        let files = PemFiles::new();
+        let key = std::fs::read(files.path("key.pem")).unwrap();
+        // One thread for the whole runtime, so that a read on it would stop every task.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (outcome, read) = runtime.block_on(async {
+            let clients = clients_over(&files).await;
+            // Released with the same bytes, so that the look finds the files unchanged.
+            let read = SlowRead::start(&files.path("key.pem"), &key);
+            let reload = tokio::spawn({
+                let clients = clients.clone();
+                async move { clients.reload_if_files_changed().await }
+            });
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            read.progressed();
+            let outcome = tokio::time::timeout(Duration::from_secs(10), reload)
+                .await
+                .expect("the reload did not end")
+                .unwrap();
+            (outcome, read)
+        });
+        read.finish();
+        assert_eq!(outcome, TlsReload::Unchanged);
     }
 }

@@ -18,9 +18,10 @@
 use super::pem::{CertificateInfo, PemSource, TlsError, check_key_matches, describe_certificates};
 use crate::metrics::tls::{record_certificate_not_after, record_reload_failure};
 use arc_swap::ArcSwap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime};
-use tokio::task::JoinHandle;
+use tokio::sync::OnceCell;
+use tokio::task::{JoinError, JoinHandle};
 use tracing::{error, info};
 
 /// How often the gRPC servers and clients, and the shard manager's etcd clients, look at their TLS
@@ -73,8 +74,12 @@ pub struct TlsMaterial {
     /// The file bytes of the last rejected set, so one bad set is reported once.
     rejected: Mutex<Option<[Vec<u8>; 3]>>,
     reloader: OnceLock<JoinHandle<()>>,
+    /// Set once a client's first look at the files is done; see [`Self::start_reloader_checked`].
+    first_check: OnceCell<()>,
     /// Serializes the read, compare, validate and store of one reload, so an older read can never
-    /// be stored over a newer one. Readers of `current` never take it.
+    /// be stored over a newer one. Readers of `current` never take it. Only
+    /// [`Self::reload_if_changed`] takes it, and the services run that on Tokio's blocking pool,
+    /// so a wait for it never holds up an async worker thread.
     reload_lock: Mutex<()>,
     /// Test-only seam: called once the files are read, before anything is compared or stored.
     #[cfg(test)]
@@ -95,6 +100,7 @@ impl TlsMaterial {
             current: ArcSwap::from_pointee(loaded),
             rejected: Mutex::new(None),
             reloader: OnceLock::new(),
+            first_check: OnceCell::new(),
             reload_lock: Mutex::new(()),
             #[cfg(test)]
             after_read: Mutex::new(None),
@@ -125,6 +131,9 @@ impl TlsMaterial {
     /// (a certificate that is not yet valid becomes usable without its bytes changing); a usable
     /// set is swapped in, an unusable one is kept out. The error log and the failure counter fire
     /// once per distinct rejected set of bytes.
+    ///
+    /// This blocks: it reads files, checks certificates and waits for any other reload. The poller
+    /// and a client's first look run it on Tokio's blocking pool.
     pub fn reload_if_changed(&self) -> ReloadOutcome {
         self.reload_if_changed_at(SystemTime::now())
     }
@@ -203,26 +212,69 @@ impl TlsMaterial {
     }
 
     /// Spawns, once, a task that calls `reload_if_changed` every `interval` while any `Arc` of
-    /// this value lives. Spawns nothing when no source is a file. Needs a Tokio runtime.
+    /// this value lives. Spawns nothing when no source is a file. Needs a Tokio runtime. Does not
+    /// block: it reads no file, and each reload runs on Tokio's blocking pool. A reload that
+    /// panics is logged, and the next one runs at the next interval.
     ///
-    /// Looks at the files once before it spawns: a client starts its reloader at its first
-    /// connection, which can come long after the files were loaded, and that connection must not
-    /// wait a whole interval for a certificate that was renewed in the meantime.
+    /// For a server, which loaded the files just before. A client uses
+    /// [`Self::start_reloader_checked`].
     pub fn start_reloader(self: &Arc<Self>, interval: Duration) {
         if !self.has_files() {
             return;
         }
         self.reloader.get_or_init(|| {
-            self.reload_if_changed();
             let weak = Arc::downgrade(self);
+            let name = self.name.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(interval).await;
-                    let Some(me) = weak.upgrade() else { break };
-                    me.reload_if_changed();
+                    if weak.strong_count() == 0 {
+                        break;
+                    }
+                    match Self::reload_on_blocking_thread(weak.clone()).await {
+                        Ok(Some(_)) => {}
+                        Ok(None) => break,
+                        Err(error) => error!(
+                            r#use = %name,
+                            error = %error,
+                            "The TLS file reload failed; trying again at the next poll"
+                        ),
+                    }
                 }
             })
         });
+    }
+
+    /// [`Self::start_reloader`] for a client, which starts it at its first connection: that can
+    /// come long after the files were loaded, and the connection must not wait a whole interval
+    /// for a certificate that was renewed in the meantime. So this looks at the files once first,
+    /// on Tokio's blocking pool, and returns when that look is done. Concurrent first connections
+    /// all wait for the same look; later calls return at once.
+    pub async fn start_reloader_checked(self: &Arc<Self>, interval: Duration) {
+        if !self.has_files() {
+            return;
+        }
+        self.first_check
+            .get_or_init(|| async {
+                if let Err(error) = Self::reload_on_blocking_thread(Arc::downgrade(self)).await {
+                    error!(
+                        r#use = %self.name,
+                        error = %error,
+                        "The first look at the TLS files failed; the poller tries again"
+                    );
+                }
+                self.start_reloader(interval);
+            })
+            .await;
+    }
+
+    /// Runs [`Self::reload_if_changed`] on Tokio's blocking pool, so that the file reads, the
+    /// checks and `reload_lock` stay off the async worker threads. The material is held only
+    /// while the reload runs; `None` when it is gone. A panic in the reload is the `JoinError`.
+    async fn reload_on_blocking_thread(
+        weak: Weak<Self>,
+    ) -> Result<Option<ReloadOutcome>, JoinError> {
+        tokio::task::spawn_blocking(move || weak.upgrade().map(|me| me.reload_if_changed())).await
     }
 
     #[cfg(test)]
@@ -573,6 +625,45 @@ mod tests {
         assert_eq!(m.current().certificate.sha256, sha(&cert2));
     }
 
+    #[test]
+    fn a_held_material_stays_current_until_a_changed_set_is_swapped_in() {
+        let f = Fixture::new();
+        let m = TlsMaterial::load("t-is-current", f.sources()).unwrap();
+        let held = m.current();
+        assert!(matches!(m.reload_if_changed(), ReloadOutcome::Unchanged));
+        assert!(m.is_current(&held));
+        f.write("tls.key", "not a key");
+        assert!(matches!(m.reload_if_changed(), ReloadOutcome::Rejected(_)));
+        assert!(m.is_current(&held));
+        let (cert, key) = signed_by(&f.ca, None);
+        f.write("tls.crt", &cert);
+        f.write("tls.key", &key);
+        assert!(matches!(m.reload_if_changed(), ReloadOutcome::Reloaded));
+        assert!(!m.is_current(&held));
+        assert!(m.is_current(&m.current()));
+    }
+
+    #[test]
+    async fn a_panic_in_one_reload_does_not_end_the_poller() {
+        let f = Fixture::new();
+        let m = TlsMaterial::load("t-panic", f.sources()).unwrap();
+        m.start_reloader(Duration::from_millis(20));
+        *m.after_read.lock().unwrap() = Some(Arc::new(|| panic!("a reload panics")));
+        let (cert, key) = signed_by(&f.ca, None);
+        f.write("tls.crt", &cert);
+        f.write("tls.key", &key);
+        let expected = sha(&cert);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while m.current().certificate.sha256 != expected {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no reload within 2 s after a panicking one"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(m.after_read.lock().unwrap().is_none(), "the hook never ran");
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_kubernetes_style_symlink_swap_is_seen() {
@@ -641,9 +732,60 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "no reload within 2 s");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        // The task holds only a weak reference: no strong reference outlives the last `Arc`.
+        // The task holds only a weak reference: once a reload in flight ends, no strong reference
+        // outlives the last `Arc`.
         let weak = Arc::downgrade(&m);
         drop(m);
-        assert!(weak.upgrade().is_none());
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while weak.strong_count() > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the material outlives its last Arc"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[test]
+    async fn concurrent_first_connections_all_wait_for_the_one_first_look() {
+        let f = Fixture::new();
+        let m = TlsMaterial::load("t-first-look", f.sources()).unwrap();
+        let (cert, key) = signed_by(&f.ca, None);
+        f.write("tls.crt", &cert);
+        f.write("tls.key", &key);
+        let (parked_tx, parked_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        *m.after_read.lock().unwrap() = Some(Arc::new(move || {
+            parked_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+        }));
+        let first_connection = |m: Arc<TlsMaterial>| {
+            tokio::spawn(async move {
+                m.start_reloader_checked(Duration::from_secs(3600)).await;
+                m.current().certificate.sha256.clone()
+            })
+        };
+        let first = first_connection(m.clone());
+        // The first look has read the renewed files and is parked on its blocking thread.
+        tokio::task::spawn_blocking(move || parked_rx.recv().unwrap())
+            .await
+            .unwrap();
+        // Taken by any other look that reads the files.
+        *m.after_read.lock().unwrap() = Some(Arc::new(|| {}));
+        let second = first_connection(m.clone());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !second.is_finished(),
+            "a concurrent first connection did not wait for the first look"
+        );
+        release_tx.send(()).unwrap();
+        assert_eq!(first.await.unwrap(), sha(&cert));
+        assert_eq!(second.await.unwrap(), sha(&cert));
+        assert!(
+            m.after_read.lock().unwrap().is_some(),
+            "the second first connection made a look of its own"
+        );
+        assert!(m.reloader_started());
     }
 }

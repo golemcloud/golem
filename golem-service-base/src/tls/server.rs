@@ -79,6 +79,7 @@ impl GrpcServerTls {
             source: use_name.to_string(),
             reason,
         })?;
+        // The files were read just above, so the poller needs no first look: this only spawns it.
         material.start_reloader(reload_interval);
         Ok(Arc::new(Self {
             material,
