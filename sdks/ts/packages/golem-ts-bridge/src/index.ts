@@ -14,6 +14,8 @@
 
 import WebSocket, { type RawData } from 'ws';
 
+export { Datetime } from './datetime';
+
 export type PhantomId = string;
 
 export type GolemServer =

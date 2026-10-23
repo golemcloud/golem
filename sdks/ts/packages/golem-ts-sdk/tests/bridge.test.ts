@@ -1155,14 +1155,14 @@ describe('public bridge runtime', () => {
   });
 
   it.each([1.5, Number.NaN])('rejects invalid datetime nanoseconds (%s)', (nanoseconds) => {
-    expect(() => bridge.datetimeToISOString({ seconds: 0n, nanoseconds })).toThrow(/nanoseconds/i);
+    expect(() => bridge.Datetime.toISOString({ seconds: 0n, nanoseconds })).toThrow(/nanoseconds/i);
   });
 
   it('rejects datetimes outside the canonical four-digit-year domain', () => {
-    expect(() => bridge.datetimeToISOString({ seconds: 253402300800n, nanoseconds: 0 })).toThrow();
-    const endpoint = bridge.datetimeToISOString({ seconds: 253402214400n, nanoseconds: 0 });
-    expect(() => bridge.datetimeFromISOString(endpoint)).not.toThrow();
-    expect(bridge.datetimeToISOString({ seconds: -62167219200n, nanoseconds: 0 })).toBe(
+    expect(() => bridge.Datetime.toISOString({ seconds: 253402300800n, nanoseconds: 0 })).toThrow();
+    const endpoint = bridge.Datetime.toISOString({ seconds: 253402214400n, nanoseconds: 0 });
+    expect(() => bridge.Datetime.parse(endpoint)).not.toThrow();
+    expect(bridge.Datetime.toISOString({ seconds: -62167219200n, nanoseconds: 0 })).toBe(
       '0000-01-01T00:00:00Z',
     );
   });
@@ -1170,13 +1170,13 @@ describe('public bridge runtime', () => {
   it.each(['2023-02-29T00:00:00Z', '2024-02-30T00:00:00Z', '2024-01-01', '2024-01-01T00:00:00'])(
     'rejects invalid or incomplete ISO instants (%s)',
     (value) => {
-      expect(() => bridge.datetimeFromISOString(value)).toThrow();
+      expect(() => bridge.Datetime.parse(value)).toThrow();
     },
   );
 
   it('preserves valid ISO instant fractions', () => {
-    const datetime = bridge.datetimeFromISOString('2024-02-29T12:34:56.123456789Z');
+    const datetime = bridge.Datetime.parse('2024-02-29T12:34:56.123456789Z');
     expect(datetime).toEqual({ seconds: 1709210096n, nanoseconds: 123456789 });
-    expect(bridge.datetimeToISOString(datetime)).toBe('2024-02-29T12:34:56.123456789Z');
+    expect(bridge.Datetime.toISOString(datetime)).toBe('2024-02-29T12:34:56.123456789Z');
   });
 });

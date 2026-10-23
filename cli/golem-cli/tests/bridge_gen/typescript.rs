@@ -134,7 +134,7 @@ fn compile_guest_durable_agent() {
     std::fs::write(
         package_dir.join("bigint-fixture.ts"),
         r#"import { GuestAgent } from './guest-agent-guest-client';
-const client = GuestAgent.newPhantom('example', ['label'], undefined, new Map(), '2026-01-01T00:00:00Z', 18446744073709551615n);
+const client = GuestAgent.newPhantom('example', ['label'], undefined, new Map(), { seconds: 1767225600n, nanoseconds: 0 }, 18446744073709551615n);
 const output: Promise<bigint> = client.read();
 void output;
 "#,
@@ -997,8 +997,9 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(source.contains("{ tag: 'list', elements:"));
     assert!(source.contains("{ tag: 'map', entries:"));
     assert!(source.contains("{ tag: 'option', value:"));
-    assert!(source.contains("base.datetimeFromISOString("));
-    assert!(source.contains("base.datetimeToISOString("));
+    assert!(source.contains("{ tag: 'datetime', value: "));
+    assert!(source.contains("n.value as base.Datetime"));
+    assert!(!source.contains("ISOString"));
     assert!(source.contains(": bigint"));
     assert!(source.contains("{ tag: 'u64', value:"));
     assert!(!source.contains("{ tag: 'u64', value: BigInt("));
@@ -1160,8 +1161,9 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(source.contains("n.unionTag"));
     assert!(source.contains("{ tag: 'path', value:"));
     assert!(source.contains("{ tag: 'url', value:"));
-    assert!(source.contains("base.datetimeFromISOString("));
-    assert!(source.contains("base.datetimeToISOString("));
+    assert!(source.contains("{ tag: 'datetime', value: "));
+    assert!(source.contains("n.value as base.Datetime"));
+    assert!(!source.contains("ISOString"));
     assert!(source.contains("{ tag: 'duration', nanoseconds:"));
     assert!(source.contains("base.UnstructuredTextType<['en', 'de']>"));
     assert!(source.contains("base.UnstructuredBinaryType<['image/png']>"));
@@ -2601,6 +2603,244 @@ await assert.rejects(
 );
 for (const client of wss.clients) client.terminate();
 await new Promise((resolve) => wss.close(resolve));
+"#
+        ),
+    );
+}
+
+fn time_record() -> SchemaType {
+    SchemaType::record(vec![
+        named_field("at", SchemaType::datetime()),
+        named_field("maybe-at", SchemaType::option(SchemaType::datetime())),
+        named_field("history", SchemaType::list(SchemaType::datetime())),
+        named_field("timeout", SchemaType::duration()),
+        named_field(
+            "file",
+            SchemaType::path(PathSpec {
+                direction: PathDirection::InOut,
+                kind: PathKind::Any,
+                allowed_mime_types: None,
+                allowed_extensions: None,
+            }),
+        ),
+        named_field("link", SchemaType::url(UrlRestrictions::default())),
+    ])
+}
+
+fn time_methods() -> Vec<(&'static str, SchemaType)> {
+    vec![
+        ("echo-datetime", SchemaType::datetime()),
+        ("echo-duration", SchemaType::duration()),
+        (
+            "echo-path",
+            SchemaType::path(PathSpec {
+                direction: PathDirection::InOut,
+                kind: PathKind::Any,
+                allowed_mime_types: None,
+                allowed_extensions: None,
+            }),
+        ),
+        ("echo-url", SchemaType::url(UrlRestrictions::default())),
+        ("echo-record", ref_to("TimeRecord")),
+    ]
+}
+
+fn time_agent(name: &str) -> AgentTypeSchema {
+    agent(
+        name,
+        "typescript",
+        vec![field("since", SchemaType::datetime())],
+        time_methods()
+            .into_iter()
+            .map(|(name, typ)| method(name, vec![field("value", typ.clone())], Some(typ)))
+            .collect(),
+        vec![def("TimeRecord", time_record())],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn guest_datetime_duration_path_and_url_use_sdk_types_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = time_agent("TimeGuestAgent");
+    let package_dir = target.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::Guest,
+    ));
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("time-guest-agent-guest-client.ts")).unwrap();
+    for expected in [
+        "at: base.Datetime;",
+        "maybe_at?: base.Datetime;",
+        "history: base.Datetime[];",
+        "timeout: bigint;",
+        "file: string;",
+        "link: string;",
+        "{ tag: 'datetime', value: ",
+        "n.value as base.Datetime",
+        "{ tag: 'duration', nanoseconds: ",
+        "{ tag: 'path', value: ",
+        "{ tag: 'url', value: ",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    assert!(!source.contains("ISOString"), "{source}");
+    std::fs::write(
+        package_dir.join("test.ts"),
+        r#"import { TimeGuestAgent } from './time-guest-agent-guest-client';
+import { Datetime, bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
+export async function usage(): Promise<void> {
+  const since: Datetime = Datetime.parse('2024-02-29T12:34:56.12+02:00');
+  const client = TimeGuestAgent.get(since);
+  const at: sdkBridge.Datetime = await client.echo_datetime(Datetime.fromDate(new Date()));
+  const date: Date = Datetime.toDate(at);
+  const text: string = Datetime.toISOString(at);
+  const timeout: bigint = await client.echo_duration(1_500_000_000n);
+  const file: string = await client.echo_path('/data/file.txt');
+  const link: string = await client.echo_url('https://example.com/file');
+  const record = await client.echo_record({ at, history: [at], timeout, file, link });
+  const maybe: Datetime | undefined = record.maybe_at;
+  await client.echo_datetime({ seconds: 0n, nanoseconds: 0 });
+  // @ts-expect-error datetime is not a string
+  await client.echo_datetime('2024-02-29T12:34:56Z');
+  // @ts-expect-error datetime is not a Date
+  await client.echo_datetime(new Date());
+  // @ts-expect-error duration is bigint nanoseconds
+  await client.echo_duration(1.5);
+  void [date, text, maybe];
+}
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn external_datetime_duration_path_and_url_round_trip_in_canonical_form() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    generate_and_compile(time_agent("TimeExternalAgent"), target);
+    let package = generated_package_dir(target, "time-external-agent");
+    let source = std::fs::read_to_string(package.join("time-external-agent-client.ts")).unwrap();
+    for expected in [
+        "at: base.Datetime;",
+        "maybe_at?: base.Datetime;",
+        "history: base.Datetime[];",
+        "timeout: bigint;",
+        "file: string;",
+        "link: string;",
+        "base.Datetime.toISOString(",
+        "base.Datetime.parse(",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    let graphs = serde_json::Value::Object(
+        time_methods()
+            .into_iter()
+            .map(|(name, typ)| {
+                let root = match typ {
+                    SchemaType::Ref { .. } => time_record(),
+                    other => other,
+                };
+                (
+                    name.to_string(),
+                    serde_json::to_value(golem_common::schema::graph::SchemaGraph {
+                        defs: vec![],
+                        root,
+                    })
+                    .unwrap(),
+                )
+            })
+            .collect(),
+    );
+    run_node_script(
+        &package,
+        "round-trip.mjs",
+        &format!(
+            r#"import assert from 'node:assert/strict';
+import http from 'node:http';
+import {{ Datetime }} from '@golemcloud/golem-ts-bridge';
+import {{ TimeExternalAgent, configure }} from './time-external-agent-client.js';
+
+const graphs = {graphs};
+let override = undefined;
+let sent = undefined;
+const server = http.createServer((req, res) => {{
+  let body = '';
+  req.on('data', (chunk) => (body += chunk));
+  req.on('end', () => {{
+    const request = JSON.parse(body);
+    sent = request.methodParameters.value.fields[0];
+    const value = override ?? sent;
+    override = undefined;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({{
+      agentId: {{ componentId: 'component', agentId: 'agent' }}, idempotencyKey: 'key',
+      result: {{ graph: graphs[request.methodName], value }},
+    }}));
+  }});
+}});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+configure({{
+  server: {{ type: 'custom', url: `http://127.0.0.1:${{server.address().port}}`, token: 'test' }},
+  application: 'app', environment: 'env',
+}});
+const remote = new TimeExternalAgent(
+  {{ kind: 'record', value: {{ fields: [] }} }}, undefined, {{ componentId: 'component', agentId: 'agent' }},
+);
+
+const at = Datetime.parse('2024-03-01T01:04:56.120+02:30');
+assert.deepEqual(await remote.echo_datetime(at), at);
+assert.deepEqual(sent, {{ kind: 'datetime', value: {{ value: '2024-02-29T22:34:56.12Z' }} }});
+const whole = {{ seconds: 0n, nanoseconds: 0 }};
+assert.deepEqual(await remote.echo_datetime(whole), whole);
+assert.deepEqual(sent, {{ kind: 'datetime', value: {{ value: '1970-01-01T00:00:00Z' }} }});
+override = {{ kind: 'datetime', value: {{ value: '9999-12-31T23:59:59.999999999Z' }} }};
+assert.deepEqual(await remote.echo_datetime(at), {{ seconds: 253402300799n, nanoseconds: 999999999 }});
+override = {{ kind: 'datetime', value: {{ value: '0000-01-01T00:00:00.000000000Z' }} }};
+assert.deepEqual(await remote.echo_datetime(at), {{ seconds: -62167219200n, nanoseconds: 0 }});
+await assert.rejects(
+  remote.echo_datetime({{ seconds: 253402300800n, nanoseconds: 0 }}),
+  /outside the years 0000\.\.9999/,
+);
+await assert.rejects(
+  remote.echo_datetime({{ seconds: -62167219201n, nanoseconds: 0 }}),
+  /outside the years 0000\.\.9999/,
+);
+await assert.rejects(remote.echo_datetime({{ seconds: 0n, nanoseconds: 1e9 }}), /nanoseconds/);
+override = {{ kind: 'datetime', value: {{ value: '2023-02-29T00:00:00Z' }} }};
+await assert.rejects(remote.echo_datetime(at));
+
+assert.equal(await remote.echo_duration(-1_500_000_000n), -1_500_000_000n);
+assert.deepEqual(sent, {{ kind: 'duration', value: {{ nanoseconds: '-1500000000' }} }});
+const maxDuration = (1n << 63n) - 1n;
+assert.equal(await remote.echo_duration(maxDuration), maxDuration);
+assert.deepEqual(sent, {{ kind: 'duration', value: {{ nanoseconds: maxDuration.toString() }} }});
+
+assert.equal(await remote.echo_path('/data/file.txt'), '/data/file.txt');
+assert.deepEqual(sent, {{ kind: 'path', value: {{ path: '/data/file.txt' }} }});
+assert.equal(await remote.echo_url('https://example.com/a?b=c'), 'https://example.com/a?b=c');
+assert.deepEqual(sent, {{ kind: 'url', value: {{ url: 'https://example.com/a?b=c' }} }});
+
+const record = {{
+  at, maybe_at: whole, history: [whole, at], timeout: 5n, file: 'notes.txt', link: 'https://example.com',
+}};
+assert.deepEqual(await remote.echo_record(record), record);
+assert.deepEqual(sent.value.fields[0], {{ kind: 'datetime', value: {{ value: '2024-02-29T22:34:56.12Z' }} }});
+assert.deepEqual(sent.value.fields[2].value.elements[0], {{ kind: 'datetime', value: {{ value: '1970-01-01T00:00:00Z' }} }});
+const {{ maybe_at, ...withoutMaybe }} = record;
+assert.deepEqual(await remote.echo_record(withoutMaybe), {{ ...withoutMaybe, maybe_at: undefined }});
+server.close();
 "#
         ),
     );

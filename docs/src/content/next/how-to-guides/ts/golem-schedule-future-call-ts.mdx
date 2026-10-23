@@ -12,42 +12,46 @@ takes a `Datetime` as the first argument, followed by the method's input record
 `CancellationToken`; ignore the token when cancellation is not needed.
 
 ```typescript
+import { Datetime } from '@golemcloud/golem-ts-sdk';
 import { Counter } from './counter-agent.js';
 
 const counter = Counter.client.get({ name: 'my-counter' });
 
 // Schedule increment to run 60 seconds from now.
-const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-counter.increment.schedule({ seconds: nowSecs + 60n, nanoseconds: 0 });
+const inOneMinute = Datetime.fromDate(new Date(Date.now() + 60_000));
+counter.increment.schedule(inOneMinute);
 
 // Schedule with arguments.
 const reporter = ReportAgent.client.get({ name: 'daily' });
 reporter.generateReport.schedule(
-    { seconds: BigInt(tomorrowMidnight), nanoseconds: 0 },
+    Datetime.parse('2026-01-02T00:00:00Z'),
     { kind: 'summary' },
 );
 ```
 
 ## Datetime Type
 
-The `Datetime` argument represents a point in time as seconds + nanoseconds since the Unix epoch. It is a plain object; construct it inline:
+The `Datetime` argument is the SDK `Datetime` type: a plain
+`{ seconds: bigint, nanoseconds: number }` object with seconds since the Unix
+epoch in UTC. Import it from the SDK and build values with its helpers:
 
 ```typescript
-const at = {
-    seconds: BigInt(1700000000),  // Unix timestamp as a BigInt
-    nanoseconds: 0,               // Sub-second precision
-};
-```
+import { Datetime } from '@golemcloud/golem-ts-sdk';
 
-Note: `seconds` is a `BigInt` in the TypeScript binding. If you want the exact
-type, import it as `import type { Datetime } from 'golem:agent/host@2.0.0'`.
+const fromDate = Datetime.fromDate(new Date(Date.now() + 5 * 60_000));
+const fromText = Datetime.parse('2026-01-02T09:30:00+02:00'); // any RFC 3339 offset, stored as UTC
+const inline: Datetime = { seconds: 1700000000n, nanoseconds: 0 };
+
+Datetime.toISOString(fromText); // '2026-01-02T07:30:00Z'
+Datetime.toDate(inline);        // a JavaScript Date (millisecond precision)
+```
 
 ## Cancellation
 
 Keep the `CancellationToken` returned by `.schedule(at, input)` and call `.cancel()` any time before the scheduled time to cancel the invocation:
 
 ```typescript
-const token = counter.increment.schedule({ seconds: nowSecs + 60n, nanoseconds: 0 });
+const token = counter.increment.schedule(Datetime.fromDate(new Date(Date.now() + 60_000)));
 // …later, if the run is no longer wanted:
 token.cancel();
 ```
