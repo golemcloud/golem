@@ -1,7 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { templateMatrix } from './template-matrix.mjs';
+import {
+  installToolProcessBridge,
+  toolProcessModules,
+} from '../../../../javascript/tool-process-template.mjs';
 
 // ---------------------------------------------------------------------------
 // The generated Preview 3 wrapper must build its async WIT bindings with Golem's
@@ -52,7 +56,10 @@ function useForkedWitBindgen(cargoTomlPath) {
 // ---------------------------------------------------------------------------
 
 const sourceWit = resolve(process.cwd(), '../../wit');
-const sharedModules = [['@golemcloud/golem-ts-sdk/middleware', 'dist/middleware.mjs']];
+const sharedModules = [
+  ['@golemcloud/golem-ts-sdk/middleware', 'dist/middleware.mjs'],
+  ...toolProcessModules,
+];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((entry) => {
@@ -75,7 +82,14 @@ if (offenders.length > 0) {
 }
 
 for (const template of templateMatrix) {
-  rmSync(template.wrapperDirectory, { recursive: true, force: true });
+  // Keep Cargo's cache when regenerating the wrapper sources.
+  if (existsSync(template.wrapperDirectory)) {
+    for (const entry of readdirSync(template.wrapperDirectory, { withFileTypes: true })) {
+      if (entry.name !== 'target') {
+        rmSync(join(template.wrapperDirectory, entry.name), { recursive: true, force: true });
+      }
+    }
+  }
 
   const modules = [[template.sdkModuleName, template.sdkEntry], ...sharedModules];
 
@@ -104,4 +118,5 @@ for (const template of templateMatrix) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 
   useForkedWitBindgen(resolve(process.cwd(), template.wrapperDirectory, 'Cargo.toml'));
+  installToolProcessBridge(resolve(process.cwd(), template.wrapperDirectory));
 }

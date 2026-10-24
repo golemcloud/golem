@@ -36,6 +36,25 @@ and an installed command always run through npm.
 Inline evaluation started through the runtime's `node:child_process` adapter, for example from
 a package script, does not accept the `*-typescript` input types.
 
+## Child processes and bound tools
+
+Scripts can use `node:child_process` to call tools bound to the calling component.
+The command name and arguments use the same command schema as the Bash tool.
+Local Node scripts and package launchers take precedence over a tool with the
+same name. No host operating-system process is started.
+
+Set `GOLEM_NODE_TOOL_PROCESSES=0` or `false` to disable this dispatch while keeping
+local Node scripts available. The switch is checked for each call. It is a
+compatibility option, not a permission control; Golem tool permissions still apply.
+The shared TypeScript SDK template installs the adapter in both the main runtime
+and fresh JavaScript execution runtimes. Its build requires the generic WRQJS
+process-backend and runtime-init hooks.
+
+Local Node children started by npm currently finish when synchronous script
+evaluation returns. Use synchronous tool calls in those lifecycle scripts;
+asynchronous work can outlive output capture. This does not affect asynchronous
+tool calls awaited by the built-in `node` runner itself.
+
 ## Releases and builds
 
 The source tool coordinates are `node@0.1.10`, `npm@10.9.9+golem.9`,

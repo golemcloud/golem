@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::{ParsedToolArguments, parse, parse_with_variables};
+use crate::schema::tool::process::{ParsedProcessCommand, parse_command};
 use crate::schema::tool::*;
 use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
 use std::collections::HashMap;
@@ -146,6 +147,140 @@ fn env_option(name: &str, shape: OptionShape, variable: &str) -> OptionSpec {
 
 fn string(value: &str) -> SchemaValue {
     SchemaValue::String(value.into())
+}
+
+#[test]
+fn process_command_preparation_preserves_canonical_input_and_selected_io() {
+    let mut command = body();
+    command
+        .positionals
+        .fixed
+        .push(positional("text", SchemaType::string()));
+    command.options.push(env_option(
+        "cwd",
+        OptionShape::Scalar(SchemaType::string()),
+        "PWD",
+    ));
+    let stream = StreamSpec {
+        doc: Doc::default(),
+        mime: vec![],
+        required: false,
+    };
+    command.stdin = Some(stream.clone());
+    command.stdout = Some(stream.clone());
+    command.stderr = Some(stream);
+    command.errors.push(ErrorCase {
+        name: "failure".into(),
+        doc: Doc::default(),
+        kind: ErrorKind::RuntimeError,
+        exit_code: 9,
+        payload: None,
+    });
+    let graph = crate::try_into_schema_graph::<ProcessExitStatus>().unwrap();
+    command.result = Some(ResultSpec {
+        type_: graph.root.clone(),
+        doc: Doc::default(),
+        formatters: vec![],
+        default_formatter: String::new(),
+    });
+    let mut tool = tool(command);
+    tool.schema = graph;
+    let mut child = tool.commands.nodes[0].clone();
+    child.name = "run".into();
+    child.aliases = vec!["r".into()];
+    tool.commands.nodes[0].body = None;
+    tool.commands.nodes[0].subcommands = vec![CommandIndex(1)];
+    tool.commands.nodes.push(child);
+    let variables = HashMap::from([("PWD".into(), "/workspace/env".into())]);
+    for args in [
+        vec!["r".into(), "hello world".into()],
+        vec![
+            "run".into(),
+            "hello world".into(),
+            "--cwd".into(),
+            "/explicit".into(),
+        ],
+    ] {
+        let ParsedToolArguments::Invoke {
+            command_path: expected_path,
+            input: expected_input,
+        } = parse_with_variables(&tool, &args, &variables).unwrap()
+        else {
+            panic!("expected invocation")
+        };
+        let ParsedProcessCommand::Invoke {
+            command_path,
+            input,
+            stdin,
+            stdout,
+            stderr,
+            result_is_status,
+            errors,
+        } = parse_command(&tool, &args, &variables).unwrap()
+        else {
+            panic!("expected invocation")
+        };
+        assert_eq!(command_path, expected_path);
+        assert_eq!(command_path, ["run"]);
+        assert_eq!(input.graph(), expected_input.graph());
+        assert_eq!(input.value(), expected_input.value());
+        assert!(stdin && stdout && stderr && result_is_status);
+        assert_eq!(
+            errors,
+            std::collections::BTreeMap::from([("failure".into(), 9)])
+        );
+    }
+}
+
+#[test]
+fn process_command_help_and_usage_errors_match_the_canonical_parser() {
+    let mut command = body();
+    command
+        .positionals
+        .fixed
+        .push(positional("text", SchemaType::string()));
+    let tool = tool(command);
+    let variables = HashMap::new();
+    let args = vec!["--help".into()];
+    let ParsedToolArguments::Help(expected) =
+        parse_with_variables(&tool, &args, &variables).unwrap()
+    else {
+        panic!("expected help")
+    };
+    let ParsedProcessCommand::Help(actual) = parse_command(&tool, &args, &variables).unwrap()
+    else {
+        panic!("expected help")
+    };
+    assert_eq!(actual, expected);
+    for args in [vec![], vec!["--unknown".into()]] {
+        assert_eq!(
+            parse_command(&tool, &args, &variables).unwrap_err(),
+            parse_with_variables(&tool, &args, &variables)
+                .err()
+                .unwrap(),
+        );
+    }
+}
+
+#[test]
+fn process_command_rejects_a_malformed_named_exit_status() {
+    let mut tool = tool(body());
+    tool.schema = crate::try_into_schema_graph::<ProcessExitStatus>().unwrap();
+    tool.commands.nodes[0].body.as_mut().unwrap().result = Some(ResultSpec {
+        type_: tool.schema.root.clone(),
+        doc: Doc::default(),
+        formatters: vec![],
+        default_formatter: String::new(),
+    });
+    let SchemaType::Record { fields, .. } = &mut tool.schema.defs[0].body else {
+        panic!("expected record")
+    };
+    fields[0].name = "code".into();
+    let error = parse_command(&tool, &[], &HashMap::new()).unwrap_err();
+    assert_eq!(
+        error,
+        "ProcessExitStatus must define exactly one exit_code: u8 field"
+    );
 }
 
 #[test]
