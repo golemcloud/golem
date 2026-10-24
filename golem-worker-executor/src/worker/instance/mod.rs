@@ -503,10 +503,7 @@ impl OwnerExecution {
     }
 
     pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogRefusal> {
-        self.commit
-            .commit_and_update_state(level)
-            .await
-            .map(|(index, _)| index)
+        self.commit.commit_and_update_state(level).await
     }
 }
 

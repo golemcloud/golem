@@ -24,12 +24,12 @@ use crate::services::oplog::reader::{
     OplogReadSource, UnreadableOplog, checked_range_end, exact_from_source,
 };
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload,
-    RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, StagePublication,
-    decode_scan_cursor, next_scan_cursor, record_epoch_verdict, record_owning_epoch,
-    refuse_if_fenced, retry_scan_storage_op,
+    AutoCommitListener, CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder,
+    MAX_RETAINED_RECEIPT_BATCHES, OpenOplogs, Oplog, OplogAddReceipt, OplogCloseCompletion,
+    OplogConstructor, OplogError, OplogFence, OplogLifecycleGuard, OplogService, OrderedOplogStart,
+    PendingUpload, RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder,
+    StagePublication, decode_scan_cursor, next_scan_cursor, record_epoch_verdict,
+    record_owning_epoch, refuse_if_fenced, retry_scan_storage_op,
 };
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::storage::indexed::{
@@ -62,7 +62,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tracing::{error, warn};
 
@@ -180,6 +180,8 @@ struct PrimaryOplog {
     /// The refusal the actor's state has latched, shared so the handle can report it.
     fence: Arc<std::sync::OnceLock<OplogFence>>,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
+    /// Shared with the actor's state, which calls it after a commit outside an explicit one.
+    auto_commit_listener: AutoCommitListener,
     close: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
 
@@ -293,6 +295,11 @@ struct PrimaryOplogState {
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
     last_reported_commit_idx: OplogIndex,
+    /// The entries of the latest commits outside an explicit one, kept for the next report while
+    /// a listener collects them. No other commit follows them before the next report, so the
+    /// report reads only the unreported entries before them back from storage.
+    retained_auto_commits: VecDeque<BTreeMap<OplogIndex, OplogEntry>>,
+    auto_commit_listener: AutoCommitListener,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     fingerprint: AgentFingerprint,
