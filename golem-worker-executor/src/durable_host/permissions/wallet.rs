@@ -239,7 +239,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let result = match execute_source_card_transfer(self, start_index, &transfer).await {
+            let result = match execute_source_card_transfer(self, &transfer).await {
                 Ok(result) => result,
                 Err(error) => {
                     handle.abandon_for_trap();

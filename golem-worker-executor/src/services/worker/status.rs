@@ -28,6 +28,11 @@ pub(super) const STATUS_RECEIVED_CARD_TRANSFER_PREFIX: &str = "tr:";
 pub(super) fn status_received_card_transfer_field(transfer_id: &uuid::Uuid) -> String {
     format!("{STATUS_RECEIVED_CARD_TRANSFER_PREFIX}{transfer_id}")
 }
+/// Prefix for per-transfer source record fields (`ts:{transfer_id}` -> source records).
+pub(super) const STATUS_SOURCE_CARD_TRANSFER_PREFIX: &str = "ts:";
+pub(super) fn status_source_card_transfer_field(transfer_id: &uuid::Uuid) -> String {
+    format!("{STATUS_SOURCE_CARD_TRANSFER_PREFIX}{transfer_id}")
+}
 /// Moves the separately persisted fields out of `status`, leaving the small `core` that is
 /// serialized into the `core` field. Uses `mem::take`/`mem::replace`, so it does not clone the
 /// potentially large updates, regions, or transfer index.
@@ -38,6 +43,7 @@ pub(super) fn split_status(status: &mut AgentStatusRecord) -> SplitStatusParts {
             InvocationResultMembership::new(0, 1, 1),
         ),
         received_card_transfers: std::mem::take(&mut status.received_card_transfers),
+        source_card_transfers: std::mem::take(&mut status.source_card_transfers),
         failed_updates: std::mem::take(&mut status.failed_updates),
         successful_updates: std::mem::take(&mut status.successful_updates),
         skipped_regions: std::mem::replace(&mut status.skipped_regions, DeletedRegions::new()),
@@ -58,6 +64,7 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         successful_updates: Vec::new(),
         invocation_results: InvocationResultMembership::new(0, 1, 1),
         received_card_transfers: ReceivedCardTransferIndex::default(),
+        source_card_transfers: SourceCardTransferIndex::default(),
         durable_stream_sessions: status.durable_stream_sessions.clone(),
         pending_durable_stream_cancellations: status.pending_durable_stream_cancellations.clone(),
         has_durable_stream_history: status.has_durable_stream_history,
@@ -89,7 +96,7 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
 /// `core` must be the already-split (emptied) record. When `previous` is `Some`, the result is a
 /// delta against it (this is the hot path, where `dels` is usually empty). When `previous` is
 /// `None` (cold path: create / cache-miss recompute / detach reload), every part is written and
-/// `existing_split_fields` is used to delete stale `tr:` fields.
+/// `existing_split_fields` is used to delete stale `tr:` and `ts:` fields.
 ///
 /// `core` is always part of `sets` (it carries the `oplog_idx` marker), so the marker and every
 /// written part advance together in one atomic `set_many` by the caller.
@@ -143,43 +150,65 @@ pub(super) fn compute_status_field_writes(
         ));
     }
 
+    write_card_transfer_fields(
+        previous.map(|previous| &previous.received_card_transfers),
+        &parts.received_card_transfers,
+        existing_split_fields,
+        STATUS_RECEIVED_CARD_TRANSFER_PREFIX,
+        status_received_card_transfer_field,
+        &mut sets,
+        &mut dels,
+    )?;
+    write_card_transfer_fields(
+        previous.map(|previous| &previous.source_card_transfers),
+        &parts.source_card_transfers,
+        existing_split_fields,
+        STATUS_SOURCE_CARD_TRANSFER_PREFIX,
+        status_source_card_transfer_field,
+        &mut sets,
+        &mut dels,
+    )?;
+
+    Ok((sets, dels))
+}
+
+/// Adds the writes of the per-transfer fields of one transfer index: a delta against `previous`
+/// when it is given, otherwise every transfer, and a delete of each stale `prefix` field.
+fn write_card_transfer_fields<S: PartialEq + BinarySerializer>(
+    previous: Option<&CardTransferIndex<S>>,
+    transfers: &CardTransferIndex<S>,
+    existing_split_fields: &[String],
+    prefix: &str,
+    field: fn(&uuid::Uuid) -> String,
+    sets: &mut Vec<(String, Vec<u8>)>,
+    dels: &mut Vec<String>,
+) -> Result<(), String> {
     match previous {
         Some(previous) => {
-            for (transfer_id, state) in parts
-                .received_card_transfers
-                .changes_from(&previous.received_card_transfers)
-            {
-                let field = status_received_card_transfer_field(&transfer_id);
+            for (transfer_id, state) in transfers.changes_from(previous) {
                 match state {
-                    Some(state) => sets.push((field, serialize(state)?)),
-                    None => dels.push(field),
+                    Some(state) => sets.push((field(&transfer_id), serialize(state)?)),
+                    None => dels.push(field(&transfer_id)),
                 }
             }
         }
         None => {
-            let new_transfer_fields: HashSet<String> = parts
-                .received_card_transfers
+            let new_transfer_fields: HashSet<String> = transfers
                 .iter()
-                .map(|(transfer_id, _)| status_received_card_transfer_field(transfer_id))
+                .map(|(transfer_id, _)| field(transfer_id))
                 .collect();
-            for (transfer_id, state) in parts.received_card_transfers.iter() {
-                sets.push((
-                    status_received_card_transfer_field(transfer_id),
-                    serialize(state)?,
-                ));
+            for (transfer_id, state) in transfers.iter() {
+                sets.push((field(transfer_id), serialize(state)?));
             }
 
-            for field in existing_split_fields {
-                if field.starts_with(STATUS_RECEIVED_CARD_TRANSFER_PREFIX)
-                    && !new_transfer_fields.contains(field)
-                {
-                    dels.push(field.clone());
+            for existing in existing_split_fields {
+                if existing.starts_with(prefix) && !new_transfer_fields.contains(existing) {
+                    dels.push(existing.clone());
                 }
             }
         }
     }
-
-    Ok((sets, dels))
+    Ok(())
 }
 
 /// Reassembles a cached [`AgentStatusRecord`] from the split hash fields. Returns `None` if the
@@ -194,6 +223,7 @@ pub(super) fn reassemble_cached_status(
     let mut regions: Option<(DeletedRegions, DeletedRegions)> = None;
     let mut updates: Option<(Vec<FailedUpdateRecord>, Vec<SuccessfulUpdateRecord>)> = None;
     let mut received_card_transfers = ReceivedCardTransferIndex::default();
+    let mut source_card_transfers = SourceCardTransferIndex::default();
 
     for (name, bytes) in fields {
         if name == STATUS_CORE_FIELD {
@@ -211,6 +241,10 @@ pub(super) fn reassemble_cached_status(
             let transfer_id = uuid::Uuid::parse_str(transfer_id).ok()?;
             let state = deserialize::<ReceivedCardTransferState>(&bytes).ok()?;
             received_card_transfers.insert(transfer_id, state);
+        } else if let Some(transfer_id) = name.strip_prefix(STATUS_SOURCE_CARD_TRANSFER_PREFIX) {
+            let transfer_id = uuid::Uuid::parse_str(transfer_id).ok()?;
+            let state = deserialize::<SourceCardTransferState>(&bytes).ok()?;
+            source_card_transfers.insert(transfer_id, state);
         }
         // Unknown fields are ignored.
     }
@@ -226,12 +260,13 @@ pub(super) fn reassemble_cached_status(
         status.successful_updates = successful_updates;
     }
     status.received_card_transfers = received_card_transfers;
+    status.source_card_transfers = source_card_transfers;
     Some(status)
 }
 
 impl DefaultWorkerService {
     /// Namespace holding the agent's split cached status (one per-agent hash whose fields are
-    /// `core`, `membership`, `regions`, `updates`, and `tr:{transfer_id}`).
+    /// `core`, `membership`, `regions`, `updates`, `tr:{transfer_id}`, and `ts:{transfer_id}`).
     pub(super) fn status_namespace(
         agent_id: &AgentId,
         fingerprint: AgentFingerprint,
@@ -257,9 +292,9 @@ impl DefaultWorkerService {
     }
 
     /// Reads the cached `AgentStatusRecord` for `owned_agent_id`, if any, reassembling it from the
-    /// split hash fields (`core`, `membership`, `regions`, `updates`, `tr:{transfer_id}`). Returns
-    /// `None` if the `core` field is missing (cache miss) or any field cannot be deserialized in
-    /// the current format (treated as a cache miss).
+    /// split hash fields (`core`, `membership`, `regions`, `updates`, `tr:{transfer_id}`,
+    /// `ts:{transfer_id}`). Returns `None` if the `core` field is missing (cache miss) or any
+    /// field cannot be deserialized in the current format (treated as a cache miss).
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
@@ -276,9 +311,9 @@ impl DefaultWorkerService {
     }
 
     /// Reads a split status record (live cache or checkpoint) from `namespace`, reassembling it
-    /// from the `core` / `membership` / `regions` / `updates` / `tr:{transfer_id}` fields. Returns
-    /// `None` if `core` is missing (cache miss / torn write) or any field cannot be deserialized in
-    /// the current format.
+    /// from the `core` / `membership` / `regions` / `updates` / `tr:{transfer_id}` /
+    /// `ts:{transfer_id}` fields. Returns `None` if `core` is missing (cache miss / torn write) or
+    /// any field cannot be deserialized in the current format.
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
@@ -288,13 +323,14 @@ impl DefaultWorkerService {
         namespace: KeyValueStorageNamespace,
     ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         // Single atomic read of every field of the per-agent status hash (`core`, `membership`,
-        // `regions`, `updates`, `tr:{transfer_id}`). This is one round-trip (Redis `HGETALL`, a single
-        // `SELECT ... WHERE namespace`, or one locked scan in memory) that observes a consistent
-        // snapshot, so it cannot reassemble a torn, mixed-generation record. (A naive `keys` +
-        // `get_many` would be two round-trips, leaving a window where a concurrent writer — the
-        // background status flusher for the live cache, or the clean-checkpoint writer for the
-        // checkpoint namespace — could add a new split field that the earlier `keys` did not list,
-        // yielding a record at the newer `core.oplog_idx` missing derived status.)
+        // `regions`, `updates`, `tr:{transfer_id}`, `ts:{transfer_id}`). This is one round-trip
+        // (Redis `HGETALL`, a single `SELECT ... WHERE namespace`, or one locked scan in memory)
+        // that observes a consistent snapshot, so it cannot reassemble a torn, mixed-generation
+        // record. (A naive `keys` + `get_many` would be two round-trips, leaving a window where a
+        // concurrent writer — the background status flusher for the live cache, or the
+        // clean-checkpoint writer for the checkpoint namespace — could add a new split field that
+        // the earlier `keys` did not list, yielding a record at the newer `core.oplog_idx` missing
+        // derived status.)
         let fields = self
             .key_value_storage
             .with_entity("worker", "read_cached_status", "agent_status")
@@ -318,7 +354,7 @@ impl DefaultWorkerService {
     ///
     /// `core` is always written (it carries the `oplog_idx` marker that versions the whole record).
     /// `membership`/`regions`/`updates` are written only when they differ from `previous_status`,
-    /// and received card transfers are written per key (only newly added/changed keys).
+    /// and received and source card transfers are written per key (only newly added/changed keys).
     ///
     /// Publication compares the exact serialized baseline `core` and atomically applies all sets,
     /// stale-field deletions, and expiry. A mismatch reloads one complete hash snapshot and retries
@@ -455,6 +491,7 @@ impl DefaultWorkerService {
         reassembled.failed_updates = parts.failed_updates;
         reassembled.successful_updates = parts.successful_updates;
         reassembled.received_card_transfers = parts.received_card_transfers;
+        reassembled.source_card_transfers = parts.source_card_transfers;
         Ok(reassembled)
     }
 

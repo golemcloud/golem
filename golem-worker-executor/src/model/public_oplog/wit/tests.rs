@@ -305,6 +305,7 @@ fn wit_projection_preserves_wallet_generation_outcomes() {
             entity_parent_start_index: None,
             card: Box::new(card.into()),
             wallet_generation: 2,
+            transfer_id: None,
         })
         .is_err()
     );

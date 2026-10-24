@@ -41,15 +41,17 @@ use crate::worker::snapshot_selection::kept_rejections;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
+use desert_rust::BinarySerializer;
 use golem_common::base_model::durable_stream::StreamSessionKey;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::card::CardTransferIndex;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
     DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey,
     InvocationResultMembership, OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    ShardEpoch, ShardId, SuccessfulUpdateRecord,
+    ShardEpoch, ShardId, SourceCardTransferIndex, SourceCardTransferState, SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -122,6 +124,7 @@ pub struct DurableStreamRecoveryMetadata {
 struct SplitStatusParts {
     invocation_results: InvocationResultMembership,
     received_card_transfers: ReceivedCardTransferIndex,
+    source_card_transfers: SourceCardTransferIndex,
     failed_updates: Vec<FailedUpdateRecord>,
     successful_updates: Vec<SuccessfulUpdateRecord>,
     skipped_regions: DeletedRegions,

@@ -773,11 +773,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 timestamp,
                 card,
                 wallet_generation,
+                transfer_id,
                 ..
             } => Entry::CardDerived(RawCardDerivedParameters {
                 timestamp: Some(timestamp.into()),
                 card: crate::serialization::serialize(&card)?,
                 wallet_generation,
+                transfer_id: transfer_id.map(Into::into),
             }),
             OplogEntry::CardTransferStarted {
                 timestamp,
@@ -1444,6 +1446,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 entity_parent_start_index,
                 card: Box::new(deserialize_stored_card(&p.card, "derived card")?),
                 wallet_generation: p.wallet_generation,
+                transfer_id: p.transfer_id.map(Into::into),
             }),
             Entry::CardTransferStarted(p) => Ok(OplogEntry::CardTransferStarted {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),

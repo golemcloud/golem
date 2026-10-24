@@ -714,6 +714,8 @@ oplog_entry! {
             entity_parent_start_index: Option<OplogIndex>,
             card: Box<StoredCard>,
             wallet_generation: u64,
+            /// The transfer that derived the card as the installed child of a polymorphic source.
+            transfer_id: Option<Uuid>,
         }
         public {
             card_id: CardId,
