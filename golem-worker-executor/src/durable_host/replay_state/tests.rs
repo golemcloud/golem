@@ -1990,6 +1990,7 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
             entity_parent_start_index: None,
             card: Box::new(derived_card.clone()),
             wallet_generation: 0,
+            transfer_id: None,
         },
         start_now(),
     ] {
@@ -6157,6 +6158,7 @@ async fn hints_behind_a_retained_start_are_published_when_its_owner_claims_it() 
             entity_parent_start_index: None,
             card: Box::new(derived_card.clone()),
             wallet_generation: 0,
+            transfer_id: None,
         },
         start_now(),
     ])
@@ -6260,6 +6262,7 @@ async fn hints_behind_a_released_retained_start_are_published_at_live_invocation
             entity_parent_start_index: None,
             card: Box::new(derived_card.clone()),
             wallet_generation: 0,
+            transfer_id: None,
         },
         end_for(2, 42),
     ])
@@ -9915,6 +9918,7 @@ async fn wallet_replay_batches_share_membership_and_release_retained_prefixes() 
                     entity_parent_start_index: delayed_entity.then_some(start),
                     card: Box::new(stored_test_card(CardId::new())),
                     wallet_generation: generation as u64,
+                    transfer_id: None,
                 });
             }
             if delayed_entity {
@@ -10278,6 +10282,7 @@ async fn card_audit_wait_drains_unclaimed_same_store_accessor_without_rescan() {
                 entity_parent_start_index: None,
                 card: Box::new(card.clone()),
                 wallet_generation: 0,
+                transfer_id: None,
             },
             remove_retry_policy(),
         ],
@@ -12464,6 +12469,7 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
             entity_parent_start_index: None,
             card: Box::new(derived.clone()),
             wallet_generation: 2,
+            transfer_id: None,
         },
         OplogEntry::successful_update(
             ComponentRevision::new(1).unwrap(),
@@ -12623,6 +12629,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
             entity_parent_start_index: None,
             card: Box::new(audit.clone()),
             wallet_generation: 7,
+            transfer_id: None,
         },
         remove_retry_policy(),
     ] {
@@ -12719,6 +12726,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
             entity_parent_start_index: parent,
             card: Box::new(card.clone()),
             wallet_generation: 1,
+            transfer_id: None,
         };
         let mut entries = vec![remove_retry_policy(); 23];
         entries[10] = start_now();

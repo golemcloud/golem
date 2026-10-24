@@ -845,6 +845,25 @@ fn stored_card(card_id: CardId) -> StoredCard {
     })
 }
 
+fn source_transfer_state() -> SourceCardTransferState {
+    let card = stored_card(CardId::new());
+    SourceCardTransferState::Recorded(golem_common::model::card::SourceCardTransferRecords {
+        derived_card: Some(card.clone()),
+        queued: Some(golem_common::base_model::oplog::QueuedCardEventTransfer {
+            transfer_id: transfer_id(1),
+            card_id: CardId::new(),
+            card: Some(card),
+            target_holder: golem_common::model::card::CardHolder::Account(
+                golem_common::model::card::AccountCardHolder {
+                    account_id: uuid::Uuid::from_u128(7),
+                },
+            ),
+        }),
+        started: None,
+        confirmed: None,
+    })
+}
+
 fn sample_status() -> AgentStatusRecord {
     let mut status = AgentStatusRecord {
         status: AgentStatus::Running,
@@ -865,6 +884,9 @@ fn sample_status() -> AgentStatusRecord {
             card: stored_card(CardId::new()),
         },
     );
+    status
+        .source_card_transfers
+        .insert(transfer_id(1), source_transfer_state());
     status.durable_stream_sessions.insert(
         idempotency_key("stream-1"),
         DurableStreamSessionStatus {
@@ -1034,6 +1056,7 @@ fn hot_delta_only_writes_changed_fields() {
     assert!(!written.contains(STATUS_REGIONS_FIELD));
     assert!(!written.contains(STATUS_UPDATES_FIELD));
     assert!(!written.contains(status_received_card_transfer_field(&transfer_id(1)).as_str()));
+    assert!(!written.contains(status_source_card_transfer_field(&transfer_id(1)).as_str()));
     assert_eq!(written.len(), 2);
     assert!(dels.is_empty());
 
@@ -1053,16 +1076,36 @@ fn hot_delta_only_writes_changed_transfer_fields() {
             card: stored_card(CardId::new()),
         },
     );
+    new.source_card_transfers
+        .insert(transfer_id(1), SourceCardTransferState::Conflict);
+    new.source_card_transfers
+        .insert(transfer_id(3), source_transfer_state());
 
-    let mut core = new;
+    let mut store = HashMap::new();
+    {
+        let mut core = previous.clone();
+        let parts = split_status(&mut core);
+        let (sets, _) = compute_status_field_writes(None, &[], &core, &parts).unwrap();
+        store.extend(sets);
+    }
+    let mut core = new.clone();
     let parts = split_status(&mut core);
     let (sets, dels) = compute_status_field_writes(Some(&previous), &[], &core, &parts).unwrap();
 
     let written: HashSet<&str> = sets.iter().map(|(field, _)| field.as_str()).collect();
-    assert_eq!(written.len(), 2);
-    assert!(written.contains(STATUS_CORE_FIELD));
-    assert!(written.contains(status_received_card_transfer_field(&transfer_id(2)).as_str()));
+    assert_eq!(
+        written,
+        HashSet::from([
+            STATUS_CORE_FIELD,
+            status_received_card_transfer_field(&transfer_id(2)).as_str(),
+            status_source_card_transfer_field(&transfer_id(1)).as_str(),
+            status_source_card_transfer_field(&transfer_id(3)).as_str(),
+        ])
+    );
     assert!(dels.is_empty());
+
+    let reassembled = apply_and_reassemble(&mut store, sets, dels).unwrap();
+    assert_eq!(reassembled, new);
 }
 
 #[test]
@@ -1105,6 +1148,8 @@ fn cold_reconcile_deletes_stale_transfer_fields() {
         STATUS_CORE_FIELD.to_string(),
         status_received_card_transfer_field(&transfer_id(1)),
         status_received_card_transfer_field(&stale_transfer_id),
+        status_source_card_transfer_field(&transfer_id(1)),
+        status_source_card_transfer_field(&stale_transfer_id),
     ];
     let new = sample_status();
 
@@ -1114,7 +1159,10 @@ fn cold_reconcile_deletes_stale_transfer_fields() {
 
     assert_eq!(
         dels,
-        vec![status_received_card_transfer_field(&stale_transfer_id)]
+        vec![
+            status_received_card_transfer_field(&stale_transfer_id),
+            status_source_card_transfer_field(&stale_transfer_id),
+        ]
     );
 }
 
