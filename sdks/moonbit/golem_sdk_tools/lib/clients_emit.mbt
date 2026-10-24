@@ -262,7 +262,7 @@ fn emit_client(
   // Known phantom identities are valid for both durable and ephemeral agents.
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @types.Uuid,\n) -> \{client} raise @common.AgentError {\n",
+    "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @schema.Uuid,\n) -> \{client} raise @common.AgentError {\n",
   )
   buf.write_string("  let constructor_input = \{ctor_input}\n")
   buf.write_string(
@@ -278,7 +278,7 @@ fn emit_client(
     // phantom_id
     buf.write_string("///|\n")
     buf.write_string(
-      "pub fn \{client}::phantom_id(self : \{client}) -> @types.Uuid? {\n  self.client.phantom_id()\n}\n\n",
+      "pub fn \{client}::phantom_id(self : \{client}) -> @schema.Uuid? {\n  self.client.phantom_id()\n}\n\n",
     )
   }
   // drop
@@ -297,7 +297,7 @@ fn emit_client(
   }
   emit_client_scoped(buf, client, "scoped_new_phantom", "new_phantom", vis, [])
   emit_client_scoped(buf, client, "scoped_get_phantom", "get_phantom", vis, [
-    ("phantom_id", "@types.Uuid"),
+    ("phantom_id", "@schema.Uuid"),
   ])
   // methods
   for meth in agent.methods {
@@ -513,7 +513,7 @@ fn emit_client_config_variants(
   // get_phantom_with_config
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @types.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
+    "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @schema.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
   )
   buf.write_string("  let constructor_input = \{ctor_input}\n")
   buf.write_string("  let agent_config = \{walker}(config, [])\n")
@@ -548,7 +548,7 @@ fn emit_client_config_variants(
     "scoped_get_phantom_with_config",
     "get_phantom_with_config",
     vis,
-    [("phantom_id", "@types.Uuid")],
+    [("phantom_id", "@schema.Uuid")],
     override_name,
   )
 }

@@ -55,6 +55,47 @@ export interface AgentText {
   language?: string;
 }
 
+const MAX_U64 = (1n << 64n) - 1n;
+const HYPHENATED_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/** UUID value of the `uuid` schema kind; the same API as the TypeScript SDK `Uuid`. */
+export class Uuid {
+  readonly highBits: bigint;
+  readonly lowBits: bigint;
+
+  constructor(highBits: bigint, lowBits: bigint) {
+    if (highBits < 0n || highBits > MAX_U64 || lowBits < 0n || lowBits > MAX_U64)
+      throw new RangeError('UUID halves must be unsigned 64-bit integers');
+    this.highBits = highBits;
+    this.lowBits = lowBits;
+  }
+
+  /** Formats the UUID as a lowercase hyphenated string. */
+  toString(): string {
+    const hex =
+      this.highBits.toString(16).padStart(16, '0') + this.lowBits.toString(16).padStart(16, '0');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
+  /** Parses a hyphenated UUID string. */
+  static parse(value: string): Uuid {
+    if (!HYPHENATED_UUID.test(value)) throw new Error(`Invalid UUID string: ${value}`);
+    const hex = value.replace(/-/gu, '');
+    return new Uuid(BigInt(`0x${hex.slice(0, 16)}`), BigInt(`0x${hex.slice(16)}`));
+  }
+
+  /** Generates a random (version 4) UUID. */
+  static generate(): Uuid {
+    return Uuid.parse(globalThis.crypto.randomUUID());
+  }
+
+  /** Wraps a `{ highBits, lowBits }` pair; returns a `Uuid` unchanged. */
+  static from(value: { highBits: bigint; lowBits: bigint }): Uuid {
+    return value instanceof Uuid ? value : new Uuid(value.highBits, value.lowBits);
+  }
+}
+
 /** A single-consumer asynchronous stream returned by a streaming agent method. */
 export interface AgentStream<T> extends AsyncIterable<T> {}
 
@@ -197,6 +238,7 @@ export type SchemaTypeBody =
   | { tag: 'binary'; restrictions: BinaryRestrictions }
   | { tag: 'path'; spec: PathSpec }
   | { tag: 'url'; restrictions: UrlRestrictions }
+  | { tag: 'uuid' }
   | { tag: 'datetime' }
   | { tag: 'duration' }
   | { tag: 'quantity'; spec: QuantitySpec }
@@ -301,6 +343,7 @@ export type SchemaValue =
   | { kind: 'binary'; value: BinaryValuePayload }
   | { kind: 'path'; value: { path: string } }
   | { kind: 'url'; value: { url: string } }
+  | { kind: 'uuid'; value: string }
   | { kind: 'datetime'; value: { value: string } }
   | { kind: 'duration'; value: { nanoseconds: string } }
   | { kind: 'quantity'; value: { mantissa: string; scale: number; unit: string } }
@@ -1577,6 +1620,8 @@ class PublicValueValidator {
         return (payload as { path: string }).path;
       case 'url':
         return (payload as { url: string }).url;
+      case 'uuid':
+        return payload;
       case 'datetime':
         return canonicalApplicationDatetime((payload as { value: string }).value);
       case 'duration':
@@ -1801,6 +1846,13 @@ class PublicValueValidator {
           this.url(body.restrictions, input.url);
         }
         return;
+      case 'uuid': {
+        const uuid = publicString(payload, 'uuid');
+        if (!CANONICAL_UUID.test(uuid))
+          this.fail('validation-error', 'uuid must be a lowercase hyphenated UUID');
+        this.add(16);
+        return uuid;
+      }
       case 'datetime': {
         const input = publicObject(payload, 'datetime payload');
         publicExactMembers(input, new Set(['value']), 'datetime payload');
@@ -2323,6 +2375,7 @@ function schemaTypeFromWire(value: unknown): SchemaType {
     case 'bool':
     case 'char':
     case 'string':
+    case 'uuid':
     case 'datetime':
     case 'duration':
       exact([]);

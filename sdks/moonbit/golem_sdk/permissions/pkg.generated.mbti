@@ -69,8 +69,8 @@ pub(all) struct CardView {
 } derive(Eq, @debug.Debug)
 
 pub(all) enum Holder {
-  Account(@types.Uuid)
-  App(@types.Uuid)
+  Account(@schema.Uuid)
+  App(@schema.Uuid)
   Agent(@types.AgentId)
 } derive(Eq, @debug.Debug)
 

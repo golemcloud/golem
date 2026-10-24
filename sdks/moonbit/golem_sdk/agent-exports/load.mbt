@@ -34,7 +34,7 @@ pub async fn load(
         agent_id,
         agent_type,
         identity_fields,
-        phantom_id,
+        phantom_id: phantom_id.map(@schema.Uuid::from_wit),
         principal,
       })
     }

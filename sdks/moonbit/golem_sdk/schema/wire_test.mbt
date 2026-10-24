@@ -2,32 +2,29 @@
 test "direct wire UUID preserves bits and uses the UUID schema" {
   for
     value in [
-      @types.Uuid::{ high_bits: 0UL, low_bits: 0UL, },
-      @types.Uuid::{
-        high_bits: 18446744073709551615UL,
-        low_bits: 9223372036854775808UL,
-      },
-      @types.Uuid::{ high_bits: 42UL, low_bits: 19UL, },
+      @schema.Uuid::from_bits(0UL, 0UL),
+      @schema.Uuid::from_bits(18446744073709551615UL, 9223372036854775808UL),
+      @schema.Uuid::from_bits(42UL, 19UL),
     ] {
     let wire = @schema.into_wire(value)
     assert_eq(wire.root, 0)
-    assert_eq(wire.value_nodes, [@types.UuidValue(value)])
-    let decoded : @types.Uuid = @schema.from_wire(wire)
+    assert_eq(wire.value_nodes, [@types.UuidValue(value.to_wit())])
+    let decoded : @schema.Uuid = @schema.from_wire(wire)
     assert_eq(decoded, value)
-    let nested : Array[@types.Uuid?] = [Some(value), None]
-    let decoded_nested : Array[@types.Uuid?] = @schema.from_wire(
+    let nested : Array[@schema.Uuid?] = [Some(value), None]
+    let decoded_nested : Array[@schema.Uuid?] = @schema.from_wire(
       @schema.into_wire(nested),
     )
     assert_eq(decoded_nested, nested)
   }
   let graph = @schema.wire_schema(
-    (@schema.type_tag() : @schema.TypeTag[@types.Uuid]),
+    (@schema.type_tag() : @schema.TypeTag[@schema.Uuid]),
   )
   assert_eq(graph.type_nodes.length(), 1)
   assert_eq(graph.type_nodes[graph.root].body, @types.UuidType)
   assert_true(graph.defs.is_empty())
   try {
-    let _ : @types.Uuid = @schema.from_wire(@schema.into_wire("not a uuid"))
+    let _ : @schema.Uuid = @schema.from_wire(@schema.into_wire("not a uuid"))
   } catch {
     @schema.WireError::Invalid("expected uuid value") => ()
     @schema.WireError::Invalid(message) => fail("unexpected error: \{message}")
