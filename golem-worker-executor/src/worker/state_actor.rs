@@ -206,14 +206,14 @@ impl CommitReceipt {
 enum StatusJob {
     Stop,
     /// Commits the oplog and folds the newly committed entries into the published status.
-    /// Replies with the current oplog index after the commit and whether the status changed, or
-    /// with the refusal when the oplog refused the commit.
+    /// Replies with the current oplog index after the commit, or with the refusal when the oplog
+    /// refused the commit.
     /// The actor queues lifecycle notification without awaiting the lifecycle lock, even if the
     /// caller has cancelled its receipt or full-transaction waiter.
     CommitAndUpdateState {
         level: CommitLevel,
         committed: Option<CommitReceipt>,
-        done: oneshot::Sender<Result<(OplogIndex, bool), OplogRefusal>>,
+        done: oneshot::Sender<Result<OplogIndex, OplogRefusal>>,
     },
     /// Appends an entry and completes its commit + fold transaction even if the caller is
     /// cancelled. The caller-acquired guards remain owned by this job until the transaction ends.
@@ -236,6 +236,9 @@ enum StatusJob {
         instance_guard: OwnedMutexGuard<WorkerInstance>,
         done: oneshot::Sender<Result<bool, OplogError>>,
     },
+    /// Folds the entries that the oplog committed by itself, on its commit threshold, into the
+    /// published status. Commits nothing. The oplog queues it through its auto-commit listener.
+    FoldAutoCommits,
     /// Observes completed projection work in FIFO order without committing buffered entries.
     Status {
         done: oneshot::Sender<Arc<AgentStatusRecord>>,
@@ -322,6 +325,9 @@ struct StatusState<Ctx: WorkerCtx> {
     /// status fold. Live host-call authorization uses this as its lock-free
     /// invalidation signal.
     published_authority_generation: Arc<AtomicU64>,
+    /// The auto-commit listener of the oplog, which holds it weakly. Owned here so that it lives
+    /// exactly as long as this task.
+    _auto_commit_listener: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
@@ -377,6 +383,21 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         lifecycle: Arc<Mutex<WorkerInstance>>,
     ) -> Self {
         let task_owner = oplog.task_owner().cloned();
+        let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
+        // Coalesces the auto commits that happen while a fold job is queued into that one job.
+        let auto_commit_queued = Arc::new(AtomicBool::new(false));
+        let auto_commit_listener: Arc<dyn Fn() + Send + Sync> = {
+            let status_jobs = status_jobs.clone();
+            let auto_commit_queued = auto_commit_queued.clone();
+            Arc::new(move || {
+                if !auto_commit_queued.swap(true, Ordering::AcqRel)
+                    && status_jobs.send(StatusJob::FoldAutoCommits).is_err()
+                {
+                    auto_commit_queued.store(false, Ordering::Release);
+                }
+            })
+        };
+        oplog.set_auto_commit_listener(Arc::downgrade(&auto_commit_listener));
         let state = StatusState {
             deps,
             owned_agent_id: owned_agent_id.clone(),
@@ -390,6 +411,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             metrics_status,
             status_flusher: status_flusher.clone(),
             published_authority_generation,
+            _auto_commit_listener: auto_commit_listener,
         };
 
         let notification_queued = Arc::new(AtomicBool::new(false));
@@ -397,7 +419,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel::<LifecycleJob<Ctx>>();
         let status_lifecycle_jobs = lifecycle_jobs.clone();
         let status_notification_queued = notification_queued.clone();
-        let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
                 match job {
@@ -431,7 +452,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                         &status_notification_queued,
                                     );
                                 }
-                                Ok((index, changed))
+                                Ok(index)
                             },
                             done,
                         )
@@ -538,6 +559,29 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             done,
                         )
                         .await;
+                    }
+                    StatusJob::FoldAutoCommits => {
+                        auto_commit_queued.store(false, Ordering::Release);
+                        let notify = match state
+                            .commit_and_update_state_with_wallet(
+                                CommitLevel::ReportOnly,
+                                None,
+                                None,
+                            )
+                            .await
+                        {
+                            // An index that moved past entries without effect wakes nobody:
+                            // nothing the invocation loop chooses work from has changed.
+                            Ok(outcome) => outcome.fields_changed,
+                            // The owner repairs the detached status before it chooses more work.
+                            Err(refusal) => matches!(refusal, OplogRefusal::Unreadable(_)),
+                        };
+                        if notify {
+                            queue_status_notification(
+                                &status_lifecycle_jobs,
+                                &status_notification_queued,
+                            );
+                        }
                     }
                     StatusJob::Status { done } => {
                         let _ = done.send(state.last_known_status.load_full());
@@ -684,15 +728,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     }
 
     /// Commits the oplog and folds the new entries into the published status. Returns the
-    /// current oplog index after the commit and whether the status changed, or the refusal when the
-    /// oplog refused the commit; a fence has already started the agent's retirement.
+    /// current oplog index after the commit, or the refusal when the oplog refused the commit; a
+    /// fence has already started the agent's retirement.
     ///
     /// If the caller's future is dropped while awaiting the reply, the commit still runs to
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
     pub async fn commit_and_update_state(
         &self,
         level: CommitLevel,
-    ) -> Result<(OplogIndex, bool), OplogRefusal> {
+    ) -> Result<OplogIndex, OplogRefusal> {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
@@ -706,7 +750,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         &self,
         level: CommitLevel,
         committed: CommitReceipt,
-    ) -> Result<(OplogIndex, bool), OplogRefusal> {
+    ) -> Result<OplogIndex, OplogRefusal> {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
@@ -995,7 +1039,7 @@ impl OwnerCommitController {
     pub async fn commit_and_update_state(
         &self,
         level: CommitLevel,
-    ) -> Result<(OplogIndex, bool), OplogRefusal> {
+    ) -> Result<OplogIndex, OplogRefusal> {
         self.run_status_job(|done| StatusJob::CommitAndUpdateState {
             level,
             committed: None,
@@ -1359,8 +1403,15 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             authority_change_count = authority_change_count.max(1);
         }
 
-        // Empty folds still finalize checkpoint pruning; do not bypass them on an empty receipt.
-        let changed = if reconstructed || updated_status != *old_status {
+        // Compared without the index, which moves on nearly every fold, to tell a fold that changed
+        // other fields. Empty folds still finalize checkpoint pruning; do not bypass them on an
+        // empty receipt.
+        let mut updated_status = updated_status;
+        let updated_index = updated_status.oplog_idx;
+        updated_status.oplog_idx = old_status.oplog_idx;
+        let fields_changed = reconstructed || updated_status != *old_status;
+        updated_status.oplog_idx = updated_index;
+        let changed = if fields_changed || updated_index != old_status.oplog_idx {
             let updated_status = self.update_last_known_status(updated_status).await;
             if reconstructed {
                 self.detached.store(false, Ordering::Release);
@@ -1395,6 +1446,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
 
         Ok(CommittedOutcome {
             changed,
+            fields_changed,
             wallet_publication,
         })
     }
@@ -1468,6 +1520,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
 
 struct CommittedOutcome {
     changed: bool,
+    /// Whether the status changed in more than its oplog index.
+    fields_changed: bool,
     wallet_publication: Result<(), WalletPublicationFailure>,
 }
 

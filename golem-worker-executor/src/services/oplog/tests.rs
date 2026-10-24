@@ -3060,6 +3060,82 @@ async fn archiving_auto_committed_entries_does_not_consume_explicit_commit_repor
 }
 
 #[test]
+async fn report_only_returns_retained_threshold_commits_without_reading_storage(
+    _tracing: &Tracing,
+) {
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let oplog = create_append_reconciliation_oplog(&service, "report-only-threshold-commits").await;
+    let notifications = Arc::new(AtomicUsize::new(0));
+    let listener: Arc<dyn Fn() + Send + Sync> = {
+        let notifications = notifications.clone();
+        Arc::new(move || {
+            notifications.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    oplog.set_auto_commit_listener(Arc::downgrade(&listener));
+    indexed_storage.reset();
+
+    // A threshold of one commits every second add; the fifth entry stays buffered.
+    let mut entries = BTreeMap::new();
+    for delta in 1..=5 {
+        let entry = OplogEntry::grow_memory(delta).rounded();
+        entries.insert(oplog.add(entry.clone()).await.unwrap(), entry);
+    }
+    let fifth = *entries.keys().nth(4).unwrap();
+    let buffered = entries.split_off(&fifth);
+    assert_eq!(notifications.load(Ordering::SeqCst), 2);
+
+    assert_eq!(
+        oplog.commit(CommitLevel::ReportOnly).await.unwrap(),
+        entries
+    );
+    assert_eq!(indexed_storage.reads(), 0);
+    assert!(
+        oplog
+            .commit(CommitLevel::ReportOnly)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(oplog.commit(CommitLevel::Always).await.unwrap(), buffered);
+
+    // Beyond the retention bound the oldest commits are read back, and the report stays complete.
+    let mut entries = BTreeMap::new();
+    for delta in 0..(2 * (MAX_RETAINED_RECEIPT_BATCHES as u64 + 3)) {
+        let entry = OplogEntry::grow_memory(delta).rounded();
+        entries.insert(oplog.add(entry.clone()).await.unwrap(), entry);
+    }
+    assert_eq!(
+        oplog.commit(CommitLevel::ReportOnly).await.unwrap(),
+        entries
+    );
+    assert!(indexed_storage.reads() > 0);
+
+    // Without a live listener nothing is retained, and the report reads the range back.
+    drop(listener);
+    let mut entries = BTreeMap::new();
+    for delta in 0..4 {
+        let entry = OplogEntry::grow_memory(delta).rounded();
+        entries.insert(oplog.add(entry.clone()).await.unwrap(), entry);
+    }
+    let reads = indexed_storage.reads();
+    assert_eq!(
+        oplog.commit(CommitLevel::ReportOnly).await.unwrap(),
+        entries
+    );
+    assert!(indexed_storage.reads() > reads);
+}
+
+#[test]
 async fn wait_for_replicas_does_not_consume_explicit_commit_report(_tracing: &Tracing) {
     let service = PrimaryOplogService::new(
         Arc::new(InMemoryIndexedStorage::new()),

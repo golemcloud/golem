@@ -21,9 +21,10 @@ use crate::services::oplog::reader::{
     OplogRead, OplogReadError, OplogReadSource, UnreadableOplog, checked_range_end,
 };
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogCloseCompletion, OplogError, OplogFence, OplogService, OrderedOplogStart, PendingUpload,
-    RawOplogPayloadDownloadError, ReservedRawStartBuilder, downcast_oplog, refuse_if_fenced,
+    AutoCommitListener, CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder,
+    MAX_RETAINED_RECEIPT_BATCHES, Oplog, OplogAddReceipt, OplogCloseCompletion, OplogError,
+    OplogFence, OplogService, OrderedOplogStart, PendingUpload, RawOplogPayloadDownloadError,
+    ReservedRawStartBuilder, downcast_oplog, refuse_if_fenced,
 };
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -45,7 +46,6 @@ use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 pub(super) mod tests;
 
 const MAX_QUEUED_WRITE_BATCHES: usize = 2;
-const MAX_RETAINED_RECEIPT_BATCHES: usize = 32;
 
 use golem_common::related_span;
 use golem_common::tracing::TraceOrigin;
@@ -78,6 +78,8 @@ pub struct EphemeralOplog {
     /// The refusal the writer task met, shared with the writer and the actor: the actor refuses
     /// new writes on it, and [`Oplog::fence`] reports it without a round trip.
     fence: Arc<OnceLock<OplogFence>>,
+    /// Shared with the actor's state, which calls it after a threshold flush.
+    auto_commit_listener: AutoCommitListener,
 }
 
 /// A request processed by the [`EphemeralOplog`] actor task, which exclusively owns the
@@ -107,6 +109,10 @@ enum EphemeralJob {
     Commit {
         wait_for_storage: bool,
         done: tokio::sync::oneshot::Sender<Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>>,
+    },
+    /// Takes the retained receipts of threshold flushes without flushing the buffer.
+    TakeReceipts {
+        done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
     },
     Drain {
         done: tokio::sync::oneshot::Sender<()>,
@@ -171,6 +177,7 @@ struct EphemeralOplogState {
     /// The archive write the writer task could not store, latched like the fence.
     failure: Arc<OnceLock<OplogError>>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
+    auto_commit_listener: AutoCommitListener,
 }
 
 impl EphemeralOplogState {
@@ -203,10 +210,10 @@ impl EphemeralOplogState {
 
     async fn maybe_commit(&mut self) -> Result<(), OplogError> {
         if self.buffer.len() > self.max_operations_before_commit as usize {
-            self.flush(false).await
-        } else {
-            Ok(())
+            self.flush(false).await?;
+            self.auto_commit_listener.notify();
         }
+        Ok(())
     }
 
     async fn add(&mut self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
@@ -337,6 +344,7 @@ impl EphemeralOplog {
         let (writer, writer_rx) = tokio::sync::mpsc::channel(MAX_QUEUED_WRITE_BATCHES);
         let writer_watermark = Arc::new(AtomicU64::new(last_oplog_idx.as_u64()));
         let failure = Arc::new(OnceLock::new());
+        let auto_commit_listener = AutoCommitListener::default();
         let writer_task = tokio::spawn(Self::write_batches(
             owned_agent_id.agent_id(),
             target,
@@ -359,6 +367,7 @@ impl EphemeralOplog {
             fence: fence.clone(),
             failure,
             lower: lower.clone(),
+            auto_commit_listener: auto_commit_listener.clone(),
         };
 
         let actor_primary_service = primary_service.clone();
@@ -456,6 +465,9 @@ impl EphemeralOplog {
                             .await
                             .map(|()| state.take_receipts());
                         let _ = done.send(result);
+                    }
+                    EphemeralJob::TakeReceipts { done } => {
+                        let _ = done.send(state.take_receipts());
                     }
                     EphemeralJob::Drain { done } => {
                         // The job has no error to reply with: a fence stays latched, where
@@ -564,6 +576,7 @@ impl EphemeralOplog {
             multi_layer_oplog_service,
             close_fn: Mutex::new(Some(close)),
             fence,
+            auto_commit_listener,
         }
     }
 
@@ -1203,7 +1216,17 @@ impl Oplog for EphemeralOplog {
                 .await
             }
             CommitLevel::DurableOnly => Ok(BTreeMap::new()),
+            CommitLevel::ReportOnly => Ok(self
+                .run_job(|done| EphemeralJob::TakeReceipts { done })
+                .await),
         }
+    }
+
+    fn set_auto_commit_listener(
+        &self,
+        listener: std::sync::Weak<crate::services::oplog::AutoCommitCallback>,
+    ) {
+        self.auto_commit_listener.set(listener);
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
