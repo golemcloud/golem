@@ -1665,6 +1665,15 @@ pub trait CancelTester {
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String);
 
+    /// Activates the RPC target with `get_value`, writes to stdout, then increments the
+    /// counter by 1 with `mode` (`await` or `invoke`), so a hint entry directly
+    /// precedes the increment's `Start`.
+    fn inc_after_stdout(&self, counter_name: String, mode: String);
+
+    /// Activates the `RpcBlockingCounter` target with `get_value`, writes to stdout, then awaits
+    /// `inc_after_promise` asynchronously, so a hint entry directly precedes the RPC's `Start`.
+    async fn await_counter_after_stdout(&self, counter_name: String, promise_id: PromiseId) -> u64;
+
     async fn await_counter(
         &self,
         counter_name: String,
@@ -1908,6 +1917,54 @@ impl CancelTester for CancelTesterImpl {
         let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
         assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
         rpc.invoke_and_await("inc_by", input, None).unwrap();
+    }
+
+    fn inc_after_stdout(&self, counter_name: String, mode: String) {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let no_input = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
+            .expect("failed to encode empty RPC input");
+        rpc.invoke_and_await("get_value", no_input, None).unwrap();
+        println!("incrementing with {mode}");
+        let input = encode_single_parameter(1u64);
+        match mode.as_str() {
+            "await" => {
+                rpc.invoke_and_await("inc_by", input, None).unwrap();
+            }
+            "invoke" => {
+                rpc.invoke("inc_by", input, None).unwrap();
+            }
+            _ => panic!("unknown RPC mode: {mode}"),
+        }
+    }
+
+    async fn await_counter_after_stdout(&self, counter_name: String, promise_id: PromiseId) -> u64 {
+        let rpc = WasmRpc::new(
+            "RpcBlockingCounter",
+            encode_single_parameter(counter_name.clone()),
+            None,
+            Vec::new(),
+        );
+        let no_input = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
+            .expect("failed to encode empty RPC input");
+        rpc.invoke_and_await("get_value", no_input, None).unwrap();
+        println!("waiting for {counter_name}");
+        let result = rpc
+            .async_invoke_and_await(
+                "inc_after_promise",
+                encode_single_parameter(promise_id),
+                None,
+            )
+            .future
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
     }
 
     async fn await_counter(

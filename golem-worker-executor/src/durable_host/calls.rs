@@ -72,14 +72,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 return Err(WorkerExecutorError::from(OplogError::Fenced(fence)));
             }
 
-            // Hints are nondeterministic and cannot serve as retry points.
-
-            let begin_index = if self.state.is_live() {
-                self.state.oplog.current_oplog_index().await
-            } else {
-                self.state.replay_state.last_replayed_non_hint_index()
-            };
-
+            // Hints are nondeterministic: replay skips them, so they serve neither as retry points
+            // nor as the position a call derives its idempotency key from. Live and replay must
+            // both return the last non-hint entry, or a repaired call gets a different key.
             let new_retry_point = self
                 .state
                 .oplog
@@ -87,6 +82,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .await
                 .unwrap_or(self.state.replay_state.last_replayed_non_hint_index());
             self.state.current_retry_point = new_retry_point;
+
+            let begin_index = if self.state.is_live() {
+                new_retry_point
+            } else {
+                self.state.replay_state.last_replayed_non_hint_index()
+            };
 
             Ok((begin_index, span_started))
         }
