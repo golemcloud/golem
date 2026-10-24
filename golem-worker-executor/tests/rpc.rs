@@ -63,6 +63,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
+mod hint_before_rpc_start;
 mod replay_barrier_probe;
 mod websocket_crash_probe;
 

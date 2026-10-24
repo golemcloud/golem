@@ -238,7 +238,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let begun = DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
             begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
             .await?;
-        let begin_index = begun.begin_index();
+        let key_position = self.idempotency_key_position();
         let call = match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
                 if let RpcTargetAdmission::LiveOnly(target) = &admission
@@ -247,6 +247,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     return persist_schedule_denial_from_begun(
                         self,
                         begun,
+                        key_position,
                         logical_remote_agent_id,
                         datetime,
                         method_name,
@@ -256,83 +257,85 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 Either::Left(begun)
             }
-            ResolvedCall::Replay(handle) => match handle.replay(self).await? {
-                CallReplayOutcome::Replayed(result) => {
-                    let schedule_id = match result.result {
-                        Ok(schedule_id) => schedule_id,
-                        Err(error) => return Ok(Err(InternalRpcError::from(error).into())),
-                    };
-                    let idempotency_key = self.derive_idempotency_key(begin_index);
-                    let remote_agent_id = invocation_target_agent_id(
-                        &logical_remote_agent_id,
-                        ephemeral_logical_agent_id.as_ref(),
-                        &idempotency_key,
-                    )?;
-                    let schedule_id = serialize(&schedule_id).map_err(|err| {
-                        anyhow::Error::from(WorkerExecutorError::runtime(format!(
-                            "Failed to serialize schedule id: {err}"
-                        )))
-                    })?;
-                    let owner = self.owned_agent_id().clone();
-                    return self
-                        .table()
-                        .push(CancellationTokenEntry {
-                            schedule_id,
-                            metadata: invocation_metadata(&remote_agent_id, &idempotency_key),
-                            owner,
-                            recipient: remote_agent_id,
-                        })
-                        .map(Ok)
-                        .map_err(Into::into);
+            ResolvedCall::Replay(handle) => {
+                let start_index = handle.start_index();
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(result) => {
+                        let schedule_id = match result.result {
+                            Ok(schedule_id) => schedule_id,
+                            Err(error) => return Ok(Err(InternalRpcError::from(error).into())),
+                        };
+                        let idempotency_key = key_position.derive(start_index);
+                        let remote_agent_id = invocation_target_agent_id(
+                            &logical_remote_agent_id,
+                            ephemeral_logical_agent_id.as_ref(),
+                            &idempotency_key,
+                        )?;
+                        let schedule_id = serialize(&schedule_id).map_err(|err| {
+                            anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                                "Failed to serialize schedule id: {err}"
+                            )))
+                        })?;
+                        let owner = self.owned_agent_id().clone();
+                        return self
+                            .table()
+                            .push(CancellationTokenEntry {
+                                schedule_id,
+                                metadata: invocation_metadata(&remote_agent_id, &idempotency_key),
+                                owner,
+                                recipient: remote_agent_id,
+                            })
+                            .map(Ok)
+                            .map_err(Into::into);
+                    }
+                    CallReplayOutcome::Incomplete(live) => Either::Right(live),
                 }
-                CallReplayOutcome::Incomplete(live) => Either::Right(live),
-            },
+            }
         };
 
-        // The persisted request embeds an idempotency key derived from the durable-scope begin
-        // index, so this is a two-step call: open the scope first to learn the index, then build
-        // the request from it.
-        // Obtain a live handle to complete — either freshly (writing the eager `Start`) or by
-        // recovering an incomplete `Start` from a previous run — or short-circuit on a fully
-        // replayed call. The idempotency key is derived once per execution from `begin_index`
-        // (which is stable across an incomplete-replay re-execution), so both live paths reproduce
-        // the same key and `ScheduleId`.
-        let idempotency_key;
-        let remote_agent_id;
-        let metadata;
-        let mut handle;
-        if let Either::Left(begun) = call {
-            idempotency_key = self.derive_idempotency_key(begin_index);
-            remote_agent_id = invocation_target_agent_id(
-                &logical_remote_agent_id,
-                ephemeral_logical_agent_id.as_ref(),
-                &idempotency_key,
-            )?;
-            metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-
-            let request = HostRequestGolemRpcScheduledInvocation {
-                remote_agent_id: remote_agent_id.agent_id(),
-                idempotency_key: idempotency_key.clone(),
-                method_name: method_name.clone(),
-                input: input_value.clone(),
-                datetime: datetime.into(),
-                remote_agent_type: None,
-                remote_agent_parameters: None,
-            };
-            handle = begun.start_live(self, request).await?;
-        } else {
-            let Either::Right(live) = call else {
-                unreachable!()
-            };
-            idempotency_key = self.derive_idempotency_key(begin_index);
-            remote_agent_id = invocation_target_agent_id(
-                &logical_remote_agent_id,
-                ephemeral_logical_agent_id.as_ref(),
-                &idempotency_key,
-            )?;
-            metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-            handle = live;
-        }
+        // The persisted request embeds an idempotency key derived from the call's own `Start`
+        // index. A live call builds its request when that index is assigned; an incomplete
+        // `Start` from a previous run keeps its index, so a repair reproduces the same key and
+        // `ScheduleId`.
+        let mut handle = match call {
+            Either::Left(begun) => {
+                let request_key_position = key_position.clone();
+                let request_logical_remote_agent_id = logical_remote_agent_id.clone();
+                let request_ephemeral_logical_agent_id = ephemeral_logical_agent_id.clone();
+                let request_method_name = method_name.clone();
+                let request_input = input_value.clone();
+                let request_datetime: golem_common::model::oplog::types::SerializableDateTime =
+                    datetime.into();
+                begun
+                    .start_live_at_index(self, move |start_index| {
+                        let idempotency_key = request_key_position.derive(start_index);
+                        let remote_agent_id = invocation_target_agent_id(
+                            &request_logical_remote_agent_id,
+                            request_ephemeral_logical_agent_id.as_ref(),
+                            &idempotency_key,
+                        )
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                        Ok(HostRequestGolemRpcScheduledInvocation {
+                            remote_agent_id: remote_agent_id.agent_id(),
+                            idempotency_key,
+                            method_name: request_method_name,
+                            input: request_input,
+                            datetime: request_datetime,
+                            remote_agent_type: None,
+                            remote_agent_parameters: None,
+                        })
+                    })
+                    .await?
+            }
+            Either::Right(live) => live,
+        };
+        let idempotency_key = key_position.derive(handle.start_index());
+        let remote_agent_id = invocation_target_agent_id(
+            &logical_remote_agent_id,
+            ephemeral_logical_agent_id.as_ref(),
+            &idempotency_key,
+        )?;
+        let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
 
         let schedule_id = ScheduleId::from_idempotency_key(&idempotency_key);
 

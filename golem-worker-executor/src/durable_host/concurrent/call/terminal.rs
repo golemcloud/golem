@@ -116,11 +116,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .await?;
             oplog.add(end).await?;
             access
-                .finish_scope_with_commit(
-                    self.retry.function_type().clone(),
-                    self.begin_index(),
-                    forced_commit,
-                )
+                .finish_scope_with_commit(self.retry.function_type().clone(), forced_commit)
                 .await?;
             response
         } else {
@@ -576,8 +572,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         guard: &mut AccessTerminalGuard<P>,
     ) -> Result<(), WorkerExecutorError> {
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
-        let result = access.finish_scope(function_type, begin_index).await;
+        let result = access.finish_scope(function_type).await;
         if result.is_err() {
             // The caller observes this failure; it is not a guest-discarded completion.
             guard.suppress_discard_marker();
@@ -793,32 +788,7 @@ pub(crate) async fn end_durable_function_access<T, D, Ctx>(
     store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     function_type: DurableFunctionType,
-    begin_index: OplogIndex,
     forced_commit: bool,
-) -> Result<(), WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    end_durable_function_access_with_span(
-        store,
-        get_ctx,
-        function_type,
-        begin_index,
-        forced_commit,
-        None,
-    )
-    .await
-}
-
-pub(crate) async fn end_durable_function_access_with_span<T, D, Ctx>(
-    store: &(impl DurableAccess<T, D> + ?Sized),
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    function_type: DurableFunctionType,
-    _begin_index: OplogIndex,
-    forced_commit: bool,
-    _span_finished: Option<golem_common::model::oplog::SpanFinished>,
 ) -> Result<(), WorkerExecutorError>
 where
     T: 'static,

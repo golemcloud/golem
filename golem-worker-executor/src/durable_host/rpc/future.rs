@@ -431,7 +431,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             // terminal was never written. A read-only `WriteRemote` call is safe to
                             // re-execute, so re-dispatch the RPC now and complete the existing `Start`
                             // (mirrors the synchronous path's `Incomplete` -> re-run).
-                            let retry_point = live.begin_index();
+                            let retry_point = live.start_index();
                             let auth_ctx = live.take_agent_auth_ctx();
                             let mut task = accessor.with(|mut access| {
                                 let ctx = access.get();

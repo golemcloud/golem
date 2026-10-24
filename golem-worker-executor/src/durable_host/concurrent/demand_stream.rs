@@ -14,7 +14,8 @@
 
 use super::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, CompletionDelivery,
-    DeferredCallReplayOutcome, DurableCallSession, NotCancellable, ScopeReplayRecovery,
+    DeferredCallReplayOutcome, DurableCallSession, InvocationIdSource, NotCancellable,
+    ScopeReplayRecovery,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::{DurableCallTrapContext, TerminalCallError};
@@ -146,8 +147,8 @@ where
         self.parent.is_live()
     }
 
-    pub(crate) fn begin_index(&self) -> OplogIndex {
-        self.parent.begin_index()
+    pub(crate) fn start_index(&self) -> OplogIndex {
+        self.parent.start_index()
     }
 
     pub(crate) fn trap_context(&self) -> DurableCallTrapContext {
@@ -190,6 +191,8 @@ where
                 observational_owner: self.observational_owner,
                 incomplete_repair_authorized_by_scope: self.children_repair_incomplete,
                 scope_replay_recovery: self.parent.child_replay_recovery(),
+                // A child belongs to the guest call that opened the stream.
+                invocation_id: InvocationIdSource::Reserved(self.parent.invocation_id()),
                 ..Default::default()
             },
             request,

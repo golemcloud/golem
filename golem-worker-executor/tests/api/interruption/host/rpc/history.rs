@@ -86,16 +86,15 @@ pub(super) fn caller(
     )
     .map_err(anyhow::Error::msg)?;
     ensure!(&request.remote_agent_id == target && request.method_name == "inc_after_promise");
-    // The invocation span is embedded in Start. Both keys use the pre-call position.
+    // The invocation span is embedded in Start. The key derives from the call's own Start index.
     if asynchronous {
         ensure!(
             call.span_started.is_some(),
             "async RPC Start must carry its span"
         );
     }
-    let begin = OplogIndex::from_u64(start.as_u64() - 1);
     ensure!(
-        request.idempotency_key == IdempotencyKey::derived(key, begin),
+        request.idempotency_key == IdempotencyKey::derived(key, start),
         "unexpected derived key: {request:?}, {start}"
     );
     let invocation = invocation(entries, key, METHOD, finished)?;

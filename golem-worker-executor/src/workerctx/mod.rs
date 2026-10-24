@@ -592,15 +592,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError>;
 
-    /// Resume the replay of a worker instance. Note that if the previous replay
-    /// hasn't reached the end of the replay (which is usually last index in oplog)
-    /// resume_replay will ensure to start replay from the last replayed index.
-    async fn resume_replay(
-        store: &mut Store<Ctx>,
-        instance: &Instance,
-        refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
-
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker, but by general it can be no-op.
     ///

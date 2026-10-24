@@ -342,11 +342,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         // Even though `IdempotencyKey::derived` is used, we still need to persist this, because the
-        // derived key depends on the oplog index. `begin_index()` is the durable-scope index of this
-        // call; reusing it (rather than reading the live oplog index again) keeps the derived key
-        // stable across an incomplete-replay re-execution, since the `Start` is reused.
+        // derived key depends on the oplog index. The key derives from this call's own `Start`
+        // index, which an incomplete-replay re-execution reuses.
         // Reserve the logical position on replay too, even when the recorded result is returned.
-        let key = self.derive_idempotency_key(handle.begin_index());
+        let key = self.derive_idempotency_key(handle.start_index());
 
         let result = handle
             .run(self, async |_| {
@@ -974,7 +973,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     if let Some(denial) = agent_operation_denial(denied) {
                         // The replay of the denied call reserves the logical counter below, so
                         // the live denial reserves it too.
-                        let _ = self.derive_idempotency_key(begun.begin_index());
+                        let _ = self.idempotency_key_position();
                         break 'result begun.start_live_denied(self, request, denial).await?;
                     }
                     begun.start_live(self, request).await?

@@ -311,6 +311,7 @@ pub(super) fn native_output_handles(
 pub(super) async fn admit_tool_response_secret_holds<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     response: ToolInvokeResponse,
+    invocation_id: crate::durable_host::concurrent::InvocationIdSource,
 ) -> anyhow::Result<ToolInvokeResponse>
 where
     U: Send + 'static,
@@ -343,11 +344,15 @@ where
         targets: targets.clone(),
     };
     let admission =
-        DurableCallSession::<GolemToolResponseSecretHoldAdmission, Cancellable>::invoke_access(
+        DurableCallSession::<GolemToolResponseSecretHoldAdmission, Cancellable>::invoke_access_with_options(
             accessor,
             accessor.getter(),
             request,
             DurableFunctionType::ReadLocal,
+            crate::durable_host::concurrent::AccessClaimOptions {
+                invocation_id,
+                ..Default::default()
+            },
             async || {
                 Ok::<_, anyhow::Error>(HostResponseGolemToolResponseSecretHoldAdmission {
                     admitted: authorize_live_permissions_at_serialized_access(

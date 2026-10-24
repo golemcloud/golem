@@ -1328,6 +1328,65 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
 }
 
 #[test]
+async fn claim_retried_after_replay_resumed_claims_the_grown_start() {
+    let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
+    let parent = OplogIndex::from_u64(1);
+    let claim = || {
+        StartClaim::tool_invocation(
+            &HostFunctionName::GolemEntityInvoke,
+            &HostFunctionName::GolemToolInvocationRejected,
+            &DurableFunctionType::WriteLocal,
+            parent,
+        )
+    };
+    assert!(matches!(
+        replay.claim_start_or_replay_end(claim()).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+
+    let linear_memory = replay_linear_memory();
+    let transition = tokio::spawn({
+        let replay = replay.clone();
+        let linear_memory = linear_memory.clone();
+        async move {
+            replay
+                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while replay.cursor.transition_phase.load(Ordering::Acquire)
+            != ReplayTransitionPhase::Settling as u8
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("primary transition did not enter settling");
+
+    let grown_start = oplog
+        .add(rejected_tool_reconstruction_start(parent))
+        .await
+        .unwrap();
+    replay
+        .set_replay_target(grown_start)
+        .await
+        .expect("failed to grow replay target over a recorded Start");
+    drop(reconstruction);
+    assert_eq!(
+        transition.await.unwrap().unwrap(),
+        ReplayToLiveOutcome::ReplayResumed
+    );
+
+    match replay.claim_start_or_replay_end(claim()).await.unwrap() {
+        ReplayStartClaimOutcome::Claimed { handle, .. } => {
+            assert_eq!(handle.start_idx(), grown_start)
+        }
+        _ => panic!("the retried claim must replay the Start the grown target covers"),
+    }
+}
+
+#[test]
 async fn replay_finished_is_withheld_while_reconstruction_settles() {
     let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
     let linear_memory = replay_linear_memory();

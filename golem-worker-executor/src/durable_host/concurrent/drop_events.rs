@@ -300,7 +300,6 @@ impl<T: Send + 'static, D: HasData + ?Sized> wasmtime::component::AccessorTask<T
 #[derive(Debug, Clone)]
 pub struct DroppedCall {
     pub(super) start_idx: OplogIndex,
-    pub(super) begin_index: OplogIndex,
     pub(super) function_type: DurableFunctionType,
     pub(super) request_upload: PendingUpload,
     pub(super) entity_admission: bool,
@@ -332,10 +331,6 @@ impl DroppedCall {
         self.start_idx
     }
 
-    pub fn begin_index(&self) -> OplogIndex {
-        self.begin_index
-    }
-
     pub fn function_type(&self) -> &DurableFunctionType {
         &self.function_type
     }
@@ -363,8 +358,7 @@ impl DroppedCall {
     ) -> Result<(), WorkerExecutorError> {
         self.append_cancelled_with_oplog(ctx.state.oplog.clone(), partial)
             .await?;
-        ctx.end_durable_function(&self.function_type, self.begin_index, false)
-            .await?;
+        ctx.end_durable_function(&self.function_type, false).await?;
         Ok(())
     }
 
@@ -436,7 +430,6 @@ pub enum DropEvent {
     /// rather than ambient state.
     CleanupAfterTerminal {
         function_type: DurableFunctionType,
-        durable_begin_index: OplogIndex,
         terminal: Option<OrderedAppend>,
         trap_context: DurableCallTrapContext,
         /// Keeps the call counted as in flight until this event is fully consumed (the owned
@@ -585,7 +578,6 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
         }
         DropEvent::CleanupAfterTerminal {
             function_type,
-            durable_begin_index,
             terminal,
             trap_context,
             // Bound (not `_`) so the permit is released only at the end of this arm, after the
@@ -605,7 +597,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                     }
                 }
             }
-            ctx.end_durable_function(&function_type, durable_begin_index, false)
+            ctx.end_durable_function(&function_type, false)
                 .await
                 .map_err(|err| TerminalCallError::new(err, trap_context))?;
         }
@@ -833,7 +825,6 @@ where
             DropEvent::UnfinishedCancellable { call } => {
                 let context = call.trap_context();
                 let function_type = call.function_type().clone();
-                let durable_begin_index = call.begin_index();
                 let result = async {
                     call.wait_request_upload().await?;
                     call.append_cancelled_with_oplog(oplog.clone(), None).await
@@ -850,14 +841,8 @@ where
                             trap_context: context,
                             live_call_permit,
                         });
-                        if let Err(err) = end_durable_function_access(
-                            store,
-                            get_ctx,
-                            function_type,
-                            durable_begin_index,
-                            false,
-                        )
-                        .await
+                        if let Err(err) =
+                            end_durable_function_access(store, get_ctx, function_type, false).await
                             && first_error.is_none()
                         {
                             first_error = Some(TerminalCallError::new(err, context));
@@ -885,7 +870,6 @@ where
             }
             DropEvent::CleanupAfterTerminal {
                 function_type,
-                durable_begin_index,
                 terminal,
                 trap_context,
                 // Left in place: the permit stays owned by the event, so it survives a torn drain
@@ -894,7 +878,6 @@ where
                 live_call_permit: _,
             } => {
                 let function_type = function_type.clone();
-                let durable_begin_index = *durable_begin_index;
                 let trap_context = *trap_context;
                 let mut terminal_recorded = true;
                 if let Some(handle) = terminal {
@@ -915,14 +898,8 @@ where
                     }
                 }
                 if terminal_recorded {
-                    if let Err(err) = end_durable_function_access(
-                        store,
-                        get_ctx,
-                        function_type,
-                        durable_begin_index,
-                        false,
-                    )
-                    .await
+                    if let Err(err) =
+                        end_durable_function_access(store, get_ctx, function_type, false).await
                     {
                         if first_error.is_none() {
                             first_error = Some(TerminalCallError::new(err, trap_context));

@@ -56,28 +56,34 @@ pub(super) fn rpc_span_finished<T>(
     }
 }
 
-pub(super) fn create_embedded_invocation_span<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
+/// Builds the span of an embedded RPC invocation from its idempotency key without the Store, so
+/// a call can build it in the oplog's writer step, once its `Start` index fixes the key.
+pub(super) fn embedded_invocation_span_builder<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
     connection_span_id: &SpanId,
     function_name: &str,
-    idempotency_key: &IdempotencyKey,
-) -> Result<(Arc<InvocationContextSpan>, SpanStarted), WorkerExecutorError> {
+) -> Result<impl Fn(&IdempotencyKey) -> SpanStarted + Send + Sync + 'static, WorkerExecutorError> {
     let connection_origin = ctx
         .state
         .invocation_context
         .span_origin(connection_span_id)
         .ok_or_else(|| WorkerExecutorError::runtime("RPC connection span has no trace origin"))?;
-    let started = embedded_invocation_span_started(
-        &ctx.state.invocation_context.trace_id,
-        &ctx.state.invocation_context.trace_states,
-        &ctx.state.current_span_id,
-        connection_span_id,
-        connection_origin,
-        function_name,
-        idempotency_key,
-    );
-    let span = install_embedded_span(ctx, &started, connection_span_id)?;
-    Ok((span, started))
+    let trace_id = ctx.state.invocation_context.trace_id.clone();
+    let trace_states = ctx.state.invocation_context.trace_states.clone();
+    let current_span_id = ctx.state.current_span_id.clone();
+    let connection_span_id = connection_span_id.clone();
+    let function_name = function_name.to_string();
+    Ok(move |idempotency_key: &IdempotencyKey| {
+        embedded_invocation_span_started(
+            &trace_id,
+            &trace_states,
+            &current_span_id,
+            &connection_span_id,
+            connection_origin.clone(),
+            &function_name,
+            idempotency_key,
+        )
+    })
 }
 
 pub(super) fn embedded_invocation_span_started(
