@@ -176,14 +176,14 @@ pub(crate) fn classify_resume_response(
 /// Computes the Golem-managed headers to inject into an outgoing HTTP request:
 /// the trace-context headers of the request's invocation span (when
 /// `forward_trace_context_headers` is enabled) and an `idempotency-key`
-/// derived from the request's own begin oplog index (when
+/// derived from the send's own `Start` index (when
 /// `set_outgoing_http_idempotency_key` is enabled and the guest did not set
-/// the header itself). The begin index is stable across live execution and
-/// replay, so a retried send reuses the same key.
+/// the header itself). The send's `Start` index is stable across live execution
+/// and replay, so a retried send reuses the same key.
 pub(crate) fn golem_managed_http_headers<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     span_id: &SpanId,
-    begin_index: OplogIndex,
+    start_index: OplogIndex,
     guest_has_idempotency_key: bool,
 ) -> Result<Vec<(String, String)>, WorkerExecutorError> {
     let mut headers = Vec::new();
@@ -202,7 +202,7 @@ pub(crate) fn golem_managed_http_headers<Ctx: WorkerCtx>(
         headers.extend(trace_context_headers.to_raw_headers_map());
     }
     if ctx.state.set_outgoing_http_idempotency_key && !guest_has_idempotency_key {
-        let idempotency_key = ctx.derive_idempotency_key(begin_index);
+        let idempotency_key = ctx.derive_idempotency_key(start_index);
         headers.push(("idempotency-key".to_string(), idempotency_key.to_string()));
     }
     Ok(headers)

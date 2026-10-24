@@ -337,7 +337,7 @@ where
                 return fail_consume_body_task(trailers_tx, wasmtime::Error::from(error), None);
             }
         };
-        let parent_begin = stream.begin_index();
+        let parent_begin = stream.start_index();
 
         // The trailers / body-error terminal, set on the live path; on replay it
         // is taken from the parent marker instead.

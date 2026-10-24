@@ -174,7 +174,6 @@ pub(super) fn live_unfinished_handle<P: DropPolicy>(
     };
     DurableCallSession {
         start_idx,
-        boundary: DurableCallBoundary::from_begin_index(start_idx),
         is_live: true,
         persisted: true,
         request_upload: PendingUpload::already_durable(),
@@ -229,7 +228,6 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
     let start_idx = scope.retry_from;
     DurableCallSession {
         start_idx,
-        boundary: DurableCallBoundary::from_begin_index(start_idx),
         is_live: true,
         persisted: true,
         request_upload: PendingUpload::already_durable(),
@@ -300,7 +298,6 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
         let mut guard = AccessTerminalGuard::<NotCancellable>::new(
             DroppedCall {
                 start_idx: idx(5),
-                begin_index: idx(4),
                 entity_admission: false,
                 function_type: DurableFunctionType::ReadRemote,
                 request_upload: PendingUpload::already_durable(),
@@ -834,7 +831,6 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
         let mut guard = AccessTerminalGuard::<NotCancellable>::new(
             DroppedCall {
                 start_idx: idx(1),
-                begin_index: idx(1),
                 entity_admission: false,
                 function_type: DurableFunctionType::ReadLocal,
                 request_upload: PendingUpload::already_durable(),
@@ -1662,7 +1658,6 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     let mut guard = AccessTerminalGuard::<NotCancellable>::new(
         DroppedCall {
             start_idx,
-            begin_index: start_idx,
             entity_admission: false,
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
@@ -2258,7 +2253,6 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
     // `TerminalCallError`.
     let dropped_a = DroppedCall {
         start_idx: idx(5),
-        begin_index: idx(4),
         entity_admission: false,
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
@@ -2269,7 +2263,6 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
     };
     let dropped_b = DroppedCall {
         start_idx: idx(8),
-        begin_index: idx(8),
         entity_admission: false,
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),

@@ -23,6 +23,8 @@ use super::{
     ensure_install_permission_in_surface, instantiate_polymorphic_card_for_agent,
     permission_error_to_derive_error, permissions_types, serialize,
 };
+use golem_common::model::OwnedAgentId;
+use std::sync::Arc;
 
 /// After the card service refused a runtime card, names the first parent of the card that is no
 /// longer live. The card service refuses a child of a revoked or expired parent on every attempt,
@@ -163,8 +165,8 @@ where
             Req = HostRequestPermissionCardDerive,
             Resp = HostResponsePermissionCardDerived,
         >,
-    DeriveCardId: FnOnce(&DurableWorkerCtx<Ctx>, &IdempotencyKey, OplogIndex) -> CardId,
-    BuildCard: FnOnce(CardId) -> StoredCard,
+    DeriveCardId: FnOnce(&OwnedAgentId, &IdempotencyKey, OplogIndex) -> CardId + Send + 'static,
+    BuildCard: FnOnce(CardId) -> StoredCard + Send + 'static,
     RepairAuthorization:
         FnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<(), permissions_types::PermissionError>,
 {
@@ -178,30 +180,57 @@ where
     let begun =
         DurableCallSession::<Pair, NotCancellable>::begin(ctx, DurableFunctionType::WriteLocal)
             .await?;
-    let oplog_index = begun.begin_index();
-    let card_id_sequence = ctx.state.current_idempotency_key_oplog_index(oplog_index);
-    let card_id = derive_card_id(ctx, &invocation_key, card_id_sequence);
-    let provenance = CardManagedByRuntimeDerived {
-        environment_id: ctx.owned_agent_id.environment_id,
-        agent_id: ctx.owned_agent_id.agent_id.clone(),
-        invocation_key,
-        oplog_index,
+    // The card derives from the call's own `Start` index, which live and replay agree on.
+    let logical_position = ctx.state.take_logical_key_position();
+    let owned_agent_id = ctx.owned_agent_id.clone();
+    let card_at = move |start_index: OplogIndex| {
+        let card_id = derive_card_id(
+            &owned_agent_id,
+            &invocation_key,
+            logical_position.unwrap_or(start_index),
+        );
+        let provenance = CardManagedByRuntimeDerived {
+            environment_id: owned_agent_id.environment_id,
+            agent_id: owned_agent_id.agent_id.clone(),
+            invocation_key,
+            oplog_index: start_index,
+        };
+        (card_id, provenance, build_card(card_id))
     };
-    let card = build_card(card_id);
+    let built = Arc::new(std::sync::Mutex::new(None));
     let handle = match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
-            let request = HostRequestPermissionCardDerive {
-                card: serialize(&card).map_err(|err| {
-                    anyhow!("failed to serialize runtime permission card {card_id}: {err}")
-                })?,
-                provenance: serialize(&provenance).map_err(|err| {
-                    anyhow!("failed to serialize provenance for permission card {card_id}: {err}")
-                })?,
-            };
-            begun.start_live(ctx, request).await?
+            let slot = built.clone();
+            begun
+                .start_live_at_index(ctx, move |start_index| {
+                    let (card_id, provenance, card) = card_at(start_index);
+                    let request = HostRequestPermissionCardDerive {
+                        card: serialize(&card).map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "failed to serialize runtime permission card {card_id}: {err}"
+                            ))
+                        })?,
+                        provenance: serialize(&provenance).map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "failed to serialize provenance for permission card {card_id}: {err}"
+                            ))
+                        })?,
+                    };
+                    *slot.lock().unwrap() = Some((card_id, provenance, card));
+                    Ok(request)
+                })
+                .await?
         }
-        ResolvedCall::Replay(handle) => handle,
+        ResolvedCall::Replay(handle) => {
+            *built.lock().unwrap() = Some(card_at(handle.start_index()));
+            handle
+        }
     };
+    let (card_id, provenance, card) = built
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the runtime card is built from the claimed or appended Start");
 
     let start = handle.start_index();
     let owner = ctx.state.owner_wallet.clone();
@@ -361,16 +390,18 @@ pub(crate) async fn persist_installed_child_card<Ctx: WorkerCtx>(
     let target_recipient = agent_recipient_pattern(target);
     persist_runtime_card::<Ctx, GolemPermissionsInstallChildPersist, _, _, _>(
         ctx,
-        |ctx, invocation_key, oplog_index| {
-            ctx.derive_installed_child_card_id(invocation_key, oplog_index)
-        },
-        |child_card_id| {
-            StoredCard::Concrete(instantiate_polymorphic_card_for_agent(
-                source,
-                target,
-                child_card_id,
-                created_at,
-            ))
+        crate::durable_host::authorization::context::installed_child_card_id,
+        {
+            let source = source.clone();
+            let target = target.clone();
+            move |child_card_id| {
+                StoredCard::Concrete(instantiate_polymorphic_card_for_agent(
+                    &source,
+                    &target,
+                    child_card_id,
+                    created_at,
+                ))
+            }
         },
         source.expires_at,
         move |ctx| {

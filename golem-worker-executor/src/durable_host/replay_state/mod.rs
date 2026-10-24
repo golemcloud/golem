@@ -233,6 +233,8 @@ enum ReplayTransitionPhase {
 type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
 type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIndex, OplogEntry>>;
 type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
+type StartsByInvocationId =
+    HashMap<DurableInvocationId, std::collections::BTreeMap<OplogIndex, claims::RecordedStart>>;
 
 /// The consuming invocation whose earlier retained Starts must be claimed before a native read
 /// is delivered, including host-internal descendants of its imports.
@@ -509,6 +511,11 @@ struct ReplayCursor {
     /// Guest-consumed journal positions, with their durable scope owner. Host projections are
     /// ordinary hints; guest records reserve the cursor until the native read observer fires.
     stream_observations: std::sync::Mutex<StreamObservationPositions>,
+    /// The `Start`s recorded under each durable invocation id, in oplog order, including the ones
+    /// in deleted regions. Built by the recovery metadata scan with the delivery markers, and
+    /// extended by the scan of exactly the newly visible range when the replay target grows. A
+    /// claim of an identified call looks its `Start` up here instead of scanning the oplog.
+    start_invocation_ids: std::sync::Mutex<StartsByInvocationId>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via

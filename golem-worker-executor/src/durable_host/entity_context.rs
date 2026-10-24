@@ -184,10 +184,34 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|anchor| replay_state::GuestReadOrder { anchor })
     }
 
-    /// Reserves the next ordinal in guest call order for a direct Store-holding durable call.
+    /// How the guest import call that starts next is numbered, decided by the Store's call hook
+    /// from the calling guest task's custom invocation scope (see
+    /// [`durability::GuestImportNumbering`]).
+    pub(crate) fn guest_import_numbering(
+        &self,
+        custom_invocation_scope: Option<durability::CustomInvocationScope>,
+    ) -> durability::ImportNumbering {
+        if self.state.snapshotting_mode {
+            return durability::ImportNumbering::Unidentified(
+                durability::UnidentifiedReason::Snapshotting,
+            );
+        }
+        match self.invocation_anchor() {
+            Some(root) => durability::ImportNumbering::Under {
+                root,
+                anchor: custom_invocation_scope.map_or(root, |scope| scope.owner_start_index),
+            },
+            None => durability::ImportNumbering::Unidentified(
+                durability::UnidentifiedReason::OutsideInvocation,
+            ),
+        }
+    }
+
+    /// The invocation id of a direct Store-holding durable call: the id of the guest import that
+    /// makes it (see [`durability::GuestImportNumbering::store_holding_call_identity`]). A call
+    /// observed by a custom durable invocation records none.
     pub(crate) fn direct_call_invocation_id(
         &mut self,
-        _function_type: &DurableFunctionType,
     ) -> Result<Option<DurableInvocationId>, WorkerExecutorError> {
         if self.state.snapshotting_mode {
             return Ok(None);
@@ -202,10 +226,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if observed_by_custom_invocation {
             return Ok(None);
         }
-        let Some(anchor) = self.invocation_anchor() else {
+        let Some(root) = self.invocation_anchor() else {
             return Ok(None);
         };
-        durability::reserve_invocation_id(self, None, anchor).map(Some)
+        Ok(self
+            .guest_imports
+            .store_holding_call_identity(root)?
+            .invocation_id())
     }
 
     pub(in crate::durable_host) fn entity_parent_start_index(&self) -> Option<OplogIndex> {

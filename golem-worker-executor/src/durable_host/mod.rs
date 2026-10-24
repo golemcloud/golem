@@ -352,6 +352,22 @@ pub(crate) struct LiveAuthorizationPermit {
     pub(crate) _private: (),
 }
 
+/// The derived idempotency key of one durable call, reserved before its `Start` index is known
+/// (see [`DurableWorkerCtx::idempotency_key_position`]). The key derives from the call's `Start`
+/// index, which live execution and replay agree on, unless an entity Store assigned a logical
+/// position.
+#[derive(Debug, Clone)]
+pub(crate) struct IdempotencyKeyPosition {
+    parent: IdempotencyKey,
+    logical: Option<OplogIndex>,
+}
+
+impl IdempotencyKeyPosition {
+    pub(crate) fn derive(&self, start_index: OplogIndex) -> IdempotencyKey {
+        IdempotencyKey::derived(&self.parent, self.logical.unwrap_or(start_index))
+    }
+}
+
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
@@ -374,6 +390,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     invocation_principal: Option<Principal>,
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
+    pub(crate) guest_imports: Arc<durability::GuestImportNumbering>,
     _owner_resources: Arc<OwnerRuntimeResources>,
     entity_reconstruction_claim_hook:
         Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
@@ -657,13 +674,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
-        let current_idempotency_key = self
-            .state
-            .get_current_idempotency_key()
-            .unwrap_or(IdempotencyKey::fresh());
-        let idempotency_key_oplog_index =
-            self.state.current_idempotency_key_oplog_index(oplog_index);
-        IdempotencyKey::derived(&current_idempotency_key, idempotency_key_oplog_index)
+        self.idempotency_key_position().derive(oplog_index)
+    }
+
+    /// Reserves the derived idempotency key of one durable call before its `Start` index is
+    /// known. An entity Store reserves its next logical position here, exactly once per call.
+    pub(crate) fn idempotency_key_position(&mut self) -> IdempotencyKeyPosition {
+        IdempotencyKeyPosition {
+            parent: self
+                .state
+                .get_current_idempotency_key()
+                .unwrap_or(IdempotencyKey::fresh()),
+            logical: self.state.take_logical_key_position(),
+        }
     }
 
     /// Returns the per-instance cache of resolved typed guest export handles.
@@ -1118,9 +1141,6 @@ struct PrivateDurableWorkerState {
 
     /// Custom durable invocations whose committed logical `Start` is currently executing live.
     active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
-    /// Next custom invocation ordinal in each logical parent namespace for the current top-level
-    /// agent invocation. `None` is the root namespace.
-    invocation_ordinals: HashMap<OplogIndex, u64>,
     /// Next tool invocation attempt ordinal in each durable parent namespace.
     tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
@@ -1493,13 +1513,15 @@ impl PrivateDurableWorkerState {
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
-        if let Some(position) = self.entity_logical_key_position.as_mut() {
+        self.take_logical_key_position().unwrap_or(oplog_index)
+    }
+
+    pub(crate) fn take_logical_key_position(&mut self) -> Option<OplogIndex> {
+        self.entity_logical_key_position.as_mut().map(|position| {
             let result = *position;
             *position = position.next();
             result
-        } else {
-            oplog_index
-        }
+        })
     }
 
     /// Enriches retry properties with the worker's `agent-type`.
@@ -1594,7 +1616,6 @@ impl PrivateDurableWorkerState {
 
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
-        self.invocation_ordinals.clear();
     }
 
     pub async fn get_workers(

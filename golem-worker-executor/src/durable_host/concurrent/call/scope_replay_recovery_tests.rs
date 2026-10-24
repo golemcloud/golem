@@ -72,7 +72,6 @@ fn replaying_call(
         LeaveIncompleteOnDrop,
     > {
         start_idx: index,
-        boundary: DurableCallBoundary::from_begin_index(index),
         is_live: false,
         persisted: false,
         request_upload: PendingUpload::already_durable(),
@@ -235,6 +234,6 @@ async fn typed_owner_loss_requires_child_authorization() {
         .await
         .unwrap();
     assert!(authorized.is_live());
-    assert_eq!(authorized.begin_index(), OplogIndex::from_u64(5));
+    assert_eq!(authorized.start_index(), OplogIndex::from_u64(5));
     authorized.abandon_for_trap();
 }

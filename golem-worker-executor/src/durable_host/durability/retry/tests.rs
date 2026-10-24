@@ -114,7 +114,7 @@ impl DurabilityHost for MockDurabilityHost {
         &mut self,
         function_type: &DurableFunctionType,
         host_function: &str,
-    ) -> Result<OplogIndex, WorkerExecutorError> {
+    ) -> Result<(), WorkerExecutorError> {
         // Mirror the production read-only side-effect trap so tests can exercise the
         // single central enforcement point.
         if is_write_side_effect(function_type)
@@ -128,39 +128,15 @@ impl DurabilityHost for MockDurabilityHost {
                 host_function,
             });
         }
-        Ok(OplogIndex::from_u64(1))
-    }
-
-    async fn begin_durable_function_with_span(
-        &mut self,
-        function_type: &DurableFunctionType,
-        host_function: &str,
-        span_started: golem_common::model::oplog::SpanStarted,
-    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
-        let index = self
-            .begin_durable_function(function_type, host_function)
-            .await?;
-        Ok((index, span_started))
+        Ok(())
     }
 
     async fn end_durable_function(
         &mut self,
         _function_type: &DurableFunctionType,
-        _begin_index: OplogIndex,
         _forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())
-    }
-
-    async fn end_durable_function_with_span(
-        &mut self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-        forced_commit: bool,
-        _span_finished: golem_common::model::oplog::SpanFinished,
-    ) -> Result<(), WorkerExecutorError> {
-        self.end_durable_function(function_type, begin_index, forced_commit)
-            .await
     }
 
     async fn try_trigger_retry(
@@ -220,7 +196,7 @@ async fn make_retry_controller(
 async fn begin_durable_call(
     ctx: &mut MockDurabilityHost,
     function_type: DurableFunctionType,
-) -> Result<OplogIndex, WorkerExecutorError> {
+) -> Result<(), WorkerExecutorError> {
     DurabilityHost::observe_function_call(
         ctx,
         <KeyvalueEventualGet as HostPayloadPair>::INTERFACE,

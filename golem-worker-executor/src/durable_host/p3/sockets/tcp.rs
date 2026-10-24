@@ -21,9 +21,8 @@ use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
     DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource,
-    ScopeReplayRecovery, closed_demand, deliver_demand, demand_channel,
-    reserve_access_invocation_id, reserve_invocation_id_before_await,
-    resolve_current_observational_owner,
+    ScopeReplayRecovery, access_invocation_id, closed_demand, deliver_demand, demand_channel,
+    reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
     CustomInvocationContext, DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
@@ -1572,7 +1571,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         accessor: &Accessor<U, Self>,
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
-        let invocation_id = reserve_access_invocation_id(accessor, durable_worker_ctx::<Ctx, U>)?;
+        let invocation_id = access_invocation_id(accessor, durable_worker_ctx::<Ctx, U>)?;
         let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
         let observational_owner = accessor.with(|mut access| {
             resolve_current_observational_owner(

@@ -15,7 +15,7 @@
 use super::drop_events::AccessDropEventDrainGuard;
 use super::*;
 use crate::durable_host::LiveAuthorizationPermit;
-use crate::durable_host::durability::reserve_invocation_id;
+use crate::durable_host::durability::GuestImportIdentity;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::workerctx::ReplayAdmissionStage;
@@ -35,16 +35,15 @@ mod completion_replay;
 mod execution;
 mod start;
 mod terminal;
-pub(crate) use access_start::reserve_access_invocation_id;
-pub(in crate::durable_host::concurrent) use access_start::reserve_guest_import_invocation_id;
-pub(crate) use access_start::reserve_import_invocation_id;
+pub(crate) use access_start::access_invocation_id;
+pub(in crate::durable_host::concurrent) use access_start::guest_import_invocation_id;
+pub(crate) use access_start::import_invocation_id;
 pub(crate) use access_start::reserve_invocation_id_before_await;
 pub(crate) use access_start::resolve_current_observational_owner;
 pub(crate) use access_start::resolve_observational_owner;
 pub(crate) use claims::admission_refusal_before_start;
 pub(crate) use claims::finish_prepared_access_to_live;
 pub(crate) use claims::finish_prepared_access_to_live_at;
-use claims::prepare_access_replay_continuation;
 use claims::publish_incomplete_replay_tail_access;
 pub(in crate::durable_host::concurrent) use claims::publish_incomplete_replay_tail_at;
 pub(crate) use claims::reproduce_incomplete_start_refusal;
@@ -102,8 +101,6 @@ pub(crate) trait CallSpanObserver: std::fmt::Debug + Send + Sync {
 /// finished twice; an unfinished drop runs the `P` drop policy.
 pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     pub(super) start_idx: OplogIndex,
-    /// Carries the [`DurableCallBoundary`] admitted for this session.
-    pub(super) boundary: DurableCallBoundary,
     pub(super) is_live: bool,
     /// `true` when a `Start` entry was actually appended. It is `false` during unpersisted
     /// execution and for replay handles.
@@ -242,7 +239,7 @@ impl CallExecutionScope {
 }
 
 pub(crate) struct PreparedContextStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
-    prepared: PreparedAccessStart<Pair, P, Ctx>,
+    prepared: BegunCall<Pair, P, Ctx>,
 }
 
 /// The request of an accessor call's `Start`.
@@ -312,7 +309,11 @@ struct OwnedReplayClaim<Pair: HostPayloadPair, P: DropPolicy, T: 'static, Ctx: W
     _activity: crate::durable_host::tail_work::TailActivity,
 }
 
-struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
+/// The first phase of a durable call: admitted, with its initiation-time scope captured, before
+/// its host-call `Start` is claimed or appended. [`Self::resolve_against_history`] claims the
+/// recorded `Start` or continues live at the replay tail; the accessor, context and direct
+/// (Store-holding) start paths all produce and resolve this type.
+pub(crate) struct BegunCall<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
     is_live: bool,
     unpersisted: bool,
     requires_agent_authority: bool,
@@ -339,6 +340,8 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     /// `Start` append and its handle construction in `finish_access_start`. `Some` for live calls,
     /// `None` on replay.
     live_call_permit: Option<LiveCallPermit>,
+    /// The agent authority a direct call captured at admission or at the replay tail.
+    agent_auth_ctx: Option<AuthCtx>,
     _phantom: PhantomData<(Pair, P)>,
 }
 
@@ -409,28 +412,31 @@ impl AccessClaimOptions {
 
 /// Where an accessor call gets the invocation id it records in its `Start`s.
 ///
-/// A guest call that reaches the durable call path through a concurrent guest import records the
-/// invocation id of that import (see [`reserve_invocation_id`]), and replay claims its `Start`s
-/// by that id. Calls observed inside a custom durable invocation record none: replay never claims
-/// them.
+/// A guest import call that makes durable calls reserves an identity in guest call order (see
+/// [`crate::durable_host::durability::GuestImportNumbering`]). Replay claims a call's `Start`s by
+/// that id. Calls observed inside a custom durable invocation record none: replay
+/// never claims them.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) enum InvocationIdSource {
-    /// The call reserves the id of its guest import when it starts. This is correct only when the
-    /// import has made no `await` that lets the guest make another import call first.
+    /// The id of the guest import the call's accessor belongs to. A call made by a task that is
+    /// not a guest import fails: such a task must say where its id comes from.
     #[default]
-    AtStart,
-    /// The id reserved earlier by the guest import that issued this call, with
-    /// [`reserve_access_invocation_id`] or [`reserve_import_invocation_id`]. `None` means the
-    /// import is not identified by an invocation id.
+    GuestImport,
+    /// The id of the guest import that issued this call, looked up by that import with
+    /// [`access_invocation_id`] or [`import_invocation_id`] and passed to the task that makes the
+    /// call. `None` means the import is not identified by an invocation id.
     Reserved(Option<DurableInvocationId>),
+    /// The call is made by a host task that no single guest import issued. It records no id, and
+    /// replay claims it in oplog order.
+    HostTask,
 }
 
 impl InvocationIdSource {
-    /// The reserved invocation id, or `None` when the call reserves its id at start.
+    /// The id passed from the issuing guest import, or `None` for any other source.
     pub(crate) fn reserved(self) -> Option<DurableInvocationId> {
         match self {
-            Self::AtStart => None,
             Self::Reserved(invocation_id) => invocation_id,
+            Self::GuestImport | Self::HostTask => None,
         }
     }
 }
@@ -475,7 +481,6 @@ pub(crate) enum ScopeReplayRecovery {
 mod scope_replay_recovery_tests;
 
 struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
-    begin_index: OplogIndex,
     start_idx: OplogIndex,
     persisted: bool,
     requires_agent_authority: bool,
@@ -548,9 +553,9 @@ pub(crate) type BuildSpanCallback = Box<
 >;
 
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum ResolvedCall<Pair: HostPayloadPair, P: DropPolicy> {
+pub(crate) enum ResolvedCall<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
     Replay(DurableCallSession<Pair, P>),
-    Live(BegunCall<Pair, P>),
+    Live(BegunCall<Pair, P, Ctx>),
 }
 
 fn is_write_side_effect_for_access(function_type: &DurableFunctionType) -> bool {
@@ -658,13 +663,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 format!("{entry:?}"),
             )),
         }
-    }
-
-    /// The boundary index returned by `begin_durable_function`.
-    /// Used by call sites that derive a stable identifier from that index (e.g. the idempotency-key
-    /// derivation).
-    pub fn begin_index(&self) -> OplogIndex {
-        self.boundary.begin_index()
     }
 
     pub(crate) fn require_incomplete_repair_readiness(
@@ -789,20 +787,6 @@ fn is_accessor_supported_function_type(function_type: &DurableFunctionType) -> b
 fn is_accessor_terminal_supported_function_type(function_type: &DurableFunctionType) -> bool {
     is_accessor_supported_function_type(function_type)
         || matches!(function_type, DurableFunctionType::WriteRemote)
-}
-
-/// The first phase of a two-phase durable call, produced by [`DurableCallSession::begin`]. The
-/// boundary index is known; the host-call `Start` has not yet been
-/// written or claimed. Resolve replay before preparing a live request with [`Self::resolve`].
-pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
-    boundary: DurableCallBoundary,
-    execution_scope: BegunCallExecutionScope,
-    retry: InFunctionRetryController,
-    requires_agent_authority: bool,
-    agent_auth_ctx: Option<AuthCtx>,
-    drop_sink: Option<UnboundedSender<DropEvent>>,
-    cleanup_sink: Option<UnboundedSender<DropEvent>>,
-    _phantom: PhantomData<(Pair, P)>,
 }
 
 #[cfg(test)]
