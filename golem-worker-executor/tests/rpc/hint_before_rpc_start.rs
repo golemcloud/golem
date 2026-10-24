@@ -333,3 +333,135 @@ async fn repair_after_stdout_hint_executes_target_once(
     assert_eq!(next, 2, "the next fresh invocation must continue from 1");
     Ok(())
 }
+
+/// No crash and no test hook: the caller writes stdout, then awaits a slow target
+/// asynchronously. The executor suspends the caller while the RPC is pending, commits its oplog,
+/// and later reconstructs it, which repairs the incomplete RPC `Start`.
+#[test]
+#[timeout("2 minutes")]
+async fn async_rpc_after_stdout_hint_survives_suspension_with_one_target_execution(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.suspend.rpc_suspend_after = Duration::from_secs(2);
+            config.suspend.rpc_resume_after = Duration::from_secs(1);
+        })),
+        wrap_rpc: Some(Arc::new({
+            let attempts = attempts.clone();
+            move |rpc| {
+                Arc::new(RecordingRpc::new(
+                    rpc,
+                    "inc_after_promise",
+                    attempts.clone(),
+                ))
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let target_name = "hint-before-async-target";
+    let target_id = agent_id!("RpcBlockingCounter", target_name);
+    let target = executor
+        .start_agent(&component.id, target_id.clone())
+        .await?;
+    let promise = executor
+        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let caller_id = agent_id!("CancelTester", "hint-before-async-caller");
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let caller_id = caller_id.clone();
+        let promise = promise.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &caller_id,
+                    "await_counter_after_stdout",
+                    data_value!(target_name, promise),
+                )
+                .await
+        })
+    };
+    executor
+        .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
+        .await?;
+
+    let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    let start = prefix
+        .iter()
+        .rfind(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await"))
+        .expect("the async RPC must have a committed Start")
+        .oplog_index;
+    let hint = start.previous();
+    assert!(
+        prefix
+            .iter()
+            .any(|entry| entry.oplog_index == hint
+                && matches!(&entry.entry, PublicOplogEntry::Log(_))),
+        "the stdout hint must directly precede the RPC Start; caller oplog: {prefix:#?}"
+    );
+    executor.complete_promise(&promise, vec![]).await?;
+
+    let result = tokio::time::timeout(Duration::from_secs(45), invocation).await???;
+    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let executions: Vec<_> = target_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name == "inc_after_promise" =>
+                {
+                    Some((entry.oplog_index, method.idempotency_key.clone()))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let count = executor
+        .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    let attempts = attempts.lock().unwrap().clone();
+    eprintln!(
+        "hint at {hint}, Start at {start}; attempt keys {attempts:?}; target inc_after_promise \
+         AgentInvocationStarted (index, key) {executions:?}; counter {count}; caller result {result:?}"
+    );
+
+    assert_eq!(
+        (executions.len(), count),
+        (1, 7),
+        "(target inc_after_promise AgentInvocationStarted, provider-side counter); attempt keys \
+         {attempts:?}"
+    );
+    assert!(
+        attempts.iter().all(|attempt| attempt == &attempts[0]),
+        "every attempt must carry the key of the original dispatch: {attempts:?}"
+    );
+
+    executor
+        .invoke_and_await_agent(&component, &target_id, "inc_by", data_value!(1u64))
+        .await?;
+    let next = executor
+        .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(next, 8, "the next fresh invocation must continue from 7");
+    Ok(())
+}

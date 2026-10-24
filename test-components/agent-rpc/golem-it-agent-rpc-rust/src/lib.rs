@@ -1670,6 +1670,10 @@ pub trait CancelTester {
     /// precedes the increment's `Start`.
     fn inc_after_stdout(&self, counter_name: String, mode: String);
 
+    /// Activates the `RpcBlockingCounter` target with `get_value`, writes to stdout, then awaits
+    /// `inc_after_promise` asynchronously, so a hint entry directly precedes the RPC's `Start`.
+    async fn await_counter_after_stdout(&self, counter_name: String, promise_id: PromiseId) -> u64;
+
     async fn await_counter(
         &self,
         counter_name: String,
@@ -1936,6 +1940,31 @@ impl CancelTester for CancelTesterImpl {
             }
             _ => panic!("unknown RPC mode: {mode}"),
         }
+    }
+
+    async fn await_counter_after_stdout(&self, counter_name: String, promise_id: PromiseId) -> u64 {
+        let rpc = WasmRpc::new(
+            "RpcBlockingCounter",
+            encode_single_parameter(counter_name.clone()),
+            None,
+            Vec::new(),
+        );
+        let no_input = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
+            .expect("failed to encode empty RPC input");
+        rpc.invoke_and_await("get_value", no_input, None).unwrap();
+        println!("waiting for {counter_name}");
+        let result = rpc
+            .async_invoke_and_await(
+                "inc_after_promise",
+                encode_single_parameter(promise_id),
+                None,
+            )
+            .future
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
     }
 
     async fn await_counter(
