@@ -1,6 +1,6 @@
 @agentDefinition(
   mount = "/chats/{chat}",
-  // Golem serves files this agent writes, never half-written:
+  // Golem serves this agent's files only when complete:
   exposeFiles = Array(("/*", "/out/$1")), //@
 )
 trait AnalystAgent extends BaseAgent:

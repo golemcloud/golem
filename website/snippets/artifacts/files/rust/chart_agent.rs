@@ -9,7 +9,7 @@ pub trait ChartAgent {
   #[description("Draw a sales chart for one quarter")]
   #[endpoint(get = "/chart.png?quarter={quarter}")]
   async fn chart(&self, quarter: String)
-    // the reply is the PNG itself, over HTTP or MCP:
+    // the reply is the PNG and its MIME type, over HTTP or MCP:
     -> Result<Png, AppError>; //@
 }
 struct ChartAgentImpl { team: String }
