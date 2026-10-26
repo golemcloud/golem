@@ -159,6 +159,10 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("bash")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("git_tool")]
     PrecompiledComponent
 );

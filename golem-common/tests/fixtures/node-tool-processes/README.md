@@ -21,8 +21,8 @@ while another synchronous call runs. The output cases run in a fresh JavaScript
 runtime. The bridge uses the shared command parser. The fixture calls public
 `spawn`, `spawnSync`, `execFile` and `execFileSync` entry points. It also checks
 the disable switch, unknown commands and precedence of local Node scripts over
-bound tools. The SDK templates do not register the adapter while replay readiness
-is unresolved.
+bound tools. The SDK templates register the adapter without host I/O; the controls
+below validate individual execution and reconstruction paths separately.
 
 ## Build prerequisites
 
@@ -51,7 +51,10 @@ This bundles the fixture with the SDK component entry, injects it into
 a backend itself. Use the resulting `probe.wasm` with the same executor test.
 The separately named `fresh-sdk-overflow` reduction uses the custom wrapper path,
 which embeds its SDK control as a separate module; the SDK template path bundles
-that control into the application instead.
+that control into the application instead. Use the custom wrapper for
+`fresh-sdk-overflow`: its fresh-runtime source imports the separate fixture module,
+which the normal SDK template does not provide. The normal template supports the
+public process and ordinary Node-stream controls without that module.
 
 The script uses the existing `agent-guest` world and the SDK's pinned wit-bindgen
 revision. Native module registrations are private JavaScript modules, not WIT
@@ -89,6 +92,11 @@ lifecycle cases. `fresh-stream-control` uses ordinary Node streams inside
 `runJavaScript`, without invoking a tool process there. It only accepts
 `streams-collect`. Focused results include the selected path in their label so a
 successful run cannot silently exercise the default instead.
+
+`main-cancel` checks both explicit cancellation and a timeout with `SIGINT` while
+the provider waits on stdin. Each case retains the provider's output marker and
+joins the child before a successful follow-up call. The replay option also checks
+these timer and cancellation paths against the recorded history.
 
 For a matched wrapper-cost comparison, use one component artifact with
 `GOLEM_NODE_TOOL_STREAM_PROBE_CASES=streams-collect` and
@@ -141,14 +149,12 @@ between its handler and fresh-runtime helper. It links neither the new native
 bridge nor the Rust SDK. The ordinary SDK client also handles the fresh follow-up
 invocation, so a pass still checks reconstruction and continued execution.
 
-The independent SDK/Node-stream case is now recorded in
-[the SDK replay PR](https://github.com/golemcloud/golem/pull/4293). It still
-reproduces with the blocked-wait delivery fix present. The SDK-only control has
-completed live execution and offline replay, but an
-unchanged component has also timed out during reconstruction on a subsequent
-run. Treat this as an intermittent replay finding, not proof that a passing
-adapter variation fixed it. Its cause is not yet assigned to the SDK, WRQJS or
-the executor. Keep the failure strict while reducing the reproducer.
+The independent SDK/Node-stream finding led to
+[the SDK replay reproducer](https://github.com/golemcloud/golem/pull/4293), which
+was superseded by [the platform replay fix](https://github.com/golemcloud/golem/pull/4301).
+It is no longer an open dependency. The reductions below record the original
+investigation, not the behavior expected after that fix. Keep reconstruction
+checks strict when validating the integration on the updated platform.
 
 ### Reduced SDK replay fixture
 
@@ -176,8 +182,9 @@ start SDK producer → read one chunk → write Node stream → cancel SDK call
   → cancel reader and join result → end Node stream → await finished(stream)
 ```
 
-All observations below use released WRQJS 0.4.13 and identical guest Cargo lockfiles.
-They use the current feature branch, not a new validation of latest `main`.
+The historical observations below used released WRQJS 0.4.13 and identical guest
+Cargo lockfiles before the platform replay fix. They are not validation of the
+current branch or latest `main`.
 
 | Reduction                                                       | Offline reconstruction                    |
 | --------------------------------------------------------------- | ----------------------------------------- |
@@ -217,19 +224,29 @@ remain recoverable in Git history, not in this fixture tree.
 ## Resume implementation
 
 The SDK template and optimized built-in components now include the backend.
-The regular `builtin_node_and_npm_dispatch_bound_tools` executor test checks
-synchronous and awaited asynchronous calls from built-in `node`, then synchronous
-calls from an npm lifecycle script. The ignored
-`builtin_npm_async_node_child_dispatch_bound_tools` test retains the failing
-asynchronous lifecycle case: WRQJS's local inline Node child returns before its
-Promise work finishes and produces no captured success output.
+The `builtin_node_and_npm_dispatch_bound_tools` executor test checks synchronous
+and awaited asynchronous calls from built-in `node`, then synchronous calls from
+an npm lifecycle script. `builtin_npm_async_node_child_dispatch_bound_tools` also
+awaits asynchronous calls in that lifecycle child. Preview 3 local Node children
+use separate JavaScript runtimes and join referenced work before completion.
+Both tests use the real Bash tool for shell routing and exercise native timeout
+cleanup, returned tool errors and trapped component tools.
+
+The public child-process fixture also validates reconstruction of synchronous and
+asynchronous local Node children. The dependency is stopped before reconstruction,
+and the test compares the recorded prefix and settled history without tolerance.
+This evidence does not replace the remaining replay cases listed below.
+
+Completed offline reconstruction also covers explicit cancellation, timeout,
+overlapping synchronous/asynchronous calls and the ordinary Node-stream control
+through the normal SDK template. The independent SDK overflow control passes
+through its custom wrapper, which provides its separate module.
 
 The remaining work is:
 
-- Fix the local Node-child asynchronous lifetime separately from tool dispatch.
-- Validate native shell routing, timeout and cross-component failure cases.
-- Validate timeout, cancellation and crash recovery without relaxing the history
-  checks. Track the independent SDK/Node-stream replay finding separately.
+- Validate crash cuts during pending attachment work and the combined npm lifecycle
+  path without relaxing history checks. Completed offline reconstruction does not
+  establish every in-flight crash window.
 - Measure registration/startup cost and representative component-size deltas.
 - Replace the draft CI Git pin with a WRQJS release containing the generic hooks,
   and align the publication toolchain pins before merging.

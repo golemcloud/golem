@@ -38,19 +38,21 @@ boundary. Golem's existing tool permissions still apply to dispatched commands.
 Run `cargo make test-javascript-tool-process-backend` for the mock adapter and facade tests. These
 tests do not validate the native transport, component execution, or replay.
 
-The fixture includes an SDK-only cancellation control with ordinary Node streams; it can reproduce a
-reconstruction timeout without linking this bridge. The independent reproducer is
-tracked in [the SDK replay PR](https://github.com/golemcloud/golem/pull/4293).
-That platform finding is independent of SDK registration. Feature-specific crash
-recovery still needs strict validation against the recorded history.
-Do not infer an executor fix or a bridge fix from a single successful run.
+The fixture includes an SDK-only cancellation control with ordinary Node streams.
+Its original reconstruction finding did not require this bridge and was fixed by
+[the platform replay change](https://github.com/golemcloud/golem/pull/4301).
+The superseded [SDK replay reproducer](https://github.com/golemcloud/golem/pull/4293)
+is not an open dependency. Feature-specific crash recovery still needs strict
+validation against the recorded history; one successful control does not prove
+all bridge paths are replay-safe.
 
-The built-in `node` runner supports awaited asynchronous tool calls. Local Node
-children launched by npm currently use WRQJS's inline child emulation, which
-finishes CommonJS evaluation without joining asynchronous work started by that
-script. Synchronous tool calls work there, but output after an asynchronous tool
-call can be lost. The ignored executor test
-`builtin_npm_async_node_child_dispatch_bound_tools` retains a strict reproducer;
-the regular `builtin_node_and_npm_dispatch_bound_tools` checks async calls in
-`node` and synchronous calls in an npm lifecycle script. This is a live-execution
-limitation, not the independent reconstruction finding above.
+The built-in `node` runner supports awaited asynchronous tool calls. On Preview 3,
+WRQJS runs local Node children in separate JavaScript runtimes and joins their
+referenced work before completion. This also applies to npm lifecycle scripts.
+The executor tests cover tool calls from both the built-in runner and lifecycle
+children. Preview 2 retains inline local Node execution.
+
+JavaScript scheduling remains cooperative. CPU-bound work can delay other guest
+callbacks, including parent cancellation timers. A child's own timeout bounds its
+execution, and nested local children inherit the effective deadline. This does
+not provide hard `process.exit()` semantics or independent CPU scheduling.

@@ -50,10 +50,13 @@ The shared TypeScript SDK template installs the adapter in both the main runtime
 and fresh JavaScript execution runtimes. Its build requires the generic WRQJS
 process-backend and runtime-init hooks.
 
-Local Node children started by npm currently finish when synchronous script
-evaluation returns. Use synchronous tool calls in those lifecycle scripts;
-asynchronous work can outlive output capture. This does not affect asynchronous
-tool calls awaited by the built-in `node` runner itself.
+Local Node children started by npm run in separate JavaScript runtimes on Preview 3.
+They join referenced asynchronous work, including bound-tool calls, before the
+parent receives completion. Preview 2 retains inline local Node execution.
+
+JavaScript scheduling is cooperative. A CPU-bound child can delay parent callbacks;
+its own timeout still bounds execution, including nested local children. Hard
+`process.exit()` semantics remain a separate runtime limitation.
 
 ## Releases and builds
 

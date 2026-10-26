@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { sdkOverflowControl } from "golem-tool-process-sdk-control";
 import process from "node:process";
-import { runJavaScript, runIsolatedChild } from "wasm-rquickjs:execution";
+import { runJavaScript } from "wasm-rquickjs:execution";
 import {
   ok,
   processExitStatusSchema,
@@ -254,7 +254,7 @@ probe.implement({
     if (nativeControl) await cancelNative(native);
     if (sdkControl) value = await sdkOverflowControl();
     if (isolatedChild) {
-      const result = JSON.parse(runIsolatedChild(`
+      const source = `
         (async () => {
           const backend = await import('node:child_process');
           const effectUrl = ${JSON.stringify(effectUrl)};
@@ -275,7 +275,22 @@ probe.implement({
           process.stderr.write(String(error));
           process.exitCode = 1;
         });
-      `));
+      `;
+      const result =
+        execution === "child-sync"
+          ? childProcess.spawnSync(process.execPath, ["-e", source], {
+              encoding: "utf8",
+            })
+          : await new Promise((resolve) => {
+              childProcess.execFile(
+                process.execPath,
+                ["-e", source],
+                { encoding: "utf8" },
+                (error, stdout, stderr) => {
+                  resolve({ status: error ? error.code : 0, stdout, stderr });
+                },
+              );
+            });
       assert.equal(result.status, 0, JSON.stringify(result));
       assert.equal(result.stderr, "");
       value = result.stdout;
@@ -384,6 +399,21 @@ probe.implement({
       } finally {
         cancelled.child.kill();
         await cancelled.done;
+      }
+      const timed = startCapture(backend, ["run", "marker-echo"], {
+        timeout: 1000,
+        killSignal: "SIGINT",
+      });
+      try {
+        await timed.firstOutput;
+        const stopped = await timed.done;
+        assert.equal(stopped.error, undefined);
+        assert.equal(stopped.status, null);
+        assert.equal(stopped.signal, "SIGINT");
+        assert.equal(new TextDecoder().decode(stopped.stdout), "marker:");
+      } finally {
+        timed.child.kill();
+        await timed.done;
       }
       if (summarize(backend.spawnSync("streaming", args)) !== value)
         throw new Error("Follow-up process after cancellation differs");

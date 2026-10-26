@@ -16,6 +16,7 @@ async fn builtin_node_and_npm_dispatch_bound_tools(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     #[tagged_as("tool_streaming_rust_provider")] streaming: &PrecompiledComponent,
     #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    #[tagged_as("bash")] bash: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     exercise_builtin_tool_dispatch(
@@ -24,14 +25,14 @@ async fn builtin_node_and_npm_dispatch_bound_tools(
         caller,
         streaming,
         javascript_tools,
+        bash,
         false,
     )
     .await
 }
 
-/// Reproduce asynchronous tool work outliving an inline Node lifecycle child.
+/// Join asynchronous bound-tool calls before an npm lifecycle child finishes.
 #[test]
-#[ignore]
 #[timeout("3m")]
 async fn builtin_npm_async_node_child_dispatch_bound_tools(
     last_unique_id: &LastUniqueId,
@@ -39,6 +40,7 @@ async fn builtin_npm_async_node_child_dispatch_bound_tools(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     #[tagged_as("tool_streaming_rust_provider")] streaming: &PrecompiledComponent,
     #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    #[tagged_as("bash")] bash: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     exercise_builtin_tool_dispatch(
@@ -47,6 +49,7 @@ async fn builtin_npm_async_node_child_dispatch_bound_tools(
         caller,
         streaming,
         javascript_tools,
+        bash,
         true,
     )
     .await
@@ -58,15 +61,22 @@ async fn exercise_builtin_tool_dispatch(
     caller: &PrecompiledComponent,
     streaming: &PrecompiledComponent,
     javascript_tools: &PrecompiledComponent,
+    bash: &PrecompiledComponent,
     async_lifecycle: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment = Arc::new(TestEnvironmentStateService::default());
+    let mut native_streaming = native_streaming_tool_metadata();
+    native_streaming.commands.nodes[0].name = "native-streaming".to_string();
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
             environment_state_service: Some(environment.clone()),
+            native_tool_metadata: Some(native_streaming.clone()),
+            configure: Some(Arc::new(|config| {
+                config.retry.max_attempts = 0;
+            })),
             ..Default::default()
         },
     )
@@ -79,6 +89,7 @@ async fn exercise_builtin_tool_dispatch(
     for (component, package) in [
         (javascript_tools, "golem:javascript-tools"),
         (streaming, "golem-it:tool-streaming-rust-provider"),
+        (bash, "golem:bash"),
     ] {
         let provider = executor
             .component_dep(&context.default_environment_id, component)
@@ -114,6 +125,20 @@ async fn exercise_builtin_tool_dispatch(
         }
     }
     let mut deployment = deployment.unwrap();
+    let native = native_deployment_state(
+        context.account_id,
+        "ToolStreamingCaller",
+        native_streaming,
+        native_test_tool_metadata(),
+    );
+    deployment.registered_tools.extend(native.registered_tools);
+    for (owner, bindings) in native.tool_bindings {
+        deployment
+            .tool_bindings
+            .entry(owner)
+            .or_default()
+            .extend(bindings);
+    }
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -129,6 +154,35 @@ async fn exercise_builtin_tool_dispatch(
 const assert = require('node:assert/strict');
 const { spawnSync, execFile } = require('node:child_process');
 const args = ['dual-reconstruct', 'redaction-terminals'];
+const shell = spawnSync('printf shell-out; printf shell-err >&2; exit 9', [], {
+    shell: true, encoding: 'utf8',
+});
+assert.equal(shell.error, undefined);
+assert.equal(shell.status, 9);
+assert.equal(shell.stdout, 'shell-out');
+assert.equal(shell.stderr, 'shell-err');
+
+const timed = spawnSync('native-streaming', ['run', 'wait-cancel'], {
+    encoding: 'utf8', timeout: 1000, killSignal: 'SIGINT',
+});
+assert.equal(timed.error.code, 'ETIMEDOUT');
+assert.equal(timed.status, null);
+assert.equal(timed.signal, 'SIGINT');
+assert.equal(timed.stdout, 'native:started');
+assert.ok(timed.stderr.startsWith('diagnostic:started'));
+
+const declared = spawnSync('streaming', ['run', 'declared-error'], { encoding: 'utf8' });
+assert.equal(declared.error, undefined);
+assert.equal(declared.status, 7);
+assert.equal(declared.stdout, 'marker:');
+assert.ok(declared.stderr.length > 0);
+
+const trapped = spawnSync('streaming', ['run', 'trap'], { encoding: 'utf8' });
+assert.equal(trapped.error.code, 'EIO');
+assert.equal(trapped.status, null);
+assert.equal(trapped.stdout, 'marker:');
+assert.ok(trapped.stderr.length > 0);
+
 const sync = spawnSync('streaming', args, { encoding: 'utf8' });
 assert.equal(sync.error, undefined);
 assert.equal(sync.status, 0);
