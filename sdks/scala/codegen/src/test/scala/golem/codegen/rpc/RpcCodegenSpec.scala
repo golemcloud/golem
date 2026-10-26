@@ -56,9 +56,22 @@ class RpcCodegenSpec extends munit.FunSuite {
     val content = result.files.head.content
     assert(content.contains("package example"))
     assert(content.contains("object MyAgentClient"))
-    assert(content.contains("_root_.golem.AgentCompanionBase[MyAgent]"))
+    assert(content.contains("_root_.golem.AgentCompanionBase[_root_.example.MyAgent]"))
     assert(content.contains("val typeName"))
     assert(content.contains("lazy val agentType"))
+  }
+
+  test("source package clauses must form the agent package") {
+    val result = RpcCodegen.generate(
+      agents = List(
+        agent("example.MyAgent", "example", "MyAgent")
+          .copy(sourceScopes = List(SourceScopeSurface("other", List("import java.util.UUID"))))
+      ),
+      existingObjects = Seq.empty
+    )
+
+    assertEquals(result.files.size, 0)
+    assertEquals(result.errors.map(_.message.contains("do not form its package example")), List(true))
   }
 
   test("skips generation when client object already exists") {
@@ -220,7 +233,7 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      content.contains("AbstractWireRemoteMethod[MyAgent, String, String]"),
+      content.contains("AbstractWireRemoteMethod[_root_.example.MyAgent, String, String]"),
       s"missing correct method type in:\n$content"
     )
     assert(
@@ -277,7 +290,10 @@ class RpcCodegenSpec extends munit.FunSuite {
     val content = result.files.head.content
     assert(content.contains("def apply(data: String)"), s"missing filtered apply in:\n$content")
     assert(!content.contains("caller: Principal"), s"principal param should be filtered out:\n$content")
-    assert(content.contains("AbstractWireRemoteMethod[MyAgent, String, String]"), s"wrong method type in:\n$content")
+    assert(
+      content.contains("AbstractWireRemoteMethod[_root_.example.MyAgent, String, String]"),
+      s"wrong method type in:\n$content"
+    )
   }
 
   test("all-principal method generates no-arg apply") {
