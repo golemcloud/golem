@@ -2857,21 +2857,13 @@ impl<'a> Component<'a> {
             .join(self.properties().component_wasm.clone())
     }
 
-    /// The final output component WASM
-    pub fn final_wasm(&self) -> PathBuf {
+    /// The component WASM used for metadata extraction and upload.
+    pub fn output_wasm(&self) -> PathBuf {
         self.properties()
             .output_wasm
             .as_ref()
             .map(|output_wasm| self.component_dir().join(output_wasm))
-            .unwrap_or_else(|| {
-                self.temp_dir
-                    .join("final-wasm")
-                    .join(format!("{}.wasm", self.component_name.as_str()))
-            })
-    }
-
-    pub fn agent_type_extraction_source_wasm(&self) -> PathBuf {
-        self.final_wasm()
+            .unwrap_or_else(|| self.wasm())
     }
 
     /// File for storing extracted component metadata (agent types and tools)

@@ -14,7 +14,7 @@ For the normal build workflow and `golem build` usage, load `golem-build`. This 
 `golem build` executes a multi-step pipeline. Understanding which step failed is the first step to diagnosing problems:
 
 1. **Check** — proposes dependency and configuration fixes first, then verifies build tools
-2. **Build** — runs language-specific compilation commands and copies the WASM to the final output path without changing its bytes
+2. **Build** — runs language-specific compilation commands, then uses `componentWasm` directly or copies it to a distinct `outputWasm` without changing its bytes
 3. **Generate Bridge** — generates bridge SDK code for inter-component communication
 
 Run a single step in isolation with `--step`:

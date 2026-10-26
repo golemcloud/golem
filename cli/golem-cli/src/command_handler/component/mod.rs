@@ -1930,7 +1930,7 @@ impl ComponentCommandHandler {
         let tools = extracted_metadata.tools;
         let tool_middlewares = extracted_metadata.tool_middlewares;
         let component = app_ctx.application().component(component_name);
-        let wasm_path = component.final_wasm();
+        let wasm_path = component.output_wasm();
 
         let mapping = agent_types
             .iter()

@@ -802,6 +802,16 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
         .cli([
             flag::YES,
             cmd::BUILD,
+            "conformance:adapter",
+            "--step",
+            "build",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::BUILD,
             "conformance:typescript-consumer",
             "--step",
             "gen-bridge",

@@ -268,10 +268,7 @@ async fn build_components_with_dependency_ordering(
                 .cloned()
                 .collect::<Vec<_>>()
             {
-                let wasm = ctx
-                    .application()
-                    .component(&component_name)
-                    .agent_type_extraction_source_wasm();
+                let wasm = ctx.application().component(&component_name).output_wasm();
                 if !wasm.exists() {
                     continue;
                 }
@@ -353,7 +350,7 @@ async fn build_components_with_dependency_ordering(
             built_components.insert(component_name.clone());
             if has_dependency_guest_request {
                 let component = ctx.application().component(&component_name);
-                if component.agent_type_extraction_source_wasm().exists() {
+                if component.output_wasm().exists() {
                     let metadata =
                         extract_and_store_component_metadata(ctx, &component_name).await?;
                     validate_no_ambient_tool_collisions(ctx, &component_name, &metadata.tools)?;
@@ -464,7 +461,7 @@ async fn generate_available_dependency_guest_bridges(
         .filter(|component_name| {
             ctx.application()
                 .component(component_name)
-                .agent_type_extraction_source_wasm()
+                .output_wasm()
                 .exists()
         })
         .cloned()
@@ -1095,7 +1092,7 @@ fn add_existing_component_manifest_bridge_output_dir_claims(
         return false;
     }
 
-    let wasm = component.agent_type_extraction_source_wasm();
+    let wasm = component.output_wasm();
     let extracted_component_metadata = component.extracted_component_metadata(&wasm);
     if !extracted_component_metadata.exists() {
         return false;
@@ -1455,7 +1452,7 @@ fn validate_wildcard_manifest_sources_resolved(
         .filter(|component_name| {
             !ctx.application()
                 .component(component_name)
-                .agent_type_extraction_source_wasm()
+                .output_wasm()
                 .exists()
         })
         .collect::<Vec<_>>();
@@ -1487,7 +1484,7 @@ fn component_matcher_is_not_expected_to_resolve(
     let wasm_exists = ctx
         .application()
         .component(component_name)
-        .agent_type_extraction_source_wasm()
+        .output_wasm()
         .exists();
 
     !selected || wasm_exists

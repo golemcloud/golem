@@ -3972,6 +3972,7 @@ dependencies = [
  "reqwest-retry",
  "rustix 1.1.4",
  "rustls",
+ "same-file",
  "semver",
  "serde",
  "serde_derive",

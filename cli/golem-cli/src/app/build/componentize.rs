@@ -18,6 +18,7 @@ use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
 use crate::fs;
 use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, log_warn_action};
+use anyhow::Context;
 use golem_common::model::component::ComponentName;
 
 pub async fn build_components(
@@ -52,13 +53,21 @@ pub async fn build_components(
 
     let component = ctx.application().component(component_name);
     let source_wasm = component.wasm();
-    let final_wasm = component.final_wasm();
-    if fs::path_eq_normalized(&source_wasm, &final_wasm) {
-        anyhow::ensure!(
-            source_wasm.is_file(),
-            "Component WASM is not a file: {}",
-            source_wasm.display()
-        );
+    let output_wasm = component.output_wasm();
+    anyhow::ensure!(
+        source_wasm.is_file(),
+        "Component WASM is not a file: {}",
+        source_wasm.display()
+    );
+    if output_wasm.exists()
+        && same_file::is_same_file(&source_wasm, &output_wasm).with_context(|| {
+            format!(
+                "Failed to compare component WASM {} and output WASM {}",
+                source_wasm.display(),
+                output_wasm.display()
+            )
+        })?
+    {
         return Ok(());
     }
 
@@ -68,14 +77,14 @@ pub async fn build_components(
             generator_kind: "output-wasm",
         })?
         .with_sources(|| [&source_wasm])
-        .with_targets(|| [&final_wasm])
+        .with_targets(|| [&output_wasm])
         .run_or_skip(
             || {
                 log_action(
                     "Copying",
-                    format!("component WASM to {}", final_wasm.display()),
+                    format!("component WASM to {}", output_wasm.display()),
                 );
-                fs::write(&final_wasm, fs::read(&source_wasm)?)?;
+                fs::copy(&source_wasm, &output_wasm)?;
                 Ok(())
             },
             || log_skipping_up_to_date(format!("copying component WASM for {component_name}")),

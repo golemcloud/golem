@@ -20,7 +20,7 @@ Run this from the application root directory (where the root `golem.yaml` is loc
 The build is a multi-step pipeline:
 
 1. **Check** — verifies that required build tools are installed (e.g., `cargo` for Rust, `npm`/`node` for TypeScript).
-2. **Build** — executes the build commands defined in `golem.yaml` for each component, then copies the component WASM to the final output path without changing its bytes. These commands are language-specific:
+2. **Build** — executes the build commands defined in `golem.yaml` for each component. It uses `componentWasm` directly unless `outputWasm` specifies a different file, in which case it copies the WASM without changing its bytes. These commands are language-specific:
    - **Rust**: runs `cargo build --target wasm32-wasip2` (or with `--release` for the release preset).
    - **TypeScript**: runs `rollup` to bundle the component (type checking happens in-process during bundling), then injects the bundle into a prebuilt QuickJS WASM and optionally preinitializes it.
    - **Effect**: runs `tsc` and `rollup`, then injects the bundle into the QuickJS WASM shipped by `@golemcloud/effect-golem`. Effect agents are self-describing, so this pipeline does not run `golem-typegen`.
@@ -33,7 +33,9 @@ The build is a multi-step pipeline:
 
 ## Build Output
 
-The final WASM artifact is placed in `golem-temp/agents/` under the application root:
+Golem uses `outputWasm` for metadata extraction and upload when it is configured. Otherwise, it uses `componentWasm` directly without making a staging copy. Paths are relative to the component directory. If both paths refer to the same file, including through a hard link or symbolic link, the build leaves that file unchanged.
+
+The built-in templates configure `outputWasm` under `golem-temp/agents/`:
 
 - **Rust (debug preset)**: `golem-temp/agents/<component_name_snake_case>_debug.wasm`
 - **Rust (release preset)**: `golem-temp/agents/<component_name_snake_case>_release.wasm`
