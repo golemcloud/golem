@@ -14,24 +14,15 @@ import golem.{BaseAgent, Principal, ULong}
 import golem.reflection.{AgentClientDefinition, DynamicAgentClient, DynamicToolClient, GolemReflectError, Reflection}
 import golem.runtime.annotations.*
 import golem.runtime.{InputRecordCodec, OutputCodec}
-import golem.schema.{Quantity, QuantityUnit, SchemaValue, TypedSchemaValue}
+import golem.schema.{Quantity, SchemaValue, TypedSchemaValue}
 import golem.tool.{ByteStreamFailure, ToolOutputStream}
 import zio.blocks.schema.json.Json
 import zio.blocks.schema.Schema
-import zio.blocks.typeid.TypeId
 
 import java.time.{Duration => JDuration}
 import scala.concurrent.{ExecutionContext, Future}
 
-sealed trait ReflectionMeters
-
-object ReflectionMeters {
-  implicit val unit: QuantityUnit[ReflectionMeters] = new QuantityUnit[ReflectionMeters] {
-    override val baseUnit: String                 = "m"
-    override val allowedSuffixes: List[String]    = Nil
-    override val typeId: TypeId[ReflectionMeters] = TypeId.of[ReflectionMeters]
-  }
-}
+@quantityUnit("m") sealed trait ReflectionMeters
 
 final case class ScalaConformanceInput(primary: String, nested: Map[String, Seq[Long]])
 object ScalaConformanceInput {

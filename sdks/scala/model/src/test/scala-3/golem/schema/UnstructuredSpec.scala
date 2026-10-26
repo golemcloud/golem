@@ -157,19 +157,17 @@ object UnstructuredSpec extends ZIOSpecDefault {
       wireAgrees[UnstructuredBinary[Image]](UnstructuredBinary.fromInline(Array.emptyByteArray)) &&
       wireAgrees[UnstructuredBinary[Image]](UnstructuredBinary.fromUrl("https://example.com/image.png"))
     },
-    test("bare text and binary values decode as inline values") {
+    test("bare text and binary values are rejected where the schema states the variant") {
       val bareText   = WitSchemaValueTree(Vector(WitSchemaValueNode.TextValue(WitTextValuePayload("hi", Some("en")))), 0)
       val bareBinary = WitSchemaValueTree(
         Vector(WitSchemaValueNode.BinaryValue(WitBinaryValuePayload(Vector[Byte](7, 8), Some("image/png")))),
         0
       )
       assertTrue(
-        textCodec.decode(bareText) == UnstructuredText.Inline[Lang]("hi", Some("en")),
-        binaryCodec.decode(bareBinary) == UnstructuredBinary.Inline[Image](Array[Byte](7, 8), Some("image/png")),
-        FromSchema[UnstructuredText[Lang]].fromValue(SchemaValue.TextValue("hi", None)) ==
-          Right(UnstructuredText.Inline[Lang]("hi", None)),
-        FromSchema[UnstructuredBinary[String]].fromValue(SchemaValue.BinaryValue(Vector[Byte](3), Some("x/y"))) ==
-          Right(UnstructuredBinary.Inline[String](Array[Byte](3), Some("x/y")))
+        Try(textCodec.decode(bareText)).isFailure,
+        Try(binaryCodec.decode(bareBinary)).isFailure,
+        FromSchema[UnstructuredText[Lang]].fromValue(SchemaValue.TextValue("hi", None)).isLeft,
+        FromSchema[UnstructuredBinary[String]].fromValue(SchemaValue.BinaryValue(Vector[Byte](3), Some("x/y"))).isLeft
       )
     },
     test("values outside the allow-list are rejected") {
@@ -216,13 +214,33 @@ object UnstructuredSpec extends ZIOSpecDefault {
           graphOf(t.result(Some(expectedText(None)), Some(t.string)))
       ) && values.map(wireAgrees(_)).reduce(_ && _)
     },
-    test("nested bare values decode through the structural derivation") {
-      val decoded = FromSchema[Either[String, Option[UnstructuredBinary[String]]]].fromValue(
-        SchemaValue.ResultValue(
-          SchemaResult.Ok(Some(SchemaValue.OptionValue(Some(SchemaValue.BinaryValue(Vector[Byte](9), None)))))
+    test("nested values decode through the structural derivation only in the variant form") {
+      def nested(value: SchemaValue) =
+        FromSchema[Either[String, Option[UnstructuredBinary[String]]]].fromValue(
+          SchemaValue.ResultValue(SchemaResult.Ok(Some(SchemaValue.OptionValue(Some(value)))))
         )
+      val bare = SchemaValue.BinaryValue(Vector[Byte](9), None)
+      assertTrue(
+        nested(SchemaValue.VariantValue(0, Some(bare))) ==
+          Right(Right(Some(UnstructuredBinary.Inline[String](Array[Byte](9), None)))),
+        nested(bare).isLeft
       )
-      assertTrue(decoded == Right(Right(Some(UnstructuredBinary.Inline[String](Array[Byte](9), None)))))
+    },
+    test("an empty allow-list is unrestricted") {
+      assertTrue(
+        Unstructured.disallowed(Some("x/y"), Some(Nil), "MIME type").isEmpty,
+        Unstructured.disallowed(Some("x/y"), None, "MIME type").isEmpty,
+        Unstructured.disallowed(None, Some(List("a/b")), "MIME type").isEmpty,
+        Unstructured.disallowed(Some("x/y"), Some(List("a/b")), "MIME type").nonEmpty,
+        Unstructured.binaryFromSchemaValue(
+          SchemaValue.VariantValue(0, Some(SchemaValue.BinaryValue(Vector.empty, Some("x/y")))),
+          Some(Nil)
+        ) == Right(UnstructuredBinary.Inline[String](Array.emptyByteArray, Some("x/y"))),
+        Unstructured.textFromSchemaValue(
+          SchemaValue.VariantValue(0, Some(SchemaValue.TextValue("hi", Some("fr")))),
+          Some(Nil)
+        ) == Right(UnstructuredText.Inline[String]("hi", Some("fr")))
+      )
     },
     test("unstructured fields work inside derived records") {
       val value = Document(

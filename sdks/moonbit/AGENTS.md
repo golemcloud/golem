@@ -354,8 +354,9 @@ other SDKs and the host (`golem-schema/src/schema/unstructured.rs`):
   argument implements `AllowedLanguages` / `AllowedMimeTypes`, and a non-empty list becomes the
   `languages` / `mime-types` restriction of the inline case. `AnyLanguage` / `AnyMimeType` produce
   no restriction. There are no `#derive.text_languages` / `#derive.mime_types` annotations.
-- Decoding (`FromWire` and `FromSchema`) accepts the wrapper variant or a bare text/binary value,
-  and rejects an inline language or MIME type outside a non-empty restriction list. The
+- Decoding (`FromWire` and `FromSchema`) accepts only the wrapper variant, rejects a bare
+  text/binary value, and rejects an inline language or MIME type outside a non-empty restriction
+  list. The host wraps a raw HTTP body in the `inline` case before it reaches the agent. The
   constructors (`::inline`, `::url`, and the enum cases) do not validate.
 - `Eq` and `Debug` are implemented without constraints on the phantom argument.
 

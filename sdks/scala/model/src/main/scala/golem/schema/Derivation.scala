@@ -522,7 +522,7 @@ private[golem] object Derivation {
             .collect { case DV.Primitive(PrimitiveValue.String(v)) => v }
             .getOrElse(throw SchemaEncodeError("Quantity.unit expected string"))
           UnicodeText.encodeText("quantity unit", unit)
-          if (unit != spec.baseUnit && !spec.allowedSuffixes.contains(unit))
+          if (!Quantity.allows(spec, unit))
             throw SchemaEncodeError(s"unit '$unit' is not allowed for quantity")
           SchemaValue.QuantityValueNode(QuantityValue(mantissa, scale, unit))
         case other => throw SchemaEncodeError(s"Quantity expected record dynamic value, got $other")
@@ -816,7 +816,7 @@ private[golem] object Derivation {
         try quantitySpec(reflect).get
         catch { case e: SchemaEncodeError => throw FromSchemaError(e.message) }
       value match {
-        case SchemaValue.QuantityValueNode(v) if v.unit == spec.baseUnit || spec.allowedSuffixes.contains(v.unit) =>
+        case SchemaValue.QuantityValueNode(v) if Quantity.allows(spec, v.unit) =>
           DV.Record(
             Chunk(
               "mantissa" -> DV.Primitive(PrimitiveValue.Long(v.mantissa)),

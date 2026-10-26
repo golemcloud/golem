@@ -27,6 +27,7 @@ private[wire] object ConcreteCodecMacro {
     // allow-list argument, and must not match the `Url` / `Inline` subclasses.
     val unstructuredText   = Symbol.requiredClass("golem.schema.UnstructuredText")
     val unstructuredBinary = Symbol.requiredClass("golem.schema.UnstructuredBinary")
+    val quantity           = Symbol.requiredClass("golem.schema.Quantity")
 
     // SDK types whose wire form is a hand-written codec; the static metadata describes the same form.
     val handWrittenTypes                    = Set("golem.host.PermissionsApi.PersistentCard")
@@ -82,6 +83,14 @@ private[wire] object ConcreteCodecMacro {
                 report.errorAndAbort(s"Invalid UnstructuredBinary MIME type ${Type.show[m]}")
               }
               '{ golem.schema.UnstructuredBinary.concreteCodec[m](using $allowed) }
+          }
+        case _ if tpe.typeSymbol == quantity =>
+          tpe.typeArgs.head.asType match {
+            case '[u] =>
+              golem.schema.QuantityUnitMacro.spec(TypeRepr.of[u]) match {
+                case Left(error) => report.errorAndAbort(error)
+                case Right(_)    => '{ golem.schema.Quantity.concreteCodec[u](using golem.schema.QuantityUnit.derived[u]) }
+              }
           }
         case '[golem.UByte]        => '{ ConcreteCodec.ubyte }
         case '[golem.UShort]       => '{ ConcreteCodec.ushort }
