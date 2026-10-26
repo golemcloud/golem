@@ -457,10 +457,11 @@ deliberate differences have per-case fixtures.
 A bound tool that declares stderr has it read alongside its stdout. When the call ends, the shell
 writes the call's stdout, then its stderr to the command's fd 1 and fd 2, so pipes, `2>`, `2>&1` and
 `2>/dev/null` apply. The stderr is the provider's bytes, followed by any diagnostics about the call
-(`tool error: …`, a denied or missing tool, the 16 MiB per-channel limit). A diagnostic about the
-call's stdin, stdout or stderr starts with the tool and its subcommand, as in
-`report export: stdout attachment limit exceeded`. When the tool crashes, that line is
-`report export: stdout: failed`, and the crash text follows once, as the call's error. Nothing records how the two
+(`tool error: …`, a denied or missing tool, the 16 MiB per-channel limit). The line about a failed
+stdout or stderr stream, or a failed write to stdin, starts with the tool and its subcommand, as in
+`report export: stdout: resource exhausted`. When the call's error repeats the failure text of the
+stream, as after a panic in the tool, the line ends at `failed`, and the text follows once, as the
+call's error. Nothing records how the two
 channels interleaved, so under `2>&1` a sibling's stdout always comes before its stderr, on replay
 too. The SDK's optional-argument encoding correction is a separate integration gate; tests use
 supported sibling argument shapes. See [acceptance evidence](ACCEPTANCE.md).
