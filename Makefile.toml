@@ -160,8 +160,15 @@ run_task = [{ name = ["wit", "diff-wit"] }]
 [tasks.build]
 dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Builds everything in debug mode"
-command = "cargo"
-args = ["build", "--workspace", "--all-targets"]
+# Two invocations bound peak memory: the worker executor's unit-test build needs as much memory as
+# the executor library builds for its binaries and integration tests, and one invocation runs all
+# three at once. Both invocations resolve the same features, so the second one only builds the
+# executor's own targets.
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build --workspace --all-targets --exclude golem-worker-executor
+exec --fail-on-error cargo build --workspace --all-targets
+'''
 
 [tasks.build-golem]
 dependencies = ["wit", "ensure-builtin-artifacts"]
