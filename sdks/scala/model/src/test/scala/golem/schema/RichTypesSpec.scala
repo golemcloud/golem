@@ -16,28 +16,22 @@
 
 package golem.schema
 
+import golem.runtime.annotations.quantityUnit
 import golem.schema.Implicits._
 import zio.blocks.schema.Schema
-import zio.blocks.typeid.TypeId
 import zio.test._
 
 import java.time.{Duration => JDuration, Instant}
 
 object RichTypesSpec extends ZIOSpecDefault {
-  sealed trait Bytes
-  sealed trait Seconds
+  @quantityUnit("bytes", "kb", "mb") sealed trait Bytes
+  @quantityUnit("seconds", "ms") sealed trait Seconds
+  @quantityUnit("s") sealed trait BaseOnly
+  @quantityUnit("bytes", suffixes = Seq("kb", "mb")) sealed trait StrictBytes
+  sealed trait Unmarked
 
-  implicit val bytesUnit: QuantityUnit[Bytes] = new QuantityUnit[Bytes] {
-    override val baseUnit: String              = "bytes"
-    override val allowedSuffixes: List[String] = List("kb", "mb")
-    override val typeId: TypeId[Bytes]         = TypeId.of[Bytes]
-  }
-
-  implicit val secondsUnit: QuantityUnit[Seconds] = new QuantityUnit[Seconds] {
-    override val baseUnit: String              = "seconds"
-    override val allowedSuffixes: List[String] = List("ms")
-    override val typeId: TypeId[Seconds]       = TypeId.of[Seconds]
-  }
+  private val bytesUnit   = QuantityUnit[Bytes]
+  private val secondsUnit = QuantityUnit[Seconds]
 
   final case class RichRecord(path: GolemPath, url: Url, at: Instant, duration: JDuration, size: Quantity[Bytes])
 
@@ -107,7 +101,7 @@ object RichTypesSpec extends ZIOSpecDefault {
         Url("https://golem.cloud"),
         Instant.ofEpochSecond(999L, 123456789),
         JDuration.ofNanos(-17L),
-        Quantity[Bytes](1L, 0, "bytes")
+        Quantity[Bytes](1L, 0, "kb")
       )
       val fieldBodies = recordFieldBodies[RichRecord]
       assertTrue(
@@ -122,7 +116,7 @@ object RichTypesSpec extends ZIOSpecDefault {
       )
     },
     test("derived record supports two distinct quantity units") {
-      val record = TwoQuantities(Quantity[Bytes](128L, 0, "kb"), Quantity[Seconds](30L, 0, "seconds"))
+      val record = TwoQuantities(Quantity[Bytes](128L, 0, "kb"), Quantity[Seconds](30L, 0, "ms"))
       assertTrue(
         recordFieldBodies[TwoQuantities] == List(
           SchemaTypeBody.QuantityType(bytesUnit.spec),
@@ -133,11 +127,11 @@ object RichTypesSpec extends ZIOSpecDefault {
     },
     test("quantity schemas do not depend on global unit lifecycle") {
       val beforeSchema = IntoSchema[SizeOnly].graph
-      val beforeValue  = IntoSchema[SizeOnly].toValue(SizeOnly(Quantity[Bytes](1L, 0, "bytes")))
+      val beforeValue  = IntoSchema[SizeOnly].toValue(SizeOnly(Quantity[Bytes](1L, 0, "kb")))
 
       val twoUnitSchema = IntoSchema[TwoQuantities].graph
       val afterSchema   = IntoSchema[SizeOnly].graph
-      val afterValue    = IntoSchema[SizeOnly].toValue(SizeOnly(Quantity[Bytes](1L, 0, "bytes")))
+      val afterValue    = IntoSchema[SizeOnly].toValue(SizeOnly(Quantity[Bytes](1L, 0, "kb")))
 
       assertTrue(
         beforeSchema == afterSchema,
@@ -157,6 +151,37 @@ object RichTypesSpec extends ZIOSpecDefault {
       val rejected =
         FromSchema[Quantity[Bytes]].fromValue(SchemaValue.QuantityValueNode(QuantityValue(1L, 0, "seconds")))
       assertTrue(accepted == Right(Quantity[Bytes](1L, 0, "mb")), rejected.isLeft)
+    },
+    test("a marker without @quantityUnit does not compile") {
+      val errors: List[scala.compiletime.testing.Error] =
+        scala.compiletime.testing.typeCheckErrors("QuantityUnit[RichTypesSpec.Unmarked]")
+      assertTrue(errors.exists(_.message.contains("is not a quantity unit marker")))
+    },
+    test("the annotation on the marker is the unit spec") {
+      assertTrue(
+        bytesUnit.spec == QuantitySpec("bytes", List("bytes", "kb", "mb")),
+        secondsUnit.spec == QuantitySpec("seconds", List("seconds", "ms")),
+        QuantityUnit[BaseOnly].spec == QuantitySpec("s"),
+        QuantityUnit[StrictBytes].spec == QuantitySpec("bytes", List("kb", "mb"))
+      )
+    },
+    test("every listed unit is allowed, the base unit included") {
+      assertTrue(
+        FromSchema[Quantity[Bytes]].fromValue(SchemaValue.QuantityValueNode(QuantityValue(1L, 0, "bytes"))) ==
+          Right(Quantity[Bytes](1L, 0, "bytes")),
+        IntoSchema[Quantity[Bytes]].toValue(Quantity[Bytes](1L, 0, "bytes")) ==
+          SchemaValue.QuantityValueNode(QuantityValue(1L, 0, "bytes"))
+      )
+    },
+    test("an explicit suffix list without the base accepts only the suffixes") {
+      assertTrue(
+        FromSchema[Quantity[StrictBytes]]
+          .fromValue(SchemaValue.QuantityValueNode(QuantityValue(1L, 0, "bytes")))
+          .isLeft,
+        FromSchema[Quantity[StrictBytes]].fromValue(SchemaValue.QuantityValueNode(QuantityValue(1L, 0, "kb"))) ==
+          Right(Quantity[StrictBytes](1L, 0, "kb")),
+        scala.util.Try(IntoSchema[Quantity[StrictBytes]].toValue(Quantity[StrictBytes](1L, 0, "bytes"))).isFailure
+      )
     }
   )
 }

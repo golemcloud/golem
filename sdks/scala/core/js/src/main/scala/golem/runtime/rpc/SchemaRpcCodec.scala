@@ -164,8 +164,14 @@ private[golem] object SchemaRpcCodec {
     case o                       => mismatch("url", o)
   }
   def asDatetime(v: SchemaValue): java.time.Instant = v match {
-    case SchemaValue.DatetimeValue(x) => java.time.Instant.ofEpochSecond(x.seconds, x.nanoseconds.toLong)
-    case o                            => mismatch("datetime", o)
+    case SchemaValue.DatetimeValue(x) if x.nanoseconds >= 0 && x.nanoseconds < 1000000000 =>
+      try java.time.Instant.ofEpochSecond(x.seconds, x.nanoseconds.toLong)
+      catch {
+        case _: java.time.DateTimeException => throw SchemaDecodeError(s"datetime out of Instant range: $x")
+      }
+    case SchemaValue.DatetimeValue(x) =>
+      throw SchemaDecodeError(s"datetime nanoseconds out of range: ${x.nanoseconds} (expected 0..999999999)")
+    case o => mismatch("datetime", o)
   }
   def asDuration(v: SchemaValue): Long = v match {
     case SchemaValue.DurationValue(x) => x

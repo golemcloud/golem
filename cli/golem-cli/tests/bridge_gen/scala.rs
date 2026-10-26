@@ -30,6 +30,7 @@ use golem_cli::bridge_gen::{
 use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
+use golem_common::schema::schema_type::{BinaryRestrictions, QuantitySpec, QuotaTokenSpec};
 use golem_common::schema::tool::{
     BoolFlagShape, CommandBody, CommandIndex, CommandTree, Doc, ErrorCase, ErrorKind, FlagShape,
     FlagSpec, Formatter, Globals, OptionShape, OptionSpec, Positional, Positionals,
@@ -1378,7 +1379,7 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(client_source.contains("object CounterAgentClient"));
     assert!(client_source.contains("trait CounterAgentRemote"));
     assert!(client_source.contains("def get(name: _root_.scala.Predef.String)"));
-    assert!(client_source.contains("_root_.scala.Either"));
+    assert!(!client_source.contains("sealed trait UnstructuredText"));
     assert!(client_source.contains("CounterAgentRemote"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
     assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
@@ -3057,4 +3058,283 @@ object Consumer {{
         .unwrap();
         compile(target);
     }
+}
+
+fn quantity_agent() -> AgentTypeSchema {
+    let kilograms = SchemaType::quantity(QuantitySpec {
+        base_unit: "kg".into(),
+        allowed_suffixes: vec![],
+        min: None,
+        max: None,
+    });
+    let lengths = SchemaType::quantity(QuantitySpec {
+        base_unit: "m".into(),
+        allowed_suffixes: vec!["m".into(), "km".into()],
+        min: None,
+        max: None,
+    });
+    agent(
+        "ScaleAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "weigh",
+                vec![field("load", kilograms.clone())],
+                Some(kilograms),
+            ),
+            method("measure", vec![], Some(SchemaType::list(lengths.clone()))),
+            method(
+                "pace",
+                vec![
+                    field(
+                        "interval",
+                        SchemaType::quantity(QuantitySpec {
+                            base_unit: "s".into(),
+                            allowed_suffixes: vec!["ms".into(), "us".into()],
+                            min: None,
+                            max: None,
+                        }),
+                    ),
+                    field(
+                        "weight",
+                        SchemaType::quantity(QuantitySpec {
+                            base_unit: "g".into(),
+                            allowed_suffixes: vec!["g".into()],
+                            min: None,
+                            max: None,
+                        }),
+                    ),
+                ],
+                None,
+            ),
+            method(
+                "route",
+                vec![field("leg", ref_to("leg"))],
+                Some(ref_to("leg")),
+            ),
+        ],
+        vec![def(
+            "leg",
+            SchemaType::record(vec![named_field("distance", lengths)]),
+        )],
+        AgentMode::Durable,
+    )
+}
+
+/// A quantity is `Quantity[U]`, with one generated unit marker per distinct
+/// unit; the runtime codec checks the unit on encode and decode.
+#[test]
+fn quantity_maps_to_unit_markers_in_external_mode() {
+    let pkg = GeneratedPackage::new(quantity_agent());
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir.join("src/main/scala/golem/bridge/client/scale_agent/ScaleAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(client.contains(
+        "_root_.golem.bridge.runtime.Quantity[_root_.golem.bridge.client.scale_agent.UnitKg]"
+    ));
+    assert!(client.contains("sealed trait UnitKg"));
+    assert!(client.contains("sealed trait UnitM"));
+    assert!(client.contains(
+        "_root_.golem.bridge.runtime.Quantity.toSchemaValue[_root_.golem.bridge.client.scale_agent.UnitKg](load)"
+    ));
+
+    run_sbt_test(
+        package_dir.as_path(),
+        r#"
+package golem.bridge.runtime
+
+import golem.bridge.client.scale_agent.{Codecs, Leg, UnitKg, UnitM}
+
+class StreamRuntimeTest extends munit.FunSuite {
+  test("quantity round-trips through the runtime codec and the generated record codec") {
+    val kg = Quantity[UnitKg](15, 1, "kg")
+    assertEquals(Quantity.toSchemaValue(kg), SchemaValue.QuantityValue(15, 1, "kg"))
+    assertEquals(Quantity.fromSchemaValue[UnitKg](Quantity.toSchemaValue(kg)), kg)
+    val leg = Leg(Quantity[UnitM](2, 0, "km"))
+    assertEquals(Codecs.decodeLeg(Codecs.encodeLeg(leg)), leg)
+    val json = SchemaValueCodec.toJson(Codecs.encodeLeg(leg))
+    assertEquals(SchemaValueCodec.fromJson(json).map(Codecs.decodeLeg), Right(leg))
+  }
+  test("quantity codec rejects units the schema does not allow") {
+    intercept[BridgeException](Quantity.toSchemaValue(Quantity[UnitKg](1, 0, "lb")))
+    intercept[BridgeException](Quantity.fromSchemaValue[UnitKg](SchemaValue.QuantityValue(1, 0, "g")))
+    intercept[BridgeException](Quantity.fromSchemaValue[UnitM](SchemaValue.QuantityValue(1, 0, "cm")))
+    intercept[BridgeException](Quantity.fromSchemaValue[UnitKg](SchemaValue.S64Value(1)))
+    intercept[BridgeException](Codecs.encodeLeg(Leg(Quantity[UnitM](1, 0, "mi"))))
+  }
+}
+"#,
+    );
+}
+
+#[test]
+fn quantity_maps_to_sdk_quantity_in_guest_mode() {
+    let pkg = GeneratedPackage::new_with_mode(quantity_agent(), ScalaBridgeMode::GuestWasmRpc);
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir.join("src/main/scala/golem/bridge/client/scale_agent/ScaleAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(
+        client.contains(
+            "_root_.golem.schema.Quantity[_root_.golem.bridge.client.scale_agent.UnitKg]"
+        )
+    );
+    assert!(client.contains(
+        "@_root_.golem.runtime.annotations.quantityUnit(\"m\", \"km\") sealed trait UnitM"
+    ));
+    assert!(
+        client
+            .contains("@_root_.golem.runtime.annotations.quantityUnit(\"kg\") sealed trait UnitKg")
+    );
+    assert!(client.contains(
+        "@_root_.golem.runtime.annotations.quantityUnit(\"s\", suffixes = _root_.scala.Seq(\"ms\", \"us\")) sealed trait UnitS"
+    ));
+    assert!(client.contains(
+        "@_root_.golem.runtime.annotations.quantityUnit(\"g\", suffixes = _root_.scala.Seq(\"g\")) sealed trait UnitG"
+    ));
+    assert!(!client.contains("QuantityUnit["));
+    assert!(client.contains(
+        "_root_.golem.schema.Quantity.intoSchema[_root_.golem.bridge.client.scale_agent.UnitKg].toValue(load)"
+    ));
+    assert!(client.contains(
+        "_root_.golem.schema.Quantity.fromSchema[_root_.golem.bridge.client.scale_agent.UnitKg].fromValue("
+    ));
+    assert!(!client.contains("golem.bridge.runtime"));
+    compile_guest_if_enabled(package_dir.as_path());
+}
+
+/// Generated unit markers take names clear of user types.
+#[test]
+fn quantity_unit_markers_avoid_user_type_names() {
+    let mut schema = quantity_agent();
+    schema.schema.defs.push(def(
+        "unit-kg",
+        SchemaType::record(vec![named_field("value", SchemaType::s32())]),
+    ));
+    schema.methods.push(method(
+        "describe",
+        vec![field("value", ref_to("unit-kg"))],
+        None,
+    ));
+    let pkg = GeneratedPackage::new(schema);
+    let client = std::fs::read_to_string(
+        pkg.package_dir()
+            .join("src/main/scala/golem/bridge/client/scale_agent/ScaleAgentClient.scala"),
+    )
+    .unwrap();
+    assert!(client.contains("sealed trait UnitKg"));
+    assert!(!client.contains("final case class UnitKg("));
+    compile(pkg.package_dir().as_path());
+}
+
+fn bare_binary_agent() -> AgentTypeSchema {
+    let png = SchemaType::binary(BinaryRestrictions {
+        mime_types: Some(vec!["image/png".into()]),
+        ..Default::default()
+    });
+    let any = SchemaType::binary(BinaryRestrictions::default());
+    agent(
+        "ImageAgent",
+        "scala",
+        vec![],
+        vec![
+            method("thumbnail", vec![field("image", png.clone())], Some(png)),
+            method(
+                "chunks",
+                vec![field("chunks", SchemaType::list(any.clone()))],
+                Some(SchemaType::option(any)),
+            ),
+            method(
+                "attach",
+                vec![field(
+                    "file",
+                    golem_common::schema::unstructured::unstructured_binary_schema_type(
+                        BinaryRestrictions {
+                            mime_types: Some(vec!["application/pdf".into()]),
+                            ..Default::default()
+                        },
+                    ),
+                )],
+                None,
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    )
+}
+
+/// A bare `binary` uses the `Inline` case of the SDK's unstructured binary
+/// type, typed by the schema's MIME allow-list, and the guest bridge checks
+/// the MIME type against the schema in both directions.
+#[test]
+fn guest_bare_binary_uses_sdk_inline_binary_and_checks_mime_types() {
+    let pkg = GeneratedPackage::new_with_mode(bare_binary_agent(), ScalaBridgeMode::GuestWasmRpc);
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir.join("src/main/scala/golem/bridge/client/image_agent/ImageAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(client.contains("image: _root_.golem.schema.UnstructuredBinary.Inline[\"image/png\"]"));
+    assert!(client.contains(
+        "chunks: _root_.scala.collection.immutable.List[_root_.golem.schema.UnstructuredBinary.Inline[_root_.scala.Predef.String]]"
+    ));
+    assert!(client.contains(
+        "val __allowed = _root_.scala.collection.immutable.List(\"image/png\"); mime0.foreach("
+    ));
+    assert!(client.contains("_root_.golem.schema.UnstructuredBinary.Inline[\"image/png\"](bytes.toArray, mime0.asInstanceOf[_root_.scala.Option[\"image/png\"]])"));
+    assert!(client.contains("file: _root_.golem.schema.UnstructuredBinary[\"application/pdf\"]"));
+    assert!(client.contains(
+        "_root_.golem.schema.UnstructuredBinary.intoSchema[\"application/pdf\"].toValue(file)"
+    ));
+    assert!(!client.contains("sealed trait UnstructuredBinary"));
+    compile_guest_if_enabled(package_dir.as_path());
+}
+
+/// A quota token whose schema names a resource keeps the resource in the
+/// SDK's `NamedQuotaToken` type parameter.
+#[test]
+fn guest_named_quota_token_keeps_its_resource_type() {
+    let named = SchemaType::quota_token(QuotaTokenSpec {
+        resource_name: Some("openai-tokens".into()),
+    });
+    let pkg = GeneratedPackage::new_with_mode(
+        agent(
+            "BudgetAgent",
+            "scala",
+            vec![],
+            vec![
+                method("grant", vec![field("token", named.clone())], Some(named)),
+                method(
+                    "any",
+                    vec![field("token", SchemaType::quota_token(Default::default()))],
+                    None,
+                ),
+            ],
+            vec![],
+            AgentMode::Durable,
+        ),
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir.join("src/main/scala/golem/bridge/client/budget_agent/BudgetAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(
+        client.contains("token: _root_.golem.host.QuotaApi.NamedQuotaToken[\"openai-tokens\"]")
+    );
+    assert!(
+        client
+            .contains("new _root_.golem.host.QuotaApi.NamedQuotaToken[\"openai-tokens\"](handle)")
+    );
+    assert!(client.contains("token: _root_.golem.host.QuotaApi.QuotaToken"));
+    compile_guest_if_enabled(package_dir.as_path());
 }

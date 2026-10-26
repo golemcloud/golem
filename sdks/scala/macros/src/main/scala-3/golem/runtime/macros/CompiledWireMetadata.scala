@@ -96,6 +96,11 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         return Unstructured.textType(allowList(ty, "UnstructuredText language type"))
       if (ty.typeSymbol.fullName == "golem.schema.UnstructuredBinary")
         return Unstructured.binaryType(allowList(ty, "UnstructuredBinary MIME type"))
+      if (ty.typeSymbol.fullName == "golem.schema.Quantity")
+        return QuantityUnitMacro.spec(using q)(ty.typeArgs.head) match {
+          case Right(spec) => SchemaType(SchemaTypeBody.QuantityType(spec))
+          case Left(error) => report.errorAndAbort(error)
+        }
       ty.asType match {
         case '[Unit]                               => t.tuple(Nil)
         case '[Boolean]                            => t.bool
