@@ -605,7 +605,7 @@ mod tests {
 
     /// Every `wasm-tools` step must declare both `sources` and `targets`, otherwise
     /// it re-runs on every build and keeps re-touching the component wasm, which in
-    /// turn re-triggers `add-metadata` and `gen-bridge`. Declaring only one of the
+    /// turn re-triggers the output copy and `gen-bridge`. Declaring only one of the
     /// two silently degrades to the same always-run behaviour, so assert on both.
     #[test]
     fn moonbit_wasm_tools_commands_declare_sources_and_targets() {

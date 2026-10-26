@@ -354,8 +354,6 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         Vec::new(),
-        None,
-        None,
         vec![AgentTypeSchema {
             kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("test-agent".to_string()),

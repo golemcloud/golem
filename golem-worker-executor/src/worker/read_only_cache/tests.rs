@@ -80,14 +80,7 @@ fn metadata_with_one_agent_type(
         snapshotting: Snapshotting::Disabled(Empty {}),
         config: vec![],
     };
-    ComponentMetadata::from_parts(
-        KnownExports::default(),
-        vec![],
-        None,
-        None,
-        vec![at],
-        BTreeMap::new(),
-    )
+    ComponentMetadata::from_parts(KnownExports::default(), vec![], vec![at], BTreeMap::new())
 }
 
 fn principal(seed: u128) -> Principal {

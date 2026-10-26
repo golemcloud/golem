@@ -18,11 +18,9 @@ use super::error::{
 use super::metadata::Producers;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::str::FromStr;
-use wasm_metadata::{Payload, Version};
 use wasmparser::KnownCustom;
 use wit_parser::decoding::DecodedWasm;
-use wit_parser::{Interface, PackageName, WorldItem};
+use wit_parser::{Interface, WorldItem};
 
 /// A single top-level export of a component, identified by name only.
 ///
@@ -44,8 +42,6 @@ pub struct ExportedInstance {
 
 pub struct WitAnalysisContext {
     wasm: DecodedWasm,
-    metadata_name: Option<String>,
-    metadata_version: Option<Version>,
     warnings: Rc<RefCell<Vec<AnalysisWarning>>>,
     linear_memories: Vec<wasmparser::MemoryType>,
     producers: Vec<Producers>,
@@ -56,17 +52,11 @@ impl WitAnalysisContext {
         let wasm = wit_parser::decoding::decode(component_bytes).map_err(|err| {
             AnalysisFailure::failed(format!("Failed to decode WASM component: {err:#}"))
         })?;
-        let payload = Payload::from_binary(component_bytes).map_err(|err| {
-            AnalysisFailure::failed(format!("Failed to decode WASM component metadata: {err:#}"))
-        })?;
-        let metadata = payload.metadata();
 
         let (linear_memories, producers) = Self::extract_additional_information(component_bytes)?;
 
         Ok(Self {
             wasm,
-            metadata_name: metadata.name.clone(),
-            metadata_version: metadata.version.clone(),
             warnings: Rc::new(RefCell::new(Vec::new())),
             linear_memories,
             producers,
@@ -133,35 +123,6 @@ impl WitAnalysisContext {
 
     pub fn producers(&self) -> &[Producers] {
         &self.producers
-    }
-
-    /// Gets the component's root package name
-    ///
-    /// Note that the root package name (from the original WIT) gets lost when encoding the component,
-    /// so here we use the metadata custom section's name and version fields in a Golem specific way
-    /// to recover this information. These fields are set by Golem specific build tooling. If they are not
-    /// present or not in a valid format, this function will return None.
-    pub fn root_package_name(&self) -> Option<PackageName> {
-        self.metadata_name.as_ref().and_then(|name| {
-            let parts = name.split(':').collect::<Vec<_>>();
-
-            if parts.len() == 2 {
-                let namespace = parts[0].to_string();
-                let name = parts[1].to_string();
-                let version = self
-                    .metadata_version
-                    .as_ref()
-                    .and_then(|version| semver::Version::from_str(&version.to_string()).ok());
-
-                Some(PackageName {
-                    namespace,
-                    name,
-                    version,
-                })
-            } else {
-                None
-            }
-        })
     }
 
     /// Gets a binary WIT representation of the component's interface

@@ -789,8 +789,6 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
             cmd::BUILD,
             "conformance:typescript-consumer",
             "--step",
-            "add-metadata",
-            "--step",
             "gen-bridge",
         ])
         .await;
@@ -805,8 +803,6 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
             flag::YES,
             cmd::BUILD,
             "conformance:typescript-consumer",
-            "--step",
-            "add-metadata",
             "--step",
             "gen-bridge",
         ])

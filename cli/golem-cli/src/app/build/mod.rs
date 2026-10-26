@@ -14,7 +14,6 @@
 
 use self::check::check_build_tool_requirements;
 use self::extract_component_metadata::extract_and_store_component_metadata;
-use crate::app::build::add_metadata::add_metadata_to_components;
 use crate::app::build::componentize::build_components;
 use crate::app::build::gen_bridge::{
     BridgeGenerationPlan, build_owner_components, component_tool_dependency_components,
@@ -42,7 +41,6 @@ use golem_common::model::tool::ToolName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-pub mod add_metadata;
 pub mod check;
 pub mod clean;
 pub mod command;
@@ -248,9 +246,6 @@ async fn build_components_with_dependency_ordering(
     let _indent = if ctx.should_run_step(AppBuildStep::Build) {
         log_action("Building", "components");
         Some(LogIndent::new())
-    } else if ctx.should_run_step(AppBuildStep::AddMetadata) {
-        log_action("Adding", "metadata to components");
-        Some(LogIndent::new())
     } else {
         None
     };
@@ -273,13 +268,6 @@ async fn build_components_with_dependency_ordering(
                 .cloned()
                 .collect::<Vec<_>>()
             {
-                if ctx.should_run_step(AppBuildStep::AddMetadata) {
-                    ctx.extracted_metadata
-                        .lock()
-                        .unwrap()
-                        .remove(&component_name);
-                    add_metadata_to_components(ctx, &component_name).await?;
-                }
                 let wasm = ctx
                     .application()
                     .component(&component_name)
@@ -359,11 +347,6 @@ async fn build_components_with_dependency_ordering(
                     .unwrap()
                     .remove(&component_name);
                 build_components(ctx, &component_name).await?;
-            }
-            if ctx.should_run_step(AppBuildStep::AddMetadata)
-                && (ctx.should_run_step(AppBuildStep::Build) || !has_dependency_guest_request)
-            {
-                add_metadata_to_components(ctx, &component_name).await?;
             }
 
             pending_components.remove(&component_name);
@@ -1108,10 +1091,7 @@ fn add_existing_component_manifest_bridge_output_dir_claims(
 ) -> bool {
     let component_name = ComponentName(component_name.to_string());
     let component = ctx.application().component(&component_name);
-    if ctx.should_run_step(AppBuildStep::Build) && !component.build_commands().is_empty() {
-        return false;
-    }
-    if ctx.should_run_step(AppBuildStep::AddMetadata) {
+    if ctx.should_run_step(AppBuildStep::Build) {
         return false;
     }
 

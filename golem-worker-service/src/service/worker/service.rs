@@ -5216,8 +5216,6 @@ mod tests {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![agent_type],
                 BTreeMap::from([(agent_type_name, provision_config)]),
             ),

@@ -1596,22 +1596,6 @@ fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {
     .unwrap();
 }
 
-fn check_component_metadata(
-    wasm: &Path,
-    expected_package_name: String,
-    expected_version: Option<String>,
-) {
-    let wasm = std::fs::read(wasm).unwrap();
-    let payload = wasm_metadata::Payload::from_binary(&wasm).unwrap();
-    let metadata = payload.metadata();
-
-    assert_eq!(metadata.name, Some(expected_package_name));
-    assert_eq!(
-        metadata.version.as_ref().map(|v| v.to_string()),
-        expected_version
-    );
-}
-
 #[must_use]
 fn contains_ordered<LS, L, PS, P>(lines: L, patterns: P) -> bool
 where

@@ -72,7 +72,7 @@ async fn test_moonbit_tool_middleware_component_roles() {
 }
 
 /// A build with nothing to do must not touch the component wasms, otherwise the
-/// `add-metadata` and `gen-bridge` steps re-run on every build. This exercises both
+/// output copy and `gen-bridge` steps re-run on every build. This exercises both
 /// halves of that: `golem_sdk_tools` leaving unchanged generated sources alone, and
 /// the `wasm-tools` steps declaring `sources`/`targets` so they can be skipped.
 /// Deliberately built without `--force-build`, which bypasses all up-to-date checks.

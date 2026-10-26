@@ -4015,7 +4015,6 @@ dependencies = [
  "uuid",
  "version-compare",
  "walkdir",
- "wasm-metadata 0.251.0",
  "wasm-rquickjs",
  "wasmtime",
  "wasmtime-wasi",

@@ -15,13 +15,12 @@ Run this from the application root directory (where the root `golem.yaml` is loc
 The build is a multi-step pipeline:
 
 1. **Check** — verifies that required build tools are installed (e.g., `cargo` for Rust, `npm`/`node` for TypeScript).
-2. **Build** — executes the build commands defined in `golem.yaml` for each component. These commands are language-specific:
+2. **Build** — executes the build commands defined in `golem.yaml` for each component, then copies the component WASM to the final output path without changing its bytes. These commands are language-specific:
    - **Rust**: runs `cargo build --target wasm32-wasip2` (or with `--release` for the release preset).
    - **TypeScript**: runs `rollup` to bundle the component (type checking happens in-process during bundling), then injects the bundle into a prebuilt QuickJS WASM and optionally preinitializes it.
    - **Effect**: runs `tsc` and `rollup`, then injects the bundle into the QuickJS WASM shipped by `@golemcloud/effect-golem`. Effect agents are self-describing, so this pipeline does not run `golem-typegen`.
    - **Scala**: runs Scala.js compilation, JavaScript linking, QuickJS WASM injection, agent wrapper generation, and WASM composition.
-3. **Add Metadata** — embeds component name and version into the output WASM binary.
-4. **Generate Bridge** — automatically generates guest clients selected by component `dependencies.agents` and `dependencies.tools`, and any explicitly selected bridge targets. Local providers build before their consumers; dependency clients are generated before consumer compilation. Prefer tool dependencies over explicit bridge selection for clients used by a component. Configure runtime tool bindings separately: a dependency does not add a binding, and a binding alone does not generate a client.
+3. **Generate Bridge** — automatically generates guest clients selected by component `dependencies.agents` and `dependencies.tools`, and any explicitly selected bridge targets. Local providers build before their consumers; dependency clients are generated before consumer compilation. Prefer tool dependencies over explicit bridge selection for clients used by a component. Configure runtime tool bindings separately: a dependency does not add a binding, and a binding alone does not generate a client.
 
 ### Up-to-date Checks
 
@@ -44,7 +43,7 @@ The component name in snake_case is derived from the component name in `golem.ya
 | Option | Description |
 |--------|-------------|
 | `[COMPONENT_NAME]...` | Build only specific components (by default, all components are built) |
-| `-s, --step <STEP>` | Run specific build step(s): `check`, `build`, `add-metadata`, `gen-bridge` |
+| `-s, --step <STEP>` | Run specific build step(s): `check`, `build`, `gen-bridge` |
 | `--skip-check` | Skip build-time requirement checks |
 | `--force-build` | Skip up-to-date checks, rebuild everything |
 | `-P, --preset <PRESET>` | Select a component preset (e.g., `release`) |

@@ -1,7 +1,7 @@
 use crate::app::{
-    CLOSED_OUTPUT_EXIT, ClosedStream, TestContext, check_component_metadata, cmd,
-    copy_placeholder_wasm, extracted_component_metadata_path_hash, extracted_metadata_json, flag,
-    pattern, placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
+    CLOSED_OUTPUT_EXIT, ClosedStream, TestContext, cmd, copy_placeholder_wasm,
+    extracted_component_metadata_path_hash, extracted_metadata_json, flag, pattern,
+    placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
     seed_full_extracted_metadata,
 };
 use crate::{Tracing, workspace_path};
@@ -1644,9 +1644,7 @@ async fn tool_publication_only_plan_qualifies_stage_comparison(_tracing: &Tracin
     let manifest_path = ctx.cwd_path_join("golem.yaml");
     fs::write_str(&manifest_path, &manifest).unwrap();
 
-    let build = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "add-metadata"])
-        .await;
+    let build = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
     assert!(build.success_or_dump());
     let metadata = ExtractedComponentMetadata {
         agent_types: Vec::new(),
@@ -6846,9 +6844,7 @@ async fn rust_guest_bridge_choreography_allows_metadata_before_later_builds(_tra
     )
     .unwrap();
 
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "add-metadata"])
-        .await;
+    let outputs = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
     assert!(outputs.success_or_dump());
 }
 
@@ -8407,6 +8403,64 @@ async fn rust_guest_bridge_component_matcher_without_non_rust_component_is_rejec
 }
 
 #[test]
+async fn build_preserves_wasm_bytes_and_final_output_paths(_tracing: &Tracing) {
+    for (output, hard_link) in [
+        (None, false),
+        (Some("nested/final.wasm"), false),
+        (Some("component.wasm"), false),
+        (Some("linked.wasm"), true),
+    ] {
+        let ctx = TestContext::new();
+        let output_property = output
+            .map(|path| format!("    outputWasm: {path}\n"))
+            .unwrap_or_default();
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            format!(
+                "manifestVersion: {}\napp: unchanged-wasm\nenvironments:\n  local:\n    server: local\ncomponents:\n  app:example:\n    componentWasm: component.wasm\n{output_property}",
+                versions::sdk::MANIFEST
+            ),
+        )
+        .unwrap();
+        let source = ctx.cwd_path_join("component.wasm");
+        let original =
+            wat::parse_str(r#"(component $toolchain-name (@custom "version" "2.3.4"))"#).unwrap();
+        fs::write(&source, &original).unwrap();
+        super::backdate_mtime(&source);
+        let target = ctx.cwd_path_join(output.unwrap_or("golem-temp/final-wasm/app:example.wasm"));
+        if hard_link {
+            std::fs::hard_link(&source, &target).unwrap();
+        }
+
+        let result = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(result.success_or_dump());
+        assert_eq!(fs::read(&target).unwrap(), original);
+        let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
+        let result = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(result.success_or_dump());
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert_eq!(fs::read(&target).unwrap(), original);
+        if !hard_link {
+            assert_eq!(
+                std::fs::metadata(&target).unwrap().modified().unwrap(),
+                modified
+            );
+        }
+
+        let updated =
+            wat::parse_str(r#"(component $new-name (@custom "version" "3.4.5"))"#).unwrap();
+        fs::write(&source, &updated).unwrap();
+        let result = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(result.success_or_dump());
+        assert_eq!(fs::read(&target).unwrap(), updated);
+
+        std::fs::remove_file(&source).unwrap();
+        let result = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(!result.success());
+    }
+}
+
+#[test]
 async fn app_build_with_rust_component(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
@@ -8423,11 +8477,9 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
-    check_component_metadata(
-        &ctx.working_dir
-            .join("golem-temp/agents/test_app_name_rust_main_debug.wasm"),
-        "test-app-name:rust-main".to_string(),
-        None,
+    assert!(
+        ctx.cwd_path_join("golem-temp/agents/test_app_name_rust_main_debug.wasm")
+            .is_file()
     );
 
     // Rebuild - 1

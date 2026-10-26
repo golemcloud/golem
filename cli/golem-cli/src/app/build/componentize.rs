@@ -13,8 +13,11 @@
 // limitations under the License.
 
 use crate::app::build::command::execute_build_command;
+use crate::app::build::task_result_marker::ComponentGeneratorMarkerHash;
+use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
-use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
+use crate::fs;
+use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, log_warn_action};
 use golem_common::model::component::ComponentName;
 
 pub async fn build_components(
@@ -35,18 +38,46 @@ pub async fn build_components(
                 component_name.as_str().log_color_highlight(),
             ),
         );
+    } else {
+        log_action(
+            "Building",
+            format!("{}", component_name.as_str().log_color_highlight()),
+        );
+        let _indent = LogIndent::new();
+
+        for build_step in build_commands {
+            execute_build_command(ctx, component_name, &build_step).await?;
+        }
+    }
+
+    let component = ctx.application().component(component_name);
+    let source_wasm = component.wasm();
+    let final_wasm = component.final_wasm();
+    if fs::path_eq_normalized(&source_wasm, &final_wasm) {
+        anyhow::ensure!(
+            source_wasm.is_file(),
+            "Component WASM is not a file: {}",
+            source_wasm.display()
+        );
         return Ok(());
     }
 
-    log_action(
-        "Building",
-        format!("{}", component_name.as_str().log_color_highlight()),
-    );
-    let _indent = LogIndent::new();
-
-    for build_step in build_commands {
-        execute_build_command(ctx, component_name, &build_step).await?;
-    }
-
-    Ok(())
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(ComponentGeneratorMarkerHash {
+            component_name,
+            generator_kind: "output-wasm",
+        })?
+        .with_sources(|| [&source_wasm])
+        .with_targets(|| [&final_wasm])
+        .run_or_skip(
+            || {
+                log_action(
+                    "Copying",
+                    format!("component WASM to {}", final_wasm.display()),
+                );
+                fs::write(&final_wasm, fs::read(&source_wasm)?)?;
+                Ok(())
+            },
+            || log_skipping_up_to_date(format!("copying component WASM for {component_name}")),
+        )
 }

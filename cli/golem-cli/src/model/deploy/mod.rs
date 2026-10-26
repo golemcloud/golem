@@ -1421,10 +1421,6 @@ pub struct AgentUpdateMeta {
     pub agent_id: RawAgentId,
     pub from_revision: ComponentRevision,
     pub revision: ComponentRevision,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub from_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
 }
 
 #[derive(Clone, Debug)]

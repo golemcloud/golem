@@ -284,7 +284,6 @@ pub struct ComponentStubInterfaces {
 pub enum AppBuildStep {
     Check,
     Build,
-    AddMetadata,
     GenBridge,
 }
 
