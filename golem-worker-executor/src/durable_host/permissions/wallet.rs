@@ -25,6 +25,9 @@ use super::{
     load_card_transfer_request, permissions_types, permissions_wallet, record_card_decision,
     require_agent_install_target, resolve_permission_card_handle, serialize,
 };
+use crate::durable_host::authorization::context::{installed_child_card_id, transfer_id};
+use golem_common::model::oplog::OplogIndex;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 /// Reads the wallet that a live `self-wallet` call lists. The result is recorded: replay applies
 /// the card events of an invocation at their recorded positions, but an unrecorded read has no
@@ -180,39 +183,62 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                     DurableFunctionType::WriteLocal,
                 )
                 .await?;
-            let operation_index = begun.begin_index();
-            let transfer_id = self.derive_transfer_id(&invocation_key, operation_index);
-            let (installed_card, installed_card_provenance) = match &source_card {
-                StoredCard::Concrete(_) => (source_card.clone(), None),
-                StoredCard::Polymorphic(source) => {
-                    let created_at = durable_now(self).await?;
-                    (
+            // The transfer derives from the call's own `Start` index, which live and replay
+            // agree on.
+            let created_at = match &source_card {
+                StoredCard::Concrete(_) => None,
+                StoredCard::Polymorphic(_) => Some(durable_now(self).await?),
+            };
+            let owned_agent_id = self.owned_agent_id.clone();
+            let holder = target.holder.clone();
+            let target_agent_id = target.agent_id;
+            let transfer_at = move |operation_index: OplogIndex| {
+                let (installed_card, installed_card_provenance) = match (&source_card, created_at) {
+                    (StoredCard::Polymorphic(source), Some(created_at)) => (
                         StoredCard::Concrete(instantiate_polymorphic_card_for_agent(
                             source,
-                            &target.holder,
-                            self.derive_installed_child_card_id(&invocation_key, operation_index),
+                            &holder,
+                            installed_child_card_id(
+                                &owned_agent_id,
+                                &invocation_key,
+                                operation_index,
+                            ),
                             created_at,
                         )),
                         Some(CardManagedByRuntimeDerived {
-                            environment_id: self.owned_agent_id.environment_id,
-                            agent_id: self.owned_agent_id.agent_id.clone(),
+                            environment_id: owned_agent_id.environment_id,
+                            agent_id: owned_agent_id.agent_id.clone(),
                             invocation_key: invocation_key.clone(),
                             oplog_index: operation_index,
                         }),
-                    )
+                    ),
+                    _ => (source_card.clone(), None),
+                };
+                CardTransferData {
+                    transfer_id: transfer_id(&owned_agent_id, &invocation_key, operation_index),
+                    source_card,
+                    installed_card,
+                    installed_card_provenance,
+                    target_agent_id,
                 }
             };
-            let mut transfer = CardTransferData {
-                transfer_id,
-                source_card,
-                installed_card,
-                installed_card_provenance,
-                target_agent_id: target.agent_id,
-            };
+            let mut transfer = None;
             let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
-                    let request = transfer.request()?;
-                    begun.start_live(self, request).await?
+                    let built = std::sync::Arc::new(std::sync::Mutex::new(None));
+                    let slot = built.clone();
+                    let handle = begun
+                        .start_live_at_index(self, move |start_index| {
+                            let transfer = transfer_at(start_index);
+                            let request = transfer
+                                .request()
+                                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                            *slot.lock().unwrap() = Some(transfer);
+                            Ok(request)
+                        })
+                        .await?;
+                    transfer = built.lock().unwrap().take();
+                    handle
                 }
                 ResolvedCall::Replay(handle) => handle,
             };
@@ -232,13 +258,14 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                     }
                     CallReplayOutcome::Incomplete(live) => {
                         handle = live;
-                        transfer = CardTransferData::from_request(
+                        transfer = Some(CardTransferData::from_request(
                             load_card_transfer_request(self, start_index).await?,
-                        )?;
+                        )?);
                     }
                 }
             }
 
+            let transfer = transfer.expect("a live transfer has its request");
             let result = match execute_source_card_transfer(self, start_index, &transfer).await {
                 Ok(result) => result,
                 Err(error) => {

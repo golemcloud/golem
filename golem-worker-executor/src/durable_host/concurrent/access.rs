@@ -91,7 +91,6 @@ enum AccessTerminalGuardState {
     },
     CleanupAfterTerminal {
         function_type: DurableFunctionType,
-        durable_begin_index: OplogIndex,
         terminal: Option<OrderedAppend>,
         trap_context: DurableCallTrapContext,
         /// Moved out of the armed [`DroppedCall`] when the terminal is handed to an owned task,
@@ -165,7 +164,6 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         };
         self.state = AccessTerminalGuardState::CleanupAfterTerminal {
             function_type: call.function_type().clone(),
-            durable_begin_index: call.begin_index(),
             terminal: Some(terminal.into()),
             trap_context: call.trap_context(),
             // The permit moves with the state transition: the call remains counted as in flight
@@ -261,7 +259,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
             }
             AccessTerminalGuardState::CleanupAfterTerminal {
                 function_type,
-                durable_begin_index,
                 terminal,
                 trap_context,
                 live_call_permit,
@@ -291,7 +288,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 if let Some(sink) = &self.cleanup_sink {
                     let _ = sink.send(DropEvent::CleanupAfterTerminal {
                         function_type,
-                        durable_begin_index,
                         terminal,
                         trap_context,
                         live_call_permit,

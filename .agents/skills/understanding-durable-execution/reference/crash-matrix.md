@@ -2,14 +2,14 @@
 
 "Crash" here means any loss of the resident runtime *on the same executor*: process death,
 `Restart` (simulated crash), `Suspend`, eviction, or an executor drop in a test. Reconstruction is
-identical in every case: new `Store`, `prepare_instance`, `resume_replay`, publish Live. The
+identical in every case: new `Store`, `prepare_instance`, `replay`, publish Live. The
 matrix says what the next incarnation does for a crash inside each window and which durable fact
 makes that safe.
 
 Resharding and the oplog epoch fence are different: the generation running here does not
 reconstruct at all. It is retired (`InterruptKind::ShardLost`) — stopped without writing its
 status, dropped here, never restarted — and the executor that now holds the shard runs
-`prepare_instance` / `resume_replay` from the committed oplog: the new owner, or this executor
+`prepare_instance` / `replay` from the committed oplog: the new owner, or this executor
 again if the shard came back to it at a higher epoch. See "Resharding and the oplog epoch fence"
 below for what that leaves behind.
 
@@ -87,7 +87,7 @@ owns the one replay/tool-generation reset. Acceptance and typed notification are
 | Explicit terminal interrupt during entity work | Drain the unit and leave the invocation interrupted until an explicit resume; acceptance alone does not prove drainage or physical permit release | Exact accepted request and its establishment, ordinary Store/cleanup joins, exact owner/entity generation checks |
 | Old cached owner A retires after replacement B is published under the same `AgentId` | A may finish its own cleanup but cannot remove, fence, reopen, or write lifecycle state for B; B remains usable for a fresh invocation | Concrete cached `Arc<Worker>` identity for removal/fencing; generation-checked entity-admission reopen |
 | Executor shutdown while a retained entity callback or Store task is entered | Fence captured oplog generations first; abandon transient entity execution without semantic finalization; join Store destruction and retained callbacks before closing the captured oplog layers | `InvocationLoops` shutdown token/tracker plus exact-generation `OplogShutdownHandle` |
-| Delayed retry begins with duplicate resident work notifications queued | Coalesce only the finite pre-teardown prefix; preserve one work hint and one coalesced replay demand; leave post-boundary arrivals queued so genuinely new work can shorten the delay | `receiver.len()` boundary, deferred `WorkAvailable`, retained `ResumeReplay`, authoritative interrupt recheck |
+| Delayed retry begins with duplicate resident work notifications queued | Coalesce only the finite pre-teardown prefix; preserve one work hint; leave post-boundary arrivals queued so genuinely new work can shorten the delay | `receiver.len()` boundary, deferred `WorkAvailable`, authoritative interrupt recheck |
 
 ## Invocation (`worker/mod.rs`, `durable_host/mod.rs::on_agent_invocation_success`)
 
@@ -213,7 +213,7 @@ stages do not.
 | A blob archive chunk is stored but its manifest entry is not: answered with a held index, refused, failed without an answer, or a crash in between; or a trim lands and a crash comes before its objects are deleted | an object no manifest lists | An entry that the storage answers with a held index deletes the object it was written for; a refused entry does too unless the manifest lists the object, as it does when the refusal answers a repeat of an append that was stored; an entry whose append failed without an answer may still land, so its object is kept, also when another object is listed for the chunk; after a crash the object stays; no read finds an unlisted object, and deleting the agent removes it | A blob level's chunks are only those its manifest lists, and the manifest is fenced like every archive level |
 | An invocation still queued when the retirement runs | unaffected; its `PendingAgentInvocation` stays pending | Failed in memory with a retriable error (`fail_pending_invocations` / `retirement_error`: `ShardingNotReady`), never a cached result | The `PendingAgentInvocation` left pending in the oplog, for the owner to run |
 | A deletion step is refused by the fence | whatever the deletion had committed | The attempt fails with `ShardingNotReady` and the generation stays cached in `Deleting` with its completed stages; a retry here is refused at entry, so no remote effect repeats, and stream cleanup confirms the epoch before reaching any other agent, since a re-run elsewhere finds its fenced records already written; the generation is evicted once the shard has left, and the owner finishes the delete | Epoch asserted by the cleanup commits and by the remove, which checks ownership before removing anything and deletes the oplog after everything it can rebuild |
-| The owner opens the same agent | the fenced executor's last accepted entries | Ordinary `prepare_instance` / `resume_replay`, from committed history exactly as it was left | Nothing is acknowledged after the fence latched, and no entry is appended or deleted without the asserted epoch |
+| The owner opens the same agent | the fenced executor's last accepted entries | Ordinary `prepare_instance` / `replay`, from committed history exactly as it was left | Nothing is acknowledged after the fence latched, and no entry is appended or deleted without the asserted epoch |
 
 ## Oplog-processor plugins (`services/oplog/plugin.rs`)
 

@@ -265,7 +265,12 @@ where
     observe_tool_invoke_plans(accessor, plans, async |responses| {
         let mut projected = Vec::with_capacity(responses.len());
         for response in responses {
-            let response = admit_tool_response_secret_holds(accessor, response).await?;
+            let response = admit_tool_response_secret_holds(
+                accessor,
+                response,
+                crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+            )
+            .await?;
             projected.push(project_tool_response(accessor, response));
         }
         Ok(projected)

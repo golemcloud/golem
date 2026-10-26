@@ -503,6 +503,9 @@ struct ToolInvocationAttempt {
     key_context: EntityInvocationKeyContext,
     parent: crate::worker::owner_lane::OwnerInvocationId,
     attempt_ordinal: u64,
+    /// Where the entity invocation `Start` gets its invocation id: the guest import that makes
+    /// the tool call, or none for a tool call that a client started.
+    invocation_id: crate::durable_host::concurrent::InvocationIdSource,
 }
 
 #[derive(Clone)]

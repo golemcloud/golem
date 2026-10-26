@@ -161,6 +161,7 @@ where
             key_context,
             parent,
             attempt_ordinal,
+            invocation_id: crate::durable_host::concurrent::InvocationIdSource::GuestImport,
         })
     })
 }
@@ -386,6 +387,7 @@ where
         key_context: _,
         parent,
         attempt_ordinal,
+        invocation_id: _,
     } = attempt;
     let tool_name = target.tool_name()?;
     let input = match input {
@@ -722,12 +724,14 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    let invocation_id = attempt.invocation_id;
     if accessor.with(|mut access| !access.get().state.durable_call_is_live()) {
         match EntityInvocationDurability::replay_tool_access(
             accessor,
             accessor.getter(),
             attempt.parent.clone(),
             &attempt.key_context,
+            invocation_id,
         )
         .await?
         {
@@ -790,8 +794,14 @@ where
     .await?
     {
         ToolCallPreparation::Rejected { request, stdin } => {
-            let response =
-                record_tool_rejection_access(accessor, accessor.getter(), parent, *request).await?;
+            let response = record_tool_rejection_access(
+                accessor,
+                accessor.getter(),
+                parent,
+                *request,
+                invocation_id,
+            )
+            .await?;
             Ok(ToolCallDispatch::Rejected {
                 response: Box::new(decode_tool_terminal(response)?),
                 stdin,
@@ -810,6 +820,7 @@ where
                 context.descriptor.clone(),
                 prepared.plan.clone(),
                 context.input.clone(),
+                invocation_id,
             )
             .await?;
             let operation = prepared
@@ -1003,12 +1014,22 @@ where
                     vec![execution.get_plan()],
                     async |mut results| {
                         let response = results.pop().expect("one tool invocation has one result");
-                        admit_tool_response_secret_holds(accessor, response).await
+                        admit_tool_response_secret_holds(
+                            accessor,
+                            response,
+                            crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                        )
+                        .await
                     },
                 )
                 .await;
             }
         },
     };
-    admit_tool_response_secret_holds(accessor, response).await
+    admit_tool_response_secret_holds(
+        accessor,
+        response,
+        crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+    )
+    .await
 }
