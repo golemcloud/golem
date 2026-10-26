@@ -25,11 +25,11 @@ use crate::services::oplog::reader::{
 };
 use crate::services::oplog::{
     AutoCommitListener, CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder,
-    MAX_RETAINED_RECEIPT_BATCHES, OpenOplogs, Oplog, OplogAddReceipt, OplogCloseCompletion,
-    OplogConstructor, OplogError, OplogFence, OplogLifecycleGuard, OplogService, OrderedOplogStart,
-    PendingUpload, RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder,
-    StagePublication, decode_scan_cursor, next_scan_cursor, record_epoch_verdict,
-    record_owning_epoch, refuse_if_fenced, retry_scan_storage_op,
+    OpenOplogs, Oplog, OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError,
+    OplogFence, OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload,
+    RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, StagePublication,
+    decode_scan_cursor, next_scan_cursor, record_epoch_verdict, record_owning_epoch,
+    refuse_if_fenced, retry_scan_storage_op,
 };
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::storage::indexed::{
@@ -104,6 +104,7 @@ pub struct PrimaryOplogService {
     max_operations_before_commit: u64,
     max_operations_before_commit_ephemeral: u64,
     max_payload_size: usize,
+    max_retained_auto_commit_batches: usize,
     retry_config: RetryConfig,
     oplogs: OpenOplogs,
     stream_session_index: Arc<std::sync::OnceLock<Arc<super::StreamSessionIndexService>>>,
@@ -116,6 +117,7 @@ struct CreateOplogConstructor {
     replicas: u8,
     max_operations_before_commit: u64,
     max_payload_size: usize,
+    max_retained_auto_commit_batches: usize,
     retry_config: RetryConfig,
     key: String,
     last_oplog_idx: Option<OplogIndex>,
@@ -288,6 +290,7 @@ struct PrimaryOplogState {
     replicas: u8,
     max_operations_before_commit: u64,
     max_payload_size: usize,
+    max_retained_auto_commit_batches: usize,
     retry_config: RetryConfig,
     namespace: IndexedStorageNamespace,
     key: String,

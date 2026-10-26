@@ -162,13 +162,15 @@ stays outside the fence: blob uploads of large payloads.
 `worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
 threshold flushes and replica waits commit outside an explicit commit. After such a commit the
-leaf oplog calls its auto-commit listener (`Oplog::set_auto_commit_listener`, held weakly), which
-queues one coalesced `StatusJob::FoldAutoCommits`. That job commits nothing: it folds the entries
-returned by `CommitLevel::ReportOnly`, so `status.oplog_idx` follows the committed index during a
-long invocation, while a buffered append below the threshold stays invisible until a commit. The
-primary oplog keeps the entries of its latest auto commits (at most 32 batches) in memory until
-that report, which normally follows at once, and reads only older unreported entries back from
-storage. The job wakes the invocation loop only when a field other than the index changed; a
+primary oplog calls its auto-commit listener (`Oplog::set_auto_commit_listener`, held weakly),
+which queues one coalesced `StatusJob::FoldAutoCommits`. That job commits nothing: it folds the
+entries returned by `CommitLevel::ReportOnly`, so `status.oplog_idx` follows the committed index
+during a long invocation, while a buffered append below the threshold stays invisible until a
+commit. The primary oplog keeps the entries of its latest auto commits in memory until that
+report, which normally follows at once, up to `oplog.max_retained_auto_commit_batches` batches;
+beyond it the report reads the oldest unreported entries back from storage. An ephemeral oplog
+calls no listener and reports nothing for `ReportOnly`: ephemeral agents fold at the explicit
+commit that ends each invocation. The job wakes the invocation loop only when a field other than the index changed; a
 caller of `add_and_commit_oplog_internal` sends its own wakeup after every successful commit,
 because the fold of a threshold commit can take its entry first. As the status follows the
 oplog, each status-cache write catches up the stream-session and invocation-result indexes over

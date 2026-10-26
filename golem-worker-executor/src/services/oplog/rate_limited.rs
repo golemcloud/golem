@@ -817,6 +817,7 @@ mod tests {
                     1,
                     1,
                     4096,
+                    32,
                     golem_common::model::RetryConfig::default(),
                 )
                 .await,

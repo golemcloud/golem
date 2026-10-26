@@ -425,14 +425,10 @@ pub enum CommitLevel {
     /// Only commit immediately if the worker is durable
     DurableOnly,
     /// Commit nothing: only report the entries the oplog committed by itself since the last
-    /// report, on its commit threshold or a replica wait. Buffered entries stay buffered.
+    /// report, on its commit threshold or a replica wait. Buffered entries stay buffered. Only the
+    /// primary oplog of a durable agent reports entries; an ephemeral oplog reports nothing.
     ReportOnly,
 }
-
-/// How many batches of entries that an oplog committed by itself it keeps in memory for the next
-/// report. Beyond it, the primary oplog drops its oldest batch, which the report reads back from
-/// storage, and the ephemeral oplog drops a later one, which leaves a gap for the status fold.
-pub(crate) const MAX_RETAINED_RECEIPT_BATCHES: usize = 32;
 
 /// The callback an oplog calls after it committed entries by itself, so that their owner can
 /// collect them with [`CommitLevel::ReportOnly`]. The oplog holds it weakly and does not call it

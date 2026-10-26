@@ -3756,59 +3756,6 @@ async fn bounded_fold_covers_receipt_gap_and_unpersisted_tail() {
 }
 
 #[test]
-#[test_r::timeout("30s")]
-async fn report_only_fold_follows_threshold_commits_without_a_storage_read() {
-    use crate::services::oplog::{CommitLevel, gated_ephemeral_fixture};
-
-    let mut builder = TestCase::builder(0).agent_mode(AgentMode::Ephemeral);
-    for delta in 1..7 {
-        builder = builder.grow_memory(delta);
-    }
-    let test_case = builder.build();
-    let fixture = gated_ephemeral_fixture(1).await;
-    fixture.archive.release(3);
-    for entry in &test_case.entries {
-        fixture.oplog.add(entry.oplog_entry.clone()).await.unwrap();
-    }
-    // Three threshold flushes committed indices 1 to 6. Index 7 stays buffered, and the sampled
-    // tip includes it: a report must not take the tip as committed coverage.
-    let sampled = fixture.oplog.current_oplog_index().await;
-    assert_eq!(sampled, OplogIndex::from_u64(7));
-    let receipt = fixture.oplog.commit(CommitLevel::ReportOnly).await.unwrap();
-    assert_eq!(
-        receipt.keys().copied().collect::<Vec<_>>(),
-        (1..=6).map(OplogIndex::from_u64).collect::<Vec<_>>()
-    );
-    let (result, gap, projected_through) = fold_committed_status(
-        &test_case,
-        &test_case.owned_agent_id,
-        fixture.oplog.as_ref(),
-        AgentMode::Ephemeral,
-        CommitLevel::ReportOnly,
-        sampled,
-        test_case.entries[0].expected_status.clone(),
-        receipt,
-    )
-    .await;
-    assert!(!gap);
-    assert_eq!(projected_through, OplogIndex::from_u64(6));
-    assert_eq!(
-        result.unwrap(),
-        Some(test_case.entries[5].expected_status.clone())
-    );
-    assert!(test_case.read_starts.lock().unwrap().is_empty());
-
-    fixture.archive.release(1);
-    let remaining = fixture.oplog.commit(CommitLevel::Always).await.unwrap();
-    assert_eq!(
-        remaining.keys().copied().collect::<Vec<_>>(),
-        vec![OplogIndex::from_u64(7)]
-    );
-    fixture.oplog.retire();
-    fixture.oplog.closed().await.unwrap();
-}
-
-#[test]
 async fn bounded_fold_excludes_later_jump_and_rejects_ahead_baseline() {
     let (test_case, checkpoint, stale_live, _) = jump_repair_fixture(AgentMode::Durable);
     let reader = StatusOplogReader::new(

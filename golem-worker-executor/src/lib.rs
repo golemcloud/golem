@@ -993,6 +993,7 @@ pub async fn create_worker_executor_impl<
         golem_config.oplog.max_operations_before_commit,
         golem_config.oplog.max_operations_before_commit_ephemeral,
         golem_config.oplog.max_payload_size,
+        golem_config.oplog.max_retained_auto_commit_batches,
         golem_config.indexed_storage_retry.clone(),
     )
     .await;

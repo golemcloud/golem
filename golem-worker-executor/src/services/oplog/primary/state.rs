@@ -229,17 +229,18 @@ impl PrimaryOplogState {
 
     /// Commits the buffer outside an explicit commit: on the commit threshold or for a replica
     /// wait. While a listener collects the entries with [`CommitLevel::ReportOnly`], they stay in
-    /// memory for that report, up to the latest [`MAX_RETAINED_RECEIPT_BATCHES`] commits; the
-    /// report reads older and unretained entries back from storage.
+    /// memory for that report, up to the latest `max_retained_auto_commit_batches` commits. Beyond
+    /// it the oldest batch is dropped: the report stays complete, because it reads every
+    /// unreported entry before the retained ones back from storage.
     pub(super) async fn auto_commit(&mut self) -> Result<(), OplogError> {
         let committed = self.commit(CommitLevel::Always).await?;
         if committed.is_empty() {
             return Ok(());
         }
-        if self.retained_auto_commits.len() == MAX_RETAINED_RECEIPT_BATCHES {
+        self.retained_auto_commits.push_back(committed);
+        while self.retained_auto_commits.len() > self.max_retained_auto_commit_batches {
             self.retained_auto_commits.pop_front();
         }
-        self.retained_auto_commits.push_back(committed);
         if !self.auto_commit_listener.notify() {
             self.retained_auto_commits.clear();
         }

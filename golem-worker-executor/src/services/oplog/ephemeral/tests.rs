@@ -228,6 +228,7 @@ pub async fn fixture(threshold: u64) -> Fixture {
             100,
             threshold,
             1024,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -286,6 +287,7 @@ async fn two_layer_oplog(
             100,
             100,
             1024,
+            32,
             RetryConfig::default(),
         )
         .await,
