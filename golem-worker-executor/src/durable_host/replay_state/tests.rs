@@ -2333,7 +2333,7 @@ async fn snapshot_start_scans_recovery_metadata_only_after_the_snapshot() {
     let (uncovered, reads) = build(skipped_prefix(4), Some(snapshot)).await;
     assert!(reads_prefix(&reads));
     assert_eq!(
-        *uncovered.cursor.completion_markers.lock().unwrap(),
+        uncovered.cursor.completion_markers.lock().unwrap().by_start,
         HashMap::from([
             (
                 OplogIndex::from_u64(5),
@@ -2348,7 +2348,7 @@ async fn snapshot_start_scans_recovery_metadata_only_after_the_snapshot() {
 
     for replay in [&from_snapshot, &without_snapshot] {
         assert_eq!(
-            *replay.cursor.completion_markers.lock().unwrap(),
+            replay.cursor.completion_markers.lock().unwrap().by_start,
             HashMap::from([(
                 OplogIndex::from_u64(10),
                 CompletionMarker::Delivered(OplogIndex::from_u64(12))
@@ -2356,7 +2356,7 @@ async fn snapshot_start_scans_recovery_metadata_only_after_the_snapshot() {
         );
         assert_eq!(
             *replay.cursor.stream_observations.lock().unwrap(),
-            HashMap::from([(OplogIndex::from_u64(13), None)])
+            std::collections::BTreeMap::from([(OplogIndex::from_u64(13), None)])
         );
         let attachments = replay.cursor.tool_attachment_reconstruction.lock().unwrap();
         assert!(attachments.accepted.is_empty());

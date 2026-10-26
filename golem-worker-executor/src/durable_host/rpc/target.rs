@@ -19,6 +19,7 @@ use super::{
 };
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::IdempotencyKeyPosition;
 use crate::durable_host::authorization::targets::agent_method_target;
 use crate::durable_host::concurrent::CallReplayOutcome;
 use crate::durable_host::concurrent::DurableCallSession;
@@ -124,6 +125,44 @@ pub(super) fn invocation_target_agent_id(
         logical_remote_agent_id.environment_id,
         &invocation_agent_id,
     ))
+}
+
+/// The idempotency key inputs and the logical target of one durable RPC. Once the call's `Start`
+/// index is known, [`Self::at`] gives its idempotency key and the agent it dispatches to. A live
+/// call uses it in the `Start` writer step; replay and repair use it with the recorded index.
+#[derive(Clone)]
+pub(super) struct RpcCallTarget {
+    key_position: IdempotencyKeyPosition,
+    logical_remote_agent_id: OwnedAgentId,
+    ephemeral_logical_agent_id: Option<ParsedAgentId>,
+}
+
+impl RpcCallTarget {
+    pub(super) fn new(
+        key_position: IdempotencyKeyPosition,
+        logical_remote_agent_id: &OwnedAgentId,
+        ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+    ) -> Self {
+        Self {
+            key_position,
+            logical_remote_agent_id: logical_remote_agent_id.clone(),
+            ephemeral_logical_agent_id: ephemeral_logical_agent_id.cloned(),
+        }
+    }
+
+    pub(super) fn at(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<(IdempotencyKey, OwnedAgentId), WorkerExecutorError> {
+        let idempotency_key = self.key_position.derive(start_index);
+        let remote_agent_id = invocation_target_agent_id(
+            &self.logical_remote_agent_id,
+            self.ephemeral_logical_agent_id.as_ref(),
+            &idempotency_key,
+        )
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        Ok((idempotency_key, remote_agent_id))
+    }
 }
 
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
@@ -599,6 +638,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut handle;
         let decision;
         let mut rejection_span = None;
+        let key_position = begun.idempotency_key_position(self);
 
         match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
@@ -617,7 +657,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?
                         .span_id
                         .clone();
-                    let key_position = self.idempotency_key_position();
                     let span_started =
                         embedded_invocation_span_builder(self, &connection_span_id, method_name)?;
                     let request = HostRequestGolemRpcActivate {
@@ -667,9 +706,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             }
                             Err(error) => Ok(Err(OutboundRpcDenial {
                                 error: InternalRpcError::from(error).into(),
-                                activation_decision: Some(
-                                    self.idempotency_key_position().derive(start_index),
-                                ),
+                                activation_decision: Some(key_position.derive(start_index)),
                             })),
                         };
                     }
@@ -689,8 +726,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         ),
                                     )
                                 })?;
-                            let idempotency_key =
-                                self.idempotency_key_position().derive(live.start_index());
+                            let idempotency_key = key_position.derive(live.start_index());
                             rejection_span =
                                 Some((restore_embedded_span(self, &started)?, idempotency_key));
                         }

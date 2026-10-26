@@ -838,15 +838,16 @@ impl CursorTx<'_> {
     /// observation) lies between the cursor and `bound`, outside any deleted region.
     fn delivery_boundary_before(&self, bound: OplogIndex) -> bool {
         let next = self.cursor.last_replayed_index().next();
-        let in_range = |index: &OplogIndex| {
-            *index >= next
-                && *index < bound
-                && !self.st.skipped_regions.is_in_deleted_region(*index)
-        };
-        let delivered =
-            self.cursor.completion_markers.lock().unwrap().values().any(
-                |marker| matches!(marker, CompletionMarker::Delivered(index) if in_range(index)),
-            );
+        if next >= bound {
+            return false;
+        }
+        let delivered = self
+            .cursor
+            .completion_markers
+            .lock()
+            .unwrap()
+            .delivered_in(next..bound)
+            .any(|index| !self.st.skipped_regions.is_in_deleted_region(index));
         if delivered {
             return true;
         }
@@ -855,9 +856,9 @@ impl CursorTx<'_> {
             .stream_observations
             .lock()
             .unwrap()
-            .keys()
-            .copied()
-            .filter(in_range)
+            .range(next..bound)
+            .map(|(index, _)| *index)
+            .filter(|index| !self.st.skipped_regions.is_in_deleted_region(*index))
             .collect();
         observations
             .into_iter()

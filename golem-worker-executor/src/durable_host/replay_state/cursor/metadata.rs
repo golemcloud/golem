@@ -137,8 +137,8 @@ impl ReplayState {
         WorkerExecutorError,
     > {
         const CHUNK_SIZE: u64 = 1024;
-        let mut markers = HashMap::new();
-        let mut stream_observations = HashMap::new();
+        let mut markers = CompletionMarkers::default();
+        let mut stream_observations = StreamObservationPositions::new();
         let mut transaction_markers = TransactionMarkers::new();
         let mut start_invocation_ids = StartsByInvocationId::new();
         let mut next = from;
@@ -566,7 +566,7 @@ impl ReplayState {
                         .completion_markers
                         .lock()
                         .unwrap()
-                        .retain(|_, marker| marker.index() <= new_target);
+                        .truncate_after(new_target);
                     cursor.stream_observations.lock().unwrap().retain(|index, _| *index <= new_target);
                     cursor.start_invocation_ids.lock().unwrap().retain(|_, starts| {
                         starts.retain(|index, _| *index <= new_target);
@@ -591,7 +591,7 @@ impl ReplayState {
                     .await?;
                     if !additions.is_empty() {
                         let mut markers = cursor.completion_markers.lock().unwrap();
-                        for (start_index, marker) in &additions {
+                        for (start_index, marker) in additions.iter() {
                             // Rediscovering the exact marker already in the map (recorded live by
                             // this instance before the target
                             // grew over it) is idempotent; only a *different* marker for the same
@@ -608,7 +608,9 @@ impl ReplayState {
                                 )));
                             }
                         }
-                        markers.extend(additions);
+                        for (start_index, marker) in additions.by_start {
+                            markers.insert(start_index, marker);
+                        }
                     }
                     cursor.stream_observations.lock().unwrap().extend(stream_observations);
                     {

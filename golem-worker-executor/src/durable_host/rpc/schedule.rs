@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use super::{
-    CancellationTokenEntry, RpcTargetAdmission, WasmRpcEntry, WasmRpcEntryPayload,
-    ensure_rpc_target_activated, find_agent_method, invocation_metadata,
-    invocation_target_agent_id, persist_schedule_denial, persist_schedule_denial_from_begun,
-    reject_non_await_scope_card, remote_method_uses_streams,
+    CancellationTokenEntry, RpcCallTarget, RpcTargetAdmission, WasmRpcEntry, WasmRpcEntryPayload,
+    ensure_rpc_target_activated, find_agent_method, invocation_metadata, persist_schedule_denial,
+    persist_schedule_denial_from_begun, reject_non_await_scope_card, remote_method_uses_streams,
 };
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
@@ -238,7 +237,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let begun = DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
             begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
             .await?;
-        let key_position = self.idempotency_key_position();
+        let call_target = RpcCallTarget::new(
+            begun.idempotency_key_position(self),
+            &logical_remote_agent_id,
+            ephemeral_logical_agent_id.as_ref(),
+        );
         let call = match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
                 if let RpcTargetAdmission::LiveOnly(target) = &admission
@@ -247,7 +250,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     return persist_schedule_denial_from_begun(
                         self,
                         begun,
-                        key_position,
                         logical_remote_agent_id,
                         datetime,
                         method_name,
@@ -265,12 +267,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             Ok(schedule_id) => schedule_id,
                             Err(error) => return Ok(Err(InternalRpcError::from(error).into())),
                         };
-                        let idempotency_key = key_position.derive(start_index);
-                        let remote_agent_id = invocation_target_agent_id(
-                            &logical_remote_agent_id,
-                            ephemeral_logical_agent_id.as_ref(),
-                            &idempotency_key,
-                        )?;
+                        let (idempotency_key, remote_agent_id) = call_target.at(start_index)?;
                         let schedule_id = serialize(&schedule_id).map_err(|err| {
                             anyhow::Error::from(WorkerExecutorError::runtime(format!(
                                 "Failed to serialize schedule id: {err}"
@@ -299,22 +296,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // `ScheduleId`.
         let mut handle = match call {
             Either::Left(begun) => {
-                let request_key_position = key_position.clone();
-                let request_logical_remote_agent_id = logical_remote_agent_id.clone();
-                let request_ephemeral_logical_agent_id = ephemeral_logical_agent_id.clone();
+                let request_target = call_target.clone();
                 let request_method_name = method_name.clone();
                 let request_input = input_value.clone();
                 let request_datetime: golem_common::model::oplog::types::SerializableDateTime =
                     datetime.into();
                 begun
                     .start_live_at_index(self, move |start_index| {
-                        let idempotency_key = request_key_position.derive(start_index);
-                        let remote_agent_id = invocation_target_agent_id(
-                            &request_logical_remote_agent_id,
-                            request_ephemeral_logical_agent_id.as_ref(),
-                            &idempotency_key,
-                        )
-                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                        let (idempotency_key, remote_agent_id) = request_target.at(start_index)?;
                         Ok(HostRequestGolemRpcScheduledInvocation {
                             remote_agent_id: remote_agent_id.agent_id(),
                             idempotency_key,
@@ -329,12 +318,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
             Either::Right(live) => live,
         };
-        let idempotency_key = key_position.derive(handle.start_index());
-        let remote_agent_id = invocation_target_agent_id(
-            &logical_remote_agent_id,
-            ephemeral_logical_agent_id.as_ref(),
-            &idempotency_key,
-        )?;
+        let (idempotency_key, remote_agent_id) = call_target.at(handle.start_index())?;
         let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
 
         let schedule_id = ScheduleId::from_idempotency_key(&idempotency_key);

@@ -181,13 +181,13 @@ where
         DurableCallSession::<Pair, NotCancellable>::begin(ctx, DurableFunctionType::WriteLocal)
             .await?;
     // The card derives from the call's own `Start` index, which live and replay agree on.
-    let logical_position = ctx.state.take_logical_key_position();
+    let key_position = begun.idempotency_key_position(ctx);
     let owned_agent_id = ctx.owned_agent_id.clone();
     let card_at = move |start_index: OplogIndex| {
         let card_id = derive_card_id(
             &owned_agent_id,
             &invocation_key,
-            logical_position.unwrap_or(start_index),
+            key_position.index(start_index),
         );
         let provenance = CardManagedByRuntimeDerived {
             environment_id: owned_agent_id.environment_id,

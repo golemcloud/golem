@@ -213,6 +213,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             parent_start_index,
             observational_owner,
             invocation_id,
+            logical_key_position: None,
         };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN)
@@ -900,6 +901,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             None,
         );
         begun.agent_auth_ctx = agent_auth_ctx;
+        begun.execution_scope.logical_key_position = ctx.state.take_logical_key_position();
         begun
     }
 }
@@ -907,6 +909,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ctx> {
     pub(super) fn is_live(&self) -> bool {
         self.is_live
+    }
+
+    /// The inputs of this call's idempotency key.
+    pub(crate) fn idempotency_key_position(
+        &self,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> IdempotencyKeyPosition {
+        ctx.idempotency_key_position(self.execution_scope.logical_key_position)
     }
 
     pub fn agent_auth_ctx(&self) -> &AuthCtx {

@@ -352,10 +352,11 @@ pub(crate) struct LiveAuthorizationPermit {
     pub(crate) _private: (),
 }
 
-/// The derived idempotency key of one durable call, reserved before its `Start` index is known
-/// (see [`DurableWorkerCtx::idempotency_key_position`]). The key derives from the call's `Start`
-/// index, which live execution and replay agree on, unless an entity Store assigned a logical
-/// position.
+/// The inputs from which [`Self::derive`] derives the idempotency key of one durable call once its
+/// `Start` index is known: the current invocation key, and the logical position that an entity
+/// Store assigns to the call. Without a logical position the key derives from the `Start` index,
+/// which live execution and replay agree on. The call site takes these inputs from the begun call
+/// before the `Start` is appended, because the request is built without access to the context.
 #[derive(Debug, Clone)]
 pub(crate) struct IdempotencyKeyPosition {
     parent: IdempotencyKey,
@@ -364,7 +365,12 @@ pub(crate) struct IdempotencyKeyPosition {
 
 impl IdempotencyKeyPosition {
     pub(crate) fn derive(&self, start_index: OplogIndex) -> IdempotencyKey {
-        IdempotencyKey::derived(&self.parent, self.logical.unwrap_or(start_index))
+        IdempotencyKey::derived(&self.parent, self.index(start_index))
+    }
+
+    /// The oplog index the key derives from: the logical position, or else the `Start` index.
+    pub(crate) fn index(&self, start_index: OplogIndex) -> OplogIndex {
+        self.logical.unwrap_or(start_index)
     }
 }
 
@@ -673,19 +679,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         drop(self.filesystem_preopen.take());
     }
 
+    /// The idempotency key of an accessor call. It takes the next entity logical position, so an
+    /// accessor call must derive its key exactly once, in live execution and in replay alike.
+    /// A Store-holding call takes its position when it begins; see
+    /// [`concurrent::DurableCallSession::idempotency_key_position`].
     pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
-        self.idempotency_key_position().derive(oplog_index)
+        let logical = self.state.take_logical_key_position();
+        self.idempotency_key_position(logical).derive(oplog_index)
     }
 
-    /// Reserves the derived idempotency key of one durable call before its `Start` index is
-    /// known. An entity Store reserves its next logical position here, exactly once per call.
-    pub(crate) fn idempotency_key_position(&mut self) -> IdempotencyKeyPosition {
+    fn idempotency_key_position(&self, logical: Option<OplogIndex>) -> IdempotencyKeyPosition {
         IdempotencyKeyPosition {
             parent: self
                 .state
                 .get_current_idempotency_key()
                 .unwrap_or(IdempotencyKey::fresh()),
-            logical: self.state.take_logical_key_position(),
+            logical,
         }
     }
 

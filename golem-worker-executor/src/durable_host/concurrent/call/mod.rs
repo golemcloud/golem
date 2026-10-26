@@ -14,6 +14,7 @@
 
 use super::drop_events::AccessDropEventDrainGuard;
 use super::*;
+use crate::durable_host::IdempotencyKeyPosition;
 use crate::durable_host::LiveAuthorizationPermit;
 use crate::durable_host::durability::GuestImportIdentity;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
@@ -196,6 +197,10 @@ pub(super) struct BegunCallExecutionScope {
     /// Invocation id of the guest call, recorded in every `Start` of the call; see
     /// [`InvocationIdSource`].
     pub(super) invocation_id: Option<DurableInvocationId>,
+    /// The entity logical position of the call's idempotency key. A Store-holding call takes it
+    /// when it begins, in guest call order, so live execution and replay agree on it. `None`
+    /// outside an entity Store with logical key positions, and for accessor calls.
+    pub(super) logical_key_position: Option<OplogIndex>,
 }
 
 impl BegunCallExecutionScope {
@@ -209,6 +214,7 @@ impl BegunCallExecutionScope {
             durable_scope: self.parent_start_index,
             observational_owner: self.observational_owner,
             invocation_id: self.invocation_id,
+            logical_key_position: self.logical_key_position,
         }
     }
 }
@@ -226,6 +232,8 @@ pub(super) struct CallExecutionScope {
     pub(super) observational_owner: Option<OplogIndex>,
     /// Invocation id of the guest call; see [`BegunCallExecutionScope::invocation_id`].
     pub(super) invocation_id: Option<DurableInvocationId>,
+    /// See [`BegunCallExecutionScope::logical_key_position`].
+    pub(super) logical_key_position: Option<OplogIndex>,
 }
 
 impl CallExecutionScope {
@@ -679,6 +687,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     pub fn start_index(&self) -> OplogIndex {
         self.start_idx
+    }
+
+    /// The inputs of this call's idempotency key.
+    pub(crate) fn idempotency_key_position<Ctx: WorkerCtx>(
+        &self,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> IdempotencyKeyPosition {
+        ctx.idempotency_key_position(self.execution_scope.logical_key_position)
     }
 
     pub fn agent_auth_ctx(&self) -> &AuthCtx {

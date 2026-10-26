@@ -344,8 +344,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         // Even though `IdempotencyKey::derived` is used, we still need to persist this, because the
         // derived key depends on the oplog index. The key derives from this call's own `Start`
         // index, which an incomplete-replay re-execution reuses.
-        // Reserve the logical position on replay too, even when the recorded result is returned.
-        let key = self.derive_idempotency_key(handle.start_index());
+        let key = handle
+            .idempotency_key_position(self)
+            .derive(handle.start_index());
 
         let result = handle
             .run(self, async |_| {
@@ -958,6 +959,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             DurableFunctionType::WriteRemote,
         )
         .await?;
+        let key_position = begun.idempotency_key_position(self);
         let result = 'result: {
             let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
@@ -971,9 +973,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
                     let request = HostRequestNoInput {};
                     if let Some(denial) = agent_operation_denial(denied) {
-                        // The replay of the denied call reserves the logical counter below, so
-                        // the live denial reserves it too.
-                        let _ = self.idempotency_key_position();
                         break 'result begun.start_live_denied(self, request, denial).await?;
                     }
                     begun.start_live(self, request).await?
@@ -981,9 +980,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 ResolvedCall::Replay(handle) => handle,
             };
 
-            // Reserve the logical counter on replay too so subsequent calls keep their keys.
-            // The recorded Start, unlike the pre-call cursor, is unaffected by skipped hints.
-            let fork_key = self.derive_idempotency_key(handle.start_index());
+            let fork_key = key_position.derive(handle.start_index());
             let source_fingerprint = self
                 .public_state
                 .worker()
