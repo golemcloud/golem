@@ -9,7 +9,7 @@
 export const meta = {
   title: "Golem: the durable runtime for AI agents",
   description:
-    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Golem runs AI agents and their tools, and serves their artifacts to users. After a crash, restart, rescaling or long wait, each agent's whole VM resumes mid\u2011function with its memory and files. Tool calls run exactly once, under permissions agents can't bypass.",
 };
 
 // =============================================================================
@@ -26,7 +26,7 @@ export const hero = {
   },
   heading: "The durable runtime for AI agents",
   subhead:
-    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Golem runs AI agents and their tools, and serves their artifacts to users. After a crash, restart, rescaling or long wait, each agent's whole VM resumes mid\u2011function with its memory and files. Tool calls run exactly once, under permissions agents can't bypass.",
   ctas: {
     primary: { label: "Start building →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
@@ -96,7 +96,7 @@ export const coreVm = {
     },
     {
       title: "Durable",
-      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored where it left off, with its files, without repeating completed calls.",
+      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it resumes with its memory and files, without repeating completed calls.",
     },
     {
       title: "Secure",
@@ -184,13 +184,13 @@ export const agentsChapter = {
   items: [
     {
       id: "overview",
-      title: "Same guarantees and primitives in six SDKs",
-      body: "TypeScript, Effect, Rust, Scala, MoonBit and Go agents resume mid-function with memory and files after a crash.",
+      title: "Same guarantees and building blocks in six SDKs",
+      body: "After a crash or suspension, the whole VM resumes mid\u2011function: memory, call stack and file system restored.",
     },
     {
       id: "sqlite",
       title: "Per-agent databases",
-      body: "Each agent's durable file system can hold an embedded database such as SQLite: no server to run or connect to.",
+      body: "TypeScript, Effect and Rust agents can keep SQLite in their durable file system: no database server to run or connect to.",
     },
     {
       id: "models",
@@ -200,7 +200,7 @@ export const agentsChapter = {
     {
       id: "team",
       title: "Agents working together",
-      body: "Agents make typed cross-language calls, wait or move on, and discover what other agents and tools offer.",
+      body: "Agents make typed cross-language calls, awaited or not, and discover what other agents and tools offer.",
     },
     {
       id: "waits",
@@ -215,7 +215,7 @@ export const agentsChapter = {
     {
       id: "readonly",
       title: "Cached read-only methods",
-      body: "Read-only methods answer repeat calls from a cache, without loading the agent, until a write succeeds.",
+      body: "Repeat read-only calls are served from a cache, without loading the agent, until a state-changing call succeeds.",
     },
   ] as ChapterItem[],
 };
@@ -232,12 +232,12 @@ export const toolsChapter = {
     },
     {
       id: "custom",
-      title: "Tools without a sandbox service",
+      title: "Isolated tools, no sandbox service",
       body: "Shell, Git, Node.js, npm and TypeScript are bundled and can use the agent's files. Custom tools use any Golem SDK.",
     },
     {
       id: "requests",
-      title: "HTTP retries from agents and tools",
+      title: "HTTP and MCP retries from agents and tools",
       body: "Golem retries interrupted requests with an idempotency key it adds; APIs that honor it, like Stripe, act once.",
     },
     {
@@ -253,12 +253,12 @@ export const toolsChapter = {
     {
       id: "secrets",
       title: "Secrets",
-      body: "Agents pass API keys to tools as opaque handles. Revealing one takes a grant, is recorded and can be barred per tool.",
+      body: "Agents pass API keys to tools as opaque handles. Revealing one is permission-checked and recorded.",
     },
     {
       id: "publish",
-      title: "Serve agents and tools over MCP",
-      body: "Calls to MCP servers get tool-call guarantees. Grant other environments and accounts immutable tool releases.",
+      title: "Serve over MCP, share tool releases",
+      body: "MCP clients can call your agents and tools. Share immutable tool releases with other environments and accounts.",
     },
   ] as ChapterItem[],
 };
@@ -271,12 +271,12 @@ export const artifactsChapter = {
     {
       id: "overview",
       title: "Overview",
-      body: "Asked for a sales graph, a tool writes a PNG and HTML page in agent files. Golem serves both only when complete.",
+      body: "Asked for a sales graph, the agent writes a PNG and HTML page to its files. Golem serves both only when fully written.",
     },
     {
       id: "routes",
       title: "Apps for one user's request, no deploy",
-      body: "A tool saves the model's small app in agent files. Buttons call endpoints running durable code in the agent's own VM.",
+      body: "A tool saves the model's app to the agent's files. Buttons call endpoints running durable code in the agent's own VM.",
     },
     {
       id: "peruser",
@@ -404,11 +404,11 @@ export const deployment = {
   shared: [
     {
       title: "Observability and audit",
-      body: "OpenTelemetry traces and metrics. Each agent's oplog records its external interactions and permission decisions for audit.",
+      body: "OpenTelemetry traces and metrics. Each agent's oplog records its external interactions and permission decisions.",
     },
     {
       title: "Live updates and rollback",
-      body: "Update running agents after a compatibility check. Roll an agent back to an earlier point, or clone it to try another approach.",
+      body: "Update running agents if new code matches their history. Roll an agent back to an earlier point, or clone it to try another approach.",
     },
     {
       title: "Quotas",

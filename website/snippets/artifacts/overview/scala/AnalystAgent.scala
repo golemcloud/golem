@@ -1,6 +1,6 @@
 @agentDefinition(
   mount = "/chats/{chat}",
-  // Golem serves this agent's files only when complete:
+  // Golem serves this agent's files only when fully written:
   exposeFiles = Array(("/*", "/out/$1")), //@
 )
 trait AnalystAgent extends BaseAgent:
