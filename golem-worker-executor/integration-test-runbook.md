@@ -233,7 +233,7 @@ full-suite isolation, the native metadata-Pending gap or managed-XFS validation.
 
 ## Source notes
 
-- `golem-worker-executor/tests/lib.rs`: test entry point, hosted dependencies and tracing layers.
+- `golem-worker-executor-tests/tests/lib.rs`: test entry point, hosted dependencies and tracing layers.
 - `golem-worker-executor/Cargo.toml`: harness-free integration binary.
 - `.agents/skills/testing/SKILL.md`: exact-filter syntax, stack size and fixture prerequisites.
 - `Makefile.toml`: existing worker-test environment and explicit limits for selected suites.

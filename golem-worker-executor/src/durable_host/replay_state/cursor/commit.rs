@@ -730,7 +730,7 @@ impl ReplayState {
         self.take_new_replay_events_for(true)
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn test_stage_replay_events(&self, events: Vec<ReplayEvent>) {
         self.cursor
             .pending_replay_events
