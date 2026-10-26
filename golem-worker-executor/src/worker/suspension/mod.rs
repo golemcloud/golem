@@ -13,11 +13,11 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
+use crate::durable_host::durability::GuestImportNumbering;
 use futures::future::Either;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use golem_common::model::entity::EntityInvocationId;
-use golem_common::model::oplog::DurableInvocationId;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tokio::sync::Notify;
 use wasmtime::component::{
@@ -861,30 +861,8 @@ impl<F: Future> Future for CoordinatedRpc<F> {
 pub(crate) struct RuntimeStore {
     owner: Arc<OwnerSuspension>,
     store_id: u64,
-    guest_imports: Mutex<GuestImports>,
+    guest_imports: Arc<GuestImportNumbering>,
     guest_blocked: tokio::sync::Notify,
-}
-
-/// The guest import calls of one Store, in the order the guest made them.
-///
-/// Wasmtime registers the activity of a concurrent guest import and polls the host future once
-/// inside the guest's call, before the guest can make another call. So the newest import activity
-/// is the only one that can still take the next invocation id in guest call order.
-#[derive(Default)]
-struct GuestImports {
-    latest: Option<RuntimeActivityId>,
-    invocation_ids: HashMap<RuntimeActivityId, DurableInvocationId>,
-}
-
-/// The invocation id of a guest import call, as far as the Store's import order allows.
-pub(crate) enum GuestImportInvocationId {
-    /// The call already reserved this id for an earlier durable call it made.
-    Reserved(DurableInvocationId),
-    /// The call is the guest's newest import, so it can reserve the next id now.
-    Reservable,
-    /// The guest made another import call after this one, so an id reserved now could be out
-    /// of guest call order.
-    Late,
 }
 
 impl RuntimeStore {
@@ -895,7 +873,16 @@ impl RuntimeStore {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn new(owner: Arc<OwnerSuspension>) -> Arc<Self> {
+        Self::with_guest_imports(owner, Default::default())
+    }
+
+    /// A Store whose guest import calls are numbered by `guest_imports`.
+    pub(crate) fn with_guest_imports(
+        owner: Arc<OwnerSuspension>,
+        guest_imports: Arc<GuestImportNumbering>,
+    ) -> Arc<Self> {
         let store_id = {
             let mut state = owner.state.lock().unwrap();
             state.next_store_id = state.next_store_id.wrapping_add(1);
@@ -907,7 +894,7 @@ impl RuntimeStore {
         Arc::new(Self {
             owner,
             store_id,
-            guest_imports: Mutex::new(GuestImports::default()),
+            guest_imports,
             guest_blocked: tokio::sync::Notify::new(),
         })
     }
@@ -929,32 +916,6 @@ impl RuntimeStore {
             }
             notified.await;
         }
-    }
-
-    pub(crate) fn guest_import_invocation_id(
-        &self,
-        activity: RuntimeActivityId,
-    ) -> GuestImportInvocationId {
-        let imports = self.guest_imports.lock().unwrap();
-        if let Some(invocation_id) = imports.invocation_ids.get(&activity) {
-            GuestImportInvocationId::Reserved(*invocation_id)
-        } else if imports.latest == Some(activity) {
-            GuestImportInvocationId::Reservable
-        } else {
-            GuestImportInvocationId::Late
-        }
-    }
-
-    pub(crate) fn record_guest_import_invocation_id(
-        &self,
-        activity: RuntimeActivityId,
-        invocation_id: DurableInvocationId,
-    ) {
-        self.guest_imports
-            .lock()
-            .unwrap()
-            .invocation_ids
-            .insert(activity, invocation_id);
     }
 
     pub(crate) fn timer(
@@ -1365,13 +1326,13 @@ impl RuntimeObserver for RuntimeStore {
             RuntimeObservation::ActivityStarted {
                 activity,
                 kind: RuntimeActivityKind::Import,
-            } => self.guest_imports.lock().unwrap().latest = Some(*activity),
+            } => self.guest_imports.import_started(*activity),
+            RuntimeObservation::ActivityStarted {
+                activity,
+                kind: RuntimeActivityKind::Root,
+            } => self.guest_imports.driver_started(*activity),
             RuntimeObservation::ActivityFinished { activity } => {
-                self.guest_imports
-                    .lock()
-                    .unwrap()
-                    .invocation_ids
-                    .remove(activity);
+                self.guest_imports.activity_finished(*activity)
             }
             _ => {}
         }

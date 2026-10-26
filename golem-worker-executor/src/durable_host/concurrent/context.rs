@@ -201,7 +201,7 @@ pub(crate) trait DurableAccess<T: 'static, D: HasData + ?Sized>: Sync {
     fn custom_invocation_scope(&self)
     -> Result<Option<CustomInvocationScope>, WorkerExecutorError>;
 
-    fn reserve_call_invocation_id<Ctx: WorkerCtx>(
+    fn call_invocation_id<Ctx: WorkerCtx>(
         &self,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         observed_by_custom_invocation: bool,
@@ -237,16 +237,12 @@ impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
             .and_then(CustomInvocationContext::current))
     }
 
-    fn reserve_call_invocation_id<Ctx: WorkerCtx>(
+    fn call_invocation_id<Ctx: WorkerCtx>(
         &self,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         observed_by_custom_invocation: bool,
     ) -> Result<Option<golem_common::model::oplog::DurableInvocationId>, WorkerExecutorError> {
-        super::call::reserve_guest_import_invocation_id(
-            self,
-            get_ctx,
-            observed_by_custom_invocation,
-        )
+        super::call::guest_import_invocation_id(self, get_ctx, observed_by_custom_invocation)
     }
 }
 
@@ -314,7 +310,7 @@ impl<Ctx: WorkerCtx> DurableAccess<Ctx, wasmtime::component::HasSelf<Ctx>>
         Ok(self.custom_invocation_scope)
     }
 
-    fn reserve_call_invocation_id<C: WorkerCtx>(
+    fn call_invocation_id<C: WorkerCtx>(
         &self,
         get_ctx: fn(&mut Ctx) -> &mut DurableWorkerCtx<C>,
         observed_by_custom_invocation: bool,
@@ -323,8 +319,7 @@ impl<Ctx: WorkerCtx> DurableAccess<Ctx, wasmtime::component::HasSelf<Ctx>>
             return Ok(None);
         }
         self.with_worker_ctx(|ctx| {
-            super::call::reserve_import_invocation_id(get_ctx(ctx), None)
-                .map(|source| source.reserved())
+            super::call::import_invocation_id(get_ctx(ctx), None).map(|source| source.reserved())
         })
     }
 }
@@ -345,15 +340,13 @@ pub(crate) trait DurableContext<Ctx: WorkerCtx> {
     fn finish_scope(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
     ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send {
-        self.finish_scope_with_commit(function_type, begin_index, false)
+        self.finish_scope_with_commit(function_type, false)
     }
 
     fn finish_scope_with_commit(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
@@ -426,17 +419,9 @@ impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx, A: DurableAccess<T, D> + ?
     async fn finish_scope_with_commit(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
-        end_durable_function_access(
-            self.store,
-            self.get_ctx,
-            function_type,
-            begin_index,
-            forced_commit,
-        )
-        .await
+        end_durable_function_access(self.store, self.get_ctx, function_type, forced_commit).await
     }
 
     async fn process_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
@@ -477,14 +462,12 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for SharedDurableContext<Ctx> {
     async fn finish_scope_with_commit(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         end_durable_function_access(
             self,
             |ctx| ctx.durable_ctx_mut(),
             function_type,
-            begin_index,
             forced_commit,
         )
         .await
@@ -531,10 +514,9 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for DurableWorkerCtx<Ctx> {
     async fn finish_scope_with_commit(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
-        self.end_durable_function(&function_type, begin_index, forced_commit)
+        self.end_durable_function(&function_type, forced_commit)
             .await
     }
 

@@ -30,7 +30,7 @@ use golem_common::model::oplog::{
 
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, InvocationIdSource,
-    reserve_import_invocation_id, resolve_current_observational_owner,
+    import_invocation_id, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::tail_work::TailActivity;
@@ -432,7 +432,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
             body.write().unwrap().drain(..).collect::<Vec<u8>>()
         };
 
-        let invocation_id = reserve_import_invocation_id(host.get(), observational_owner)?;
+        let invocation_id = import_invocation_id(host.get(), observational_owner)?;
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let activity = host.get().tail_work_tracker().activity();
         host.spawn(IncomingValueConsumeTask::<Ctx>::new(

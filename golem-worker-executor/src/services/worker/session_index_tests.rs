@@ -535,6 +535,7 @@ async fn service() -> (DefaultWorkerService, Arc<InMemoryKeyValueStorage>) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -564,6 +565,7 @@ async fn service_with_oplog() -> (
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -770,6 +772,7 @@ async fn quiescent_recovery_caches_only_read_new_committed_suffixes() {
             10000,
             10000,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -877,6 +880,7 @@ async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
             1000,
             1000,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1627,6 +1631,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             10000,
             10000,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -3006,7 +3011,16 @@ async fn raw_session_cache_uses_the_oplog_owner_fingerprint_in_both_modes() {
     let indexed = Arc::new(InMemoryIndexedStorage::new());
     let blobs = Arc::new(InMemoryBlobStorage::new());
     let primary = Arc::new(
-        PrimaryOplogService::new(indexed.clone(), blobs, 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed.clone(),
+            blobs,
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
         indexed,
@@ -3087,7 +3101,16 @@ async fn stale_durable_hint_falls_back_to_current_ephemeral_create_and_is_remove
     let indexed = Arc::new(InMemoryIndexedStorage::new());
     let blobs = Arc::new(InMemoryBlobStorage::new());
     let primary = Arc::new(
-        PrimaryOplogService::new(indexed.clone(), blobs, 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed.clone(),
+            blobs,
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
         indexed,
@@ -3146,6 +3169,7 @@ async fn warm_durable_identity_resolution_reads_only_the_hinted_create() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4188,6 +4212,7 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4246,7 +4271,16 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
     drop(multilayer);
 
     let primary = Arc::new(
-        PrimaryOplogService::new(indexed.clone(), blobs, 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed.clone(),
+            blobs,
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
         indexed.clone(),
@@ -4306,6 +4340,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
             10000,
             10000,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4532,6 +4567,7 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4658,6 +4694,7 @@ async fn archived_services() -> (
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,

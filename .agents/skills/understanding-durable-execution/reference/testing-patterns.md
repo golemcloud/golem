@@ -310,24 +310,6 @@ the lifecycle propagation and stale-generation cases in `tests/active_agents.rs`
 entity shutdown cases in `src/services/active_agents/tests.rs` and
 `src/worker/entity_invocation.rs`.
 
-### Replay-resume request acknowledgement
-
-The internal replay-resume method acknowledges an enqueued wake, not the completion of replay. The
-native regression holds the exact uncached input of an original Counter Started/Finished pair during
-real Restart reconstruction. The request must acknowledge while that dependency is still held. Only
-then release it and require the original Counter state plus the next fresh effect, exact keys and
-execution counts, fingerprint, complete raw prefix and original record range without Error or Jump.
-An enqueue acknowledgement is not a startup-ready or physical-cleanup receipt.
-
-Main's coalesced wake and Boolean pending demand replace the unrelated per-command processing reply,
-counter and replay-request vector. Monthly admission still runs before Store access/replay; dequeue
-clears pending demand even when admission refuses. Permit-wait and delayed-retry body tests retain
-the exact accepted interruption, establishment join, cancelled acquisition, deferred wake and actual
-filesystem-limit reply/payload. Only replay-reply assertions retire with that removed protocol. The
-duplicate-wake test exercises the actual capture/apply functions and leaves post-boundary work queued.
-Earlier enqueue-bound, library, native, lint, build and browser results are historical.
-Combined verification after instrumentation removal is pending.
-
 ### Teardown without a private pre-fence pause
 
 Use real pending outcome appends to prove writer and FIFO-capacity ownership. The retained-Suspend

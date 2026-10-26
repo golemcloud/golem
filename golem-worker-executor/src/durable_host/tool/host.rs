@@ -534,7 +534,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
             } else {
                 response
             };
-            let response = admit_tool_response_secret_holds(&accessor, response).await?;
+            let response = admit_tool_response_secret_holds(
+                &accessor,
+                response,
+                crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+            )
+            .await?;
             Ok(project_tool_response(&accessor, response))
         })
         .await?;
@@ -669,7 +674,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                     close_stdin(accessor, stdin)?;
                     reject_output(accessor, stdout)?;
                     reject_output(accessor, stderr)?;
-                    let response = admit_tool_response_secret_holds(accessor, *response).await?;
+                    let response = admit_tool_response_secret_holds(
+                        accessor,
+                        *response,
+                        crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                    )
+                    .await?;
                     accessor.with(|mut access| {
                         Ok(access.get().table().push(FutureInvokeResultEntry {
                             state: FutureToolInvokeState::Ready(Box::new(response)),

@@ -426,8 +426,8 @@ pub(super) async fn persist_derived_card<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>> {
     let created = match persist_runtime_card::<Ctx, GolemPermissionsDerivePersist, _, _, _>(
         ctx,
-        |ctx, invocation_key, oplog_index| ctx.derive_card_id(invocation_key, oplog_index),
-        |card_id| grants.into_card(card_id, parent_id, created_at, expires_at),
+        crate::durable_host::authorization::context::derived_card_id,
+        move |card_id| grants.into_card(card_id, parent_id, created_at, expires_at),
         parent_expires_at,
         move |ctx| {
             ensure_persistent_derivation_repair_authority(

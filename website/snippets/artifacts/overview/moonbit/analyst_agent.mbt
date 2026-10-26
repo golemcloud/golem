@@ -1,6 +1,6 @@
 #derive.agent
 #derive.mount("/chats/{chat}")
-// Golem serves this agent's files only when complete:
+// Golem serves this agent's files only when fully written:
 #derive.expose_files("/*", "/out/$1") //@
 struct AnalystAgent {
   chat : String
