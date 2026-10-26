@@ -1,8 +1,8 @@
-error[E0277]: the trait bound `NoDefault: std::default::Default` is not satisfied
+error[E0277]: the trait bound `NoDefault: Default` is not satisfied
   --> tests/compile_fail/skip_no_default.rs:22:12
    |
 22 |     inner: NoDefault,
-   |            ^^^^^^^^^ the trait `std::default::Default` is not implemented for `NoDefault`
+   |            ^^^^^^^^^ the trait `Default` is not implemented for `NoDefault`
    |
 help: consider annotating `NoDefault` with `#[derive(Default)]`
    |
