@@ -243,6 +243,10 @@ to `main`.
    entries, and uploads the verified manifest. All built-in packages must finish
    before the first built-in upload. The existing native matrix then builds,
    signs, notarizes, and attaches all Golem and CLI binaries to the draft.
+   Generated notes start at the highest earlier published stable Golem version,
+   excluding SDK releases, shared crate releases, drafts, and prereleases.
+   The workflow passes that tag explicitly because release tags on squash-merged
+   PR heads do not form an ancestor chain. Existing drafts keep their notes.
    It never publishes the Golem draft.
 5. **Review and publish Golem.** Wait for successful preparation. Review the draft,
    binaries, and manifest, then explicitly publish the draft. This starts

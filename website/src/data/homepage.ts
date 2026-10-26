@@ -92,7 +92,7 @@ export const coreVm = {
   explanations: [
     {
       title: "Lightweight",
-      body: "WebAssembly, not Linux: each VM has its own memory, file system and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in under 1 ms in the best case scenario.",
+      body: "WebAssembly, not Linux: each VM has its own memory, file system and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in as little as 2 ms.",
     },
     {
       title: "Durable",
@@ -100,7 +100,7 @@ export const coreVm = {
     },
     {
       title: "Secure",
-      body: "A VM reaches its own files, the network, secrets and other VMs only through Golem's permission checks, which no code, including AI-generated code, can bypass.",
+      body: "A VM reaches its own files, the network, secrets and other VMs only through Golem's permission checks, which apply to AI-generated code just as to yours.",
     },
   ],
 };
@@ -184,8 +184,8 @@ export const agentsChapter = {
   items: [
     {
       id: "overview",
-      title: "Same guarantees and primitives",
-      body: "Code in TypeScript, Effect, Rust, Scala, MoonBit or Go resumes mid-function with memory and files after a crash.",
+      title: "Same guarantees and primitives in six SDKs",
+      body: "TypeScript, Effect, Rust, Scala, MoonBit and Go agents resume mid-function with memory and files after a crash.",
     },
     {
       id: "sqlite",
@@ -205,7 +205,7 @@ export const agentsChapter = {
     {
       id: "waits",
       title: "Awaitable webhooks, timers, schedules",
-      body: "Approval and payment webhooks are promises. Sleeps and scheduled calls fire on time across restarts, at no idle cost.",
+      body: "Agents await approval and payment webhooks. Sleeps and scheduled calls fire on time across restarts, at no idle cost.",
     },
     {
       id: "stream",
@@ -215,7 +215,7 @@ export const agentsChapter = {
     {
       id: "readonly",
       title: "Cached read-only methods",
-      body: "Repeat calls skip loading the agent until a regular method succeeds. Outgoing HTTP and agent calls fail.",
+      body: "Read-only methods answer repeat calls from a cache, without loading the agent, until a write succeeds.",
     },
   ] as ChapterItem[],
 };
@@ -243,22 +243,22 @@ export const toolsChapter = {
     {
       id: "permissions",
       title: "Delegated, revocable permissions",
-      body: "One agent lends another and its tools only the orders API for an hour. Revoking it revokes every derived copy.",
+      body: "One agent lends another and its tools only the orders API for an hour. Revoking it revokes all access passed on.",
     },
     {
       id: "middleware",
-      title: "Middleware agent code can't bypass",
-      body: "Hooks can wrap every tool call to reject by argument, hold refunds for human approval, redact, audit and rate-limit.",
+      title: "Middleware that agent code can't bypass",
+      body: "Hooks on every tool call can block bad arguments, hold refunds for human approval, redact, audit and rate-limit.",
     },
     {
       id: "secrets",
       title: "Secrets",
-      body: "Agents pass API keys to tools as opaque handles. Reveals need a grant and are recorded; bindings can forbid them.",
+      body: "Agents pass API keys to tools as opaque handles. Revealing one takes a grant, is recorded and can be barred per tool.",
     },
     {
       id: "publish",
       title: "Serve agents and tools over MCP",
-      body: "Typed MCP clients get tool-call guarantees. Grant opt-in immutable releases across environments and accounts.",
+      body: "Calls to MCP servers get tool-call guarantees. Grant other environments and accounts immutable tool releases.",
     },
   ] as ChapterItem[],
 };
@@ -271,7 +271,7 @@ export const artifactsChapter = {
     {
       id: "overview",
       title: "Overview",
-      body: "Asked for a sales graph, a tool writes a PNG and HTML page in agent files. Golem serves both, never half-written.",
+      body: "Asked for a sales graph, a tool writes a PNG and HTML page in agent files. Golem serves both only when complete.",
     },
     {
       id: "routes",
@@ -286,12 +286,12 @@ export const artifactsChapter = {
     {
       id: "files",
       title: "Images and PDFs as the reply",
-      body: "An agent can reply with a PNG or PDF it just made: bytes with their MIME type over HTTP, binary content over MCP.",
+      body: "An agent can reply with a PNG or PDF it just made, to a browser over HTTP or a chat assistant over MCP.",
     },
     {
       id: "routers",
       title: "CSV downloads through a router",
-      body: "A router matches path and method, sets status, content type and download headers, and streams the agent's CSV.",
+      body: "A router matches the path and method, then streams the agent's CSV as a download.",
     },
     {
       id: "signin",
@@ -301,7 +301,7 @@ export const artifactsChapter = {
     {
       id: "login",
       title: "Only for the person who asked",
-      body: "Sign-in says who asks, not what they may see. The agent records who asked for each chart; others get a 404.",
+      body: "The agent records who asked for each chart. Anyone else, even signed in, gets a 404.",
     },
   ] as ChapterItem[],
 };
@@ -397,7 +397,7 @@ export const deployment = {
     {
       visual: "cloud",
       title: "Golem Cloud",
-      body: "Deploy to the managed service and let us run it, with no servers of your own. Free during the Developer Preview.",
+      body: "Deploy to the managed service; we run the servers. Free during the Developer Preview, then usage-based with a $0 tier.",
     },
   ],
   sharedLabel: "In every deployment",

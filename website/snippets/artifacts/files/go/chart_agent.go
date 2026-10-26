@@ -17,7 +17,7 @@ var _ = Charts.Implement(func(id ChartID) *ChartID {
     return &id
 }).Handle(Chart, golem.Adapt((*ChartID).chart))
 
-// the reply is the PNG itself, over HTTP or MCP:
+// the reply is the PNG and its MIME type, over HTTP or MCP:
 func (c *ChartID) chart(in ChartIn) Png { //@
     // the chart is drawn for this call, and no file is written:
     val := drawChart(querySales(c.Team, in.Quarter)) //@

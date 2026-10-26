@@ -4408,6 +4408,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "applying",
+ "arc-swap",
  "assert2",
  "async-fs",
  "async-trait",
@@ -4474,9 +4475,11 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-metrics",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tonic",
+ "tonic-health",
  "tonic-tracing-opentelemetry",
  "tower 0.5.3",
  "tracing",
@@ -4486,6 +4489,7 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wasmtime-wasi",
+ "x509-parser",
 ]
 
 [[package]]
@@ -4493,6 +4497,7 @@ name = "golem-shard-manager"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-rwlock",
  "async-trait",
  "base64 0.22.1",
