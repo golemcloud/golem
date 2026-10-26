@@ -360,6 +360,7 @@ fn write_go(ctx: &TestContext) {
             package impl
 
             import (
+            	"errors"
             	"fmt"
             	"math"
             	"slices"
@@ -409,16 +410,9 @@ fn write_go(ctx: &TestContext) {
             			check(back.Maybe == maybe, "nested maybe %+v", back.Maybe)
             			check(slices.Equal(back.All, all), "nested all %+v", back.All)
             		}}
-            		rejection := func() (message string) {{
-            			defer func() {{
-            				if r := recover(); r != nil {{
-            					message = fmt.Sprint(r)
-            				}}
-            			}}()
-            			_, err := remote.Echo(length{{Mantissa: 1, Unit: "mi"}})
-            			return fmt.Sprint(err)
-            		}}()
-            		check(strings.Contains(rejection, `unit "mi"`), "disallowed unit: %s", rejection)
+            		_, err := remote.Echo(length{{Mantissa: 1, Unit: "mi"}})
+            		var rejection *golem.RemoteCallError
+            		check(errors.As(err, &rejection) && rejection.Kind == golem.RemoteProtocolError && strings.Contains(err.Error(), `unit "mi"`), "disallowed unit: %v", err)
             		return "quantities-ok"
             	}})
             }}
@@ -964,6 +958,7 @@ async fn run_external_drivers(ctx: &TestContext) {
 
             import (
             	"context"
+            	"errors"
             	"fmt"
             	"log"
             	"math"
@@ -1010,7 +1005,8 @@ async fn run_external_drivers(ctx: &TestContext) {
             			log.Fatalf("nested returned %+v", back)
             		}}
             	}}
-            	if _, err := target.Echo(ctx, length{{Mantissa: 1, Unit: "mi"}}); err == nil || !strings.Contains(err.Error(), "mi") {{
+            	var rejection *bridge.EncodeError
+            	if _, err := target.Echo(ctx, length{{Mantissa: 1, Unit: "mi"}}); !errors.As(err, &rejection) || !strings.Contains(err.Error(), `unit "mi"`) {{
             		log.Fatalf("disallowed unit: %v", err)
             	}}
             	fmt.Println("QUANTITY_E2E_OK")

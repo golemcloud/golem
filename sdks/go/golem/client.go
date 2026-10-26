@@ -97,9 +97,9 @@ func (a *AgentDefinition[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
 // which differ only in how the target was declared, never in how it is called.
 //
 // Misuse — an unknown name, an ephemeral target without a phantom, an override
-// that does not match the declared config — panics. What only the host can
-// check (the constructor parameters, whether the target is deployed) is
-// returned as an error.
+// that does not match the declared config — panics. An id that does not encode,
+// and what only the host can check (the constructor parameters, whether the
+// target is deployed), is returned as an error.
 func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) (Client[Id], error) {
 	e := d.agents[name]
 	if e == nil {
@@ -115,8 +115,10 @@ func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) (Cl
 		panic(err)
 	}
 
-	idVal := reflect.ValueOf(&id).Elem()
-	ctor := encodeParams(e.idFields, idVal)
+	ctor, err := tryEncodeParams(e.idFields, reflect.ValueOf(&id).Elem())
+	if err != nil {
+		return Client[Id]{}, fmt.Errorf("golem: Get %s: the id does not encode: %w", name, err)
+	}
 
 	// Encode and validate any config overrides against the target's declarations
 	// before touching the host, so a mistyped or undeclared key is a clear error.
@@ -225,7 +227,10 @@ func makeTypedAgentID[Id any](d *definitions, name string, id Id, phantom Option
 	if e == nil {
 		return "", fmt.Errorf("golem: unknown agent %s", name)
 	}
-	ctor := encodeParams(e.idFields, reflect.ValueOf(&id).Elem())
+	ctor, err := tryEncodeParams(e.idFields, reflect.ValueOf(&id).Elem())
+	if err != nil {
+		return "", fmt.Errorf("golem: %s: the id does not encode: %w", name, err)
+	}
 	p := witTypes.None[types.Uuid]()
 	if u, has := phantom.Get(); has {
 		p = witTypes.Some(uuidToWit(u))

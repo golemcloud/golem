@@ -31,6 +31,7 @@ use crate::bridge_gen::go::go::{
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
+use crate::bridge_gen::go::quantity::reaches_quantity;
 use crate::bridge_gen::go::type_ref;
 use crate::bridge_gen::go::{AgentNames, GoBridgeGenerator, content, method_uses_streams};
 use crate::bridge_gen::type_naming::user_supplied_fields;
@@ -746,10 +747,20 @@ impl GoBridgeGenerator {
             constructor, n.id, n.client
         ));
         w.indent();
+        let id_params = format!("encode{}(id)", n.id);
+        let id_params = if id_fields
+            .iter()
+            .any(|f| reaches_quantity(&self.agent_type.schema, &f.schema))
+        {
+            w.import(SCHEMA_PKG);
+            write_checked_encode(&id_params, Some(&format!("{}{{}}", n.client)), &mut w);
+            "params".to_string()
+        } else {
+            id_params
+        };
         w.line(format!(
-            "agent, err := bridge.NewAgent({}, encode{}(id), opts...)",
+            "agent, err := bridge.NewAgent({}, {id_params}, opts...)",
             go_string(agent_name),
-            n.id
         ));
         w.line(format!("return {}{{agent: agent}}, err", n.client));
         w.dedent();
@@ -799,6 +810,7 @@ impl GoBridgeGenerator {
             return Ok(());
         };
         self.write_config_struct(w)?;
+        w.import(SCHEMA_PKG);
 
         w.doc(&format!(
             "{option} applies the set fields of cfg as configuration overrides."
@@ -822,12 +834,16 @@ impl GoBridgeGenerator {
             w.indent();
             w.line("entries = append(entries, bridge.TypedConfigEntry{");
             w.indent();
-            w.line(format!("Path:  []string{{{path}}},"));
+            w.line(format!("Path: []string{{{path}}},"));
             w.line(format!(
-                "Type:  {},",
+                "Type: {},",
                 go_string(&serde_json::to_string(&graph)?)
             ));
-            w.line(format!("Value: {encode}(v),"));
+            w.line("Value: func() schema.SchemaValue {");
+            w.indent();
+            w.line(format!("return {encode}(v)"));
+            w.dedent();
+            w.line("},");
             w.dedent();
             w.line("})");
             w.dedent();
@@ -858,9 +874,15 @@ impl GoBridgeGenerator {
         }
         // Parameter names avoid the receiver, the other locals, the packages
         // and the codec functions the body refers to.
+        let checked = fields
+            .iter()
+            .any(|f| reaches_quantity(&self.agent_type.schema, &f.schema));
         let mut reserved = vec![
             "c", "ctx", "err", "when", "bridge", "schema", "context", "time",
         ];
+        if checked {
+            reserved.push("params");
+        }
         reserved.extend(encoders.iter().map(String::as_str));
         let decoder = match &method.output_schema {
             OutputSchema::Single(typ) => Some(codecs.func(Dir::Decode, typ)?),
@@ -893,13 +915,21 @@ impl GoBridgeGenerator {
             .zip(&encoders)
             .map(|(p, enc)| format!("{enc}({p})"))
             .collect::<Vec<_>>();
-        let params_value = if encoded.is_empty() {
+        let record = if encoded.is_empty() {
             "schema.RecordValue{}".to_string()
         } else {
             format!(
                 "schema.RecordValue{{Fields: []schema.SchemaValue{{{}}}}}",
                 encoded.join(", ")
             )
+        };
+        // A parameter list holding a quantity is encoded first, so a unit the
+        // callee does not accept is returned before anything is sent.
+        let params_value = if checked { "params" } else { record.as_str() };
+        let encode_params = |zero: Option<&str>, w: &mut GoWriter| {
+            if checked {
+                write_checked_encode(&record, zero, w);
+            }
         };
 
         // A method that takes or returns a stream runs over an invocation
@@ -919,6 +949,7 @@ impl GoBridgeGenerator {
                         signature.join(", ")
                     ));
                     w.indent();
+                    encode_params(None, w);
                     w.line(format!(
                         "return bridge.InvokeStreaming(ctx, c.agent, {method_name}, {params_value})"
                     ));
@@ -933,6 +964,7 @@ impl GoBridgeGenerator {
                         signature.join(", ")
                     ));
                     w.indent();
+                    encode_params(Some(&format!("*new({output})")), w);
                     w.line(format!(
                         "return bridge.CallStreaming(ctx, c.agent, {method_name}, {params_value}, {decode})"
                     ));
@@ -957,6 +989,7 @@ impl GoBridgeGenerator {
                     signature.join(", ")
                 ));
                 w.indent();
+                encode_params(Some("bridge.Receipt{}"), w);
                 w.line(format!(
                     "return bridge.InvokeForReceipt(ctx, c.agent, {method_name}, {params_value})"
                 ));
@@ -971,6 +1004,7 @@ impl GoBridgeGenerator {
                     signature.join(", ")
                 ));
                 w.indent();
+                encode_params(Some(&format!("bridge.InvocationResult[{output}]{{}}")), w);
                 w.line(format!(
                     "return bridge.CallWithID(ctx, c.agent, {method_name}, {params_value}, {decode})"
                 ));
@@ -983,8 +1017,10 @@ impl GoBridgeGenerator {
                     signature.join(", ")
                 ));
                 w.indent();
+                encode_params(None, w);
+                let assign = if checked { "=" } else { ":=" };
                 w.line(format!(
-                    "_, err := c.agent.Invoke(ctx, {method_name}, {params_value})"
+                    "_, err {assign} c.agent.Invoke(ctx, {method_name}, {params_value})"
                 ));
                 w.line("return err");
             }
@@ -998,6 +1034,7 @@ impl GoBridgeGenerator {
                     signature.join(", ")
                 ));
                 w.indent();
+                encode_params(Some(&format!("*new({output})")), w);
                 w.line(format!(
                     "return bridge.Call(ctx, c.agent, {method_name}, {params_value}, {decode})"
                 ));
@@ -1019,6 +1056,7 @@ impl GoBridgeGenerator {
             signature.join(", ")
         ));
         w.indent();
+        encode_params(Some("bridge.Receipt{}"), w);
         w.line(format!(
             "return c.agent.Trigger(ctx, {method_name}, {params_value})"
         ));
@@ -1041,6 +1079,7 @@ impl GoBridgeGenerator {
             schedule_signature.join(", ")
         ));
         w.indent();
+        encode_params(Some("bridge.Receipt{}"), w);
         w.line(format!(
             "return c.agent.ScheduleAt(ctx, {method_name}, {params_value}, when)"
         ));
@@ -1049,6 +1088,24 @@ impl GoBridgeGenerator {
         w.blank();
         Ok(())
     }
+}
+
+/// Encodes `value` into `params` through `bridge.Encode`, returning the
+/// encode error with `zero` (or alone, when `zero` is `None`).
+fn write_checked_encode(value: &str, zero: Option<&str>, w: &mut GoWriter) {
+    w.line("params, err := bridge.Encode(func() schema.SchemaValue {");
+    w.indent();
+    w.line(format!("return {value}"));
+    w.dedent();
+    w.line("})");
+    w.line("if err != nil {");
+    w.indent();
+    w.line(match zero {
+        Some(zero) => format!("return {zero}, err"),
+        None => "return err".to_string(),
+    });
+    w.dedent();
+    w.line("}");
 }
 
 /// The option overriding configuration, as named in a constructor's doc.

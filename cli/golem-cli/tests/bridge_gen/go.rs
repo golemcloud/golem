@@ -924,14 +924,22 @@ fn quantity_agent() -> AgentTypeSchema {
     agent(
         "ScaleAgent",
         "rust",
-        vec![field("name", SchemaType::string())],
+        vec![
+            field("name", SchemaType::string()),
+            field("limit", kilograms.clone()),
+        ],
         vec![
             method(
                 "weigh",
                 vec![field("load", kilograms.clone())],
                 Some(kilograms),
             ),
-            method("measure", vec![], Some(SchemaType::list(lengths))),
+            method("measure", vec![], Some(SchemaType::list(lengths.clone()))),
+            method(
+                "record",
+                vec![field("legs", SchemaType::list(lengths))],
+                None,
+            ),
         ],
         vec![],
         AgentMode::Durable,
@@ -967,7 +975,13 @@ fn go_clients_spell_quantities_with_unit_markers(env: &GoEnv) {
             r#"package {package}
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/golemcloud/golem/sdks/go/bridge"
 	"github.com/golemcloud/golem/sdks/go/core/schema"
@@ -986,6 +1000,38 @@ func TestQuantitiesTravelInTheirUnit(t *testing.T) {{
 	if _, err := bridge.DecodeQuantity[UnitKg](schema.QuantityValueNode{{Value: schema.QuantityValue{{Unit: "lb"}}}}); err == nil {{
 		t.Fatal("a quantity in a unit it does not accept was decoded")
 	}}
+}}
+
+func TestAUnitTheCalleeDoesNotAcceptIsRefusedBeforeSending(t *testing.T) {{
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {{
+		t.Error("a value its schema refuses reached the server")
+	}}))
+	defer server.Close()
+	configuration := bridge.WithConfiguration(bridge.Configuration{{
+		Server: bridge.Custom(server.URL, "token"), AppName: "app", EnvName: "env",
+	}})
+	refused := func(what string, err error) {{
+		t.Helper()
+		var ee *bridge.EncodeError
+		if !errors.As(err, &ee) || !strings.Contains(err.Error(), `unit "`) {{
+			t.Fatalf("%s: got %v, want a *bridge.EncodeError", what, err)
+		}}
+	}}
+	_, err := GetScaleAgent(ScaleAgentID{{Name: "s", Limit: values.Quantity[UnitKg]{{Mantissa: 1, Unit: "lb"}}}}, configuration)
+	refused("id", err)
+	client, err := GetScaleAgent(ScaleAgentID{{Name: "s", Limit: values.Quantity[UnitKg]{{Mantissa: 1}}}}, configuration)
+	if err != nil {{
+		t.Fatal(err)
+	}}
+	ctx := context.Background()
+	pound := values.Quantity[UnitKg]{{Mantissa: 1, Unit: "lb"}}
+	_, err = client.Weigh(ctx, pound)
+	refused("call", err)
+	_, err = client.TriggerWeigh(ctx, pound)
+	refused("trigger", err)
+	_, err = client.ScheduleWeigh(ctx, time.Now(), pound)
+	refused("schedule", err)
+	refused("nested", client.Record(ctx, []values.Quantity[UnitM]{{{{Mantissa: 1, Unit: "km"}}, {{Mantissa: 1, Unit: "mi"}}}}))
 }}
 "#
         ),

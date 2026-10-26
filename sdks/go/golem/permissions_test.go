@@ -608,7 +608,7 @@ func TestAFailedEncodeGivesTheMovedCardsBack(t *testing.T) {
 	first, second := f.card(1, 1), f.card(2, 2)
 	second.Release()
 	m := MethodDef[scopeTestID, scopeCallIn, Unit]{name: "m"}
-	if _, err := m.encodeInput(scopeCallIn{First: first, Second: second}); err == nil || !strings.Contains(err.Error(), ErrPermissionCardMoved.Error()) {
+	if _, err := m.encodeInput("target", scopeCallIn{First: first, Second: second}); err == nil || !strings.Contains(err.Error(), ErrPermissionCardMoved.Error()) {
 		t.Fatalf("encoding a moved card gave %v", err)
 	}
 	if first.st.h == nil {

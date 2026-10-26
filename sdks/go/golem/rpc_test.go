@@ -54,7 +54,7 @@ func TestCallerEncodingMatchesCalleeDecoding(t *testing.T) {
 	note := "tip"
 	in := tChargeIn{AmountCents: 1250, Note: &note}
 
-	tree, err := tCharge.encodeInput(in)
+	tree, err := tCharge.encodeInput("target", in)
 	if err != nil {
 		t.Fatalf("encodeInput: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestCallerEncodingMatchesCalleeDecoding(t *testing.T) {
 
 // TestCallArgumentsAgreeWithThePublishedSchema — The encoded argument list must agree with the schema the callee publishes.
 func TestCallArgumentsAgreeWithThePublishedSchema(t *testing.T) {
-	tree, err := tCharge.encodeInput(tChargeIn{AmountCents: 7})
+	tree, err := tCharge.encodeInput("target", tChargeIn{AmountCents: 7})
 	if err != nil {
 		t.Fatalf("encodeInput: %v", err)
 	}
@@ -100,6 +100,45 @@ func TestCallArgumentsAgreeWithThePublishedSchema(t *testing.T) {
 	// Each argument must match its declared parameter type.
 	for i, p := range params {
 		checkAgreement2(t, at.Schema, p.Schema, tree, idxs[i], p.Name)
+	}
+}
+
+type tScaleID struct{ Name string }
+type tScaleState struct{}
+type tWeighIn struct{ Load Quantity[Weight] }
+
+var tScale = DefineAgent[tScaleID](Spec{Name: "TestScale", Mode: Durable})
+
+var tWeigh = tScale.Method[tWeighIn, Unit]("weigh")
+
+func init() {
+	s := tScale.Implement(func(tScaleID) *tScaleState { return &tScaleState{} })
+	s.Handle(tWeigh, func(*Context[tScaleState], tWeighIn) Unit { return Unit{} })
+}
+
+// An input the callee's schema does not accept is a protocol error of the call,
+// returned before anything is sent, not a panic that traps the caller.
+func TestAnInputThatDoesNotEncodeIsARemoteProtocolError(t *testing.T) {
+	_, err := tWeigh.encodeInput("scale-1", tWeighIn{Load: Quantity[Weight]{Mantissa: 1, Unit: "lb"}})
+	var rce *RemoteCallError
+	if !errors.As(err, &rce) {
+		t.Fatalf("got %v, want a *RemoteCallError", err)
+	}
+	if rce.Kind != RemoteProtocolError || rce.Target != "scale-1" || rce.Method != "weigh" || !strings.Contains(rce.Message, `unit "lb"`) {
+		t.Fatalf("got %+v", rce)
+	}
+	if _, err := tWeigh.encodeInput("scale-1", tWeighIn{Load: Quantity[Weight]{Mantissa: 1, Unit: "g"}}); err != nil {
+		t.Fatalf("an allowed unit was refused: %v", err)
+	}
+}
+
+// An id the target's constructor does not accept is an error, not a panic.
+func TestAnIdThatDoesNotEncodeIsAnError(t *testing.T) {
+	type scaleID struct{ Load Quantity[Weight] }
+	fields := defs.StructFields(reflect.TypeFor[scaleID]())
+	id := scaleID{Load: Quantity[Weight]{Mantissa: 1, Unit: "lb"}}
+	if _, err := tryEncodeParams(fields, reflect.ValueOf(&id).Elem()); err == nil || !strings.Contains(err.Error(), `unit "lb"`) {
+		t.Fatalf("got %v", err)
 	}
 }
 
