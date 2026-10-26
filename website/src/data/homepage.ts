@@ -184,7 +184,7 @@ export const agentsChapter = {
   items: [
     {
       id: "overview",
-      title: "Same guarantees and building blocks in six SDKs",
+      title: "Whole-VM recovery in all six SDKs",
       body: "After a crash or suspension, the whole VM resumes mid\u2011function: memory, call stack and file system restored.",
     },
     {
@@ -227,7 +227,7 @@ export const toolsChapter = {
   items: [
     {
       id: "overview",
-      title: "Overview",
+      title: "A fresh VM per call, results recorded",
       body: "Each call's fresh VM can't read agent memory. Recovery reuses recorded results rather than repeating those calls.",
     },
     {
@@ -270,7 +270,7 @@ export const artifactsChapter = {
   items: [
     {
       id: "overview",
-      title: "Overview",
+      title: "Charts served from the agent's files",
       body: "Asked for a sales graph, the agent writes a PNG and HTML page to its files. Golem serves both only when fully written.",
     },
     {
@@ -443,6 +443,11 @@ export const faq = {
       q: "How does it compare with a workflow engine?",
       aHtml:
         "Workflow engines usually ask you to split work into activities they record. In Golem, ordinary code is durable as it runs, with no restructuring, and each agent also gets its own VM, with a durable file system, and runtime-checked permissions.",
+    },
+    {
+      q: "What runs exactly once?",
+      aHtml:
+        "Calls between agents and from agents to tools run exactly once. All agent and tool code takes effect once, file-system changes included. Database transactions through Golem's SDK never apply twice: an interrupted commit is checked against the database, not repeated. An HTTP request cut off by a crash or rescaling is resent with the same idempotency key, so it acts exactly once where the API honors the key, as Stripe does, and at least once otherwise. Database writes outside a transaction are resent the same way.",
     },
     {
       q: "Does showing an artifact need a build or deploy step?",
