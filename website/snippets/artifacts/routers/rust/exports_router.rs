@@ -1,6 +1,6 @@
 struct ExportsRouter;
 // asked to export results as CSV, the agent replies with a link:
-// the link is /exports/<chat>/<random id>.csv, for that user only:
+// the router sets the status, content type and download headers:
 #[http_router(name = "ExportsRouter", mount = "/exports")]
 impl HttpRouter for ExportsRouter {
   type Config = ();

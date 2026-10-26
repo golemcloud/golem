@@ -1,5 +1,5 @@
 #[agent_definition(mount = "/chats/{chat}",
-  // Golem serves files this agent writes, never half-written:
+  // Golem serves this agent's files only when complete:
   filesystem_bindings = [("/*", "/out/$1")])] //@
 pub trait AnalystAgent {
   fn new(chat: String) -> Self;

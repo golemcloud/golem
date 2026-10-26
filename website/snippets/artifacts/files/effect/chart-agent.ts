@@ -10,7 +10,7 @@ export const Charts = defineAgent({
       // over MCP, a chat assistant calls this when a user asks:
       description: "Draw a sales chart for one quarter",
       input: { quarter: Schema.String },
-      // the reply is the PNG itself, over HTTP or MCP:
+      // the reply is the PNG and its MIME type, over HTTP or MCP:
       success: Png, //@
       http: [Http.get("/chart.png?quarter={quarter}")],
     }),

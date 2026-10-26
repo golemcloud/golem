@@ -6,7 +6,7 @@ trait ChartAgent extends BaseAgent:
   // over MCP, a chat assistant calls this when a user asks:
   @description("Draw a sales chart for one quarter")
   @endpoint("GET", "/chart.png?quarter={quarter}")
-  // the reply is the PNG itself, over HTTP or MCP:
+  // the reply is the PNG and its MIME type, over HTTP or MCP:
   def chart(quarter: String): Future[Png] //@
 
 @agentImplementation()

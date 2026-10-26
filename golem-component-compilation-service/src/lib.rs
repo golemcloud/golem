@@ -20,11 +20,11 @@ use futures::TryFutureExt;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::compiled_component;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::tls::server::GrpcServerTls;
 use grpc::CompileGrpcService;
 use prometheus::Registry;
 use service::ComponentCompilationService;
@@ -142,11 +142,8 @@ async fn start_grpc_server(
         .await;
 
     join_set.spawn({
-        let mut server = tonic::transport::Server::builder();
-
-        if let GrpcServerTlsConfig::Enabled(tls) = &config.tls {
-            server = server.tls_config(tls.to_tonic())?;
-        };
+        let tls = GrpcServerTls::from_config(&config.tls, "grpc server")?;
+        let server = tonic::transport::Server::builder();
 
         server
             .layer(middleware::server::OtelGrpcLayer::default().filter(filters::reject_healthcheck))
@@ -159,7 +156,10 @@ async fn start_grpc_server(
                 .send_compressed(CompressionEncoding::Gzip)
                 .accept_compressed(CompressionEncoding::Gzip),
             )
-            .serve_with_incoming(TcpListenerStream::new(listener))
+            .serve_with_incoming(GrpcServerTls::incoming(
+                tls.as_ref(),
+                TcpListenerStream::new(listener),
+            ))
             .map_err(anyhow::Error::from)
             .in_current_span()
     });

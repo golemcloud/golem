@@ -1081,9 +1081,12 @@ async fn a_redirect_over_tls_checks_the_leader_against_the_configured_host() {
                 max_jitter_factor: None,
             },
             tls: GrpcClientTlsConfig::Enabled(EnabledGrpcClientTlsConfig {
-                client_cert: Base64(pki.client_pem.clone().into_bytes()),
-                client_key: Base64(pki.client_key_pem.clone().into_bytes()),
-                server_ca_cert: Base64(pki.ca_pem.clone().into_bytes()),
+                client_cert: Some(Base64(pki.client_pem.clone().into_bytes())),
+                client_cert_file: None,
+                client_key: Some(Base64(pki.client_key_pem.clone().into_bytes())),
+                client_key_file: None,
+                server_ca_cert: Some(Base64(pki.ca_pem.clone().into_bytes())),
+                server_ca_cert_file: None,
                 server_domain_name: None,
             }),
             ..GrpcClientConfig::default()
