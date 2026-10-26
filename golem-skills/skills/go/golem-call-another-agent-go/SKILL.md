@@ -60,7 +60,7 @@ total := ledger.Record.MustCall(c, ledger.RecordIn{Amount: 10}).MustOk()
 
 ## Handling a failed call
 
-`Call` returns `(Out, error)`. The error is a `*golem.RemoteCallError` when the callee failed, could not be reached after the runtime's retries, or returned a value that does not decode as `Out`. Its `Kind` classifies the failure, and a remote custom error stays reachable through `errors.As`:
+`Call` returns `(Out, error)`. The error is a `*golem.RemoteCallError` when the callee failed, could not be reached after the runtime's retries, or returned a value that does not decode as `Out`, and when the input does not encode as the callee's parameters (a `golem.RemoteProtocolError`, returned before anything is sent). Its `Kind` classifies the failure, and a remote custom error stays reachable through `errors.As`:
 
 ```go
 total, err := ledger.Record.Call(c, ledger.RecordIn{Amount: 10})

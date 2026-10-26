@@ -22,6 +22,7 @@
 use crate::bridge_gen::go::go::{go_string, to_exported_ident, unique_idents_with_reserved};
 use crate::bridge_gen::go::go_writer::GoWriter;
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::graph::{SchemaGraph, reachable_defs};
 use golem_common::schema::schema_type::{QuantitySpec, SchemaType};
 
 pub(super) struct QuantityUnits {
@@ -123,6 +124,17 @@ impl QuantityUnits {
             w.blank();
         }
     }
+}
+
+/// True when a value of `typ` holds a quantity, whose unit the encoder checks
+/// against the schema: encoding it can fail.
+pub(super) fn reaches_quantity(graph: &SchemaGraph, typ: &SchemaType) -> bool {
+    let mut specs = Vec::new();
+    collect_specs(typ, &mut specs);
+    for def in reachable_defs(graph, typ) {
+        collect_specs(&def.body, &mut specs);
+    }
+    !specs.is_empty()
 }
 
 fn collect_specs(typ: &SchemaType, specs: &mut Vec<(String, Vec<String>)>) {
