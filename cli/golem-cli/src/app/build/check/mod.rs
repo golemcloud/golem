@@ -292,7 +292,7 @@ fn check_go_toolchain_version(
     };
 
     let output_text = String::from_utf8_lossy(&output.stdout).to_string();
-    let version = extract_tool_version(output_text.as_str()).ok_or_else(|| {
+    let version = extract_version_or_quoted_major(output_text.as_str()).ok_or_else(|| {
         anyhow!(
             "{} version could not be detected from output\nHint: {}",
             requirement.name.log_color_error_highlight(),
@@ -354,7 +354,7 @@ fn check_command_version(
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let version = extract_tool_version(output_text.as_str()).ok_or_else(|| {
+        let version = extract_version_or_quoted_major(output_text.as_str()).ok_or_else(|| {
             anyhow!(
                 "{} version could not be detected from output\nHint: {}",
                 requirement.name.log_color_error_highlight(),
@@ -488,9 +488,10 @@ fn extract_version(output: &str) -> Option<String> {
         .map(|matched| matched.as_str().to_string())
 }
 
-/// Extracts the version from a tool's `--version` output. Besides `major.minor[.patch]`,
-/// it accepts a quoted bare major version, which current JDKs print (`openjdk version "27"`).
-fn extract_tool_version(output: &str) -> Option<String> {
+/// Like [`extract_version`], but also accepts a quoted bare major version, which current
+/// JDKs print (`openjdk version "27"`). Used for tool `--version` output; dependency spec
+/// checks keep the stricter [`extract_version`].
+fn extract_version_or_quoted_major(output: &str) -> Option<String> {
     extract_version(output).or_else(|| {
         let regex = Regex::new(r#""([0-9]+)""#).ok()?;
         regex
@@ -737,7 +738,7 @@ fn expected_dependency_value(expected: &ExpectedDependencyKind) -> String {
 mod test {
     use super::{
         DependencyMatcherSemantics, DependencySpecCompliance, ExpectedDependencyKind,
-        evaluate_dependency_spec_compliance, extract_tool_version,
+        evaluate_dependency_spec_compliance, extract_version_or_quoted_major,
         verify_semantic_version_compatibility, verify_version_range,
     };
     use crate::app::build::check::requirements::VersionRange;
@@ -746,7 +747,7 @@ mod test {
     use test_r::test;
 
     #[test]
-    fn tool_version_is_extracted_from_version_outputs() {
+    fn version_or_quoted_major_is_extracted_from_version_outputs() {
         for (output, expected) in [
             (
                 "openjdk version \"27\" 2026-09-15\nOpenJDK Runtime Environment Homebrew (build 27)",
@@ -760,12 +761,12 @@ mod test {
             ("go version go1.25.1 linux/amd64", "1.25.1"),
         ] {
             assert_eq!(
-                extract_tool_version(output).as_deref(),
+                extract_version_or_quoted_major(output).as_deref(),
                 Some(expected),
                 "{output}"
             );
         }
-        assert_eq!(extract_tool_version("no version here"), None);
+        assert_eq!(extract_version_or_quoted_major("no version here"), None);
         verify_version_range("Java", "27", VersionRange::at_least("17")).unwrap();
         assert!(verify_version_range("Java", "11", VersionRange::at_least("17")).is_err());
     }
