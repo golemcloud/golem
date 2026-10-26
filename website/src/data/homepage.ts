@@ -9,7 +9,7 @@
 export const meta = {
   title: "Golem: the durable runtime for AI agents",
   description:
-    "Golem runs AI agents and their tools, and serves their artifacts to users. After a crash, restart, rescaling or long wait, each agent's whole VM resumes mid\u2011function with its memory and files. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Golem runs AI agents and their tools, and serves their artifacts to users. Each agent runs in a lightweight WebAssembly VM. After a crash, node restart, rescaling or long wait, the whole VM resumes mid\u2011function with its memory and files. Tool calls run exactly once, under permissions agents can't bypass.",
 };
 
 // =============================================================================
@@ -26,7 +26,7 @@ export const hero = {
   },
   heading: "The durable runtime for AI agents",
   subhead:
-    "Golem runs AI agents and their tools, and serves their artifacts to users. After a crash, restart, rescaling or long wait, each agent's whole VM resumes mid\u2011function with its memory and files. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Golem runs AI agents and their tools, and serves their artifacts to users. Each agent runs in a lightweight WebAssembly VM. After a crash, node restart, rescaling or long wait, the whole VM resumes mid\u2011function with its memory and files. Tool calls run exactly once, under permissions agents can't bypass.",
   ctas: {
     primary: { label: "Start building →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
