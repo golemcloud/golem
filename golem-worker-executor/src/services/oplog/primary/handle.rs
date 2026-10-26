@@ -33,6 +33,7 @@ impl PrimaryOplog {
         replicas: u8,
         max_operations_before_commit: u64,
         max_payload_size: usize,
+        max_retained_auto_commit_batches: usize,
         retry_config: RetryConfig,
         namespace: IndexedStorageNamespace,
         key: String,
@@ -50,6 +51,7 @@ impl PrimaryOplog {
             Some(fence) => std::sync::OnceLock::from(fence),
             None => std::sync::OnceLock::new(),
         });
+        let auto_commit_listener = AutoCommitListener::default();
         let mut state = PrimaryOplogState {
             shard_epoch,
             fence: fence.clone(),
@@ -58,12 +60,15 @@ impl PrimaryOplog {
             replicas,
             max_operations_before_commit,
             max_payload_size,
+            max_retained_auto_commit_batches,
             retry_config,
             namespace,
             key: key.clone(),
             buffer: VecDeque::new(),
             last_committed_idx: last_oplog_idx,
             last_reported_commit_idx: last_oplog_idx,
+            retained_auto_commits: VecDeque::new(),
+            auto_commit_listener: auto_commit_listener.clone(),
             last_oplog_idx,
             owned_agent_id,
             agent_mode,
@@ -244,7 +249,11 @@ impl PrimaryOplog {
                     }
                     OplogJob::Commit { level, done } => {
                         let previously_committed_through = state.last_committed_idx;
-                        let result = match state.commit(level).await {
+                        let committed = match level {
+                            CommitLevel::ReportOnly => Ok(BTreeMap::new()),
+                            level => state.commit(level).await,
+                        };
+                        let result = match committed {
                             Ok(committed) => Ok(state
                                 .committed_since_last_report(
                                     previously_committed_through,
@@ -261,8 +270,8 @@ impl PrimaryOplog {
                         // reported as not durable rather than lost; every subsequent write fails on
                         // it without asking the storage again. A transient storage failure is fatal
                         // here as everywhere else.
-                        match state.commit(CommitLevel::Always).await {
-                            Ok(_) | Err(OplogError::Fenced(_)) => {}
+                        match state.auto_commit().await {
+                            Ok(()) | Err(OplogError::Fenced(_)) => {}
                             Err(error) => panic!("oplog write: {error}"),
                         }
                         let _ = done.send(());
@@ -374,6 +383,7 @@ impl PrimaryOplog {
             max_payload_size,
             fence,
             stream_session_index,
+            auto_commit_listener,
             close: Mutex::new(Some(close)),
         }
     }
@@ -507,6 +517,10 @@ impl Oplog for PrimaryOplog {
         level: CommitLevel,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         self.run_job(|done| OplogJob::Commit { level, done }).await
+    }
+
+    fn set_auto_commit_listener(&self, listener: Weak<crate::services::oplog::AutoCommitCallback>) {
+        self.auto_commit_listener.set(listener);
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {

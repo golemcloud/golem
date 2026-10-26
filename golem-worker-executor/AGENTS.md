@@ -19,7 +19,7 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
    subscriptions may vanish at any instruction boundary. Suspend, evict, reshard, restart and
    crash all reconstruct the instance from the oplog through the same path
    (`src/worker/invocation_loop/mod.rs::run` → `src/durable_host/recovery.rs::prepare_instance` →
-   `resume_replay`). Do not design feature-specific "safe to unload" gates; make every pending
+   `replay`). Do not design feature-specific "safe to unload" gates; make every pending
    obligation durable or deterministically recomputable instead.
 3. **Durable agent RPC is exactly-once per logical target invocation.** Caller attempts (replay,
    transport retry, individual call repair) share one idempotency key derived from the caller's

@@ -2,7 +2,7 @@ export const Analyst = defineAgent({
   name: 'AnalystAgent',
   id: { chat: z.string() },
   http: http.mount('/chats/{chat}', {
-    // Golem serves this agent's files only when complete:
+    // Golem serves this agent's files only when fully written:
     exposeFiles: [{ route: '/*', path: '/out/$1' }], //@
   }),
   methods: { ask: method({ input: { question: z.string() },

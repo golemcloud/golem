@@ -19,8 +19,8 @@ use super::*;
 use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessPermissionCheck, CallSpanObserver, Cancellable,
-    DeferredCallReplayOutcome, DropPolicy, DurableCallSession, finish_span_in_memory,
-    reserve_access_invocation_id,
+    DeferredCallReplayOutcome, DropPolicy, DurableCallSession, access_invocation_id,
+    finish_span_in_memory,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
@@ -103,8 +103,8 @@ where
     P: DropPolicy,
 {
     // The body transmission recorded after the send carries the same invocation id.
-    let invocation_id = reserve_access_invocation_id(store, durable_worker_ctx::<Ctx, U>)
-        .map_err(HttpError::trap)?;
+    let invocation_id =
+        access_invocation_id(store, durable_worker_ctx::<Ctx, U>).map_err(HttpError::trap)?;
 
     // Detach the request's body-transmission wiring (installed by the durable
     // `request::new`) *before* anything else: the inner `WasiHttp::send` deletes

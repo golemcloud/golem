@@ -745,8 +745,12 @@ impl Oplog for InMemoryOplog {
 
     async fn commit(
         &self,
-        _level: CommitLevel,
+        level: CommitLevel,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
+        // This oplog never commits by itself, so there is nothing to report.
+        if level == CommitLevel::ReportOnly {
+            return Ok(BTreeMap::new());
+        }
         if let Some(fence) = self.latched_fence.get() {
             return Err(OplogError::Fenced(fence.clone()));
         }
@@ -1415,6 +1419,29 @@ async fn test_forwarding_oplog(
     )
     .await;
     (oplog, inner, recording_plugin, status_writer)
+}
+
+/// A report commits nothing, so it must not start the plugin flush either: that flush commits the
+/// buffered entries of the worker. A commit count of zero puts every commit over the limit, as a
+/// flush that skipped its reset leaves it.
+#[test]
+async fn report_only_commit_does_not_start_a_plugin_flush() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let (oplog, inner, recording_plugin, _status_writer) =
+        test_forwarding_oplog(HashSet::from([grant_id]), grant_id, 0).await;
+
+    let index = oplog.add(grow_memory(1)).await.unwrap();
+    assert!(
+        oplog
+            .commit(CommitLevel::ReportOnly)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(recording_plugin.sends().await.is_empty());
+
+    let committed = inner.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(committed.keys().copied().collect::<Vec<_>>(), vec![index]);
 }
 
 #[test]

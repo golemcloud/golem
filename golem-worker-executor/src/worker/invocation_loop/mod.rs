@@ -185,9 +185,6 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub(super) last_periodic_attempt: Option<Timestamp>,
     pub(super) unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
     pub idle_since_millis: Arc<AtomicU64>,
-    /// `ResumeReplay` is not represented in the internal queue, so we track it
-    /// explicitly to avoid evicting a worker that is blocked waking up for it.
-    pub resume_replay_pending: Arc<AtomicBool>,
     pub start_attempt: Uuid,
     /// What this worker's phase spans link back to, and the fields they carry.
     pub worker_trace: WorkerTrace,
@@ -303,7 +300,6 @@ struct PendingFilesystemLimitUpdate {
 
 #[derive(Default)]
 struct DelayedRetryCommands {
-    resume_replay: bool,
     filesystem_limit_updates: Vec<Sender<Result<(), WorkerExecutorError>>>,
 }
 
@@ -470,7 +466,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             }
                             match command {
                                 WorkerCommand::InternalStatusChanged => {}
-                                WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay => {
+                                WorkerCommand::WorkAvailable => {
                                     Self::defer_wakeup(&mut deferred_wakeups, command);
                                 }
                                 WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
@@ -578,7 +574,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     continue 'outer;
                                 }
                                 match command {
-                                    WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay => {
+                                    WorkerCommand::WorkAvailable => {
                                         Self::defer_wakeup(&mut deferred_wakeups, command);
                                     }
                                     WorkerCommand::InternalStatusChanged => {}
@@ -645,7 +641,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         filesystem_turn_used: false,
                         permit_state: &mut self.permit_state,
                         idle_since_millis: self.idle_since_millis.clone(),
-                        resume_replay_pending: self.resume_replay_pending.clone(),
                         worker_trace: self.worker_trace.clone(),
                         deferred_wakeups: &mut deferred_wakeups,
                     };
@@ -966,12 +961,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             if let Some(commands) = delayed_retry_commands {
-                apply_delayed_retry_commands_after_unload::<Ctx>(
-                    commands,
-                    &mut final_decision,
-                    recovery_failure.is_some(),
-                    &mut deferred_wakeups,
-                );
+                apply_delayed_retry_commands_after_unload(commands);
             }
 
             if self.parent.monthly_policy_is_unavailable() {
@@ -1149,14 +1139,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         }
                                         debug!(%agent_id, "Invocation queue loop retained work during infrastructure recovery backoff");
                                     }
-                                    command @ WorkerCommand::ResumeReplay => {
-                                        Self::defer_wakeup(&mut deferred_wakeups, command);
-                                        if recovery_failure.is_none() {
-                                            debug!(%agent_id, "Invocation queue loop woke up for resume replay during delayed retry");
-                                            continue 'outer;
-                                        }
-                                        debug!(%agent_id, "Invocation queue loop retained replay request during infrastructure recovery backoff");
-                                    }
                                     WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
                                         let _ = sender.send(Ok(()));
                                     }
@@ -1232,7 +1214,6 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     permit_state:
         &'a mut ConcurrentAgentPermitState<crate::services::active_agents::ConcurrentAgentPermit>,
     idle_since_millis: Arc<AtomicU64>,
-    resume_replay_pending: Arc<AtomicBool>,
     deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
     /// What this worker's phase spans link back to, and the fields they carry.
     worker_trace: WorkerTrace,

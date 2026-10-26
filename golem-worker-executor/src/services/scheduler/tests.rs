@@ -826,6 +826,7 @@ async fn create_oplog_service_mock() -> Arc<dyn OplogService> {
             1,
             1,
             1024,
+            32,
             golem_common::model::RetryConfig::default(),
         )
         .await,
@@ -1570,6 +1571,7 @@ async fn failed_archive_existence_check_is_not_acknowledged() {
             1,
             1,
             1024,
+            32,
             RetryConfig {
                 max_attempts: 1,
                 min_delay: Duration::ZERO,

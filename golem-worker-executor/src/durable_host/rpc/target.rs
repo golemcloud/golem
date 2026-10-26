@@ -15,10 +15,11 @@
 use super::{
     OutboundRpcDenial, RpcTargetActivation, RpcTargetAdmission, WasmRpcEntry, WasmRpcEntryPayload,
     WasmRpcTargetActivation, classified_host_error, classify_rpc_error,
-    create_embedded_invocation_span, install_embedded_span, restore_embedded_span,
+    embedded_invocation_span_builder, install_embedded_span, restore_embedded_span,
 };
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::IdempotencyKeyPosition;
 use crate::durable_host::authorization::targets::agent_method_target;
 use crate::durable_host::concurrent::CallReplayOutcome;
 use crate::durable_host::concurrent::DurableCallSession;
@@ -124,6 +125,44 @@ pub(super) fn invocation_target_agent_id(
         logical_remote_agent_id.environment_id,
         &invocation_agent_id,
     ))
+}
+
+/// The idempotency key inputs and the logical target of one durable RPC. Once the call's `Start`
+/// index is known, [`Self::at`] gives its idempotency key and the agent it dispatches to. A live
+/// call uses it in the `Start` writer step; replay and repair use it with the recorded index.
+#[derive(Clone)]
+pub(super) struct RpcCallTarget {
+    key_position: IdempotencyKeyPosition,
+    logical_remote_agent_id: OwnedAgentId,
+    ephemeral_logical_agent_id: Option<ParsedAgentId>,
+}
+
+impl RpcCallTarget {
+    pub(super) fn new(
+        key_position: IdempotencyKeyPosition,
+        logical_remote_agent_id: &OwnedAgentId,
+        ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+    ) -> Self {
+        Self {
+            key_position,
+            logical_remote_agent_id: logical_remote_agent_id.clone(),
+            ephemeral_logical_agent_id: ephemeral_logical_agent_id.cloned(),
+        }
+    }
+
+    pub(super) fn at(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<(IdempotencyKey, OwnedAgentId), WorkerExecutorError> {
+        let idempotency_key = self.key_position.derive(start_index);
+        let remote_agent_id = invocation_target_agent_id(
+            &self.logical_remote_agent_id,
+            self.ephemeral_logical_agent_id.as_ref(),
+            &idempotency_key,
+        )
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        Ok((idempotency_key, remote_agent_id))
+    }
 }
 
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
@@ -445,7 +484,6 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
         DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::begin(ctx, function_type.clone())
             .await?
     };
-    let begin_index = begun.begin_index();
     match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
             let attributes = HashMap::from([
@@ -473,7 +511,6 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
             match begun.start_live_with_span(ctx, request, started).await {
                 Ok(handle) => Ok((handle, span)),
                 Err(error) => {
-                    ctx.end_function(&function_type, begin_index).await?;
                     finish_span_in_memory(ctx, span.span_id())?;
                     Err(error)
                 }
@@ -598,10 +635,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 DurableFunctionType::WriteRemote,
             )
             .await?;
-        let begin_index = begun.begin_index();
         let mut handle;
         let decision;
         let mut rejection_span = None;
+        let key_position = begun.idempotency_key_position(self);
 
         match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
@@ -620,25 +657,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?
                         .span_id
                         .clone();
-                    let idempotency_key = self.derive_idempotency_key(begin_index);
-                    let (span, started) = create_embedded_invocation_span(
-                        self,
-                        &connection_span_id,
-                        method_name,
-                        &idempotency_key,
-                    )?;
-                    rejection_span = Some((span, idempotency_key));
+                    let span_started =
+                        embedded_invocation_span_builder(self, &connection_span_id, method_name)?;
+                    let request = HostRequestGolemRpcActivate {
+                        remote_agent_id: remote_agent_id.agent_id(),
+                        method_name: method_name.to_string(),
+                        decision: decision.clone(),
+                    };
+                    let request_key_position = key_position.clone();
                     handle = begun
-                        .start_live_with_span(
-                            self,
-                            HostRequestGolemRpcActivate {
-                                remote_agent_id: remote_agent_id.agent_id(),
-                                method_name: method_name.to_string(),
-                                decision: decision.clone(),
-                            },
-                            started,
-                        )
+                        .start_live_with_index_and_span(self, move |start_index| {
+                            let started = span_started(&request_key_position.derive(start_index));
+                            Ok((request, started))
+                        })
                         .await?;
+                    let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
+                        WorkerExecutorError::runtime("denied RPC activation Start has no span")
+                    })?;
+                    rejection_span = Some((
+                        restore_embedded_span(self, &started)?,
+                        key_position.derive(handle.start_index()),
+                    ));
                 } else {
                     handle = begun
                         .start_live(
@@ -652,41 +691,49 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await?;
                 }
             }
-            ResolvedCall::Replay(replay) => match replay.replay(self).await? {
-                CallReplayOutcome::Replayed(response) => {
-                    return match response.result {
-                        Ok(target_fingerprint) => {
-                            set_rpc_target_replay_pending(self, rpc_resource, target_fingerprint)?;
-                            Ok(Ok(RpcTargetAdmission::Recorded))
-                        }
-                        Err(error) => Ok(Err(OutboundRpcDenial {
-                            error: InternalRpcError::from(error).into(),
-                            activation_decision: Some(self.derive_idempotency_key(begin_index)),
-                        })),
-                    };
-                }
-                CallReplayOutcome::Incomplete(live) => {
-                    let recorded = self
-                        .load_recorded_rpc_activation_request(live.start_index())
-                        .await?;
-                    decision = recorded.decision;
-                    if decision.is_err() {
-                        let started = live.recorded_span_started(self).await?.ok_or_else(|| {
-                            WorkerExecutorError::unexpected_oplog_entry(
-                                "denied RPC activation Start carrying span_started",
-                                format!(
-                                    "activation Start at {} without span metadata",
-                                    live.start_index()
-                                ),
-                            )
-                        })?;
-                        let idempotency_key = self.derive_idempotency_key(begin_index);
-                        rejection_span =
-                            Some((restore_embedded_span(self, &started)?, idempotency_key));
+            ResolvedCall::Replay(replay) => {
+                let start_index = replay.start_index();
+                match replay.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => {
+                        return match response.result {
+                            Ok(target_fingerprint) => {
+                                set_rpc_target_replay_pending(
+                                    self,
+                                    rpc_resource,
+                                    target_fingerprint,
+                                )?;
+                                Ok(Ok(RpcTargetAdmission::Recorded))
+                            }
+                            Err(error) => Ok(Err(OutboundRpcDenial {
+                                error: InternalRpcError::from(error).into(),
+                                activation_decision: Some(key_position.derive(start_index)),
+                            })),
+                        };
                     }
-                    handle = live;
+                    CallReplayOutcome::Incomplete(live) => {
+                        let recorded = self
+                            .load_recorded_rpc_activation_request(live.start_index())
+                            .await?;
+                        decision = recorded.decision;
+                        if decision.is_err() {
+                            let started =
+                                live.recorded_span_started(self).await?.ok_or_else(|| {
+                                    WorkerExecutorError::unexpected_oplog_entry(
+                                        "denied RPC activation Start carrying span_started",
+                                        format!(
+                                            "activation Start at {} without span metadata",
+                                            live.start_index()
+                                        ),
+                                    )
+                                })?;
+                            let idempotency_key = key_position.derive(live.start_index());
+                            rejection_span =
+                                Some((restore_embedded_span(self, &started)?, idempotency_key));
+                        }
+                        handle = live;
+                    }
                 }
-            },
+            }
         }
 
         if let Err(error) = decision {
