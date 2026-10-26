@@ -273,13 +273,28 @@ Custom Scala types need a `zio.blocks.schema.Schema` instance, for example `deri
 
 Case names are preserved. `Text(text: String)` becomes `{"Text":{"text":"hi"}}`. **Only** a single field specifically named `value` unwraps: `Text(value: String)` becomes `{"Text":"hi"}`.
 
-| Rich Scala type                                                          | Category            |
-| ------------------------------------------------------------------------ | ------------------- |
-| `java.util.UUID`                                                         | UUID                |
-| `java.time.Instant`, `java.time.Duration`                                | Datetime, duration  |
-| `golem.schema.GolemPath`, `golem.schema.Url`, `golem.schema.Quantity[U]` | Path, URL, quantity |
+| Rich Scala type                                                      | Category            |
+| -------------------------------------------------------------------- | ------------------- |
+| `java.util.UUID`                                                     | UUID                |
+| `java.time.Instant`, `java.time.Duration`                            | Datetime, duration  |
+| `golem.schema.GolemPath`, `java.net.URI`, `golem.schema.Quantity[U]` | Path, URL, quantity |
+
+A case class with a `java.net.URI` field needs the `Schema[URI]` instance in scope for `Schema.derived`: `import golem.schema.Implicits.golemUriSchema`. Method parameters and return values of type `URI` need no import.
 
 The unit marker `U` of a quantity declares its units with `@quantityUnit` from `golem.runtime.annotations`. Every listed unit is allowed and the first is the base unit, so `@quantityUnit("m", "cm", "km") sealed trait Length` accepts `m`, `cm` and `km`. A single unit, such as `@quantityUnit("kg")`, is the base unit with no suffixes. The named `suffixes` argument sets the allowed units exactly: `@quantityUnit("m", suffixes = Seq("cm", "km"))` accepts only `cm` and `km`. A marker without the annotation does not compile.
+
+Generated Scala bridges, external and guest, use these types:
+
+| Schema type | Bridge type              | Notes                                                                 |
+| ----------- | ------------------------ | --------------------------------------------------------------------- |
+| `datetime`  | `java.time.Instant`      | A year outside `0000..9999` is an encode and a decode error           |
+| `duration`  | `java.time.Duration`     | Signed; a value outside the `s64` nanosecond range is an encode error |
+| `url`       | `java.net.URI`           | A URL that `URI` cannot parse is a decode error                       |
+| `path`      | `golem.schema.GolemPath` | A path in the agent's file system                                     |
+
+An external bridge has its own copy of `GolemPath` in `golem.bridge.runtime`. The time argument of `scheduleAt` is a `java.time.Instant` in both modes.
+
+An external bridge sends a datetime as UTC RFC 3339 text with a `Z` suffix and up to nine fraction digits. It accepts any RFC 3339 offset on input and converts the value to UTC. `SchemaValueCodec.formatDatetime` and `SchemaValueCodec.parseDatetime` in `golem.bridge.runtime` apply the same rules.
 
 </Tabs.Tab>
 <Tabs.Tab>

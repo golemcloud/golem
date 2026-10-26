@@ -17,10 +17,12 @@
 package golem.schema
 
 import golem.schema.wire.*
+import golem.schema.Implicits.golemUriSchema
 import zio.ZIO
 import zio.blocks.schema.Schema
 import zio.test.*
 
+import java.net.URI
 import java.util.UUID
 import scala.concurrent.Future
 import scala.util.Try
@@ -71,13 +73,17 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
   )
   implicit val wideSchema: Schema[Wide] = Schema.derived
 
-  final case class Located(path: GolemPath, url: Url)
+  final case class Located(path: GolemPath, url: URI)
   object Located { implicit val schema: Schema[Located] = Schema.derived }
 
   private def decodeFailure[A](result: Try[A]): Boolean =
     result.failed.toOption.exists(_.isInstanceOf[SchemaDecodeError])
   private def encodeFailure[A](result: Try[A]): Boolean =
     result.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError])
+
+  // Scala.js already rejects a lone surrogate when the URI is constructed; the JVM accepts it and the encoder rejects it.
+  private def uriEncodeFailure[A](text: String)(encode: URI => A): Boolean =
+    Try(new URI(text)).fold(_.isInstanceOf[java.net.URISyntaxException], uri => encodeFailure(Try(encode(uri))))
 
   override def spec = suite("ConcreteCodecSpec")(
     test("recursive concrete values and named descriptors match the wire contract") {
@@ -296,18 +302,18 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
       val binary = UnstructuredBinary.concreteCodec[String]
       assertTrue(
         encodeFailure(Try(ConcreteCodec.path.encodeValue(GolemPath("a\ud800")))),
-        encodeFailure(Try(ConcreteCodec.url.encodeValue(Url("\udfff")))),
+        uriEncodeFailure("\udfff")(ConcreteCodec.url.encodeValue),
         encodeFailure(Try(IntoSchema[GolemPath].toValue(GolemPath("a\ud800")))),
-        encodeFailure(Try(IntoSchema[Url].toValue(Url("\udfff")))),
-        encodeFailure(Try(IntoSchema[Located].toValue(Located(GolemPath("\ud800"), Url("ok"))))),
-        encodeFailure(Try(IntoSchema[Located].toValue(Located(GolemPath("ok"), Url("\udc00"))))),
+        uriEncodeFailure("\udfff")(IntoSchema[URI].toValue),
+        encodeFailure(Try(IntoSchema[Located].toValue(Located(GolemPath("\ud800"), new URI("ok"))))),
+        uriEncodeFailure("\udc00")(uri => IntoSchema[Located].toValue(Located(GolemPath("ok"), uri))),
         encodeFailure(Try(text.encodeValue(UnstructuredText.fromInline[String]("a\ud800")))),
         encodeFailure(Try(text.encodeValue(UnstructuredText.fromInline[String]("ok", "\ud800")))),
         encodeFailure(Try(text.encodeValue(UnstructuredText.fromUrl[String]("\udfff")))),
         encodeFailure(Try(IntoSchema[UnstructuredText[String]].toValue(UnstructuredText.fromInline[String]("\ud800")))),
         encodeFailure(Try(binary.encodeValue(UnstructuredBinary.fromInline[String](Array[Byte](1), "\ud800")))),
-        ConcreteCodec.url.decode(ConcreteCodec.url.encodeValue(Url("https://example.com/\ud83d\ude00"))) ==
-          Url("https://example.com/\ud83d\ude00"),
+        ConcreteCodec.url.decode(ConcreteCodec.url.encodeValue(new URI("https://example.com/\ud83d\ude00"))) ==
+          new URI("https://example.com/\ud83d\ude00"),
         text.decode(text.encodeValue(UnstructuredText.fromInline[String]("\ud83d\ude00", "en"))) ==
           UnstructuredText.fromInline[String]("\ud83d\ude00", "en")
       )

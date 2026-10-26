@@ -21,6 +21,7 @@ import golem.schema.Implicits._
 import zio.blocks.schema.Schema
 import zio.test._
 
+import java.net.URI
 import java.time.{Duration => JDuration, Instant}
 
 object RichTypesSpec extends ZIOSpecDefault {
@@ -33,7 +34,7 @@ object RichTypesSpec extends ZIOSpecDefault {
   private val bytesUnit   = QuantityUnit[Bytes]
   private val secondsUnit = QuantityUnit[Seconds]
 
-  final case class RichRecord(path: GolemPath, url: Url, at: Instant, duration: JDuration, size: Quantity[Bytes])
+  final case class RichRecord(path: GolemPath, url: URI, at: Instant, duration: JDuration, size: Quantity[Bytes])
 
   object RichRecord {
     implicit val schema: Schema[RichRecord] = Schema.derived
@@ -61,7 +62,7 @@ object RichTypesSpec extends ZIOSpecDefault {
     test("top-level schemas use rich nodes") {
       assertTrue(
         IntoSchema[GolemPath].graph.root.body == SchemaTypeBody.PathType(GolemPath.defaultSpec),
-        IntoSchema[Url].graph.root.body == SchemaTypeBody.UrlType(Url.defaultRestrictions),
+        IntoSchema[URI].graph.root.body == SchemaTypeBody.UrlType(UrlRestrictions.empty),
         IntoSchema[Instant].graph.root.body == SchemaTypeBody.DatetimeType,
         IntoSchema[JDuration].graph.root.body == SchemaTypeBody.DurationType,
         IntoSchema[Quantity[Bytes]].graph.root.body == SchemaTypeBody.QuantityType(bytesUnit.spec)
@@ -69,13 +70,13 @@ object RichTypesSpec extends ZIOSpecDefault {
     },
     test("top-level values roundtrip") {
       val path     = GolemPath("/tmp/in.txt")
-      val url      = Url("https://example.com/a")
+      val url      = new URI("https://example.com/a")
       val instant  = Instant.ofEpochSecond(1234L, 567)
       val duration = JDuration.ofSeconds(2L).plusNanos(3L)
       val quantity = Quantity[Bytes](42L, 1, "kb")
       assertTrue(
         FromSchema[GolemPath].fromValue(IntoSchema[GolemPath].toValue(path)) == Right(path),
-        FromSchema[Url].fromValue(IntoSchema[Url].toValue(url)) == Right(url),
+        FromSchema[URI].fromValue(IntoSchema[URI].toValue(url)) == Right(url),
         FromSchema[Instant].fromValue(IntoSchema[Instant].toValue(instant)) == Right(instant),
         FromSchema[JDuration].fromValue(IntoSchema[JDuration].toValue(duration)) == Right(duration),
         FromSchema[Quantity[Bytes]].fromValue(IntoSchema[Quantity[Bytes]].toValue(quantity)) == Right(quantity)
@@ -95,10 +96,51 @@ object RichTypesSpec extends ZIOSpecDefault {
         instantFrom.fromValue(SchemaValue.DatetimeValue(Datetime(1234L, 567))) == Right(instant)
       )
     },
+    test("durations cover the whole s64 nanosecond range and reject values beyond it") {
+      val min = JDuration.ofNanos(Long.MinValue)
+      val max = JDuration.ofNanos(Long.MaxValue)
+      assertTrue(
+        IntoSchema[JDuration].toValue(min) == SchemaValue.DurationValue(Long.MinValue),
+        IntoSchema[JDuration].toValue(max) == SchemaValue.DurationValue(Long.MaxValue),
+        wire.ConcreteCodec.duration.decode(wire.ConcreteCodec.duration.encodeValue(min)) == min,
+        scala.util
+          .Try(IntoSchema[JDuration].toValue(min.minusNanos(1)))
+          .failed
+          .toOption
+          .exists(_.isInstanceOf[SchemaEncodeError]),
+        scala.util
+          .Try(wire.ConcreteCodec.duration.encodeValue(max.plusNanos(1)))
+          .failed
+          .toOption
+          .exists(_.isInstanceOf[SchemaEncodeError])
+      )
+    },
+    test("url values that are not a URI fail to decode") {
+      assertTrue(
+        FromSchema[URI].fromValue(SchemaValue.UrlValue("https://example.com/a b")).isLeft,
+        FromSchema[RichRecord]
+          .fromValue(
+            IntoSchema[RichRecord].toValue(
+              RichRecord(
+                GolemPath("/p"),
+                new URI("https://golem.cloud"),
+                Instant.EPOCH,
+                JDuration.ZERO,
+                Quantity[Bytes](1L, 0, "kb")
+              )
+            ) match {
+              case SchemaValue.RecordValue(fields) =>
+                SchemaValue.RecordValue(fields.updated(1, SchemaValue.UrlValue("a b")))
+              case other => other
+            }
+          )
+          .isLeft
+      )
+    },
     test("derived record fields use rich nodes and roundtrip") {
       val record = RichRecord(
         GolemPath("/workspace/data"),
-        Url("https://golem.cloud"),
+        new URI("https://golem.cloud"),
         Instant.ofEpochSecond(999L, 123456789),
         JDuration.ofNanos(-17L),
         Quantity[Bytes](1L, 0, "kb")
@@ -107,7 +149,7 @@ object RichTypesSpec extends ZIOSpecDefault {
       assertTrue(
         fieldBodies == List(
           SchemaTypeBody.PathType(GolemPath.defaultSpec),
-          SchemaTypeBody.UrlType(Url.defaultRestrictions),
+          SchemaTypeBody.UrlType(UrlRestrictions.empty),
           SchemaTypeBody.DatetimeType,
           SchemaTypeBody.DurationType,
           SchemaTypeBody.QuantityType(bytesUnit.spec)

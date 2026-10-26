@@ -147,8 +147,8 @@ const AGENT_ID: &str = "_root_.golem.bridge.runtime.AgentId";
 /// Fully-qualified runtime `GolemServer` type.
 const GOLEM_SERVER: &str = "_root_.golem.bridge.runtime.GolemServer";
 
-/// Fully-qualified runtime `Datetime` type (scheduling instant).
-const DATETIME: &str = "_root_.golem.bridge.runtime.Datetime";
+/// The time argument of `scheduleAt`, in both bridge modes.
+const SCHEDULE_TIME: &str = "_root_.java.time.Instant";
 
 /// Fully-qualified UUID type, used for native `uuid` values and phantom ids in
 /// both bridge modes.
@@ -166,7 +166,6 @@ const GUEST_CONFIGURATION: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_RESOLVED_AGENT: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_AGENT_ID: &str = "_root_.scala.Predef.String";
 const GUEST_GOLEM_SERVER: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
-const GUEST_DATETIME: &str = "_root_.golem.Datetime";
 const GUEST_PERMISSION_CARD: &str = "_root_.golem.host.PermissionsApi.PermissionCard";
 const GUEST_POLYMORPHIC_PERMISSION_CARD: &str =
     "_root_.golem.host.PermissionsApi.PolymorphicPermissionCard";
@@ -306,7 +305,7 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "GolemServer",
     "Configuration",
     "AgentId",
-    "Datetime",
+    "GolemPath",
     "UByte",
     "UShort",
     "UInt",
@@ -398,7 +397,7 @@ impl ScalaRuntimeConfig {
                 resolved_agent: RESOLVED_AGENT,
                 agent_id: AGENT_ID,
                 golem_server: GOLEM_SERVER,
-                datetime: DATETIME,
+                datetime: SCHEDULE_TIME,
                 uuid: UUID,
             },
             ScalaBridgeMode::GuestWasmRpc => Self {
@@ -416,7 +415,7 @@ impl ScalaRuntimeConfig {
                 resolved_agent: GUEST_RESOLVED_AGENT,
                 agent_id: GUEST_AGENT_ID,
                 golem_server: GUEST_GOLEM_SERVER,
-                datetime: GUEST_DATETIME,
+                datetime: SCHEDULE_TIME,
                 uuid: UUID,
             },
         }
@@ -1132,10 +1131,11 @@ impl ScalaBridgeGenerator {
         writer.blank();
 
         let schedule_decls = if param_decls.is_empty() {
-            format!("when: {GUEST_DATETIME}")
+            format!("when: {SCHEDULE_TIME}")
         } else {
-            format!("{param_decls}, when: {GUEST_DATETIME}")
+            format!("{param_decls}, when: {SCHEDULE_TIME}")
         };
+        let when = format!("{GUEST_RUNTIME_PKG}.Datetime.fromInstant(when)");
         let schedule_result = if ephemeral {
             format!("{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationReceipt")
         } else {
@@ -1150,11 +1150,11 @@ impl ScalaBridgeGenerator {
         ));
         if ephemeral {
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocationWithMetadata(when, {method_name_lit}, parameters))"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocationWithMetadata({when}, {method_name_lit}, parameters))"
             ));
         } else {
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocation(when, {method_name_lit}, parameters))"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocation({when}, {method_name_lit}, parameters))"
             ));
         }
         writer.dedent();
@@ -1175,11 +1175,11 @@ impl ScalaBridgeGenerator {
         ));
         if ephemeral {
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocationWithMetadata(when, {method_name_lit}, parameters))"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocationWithMetadata({when}, {method_name_lit}, parameters))"
             ));
         } else {
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocation(when, {method_name_lit}, parameters))"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocation({when}, {method_name_lit}, parameters))"
             ));
         }
         writer.dedent();
@@ -1811,9 +1811,9 @@ impl ScalaBridgeGenerator {
 
         // scheduleAt (schedule, at a time).
         let schedule_decls = if param_decls.is_empty() {
-            format!("when: {DATETIME}")
+            format!("when: {SCHEDULE_TIME}")
         } else {
-            format!("{param_decls}, when: {DATETIME}")
+            format!("{param_decls}, when: {SCHEDULE_TIME}")
         };
         writer.line(format!(
             "def scheduleAt({schedule_decls}): {FUTURE}[{receipt_ty}] = {{"
@@ -1823,7 +1823,7 @@ impl ScalaBridgeGenerator {
             "implicit val ec: {EXECUTION_CONTEXT} = resolved.configuration.executionContext"
         ));
         writer.line(format!(
-            "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.Some(when.toIsoString)).map({})",
+            "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.Some({CODEC}.formatDatetime(when))).map({})",
             scala_string_literal(MODE_SCHEDULE),
             if self.agent_type.mode == AgentMode::Ephemeral { "r => _root_.golem.bridge.runtime.InvocationReceipt(r.agentId, r.idempotencyKey)" } else { "_ => ()" }
         ));
@@ -3076,17 +3076,14 @@ impl ScalaBridgeGenerator {
                     "{val_expr} match {{\n  case _root_.scala.Right({r}) => {ok_arm}\n  case _root_.scala.Left({l}) => {err_arm}\n}}"
                 )
             }
-            SchemaType::Path { .. } => format!("{SV}.PathValue({val_expr})"),
-            SchemaType::Url { .. } => format!("{SV}.UrlValue({val_expr})"),
+            SchemaType::Path { .. } => format!("{CODEC}.encodePath({val_expr})"),
+            SchemaType::Url { .. } => format!("{CODEC}.encodeUrl({val_expr})"),
             SchemaType::Uuid { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 format!("{GUEST_SV}.UuidValue({val_expr})")
             }
             SchemaType::Uuid { .. } => format!("{SV}.UuidValue({val_expr})"),
-            SchemaType::Datetime { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
-                "{GUEST_SV}.DatetimeValue(_root_.golem.schema.Datetime({val_expr}.getEpochSecond, {val_expr}.getNano))"
-            ),
-            SchemaType::Datetime { .. } => format!("{SV}.DatetimeValue({val_expr}.toString)"),
-            SchemaType::Duration { .. } => format!("{SV}.DurationValue({val_expr})"),
+            SchemaType::Datetime { .. } => format!("{CODEC}.encodeDatetime({val_expr})"),
+            SchemaType::Duration { .. } => format!("{CODEC}.encodeDuration({val_expr})"),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 format!("{GUEST_SV}.SecretValue({val_expr})")
             }
@@ -3541,12 +3538,15 @@ impl ScalaBridgeGenerator {
                 };
                 Ok(format!("_root_.scala.Either[{err_type}, {ok_type}]"))
             }
-            SchemaType::Path { .. } | SchemaType::Url { .. } => {
-                Ok("_root_.scala.Predef.String".to_string())
+            SchemaType::Path { .. } => Ok(match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => "_root_.golem.schema.GolemPath",
+                ScalaBridgeMode::ExternalRest => "_root_.golem.bridge.runtime.GolemPath",
             }
+            .to_string()),
+            SchemaType::Url { .. } => Ok("_root_.java.net.URI".to_string()),
             SchemaType::Uuid { .. } => Ok(UUID.to_string()),
             SchemaType::Datetime { .. } => Ok("_root_.java.time.Instant".to_string()),
-            SchemaType::Duration { .. } => Ok("_root_.scala.Long".to_string()),
+            SchemaType::Duration { .. } => Ok("_root_.java.time.Duration".to_string()),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 Ok("_root_.golem.schema.GuestSecretHandle".to_string())
             }
@@ -3975,7 +3975,7 @@ mod tests {
             runtime_config.schema_map_entry,
             "_root_.golem.schema.SchemaMapEntry"
         );
-        assert_eq!(runtime_config.datetime, "_root_.golem.Datetime");
+        assert_eq!(runtime_config.datetime, "_root_.java.time.Instant");
         assert_eq!(runtime_config.uuid, "_root_.java.util.UUID");
         assert!(
             runtime_config
@@ -4493,7 +4493,9 @@ mod tests {
                 .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
         )
         .unwrap();
-        assert!(client_source.contains("_root_.golem.schema.SchemaValue.PathValue(value)"));
+        assert!(
+            client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodePath(value)")
+        );
         assert!(client_source.contains("private object __GolemSchemaGraphs"));
         assert!(client_source.contains("_root_.golem.schema.SchemaTypeBody.PathType("));
         assert!(client_source.contains(

@@ -30,7 +30,10 @@ use golem_cli::bridge_gen::{
 use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
-use golem_common::schema::schema_type::{BinaryRestrictions, QuantitySpec, QuotaTokenSpec};
+use golem_common::schema::schema_type::{
+    BinaryRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuotaTokenSpec,
+    UrlRestrictions,
+};
 use golem_common::schema::tool::{
     BoolFlagShape, CommandBody, CommandIndex, CommandTree, Doc, ErrorCase, ErrorKind, FlagShape,
     FlagSpec, Formatter, Globals, OptionShape, OptionSpec, Positional, Positionals,
@@ -1911,9 +1914,11 @@ fn generates_client_surface() {
     assert!(client.contains("def trigger(): _root_.scala.concurrent.Future[_root_.scala.Unit]"));
     assert!(client.contains("methodParameters(), \"schedule\", _root_.scala.None).map(_ => ())"));
     assert!(client.contains(
-        "def scheduleAt(when: _root_.golem.bridge.runtime.Datetime): _root_.scala.concurrent.Future[_root_.scala.Unit]"
+        "def scheduleAt(when: _root_.java.time.Instant): _root_.scala.concurrent.Future[_root_.scala.Unit]"
     ));
-    assert!(client.contains("\"schedule\", _root_.scala.Some(when.toIsoString)"));
+    assert!(client.contains(
+        "\"schedule\", _root_.scala.Some(_root_.golem.bridge.runtime.SchemaValueCodec.formatDatetime(when))"
+    ));
     // The await result is decoded through the named-type codec.
     assert!(client.contains("_root_.golem.bridge.client.agent1.Codecs.decodeLocation(__value)"));
 
@@ -2106,7 +2111,7 @@ fn client_surface_handles_reserved_and_keyword_names() {
     assert!(client.contains("ec_2: _root_.scala.Predef.String"));
     assert!(client.contains("resolved_2: _root_.scala.Predef.String"));
     assert!(client.contains("f0_2: _root_.scala.Predef.String"));
-    assert!(client.contains("when: _root_.golem.bridge.runtime.Datetime"));
+    assert!(client.contains("when: _root_.java.time.Instant"));
 
     // Constructor parameters colliding with internal names are renamed too.
     assert!(client.contains("configuration_2: _root_.scala.Predef.String"));
@@ -3336,5 +3341,174 @@ fn guest_named_quota_token_keeps_its_resource_type() {
             .contains("new _root_.golem.host.QuotaApi.NamedQuotaToken[\"openai-tokens\"](handle)")
     );
     assert!(client.contains("token: _root_.golem.host.QuotaApi.QuotaToken"));
+    compile_guest_if_enabled(package_dir.as_path());
+}
+
+fn time_url_agent() -> AgentTypeSchema {
+    let path = SchemaType::path(PathSpec {
+        direction: PathDirection::InOut,
+        kind: PathKind::Any,
+        allowed_mime_types: None,
+        allowed_extensions: None,
+    });
+    agent(
+        "TimeUrlAgent",
+        "scala",
+        vec![field("start", SchemaType::datetime())],
+        vec![
+            method(
+                "plan",
+                vec![field("schedule", ref_to("schedule"))],
+                Some(ref_to("schedule")),
+            ),
+            method(
+                "wait",
+                vec![
+                    field("until", SchemaType::datetime()),
+                    field("file", path.clone()),
+                    field("link", SchemaType::url(UrlRestrictions::default())),
+                ],
+                Some(SchemaType::duration()),
+            ),
+        ],
+        vec![def(
+            "schedule",
+            SchemaType::record(vec![
+                named_field("at", SchemaType::datetime()),
+                named_field("every", SchemaType::duration()),
+                named_field("link", SchemaType::url(UrlRestrictions::default())),
+                named_field("file", path),
+                named_field("next", SchemaType::option(SchemaType::datetime())),
+            ]),
+        )],
+        AgentMode::Durable,
+    )
+}
+
+fn assert_time_url_types(client: &str, path_type: &str) {
+    for expected in [
+        "at: _root_.java.time.Instant".to_string(),
+        "every: _root_.java.time.Duration".to_string(),
+        "link: _root_.java.net.URI".to_string(),
+        format!("file: {path_type}"),
+        "next: _root_.scala.Option[_root_.java.time.Instant]".to_string(),
+        "until: _root_.java.time.Instant".to_string(),
+        "_root_.scala.concurrent.Future[_root_.java.time.Duration]".to_string(),
+        "when: _root_.java.time.Instant".to_string(),
+    ] {
+        assert!(client.contains(&expected), "missing {expected}:\n{client}");
+    }
+}
+
+/// Datetime, duration, url and path map to `Instant`, `Duration`, `URI` and
+/// the runtime `GolemPath`; datetime text is canonical UTC on output and any
+/// RFC 3339 offset on input.
+#[test]
+fn external_datetime_duration_url_path_use_java_types() {
+    let pkg = GeneratedPackage::new(time_url_agent());
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir
+            .join("src/main/scala/golem/bridge/client/time_url_agent/TimeUrlAgentClient.scala"),
+    )
+    .unwrap();
+    assert_time_url_types(&client, "_root_.golem.bridge.runtime.GolemPath");
+    assert!(
+        !package_dir
+            .join("src/main/scala/golem/bridge/runtime/Datetime.scala")
+            .exists()
+    );
+
+    run_sbt_test(
+        package_dir.as_path(),
+        r#"
+package golem.bridge.runtime
+
+import golem.bridge.client.time_url_agent.{Codecs, Schedule}
+import java.time.{Duration, Instant}
+
+class StreamRuntimeTest extends munit.FunSuite {
+  private val schedule = Schedule(
+    Instant.parse("2026-01-02T03:04:05.123456789Z"),
+    Duration.ofNanos(-1500000001L),
+    new java.net.URI("https://example.com/a?b=c"),
+    GolemPath("/data/report.txt"),
+    Some(Instant.EPOCH)
+  )
+
+  test("schedule round-trips through the generated codec and the JSON wire form") {
+    val encoded = Codecs.encodeSchedule(schedule)
+    assertEquals(
+      SchemaValueCodec.recordFields(encoded),
+      List(
+        SchemaValue.DatetimeValue("2026-01-02T03:04:05.123456789Z"),
+        SchemaValue.DurationValue(-1500000001L),
+        SchemaValue.UrlValue("https://example.com/a?b=c"),
+        SchemaValue.PathValue("/data/report.txt"),
+        SchemaValue.OptionValue(Some(SchemaValue.DatetimeValue("1970-01-01T00:00:00Z")))
+      )
+    )
+    assertEquals(Codecs.decodeSchedule(encoded), schedule)
+    assertEquals(SchemaValueCodec.fromJson(SchemaValueCodec.toJson(encoded)).map(Codecs.decodeSchedule), Right(schedule))
+  }
+
+  test("datetime output is canonical UTC with up to nine fraction digits") {
+    assertEquals(SchemaValueCodec.formatDatetime(Instant.parse("2026-01-01T00:00:00Z")), "2026-01-01T00:00:00Z")
+    assertEquals(SchemaValueCodec.formatDatetime(Instant.parse("2026-01-01T00:00:00.120Z")), "2026-01-01T00:00:00.12Z")
+    assertEquals(SchemaValueCodec.formatDatetime(Instant.parse("2026-01-01T00:00:00.000000001Z")), "2026-01-01T00:00:00.000000001Z")
+    assertEquals(SchemaValueCodec.formatDatetime(Instant.parse("0000-01-01T00:00:00Z")), "0000-01-01T00:00:00Z")
+    assertEquals(SchemaValueCodec.formatDatetime(Instant.parse("9999-12-31T23:59:59.999999999Z")), "9999-12-31T23:59:59.999999999Z")
+  }
+
+  test("datetime input accepts any RFC 3339 offset and converts it to UTC") {
+    val utc = Instant.parse("2026-01-01T00:00:00.5Z")
+    for (text <- List("2026-01-01T01:30:00.5+01:30", "2025-12-31T23:00:00.500-01:00", "2026-01-01t00:00:00.5z", "2026-01-01 00:00:00.5Z", "2026-01-01T00:00:00.5-00:00"))
+      assertEquals(SchemaValueCodec.asDatetime(SchemaValue.DatetimeValue(text)), utc, text)
+    assertEquals(Codecs.decodeSchedule(SchemaValue.RecordValue(SchemaValueCodec.recordFields(Codecs.encodeSchedule(schedule)).updated(0, SchemaValue.DatetimeValue("2026-01-02T05:04:05.123456789+02:00")))), schedule)
+  }
+
+  test("datetime outside the years 0000..9999 and malformed text are rejected") {
+    for (instant <- List(Instant.parse("+10000-01-01T00:00:00Z"), Instant.parse("-0001-12-31T23:59:59.999999999Z"))) {
+      val error = intercept[BridgeException](SchemaValueCodec.formatDatetime(instant))
+      assert(error.getMessage.contains("outside the years 0000..9999"), error.getMessage)
+      intercept[BridgeException](Codecs.encodeSchedule(schedule.copy(at = instant)))
+    }
+    for (text <- List("0000-01-01T00:00:00+00:01", "9999-12-31T23:59:59-00:01")) {
+      val error = intercept[BridgeException](SchemaValueCodec.parseDatetime(text))
+      assert(error.getMessage.contains("outside the years 0000..9999"), error.getMessage)
+    }
+    for (text <- List("2026-02-30T00:00:00Z", "2026-01-01T24:00:00Z", "2026-01-01T00:00:00", "2026-01-01T00:00:00.1234567891Z", "2026-01-01T00:00:00+24:00", "+12026-01-01T00:00:00Z"))
+      intercept[BridgeException](SchemaValueCodec.parseDatetime(text))
+  }
+
+  test("duration beyond the s64 nanosecond range is an encode error") {
+    val error = intercept[BridgeException](Codecs.encodeSchedule(schedule.copy(every = Duration.ofSeconds(Long.MaxValue))))
+    assert(error.getMessage.contains("s64 nanoseconds"), error.getMessage)
+    assertEquals(SchemaValueCodec.asDuration(SchemaValueCodec.encodeDuration(Duration.ofNanos(Long.MinValue))), Duration.ofNanos(Long.MinValue))
+  }
+
+  test("url text that is not a URI is a decode error") {
+    val fields = SchemaValueCodec.recordFields(Codecs.encodeSchedule(schedule)).updated(2, SchemaValue.UrlValue("https://example.com/a b"))
+    intercept[BridgeException](Codecs.decodeSchedule(SchemaValue.RecordValue(fields)))
+  }
+}
+"#,
+    );
+}
+
+#[test]
+fn guest_datetime_duration_url_path_use_sdk_and_java_types() {
+    let pkg = GeneratedPackage::new_with_mode(time_url_agent(), ScalaBridgeMode::GuestWasmRpc);
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir
+            .join("src/main/scala/golem/bridge/client/time_url_agent/TimeUrlAgentClient.scala"),
+    )
+    .unwrap();
+    assert_time_url_types(&client, "_root_.golem.schema.GolemPath");
+    assert!(client.contains("_root_.golem.Datetime.fromInstant(when)"));
+    assert!(client.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeDuration("));
+    assert!(client.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.asUrl("));
+    assert!(!client.contains("golem.bridge.runtime"));
     compile_guest_if_enabled(package_dir.as_path());
 }

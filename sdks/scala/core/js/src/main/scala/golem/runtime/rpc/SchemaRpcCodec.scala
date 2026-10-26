@@ -155,12 +155,12 @@ private[golem] object SchemaRpcCodec {
     case SchemaValue.StringValue(x) => x
     case o                          => mismatch("string", o)
   }
-  def asPath(v: SchemaValue): String = v match {
-    case SchemaValue.PathValue(x) => x
+  def asPath(v: SchemaValue): GolemPath = v match {
+    case SchemaValue.PathValue(x) => GolemPath(x)
     case o                        => mismatch("path", o)
   }
-  def asUrl(v: SchemaValue): String = v match {
-    case SchemaValue.UrlValue(x) => x
+  def asUrl(v: SchemaValue): java.net.URI = v match {
+    case SchemaValue.UrlValue(x) => UrlText.parse(x).fold(error => throw SchemaDecodeError(error), identity)
     case o                       => mismatch("url", o)
   }
   def asDatetime(v: SchemaValue): java.time.Instant = v match {
@@ -173,10 +173,16 @@ private[golem] object SchemaRpcCodec {
       throw SchemaDecodeError(s"datetime nanoseconds out of range: ${x.nanoseconds} (expected 0..999999999)")
     case o => mismatch("datetime", o)
   }
-  def asDuration(v: SchemaValue): Long = v match {
-    case SchemaValue.DurationValue(x) => x
+  def asDuration(v: SchemaValue): java.time.Duration = v match {
+    case SchemaValue.DurationValue(x) => java.time.Duration.ofNanos(x)
     case o                            => mismatch("duration", o)
   }
+
+  def encodePath(v: GolemPath): SchemaValue             = SchemaValue.PathValue(UnicodeText.encodeText("path", v.value))
+  def encodeUrl(v: java.net.URI): SchemaValue           = SchemaValue.UrlValue(UrlText.encode(v))
+  def encodeDatetime(v: java.time.Instant): SchemaValue =
+    SchemaValue.DatetimeValue(Datetime(v.getEpochSecond, v.getNano))
+  def encodeDuration(v: java.time.Duration): SchemaValue = SchemaValue.DurationValue(DurationNanos.of(v))
 
   def recordFields(v: SchemaValue): List[SchemaValue] = v match {
     case SchemaValue.RecordValue(fields) => fields

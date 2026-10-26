@@ -52,6 +52,8 @@ object IntoSchema {
       SchemaValue.ListValue(value.iterator.map(byte => SchemaValue.U8Value(byte & 0xff)).toList)
   }
 
+  implicit val uri: IntoSchema[java.net.URI] = RichSchemas.uriIntoSchema
+
   implicit def derived[A](implicit schema: Schema[A]): IntoSchema[A] =
     new IntoSchema[A] {
       override lazy val graph: SchemaGraph        = Derivation.graphOf(schema)
