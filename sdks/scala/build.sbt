@@ -10,6 +10,11 @@ import org.scalajs.linker.interface.ModuleKind
 // Scala versions
 // ---------------------------------------------------------------------------
 
+// JGit, which sbt-git uses for this status check, cannot read a git worktree, so every
+// sbt command fails at load there. sbt-dynver computes the version with the git command line
+// and does not read this setting.
+ThisBuild / git.gitUncommittedChanges := false
+
 val Scala3Golem = "3.8.2"
 val Scala212    = "2.12.21"
 
