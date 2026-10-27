@@ -25,7 +25,7 @@ use uuid::Uuid;
 use super::{AgentMode, OwnedAgentId, PendingInvocationRef};
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::TypedAgentConfigEntry;
-use crate::model::card::{CardId, ReceivedCardTransferIndex};
+use crate::model::card::{CardId, ReceivedCardTransferIndex, SourceCardTransferIndex};
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -556,6 +556,7 @@ pub struct AgentStatusRecord {
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub invocation_results: InvocationResultMembership,
     pub received_card_transfers: ReceivedCardTransferIndex,
+    pub source_card_transfers: SourceCardTransferIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
     pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
@@ -622,6 +623,7 @@ impl Default for AgentStatusRecord {
             successful_updates: Vec::new(),
             invocation_results: InvocationResultMembership::default(),
             received_card_transfers: ReceivedCardTransferIndex::default(),
+            source_card_transfers: SourceCardTransferIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,

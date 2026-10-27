@@ -28,12 +28,12 @@ use super::{
     ToolStdinClosedEntry, ToolStdinEntry, ToolStdinStreamConsumer, ToolStdinStreamPumpTask,
     ToolStdinWriterEntry, TypedSchemaValue, UnderlyingError, UnderlyingInvokeResultEntry,
     UnderlyingToolEntry, WitRegisteredTool, WorkerCtx, admit_tool_response_secret_holds,
-    attachment_pair, await_tool_invoke_plans, boundary, cleanup_failed_tool_dispatch, close_stdin,
-    create_output_attachment, create_underlying_stdin, dispatch_tool_attempt, dispatch_tool_call,
-    durability, get_tool_invoke_results, input, invoke_tool_terminal, mpsc, project_tool_response,
-    project_tool_unit, read_tool_attempt, reject_output, reserve_invocation_id_before_await,
-    resolve_tool_command, spawn_tool_execution, tool_admission_activity,
-    tool_rpc_for_current_owner, tool_rpc_resource,
+    attachment_pair, boundary, cleanup_failed_tool_dispatch, close_stdin, create_output_attachment,
+    create_underlying_stdin, dispatch_tool_attempt, dispatch_tool_call, durability,
+    get_tool_invoke_results, input, invoke_tool_terminal, mpsc, observe_tool_invoke_plans,
+    project_tool_response, project_tool_unit, read_tool_attempt, reject_output,
+    reserve_invocation_id_before_await, resolve_tool_command, spawn_tool_execution,
+    tool_admission_activity, tool_rpc_for_current_owner, tool_rpc_resource,
 };
 
 impl<U: Send + 'static, Ctx: WorkerCtx> HostToolStdinWriterWithStore<U>
@@ -521,19 +521,28 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
             };
             Ok::<_, anyhow::Error>((plan, entry.response_edge.clone()))
         })?;
-        let mut responses = await_tool_invoke_plans(&accessor, vec![plan]).await?;
-        let response = responses
-            .pop()
-            .expect("a scalar underlying result await must return one response");
-        let response = if let Some(edge) = response_edge {
-            let mut streams =
-                crate::durable_host::schema_value_stream::ExecutorProjectionStreams::new(&accessor);
-            boundary::project_underlying_tool_response(response, &edge, &mut streams)
-        } else {
-            response
-        };
-        let response = admit_tool_response_secret_holds(&accessor, response).await?;
-        let response = project_tool_response(&accessor, response);
+        let response = observe_tool_invoke_plans(&accessor, vec![plan], async |mut responses| {
+            let response = responses
+                .pop()
+                .expect("a scalar underlying result await must return one response");
+            let response = if let Some(edge) = response_edge {
+                let mut streams =
+                    crate::durable_host::schema_value_stream::ExecutorProjectionStreams::new(
+                        &accessor,
+                    );
+                boundary::project_underlying_tool_response(response, &edge, &mut streams)
+            } else {
+                response
+            };
+            let response = admit_tool_response_secret_holds(
+                &accessor,
+                response,
+                crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+            )
+            .await?;
+            Ok(project_tool_response(&accessor, response))
+        })
+        .await?;
         match response {
             Ok(result) => Ok(Ok(result.result)),
             Err(ToolRpcError::RemoteToolError(error)) => Ok(Err(UnderlyingError::ToolError(error))),
@@ -665,7 +674,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                     close_stdin(accessor, stdin)?;
                     reject_output(accessor, stdout)?;
                     reject_output(accessor, stderr)?;
-                    let response = admit_tool_response_secret_holds(accessor, *response).await?;
+                    let response = admit_tool_response_secret_holds(
+                        accessor,
+                        *response,
+                        crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                    )
+                    .await?;
                     accessor.with(|mut access| {
                         Ok(access.get().table().push(FutureInvokeResultEntry {
                             state: FutureToolInvokeState::Ready(Box::new(response)),

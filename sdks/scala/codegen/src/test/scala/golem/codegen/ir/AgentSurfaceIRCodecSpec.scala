@@ -42,6 +42,9 @@ class AgentSurfaceIRCodecSpec extends munit.FunSuite {
             returnTypeExpr = "Int",
             principalParams = List(false)
           )
+        ),
+        sourceScopes = List(
+          SourceScopeSurface("example", List("import java.util.UUID", "import golem.schema.{Quantity as Q}"))
         )
       ),
       AgentSurface(

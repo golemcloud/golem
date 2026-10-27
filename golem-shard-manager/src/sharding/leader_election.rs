@@ -19,6 +19,7 @@ use crate::config::EtcdConfig;
 use crate::metrics;
 use crate::sharding::election_watch::{CampaignView, Campaigner, ElectionWatch, ElectionWatcher};
 use crate::sharding::error::{ShardManagerError, is_stale_auth_token};
+use crate::sharding::etcd_clients::ElectionClient;
 use crate::sharding::etcd_connection::{EtcdConnectSettings, connect_election_with};
 use crate::sharding::etcd_retry::retry_retriable_until;
 use etcd_client::{
@@ -331,9 +332,12 @@ pub struct LeaseKeepAlive {
     keeper: LeaseKeeper,
     stream: LeaseKeepAliveStream,
     watchdog: RenewalWatchdog,
-    /// Re-establishes the keepalive when its stream breaks. The same client the leadership handle
-    /// revokes with.
-    lease_client: LeaseClient,
+    /// Re-establishes the keepalive when its stream breaks, through the current client: one built
+    /// from renewed TLS files if the files changed meanwhile.
+    client: ElectionClient,
+    /// The client the stream runs on, kept so that its connection lives as long as the stream does
+    /// even after the handle moves on to a newer client.
+    connection: Client,
     request_timeout: Duration,
 }
 
@@ -426,8 +430,11 @@ impl LeaseKeepAlive {
 
             let attempt = std::cmp::min(self.request_timeout, remaining);
             let attempt_sent = SentAt::now();
-            match timeout(attempt, self.lease_client.keep_alive(self.lease_id)).await {
+            let client = self.client.current();
+            let mut lease_client = client.lease_client();
+            match timeout(attempt, lease_client.keep_alive(self.lease_id)).await {
                 Ok(Ok((keeper, stream))) => {
+                    self.connection = client;
                     self.keeper = keeper;
                     self.stream = stream;
                     self.watchdog.forget_unacknowledged();
@@ -500,10 +507,8 @@ impl RetryDelays {
 #[derive(Clone)]
 pub struct LeadershipHandle {
     /// The election client: `publish_ready` sends on it, and both it and the step-down log in
-    /// again through it; `lease_client` is one of its sub-clients. Behind an `Arc`: a `Client` is
-    /// several KB, and this handle travels by value inside [`Elected`].
-    client: Arc<Client>,
-    lease_client: LeaseClient,
+    /// again through it. The handle, not a client: each use takes the current one.
+    client: ElectionClient,
     lease_id: i64,
     request_timeout: Duration,
     /// Shared with every clone, so the keepalive task can tell a revoke it asked for from one it
@@ -560,12 +565,13 @@ impl LeadershipHandle {
                     }
                     // The election client logged in before the campaign, which can have waited
                     // through a change to etcd's users or roles.
+                    let client = self.client.current();
                     send_with_fresh_login(
-                        &self.client,
+                        &client,
                         self.request_timeout,
                         "marking the shard manager leader ready",
                         || {
-                            let mut election_client = self.client.election_client();
+                            let mut election_client = client.election_client();
                             let value = value.clone();
                             let options = options.clone();
                             async move {
@@ -598,15 +604,9 @@ impl LeadershipHandle {
         // A lease etcd no longer knows is already released; anything else is reported and the
         // lease is left to lapse on its own.
         let lease_id = self.lease_id;
-        let mut lease_client = self.lease_client.clone();
-        match revoke_lease(
-            &self.client,
-            &mut lease_client,
-            lease_id,
-            self.request_timeout,
-        )
-        .await
-        {
+        let client = self.client.current();
+        let mut lease_client = client.lease_client();
+        match revoke_lease(&client, &mut lease_client, lease_id, self.request_timeout).await {
             Ok(()) => {}
             Err(err) if is_lease_not_found(&err) => {
                 info!(lease_id, "The leadership lease was already gone");
@@ -664,7 +664,7 @@ impl From<CampaignInterrupt> for CampaignExit {
 }
 
 pub struct LeaderElection {
-    client: Client,
+    client: ElectionClient,
     election_name: String,
     lease_ttl: Duration,
     request_timeout: Duration,
@@ -708,7 +708,7 @@ impl LeaderElection {
         grpc_address: LeaderAddress,
     ) -> Result<Self, ShardManagerError> {
         Ok(Self {
-            client: connect_election_with(config, settings).await?,
+            client: ElectionClient::fixed(connect_election_with(config, settings).await?),
             election_name: election_name.into(),
             lease_ttl: config.leader_lease_ttl,
             request_timeout: config.request_timeout,
@@ -728,9 +728,9 @@ impl LeaderElection {
         })
     }
 
-    /// The election client, for the run-time certificate check; it shares this election's
-    /// connection.
-    pub(crate) fn client(&self) -> Client {
+    /// The election client handle: it follows renewed TLS files, and the election watch takes its
+    /// client from it.
+    pub(crate) fn client(&self) -> ElectionClient {
         self.client.clone()
     }
 
@@ -825,7 +825,8 @@ impl LeaderElection {
                     error = %err,
                     "etcd's users or roles changed since this replica logged in; logging in again"
                 );
-                if let Err(login_failed) = self.bounded(self.client.refresh_token()).await
+                let client = self.client.current();
+                if let Err(login_failed) = self.bounded(client.refresh_token()).await
                     && !login_failed.is_retriable()
                 {
                     return Err(login_failed);
@@ -846,7 +847,9 @@ impl LeaderElection {
     }
 
     async fn campaign_once(&self) -> Result<Elected, CampaignExit> {
-        let mut lease_client = self.client.lease_client();
+        // One client for the whole attempt: its lease, its campaign and its cleanup share a login.
+        let client = self.client.current();
+        let mut lease_client = client.lease_client();
 
         let ttl_secs = self.lease_ttl.as_secs() as i64;
         let grant = self.bounded(lease_client.grant(ttl_secs, None)).await?;
@@ -862,7 +865,7 @@ impl LeaderElection {
         }
 
         match self
-            .campaign_with_lease(&mut lease_client, lease_id, granted_ttl)
+            .campaign_with_lease(&client, &mut lease_client, lease_id, granted_ttl)
             .await
         {
             Ok(elected) => {
@@ -875,13 +878,8 @@ impl LeaderElection {
                 // server's queue for a full TTL - and once the campaign is won, it is holding the
                 // election itself. The slot is cleared only after the revoke, so an attempt dropped
                 // during it still leaves the lease findable.
-                if let Err(revoke_failed) = revoke_lease(
-                    &self.client,
-                    &mut lease_client,
-                    lease_id,
-                    self.request_timeout,
-                )
-                .await
+                if let Err(revoke_failed) =
+                    revoke_lease(&client, &mut lease_client, lease_id, self.request_timeout).await
                 {
                     warn!(
                         error = %revoke_failed,
@@ -900,6 +898,7 @@ impl LeaderElection {
     /// [`Self::campaign_once`].
     async fn campaign_with_lease(
         &self,
+        client: &Client,
         lease_client: &mut LeaseClient,
         lease_id: i64,
         granted_ttl: Duration,
@@ -911,11 +910,12 @@ impl LeaderElection {
             keeper,
             stream,
             watchdog: RenewalWatchdog::armed_at(handshake_sent, granted_ttl),
-            lease_client: lease_client.clone(),
+            client: self.client.clone(),
+            connection: client.clone(),
             request_timeout: self.request_timeout,
         };
 
-        let mut election_client = self.client.election_client();
+        let mut election_client = client.election_client();
         let campaign =
             election_client.campaign(self.election_name.clone(), self.value.encode(), lease_id);
 
@@ -970,8 +970,7 @@ impl LeaderElection {
             granted_ttl,
             keepalive,
             leadership: LeadershipHandle {
-                client: Arc::new(self.client.clone()),
-                lease_client: lease_client.clone(),
+                client: self.client.clone(),
                 lease_id,
                 request_timeout: self.request_timeout,
                 stepped_down: Arc::new(AtomicBool::new(false)),
@@ -1004,7 +1003,7 @@ impl LeaderElection {
             || {
                 let attempt = self.confirm_attempts.fetch_add(1, Ordering::SeqCst) + 1;
                 let injected = self.confirm_hook.as_ref().and_then(|hook| hook(attempt));
-                let mut kv_client = self.client.kv_client();
+                let mut kv_client = self.client.current().kv_client();
                 let key = fence.key().to_vec();
                 async move {
                     match injected {
@@ -1149,7 +1148,7 @@ impl LeaderElection {
     /// What etcd says about `lease`: the time left on it and the lifetime it was granted, or that
     /// it no longer exists, or nothing when the read failed.
     async fn read_lease(&self, lease: i64) -> LeaseRead {
-        let mut lease_client = self.client.lease_client();
+        let mut lease_client = self.client.current().lease_client();
         match self.bounded(lease_client.time_to_live(lease, None)).await {
             Ok(response) if response.ttl() < 0 => {
                 debug!(
@@ -1211,15 +1210,9 @@ impl LeaderElection {
             return;
         }
 
-        let mut lease_client = self.client.lease_client();
-        match revoke_lease(
-            &self.client,
-            &mut lease_client,
-            lease_id,
-            self.request_timeout,
-        )
-        .await
-        {
+        let client = self.client.current();
+        let mut lease_client = client.lease_client();
+        match revoke_lease(&client, &mut lease_client, lease_id, self.request_timeout).await {
             Ok(()) => info!(lease_id, "Revoked the lease of an abandoned campaign"),
             Err(err) if is_lease_not_found(&err) => {}
             Err(err) => warn!(
@@ -1234,7 +1227,7 @@ impl LeaderElection {
     /// The value recorded by whichever replica currently holds the leadership.
     pub async fn current_leader(&self) -> Result<Option<ElectionValue>, ShardManagerError> {
         LeaderLocator::new(
-            self.client.clone(),
+            self.client.current(),
             self.election_name.clone(),
             self.request_timeout,
         )

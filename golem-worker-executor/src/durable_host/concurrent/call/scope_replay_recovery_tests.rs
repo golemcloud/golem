@@ -37,6 +37,7 @@ fn entity_lineage_does_not_authorize_explicit_protocol_children() {
             durable_scope: Some(entity),
             observational_owner: None,
             invocation_id: None,
+            logical_key_position: None,
         },
         declared: false,
     });
@@ -72,7 +73,6 @@ fn replaying_call(
         LeaveIncompleteOnDrop,
     > {
         start_idx: index,
-        boundary: DurableCallBoundary::from_begin_index(index),
         is_live: false,
         persisted: false,
         request_upload: PendingUpload::already_durable(),
@@ -88,6 +88,7 @@ fn replaying_call(
             observational_owner: None,
             entity_parent_start_index: None,
             invocation_id: None,
+            logical_key_position: None,
         },
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -235,6 +236,6 @@ async fn typed_owner_loss_requires_child_authorization() {
         .await
         .unwrap();
     assert!(authorized.is_live());
-    assert_eq!(authorized.begin_index(), OplogIndex::from_u64(5));
+    assert_eq!(authorized.start_index(), OplogIndex::from_u64(5));
     authorized.abandon_for_trap();
 }

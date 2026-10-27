@@ -1328,6 +1328,65 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
 }
 
 #[test]
+async fn claim_retried_after_replay_resumed_claims_the_grown_start() {
+    let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
+    let parent = OplogIndex::from_u64(1);
+    let claim = || {
+        StartClaim::tool_invocation(
+            &HostFunctionName::GolemEntityInvoke,
+            &HostFunctionName::GolemToolInvocationRejected,
+            &DurableFunctionType::WriteLocal,
+            parent,
+        )
+    };
+    assert!(matches!(
+        replay.claim_start_or_replay_end(claim()).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+
+    let linear_memory = replay_linear_memory();
+    let transition = tokio::spawn({
+        let replay = replay.clone();
+        let linear_memory = linear_memory.clone();
+        async move {
+            replay
+                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while replay.cursor.transition_phase.load(Ordering::Acquire)
+            != ReplayTransitionPhase::Settling as u8
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("primary transition did not enter settling");
+
+    let grown_start = oplog
+        .add(rejected_tool_reconstruction_start(parent))
+        .await
+        .unwrap();
+    replay
+        .set_replay_target(grown_start)
+        .await
+        .expect("failed to grow replay target over a recorded Start");
+    drop(reconstruction);
+    assert_eq!(
+        transition.await.unwrap().unwrap(),
+        ReplayToLiveOutcome::ReplayResumed
+    );
+
+    match replay.claim_start_or_replay_end(claim()).await.unwrap() {
+        ReplayStartClaimOutcome::Claimed { handle, .. } => {
+            assert_eq!(handle.start_idx(), grown_start)
+        }
+        _ => panic!("the retried claim must replay the Start the grown target covers"),
+    }
+}
+
+#[test]
 async fn replay_finished_is_withheld_while_reconstruction_settles() {
     let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
     let linear_memory = replay_linear_memory();
@@ -1990,6 +2049,7 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
             entity_parent_start_index: None,
             card: Box::new(derived_card.clone()),
             wallet_generation: 0,
+            transfer_id: None,
         },
         start_now(),
     ] {
@@ -2274,7 +2334,7 @@ async fn snapshot_start_scans_recovery_metadata_only_after_the_snapshot() {
     let (uncovered, reads) = build(skipped_prefix(4), Some(snapshot)).await;
     assert!(reads_prefix(&reads));
     assert_eq!(
-        *uncovered.cursor.completion_markers.lock().unwrap(),
+        uncovered.cursor.completion_markers.lock().unwrap().by_start,
         HashMap::from([
             (
                 OplogIndex::from_u64(5),
@@ -2289,7 +2349,7 @@ async fn snapshot_start_scans_recovery_metadata_only_after_the_snapshot() {
 
     for replay in [&from_snapshot, &without_snapshot] {
         assert_eq!(
-            *replay.cursor.completion_markers.lock().unwrap(),
+            replay.cursor.completion_markers.lock().unwrap().by_start,
             HashMap::from([(
                 OplogIndex::from_u64(10),
                 CompletionMarker::Delivered(OplogIndex::from_u64(12))
@@ -2297,7 +2357,7 @@ async fn snapshot_start_scans_recovery_metadata_only_after_the_snapshot() {
         );
         assert_eq!(
             *replay.cursor.stream_observations.lock().unwrap(),
-            HashMap::from([(OplogIndex::from_u64(13), None)])
+            std::collections::BTreeMap::from([(OplogIndex::from_u64(13), None)])
         );
         let attachments = replay.cursor.tool_attachment_reconstruction.lock().unwrap();
         assert!(attachments.accepted.is_empty());
@@ -6157,6 +6217,7 @@ async fn hints_behind_a_retained_start_are_published_when_its_owner_claims_it() 
             entity_parent_start_index: None,
             card: Box::new(derived_card.clone()),
             wallet_generation: 0,
+            transfer_id: None,
         },
         start_now(),
     ])
@@ -6260,6 +6321,7 @@ async fn hints_behind_a_released_retained_start_are_published_at_live_invocation
             entity_parent_start_index: None,
             card: Box::new(derived_card.clone()),
             wallet_generation: 0,
+            transfer_id: None,
         },
         end_for(2, 42),
     ])
@@ -9915,6 +9977,7 @@ async fn wallet_replay_batches_share_membership_and_release_retained_prefixes() 
                     entity_parent_start_index: delayed_entity.then_some(start),
                     card: Box::new(stored_test_card(CardId::new())),
                     wallet_generation: generation as u64,
+                    transfer_id: None,
                 });
             }
             if delayed_entity {
@@ -10278,6 +10341,7 @@ async fn card_audit_wait_drains_unclaimed_same_store_accessor_without_rescan() {
                 entity_parent_start_index: None,
                 card: Box::new(card.clone()),
                 wallet_generation: 0,
+                transfer_id: None,
             },
             remove_retry_policy(),
         ],
@@ -12464,6 +12528,7 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
             entity_parent_start_index: None,
             card: Box::new(derived.clone()),
             wallet_generation: 2,
+            transfer_id: None,
         },
         OplogEntry::successful_update(
             ComponentRevision::new(1).unwrap(),
@@ -12623,6 +12688,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
             entity_parent_start_index: None,
             card: Box::new(audit.clone()),
             wallet_generation: 7,
+            transfer_id: None,
         },
         remove_retry_policy(),
     ] {
@@ -12719,6 +12785,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
             entity_parent_start_index: parent,
             card: Box::new(card.clone()),
             wallet_generation: 1,
+            transfer_id: None,
         };
         let mut entries = vec![remove_retry_policy(); 23];
         entries[10] = start_now();

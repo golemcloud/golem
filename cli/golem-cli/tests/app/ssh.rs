@@ -1154,11 +1154,11 @@ async fn stop_a_command(
 ) {
     ctx.cli_interactive(["ssh", agent], move |session| {
         session.set_expect_timeout(Some(Duration::from_secs(120)));
-        answer_cursor_query(session)?;
+        // Leave the cursor query unanswered to select plain input. Cancellation and rebuilds
+        // do not need the editor, and a late terminal reply must not change these assertions.
         session.expect_str(MARKER)?;
         // A quick command first settles the session's own fetch of the command names.
         enter(session, "true")?;
-        answer_cursor_query(session)?;
         session.expect_str(MARKER)?;
 
         enter(session, script)?;
@@ -1175,13 +1175,13 @@ async fn stop_a_command(
         if let Some(printed) = printed {
             session.expect_str(printed)?;
         }
-        answer_cursor_query(session)?;
         session.expect_str("[130]")?;
+        session.expect_str(MARKER)?;
 
         // The next command does not wait behind the stopped one.
         enter(session, next)?;
         session.expect_str(expected)?;
-        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
         enter(session, "exit")?;
         session.expect_eof()
     })

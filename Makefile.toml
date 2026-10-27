@@ -5,7 +5,8 @@
 # - `cargo make check-wit`: re-syncs the per-crate wit/deps and fails if the committed copies are out of date
 # - `cargo make build`: builds everything in debug mode
 # - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
-# - `cargo make clean`: cleans all test components, the main workspace, and every SDK
+# - `cargo make clean`: runs golem clean for test apps, then removes checkout build artifacts and dependencies; continues cleanup after failures and reports them at the end
+# - `cargo make clean --dry-run`: previews cache cleanup without running golem clean or deleting files
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make unit-tests`: runs unit tests only
@@ -450,14 +451,7 @@ if [ -f target/.local-publish-marker ]; then
     echo "Scala SDK already published locally, skipping (delete sdks/scala/target/.local-publish-marker to force)"
 else
     ./scripts/generate-agent-guest-wasm.sh
-    sbt 'set every version := "0.0.0-SNAPSHOT"' \
-        '+modelJVM/publishLocal' \
-        '+modelJS/publishLocal' \
-        '+macros/publishLocal' \
-        'core/publishLocal' \
-        '+codegen/publishLocal' \
-        '++2.12.21' \
-        'sbtPlugin/publishLocal'
+    sbt golemPublishLocal
     mkdir -p target
     touch target/.local-publish-marker
 fi
@@ -3096,24 +3090,100 @@ description = "Runs and publishes the nightly Amp orb benchmark suite"
 command = "./integration-tests/benchmark_suites/run_orb_nightly.sh"
 
 [tasks.clean-test-components]
-description = "Cleans all test WASM components while preserving copied root-level WASM files"
-script_runner = "@duckscript"
-script = '''
-cd test-components
-exec --fail-on-error ./build-components.sh clean
-'''
+description = "Runs golem clean for test apps, then removes component caches, dependencies, and copied WASMs"
+env = { GOLEM_CLEAN_COMPONENTS_ONLY = "true" }
+run_task = "clean"
 
 [tasks.clean]
-description = "Cleans test components, the main workspace, and every SDK"
+description = "Runs golem clean for test apps, then removes checkout build artifacts and dependencies, preserving local data and global caches"
 script_runner = "@duckscript"
 script = '''
-test_component_clean = exec cargo make clean-test-components
-echo ${test_component_clean.stdout}
-echo ${test_component_clean.stderr}
-# Cargo validates its target marker before deletion. The configured target directory may intentionally be outside the repository.
-exec --fail-on-error cargo clean
-exec --fail-on-error cargo make clean-sdk-rust
-exec --fail-on-error cargo make clean-sdk-ts
-exec --fail-on-error cargo make clean-sdk-scala
-exec --fail-on-error cargo make clean-sdk-moonbit
+dry_run = set false
+arguments = set ${@}
+for argument in ${arguments}
+    if equals ${argument} --dry-run
+        dry_run = set true
+    else
+        trigger_error "Unknown clean argument: ${argument}"
+    end
+end
+mode = set -fdx
+if ${dry_run}
+    mode = set -ndx
+end
+
+failed = set false
+if ${dry_run}
+    echo "Would run golem clean for each test application before removing compiler caches"
+else
+    cd test-components
+    app_clean_code = exec --get-exit-code ./build-components.sh clean
+    cd ..
+    if not equals ${app_clean_code} 0
+        echo "Warning: test application cleanup failed; continuing with cache cleanup"
+        failed = set true
+    end
+end
+# These pathspecs are fixed build paths, not user input. Execute one Git scan for all of them.
+cleanup = set ""
+scopes = array test-components
+components_only = get_env GOLEM_CLEAN_COMPONENTS_ONLY
+if not equals ${components_only} true
+    manifest_code = exec --get-exit-code cargo locate-project --workspace --message-format plain
+    if not equals ${manifest_code} 0
+        failed = set true
+    end
+    scopes = array builtin-tools cli dev-tools docs golem-skills integration-tests plugins sdks test-components website
+    roots = array target target-tarpaulin node_modules dist golem-temp _build .mooncakes .zig-cache zig-cache __pycache__ build-out .scala-build
+    for path in ${roots}
+        cleanup = concat ${cleanup} " \"${path}\""
+    end
+    paths = array golem-client/openapi golem-worker-executor/golem-wit builtin-tools/js-ts-tools/generated sdks/ts/packages/golem-ts-sdk/tests/bench/quickjs/crate
+    for path in ${paths}
+        cleanup = concat ${cleanup} " \"${path}\""
+    end
+    scoped = array docs/.next docs/out docs/coverage docs/build docs/public/_pagefind docs/next-env.d.ts "docs/*.tsbuildinfo" website/.astro "sdks/scala/**/out" "sdks/scala/**/.generated" "sdks/scala/**/wasm/*.wasm" "sdks/ts/**/.metadata" "sdks/ts/**/.component-measurements" "sdks/ts/**/.agent-template-wit" "sdks/ts/**/agent-template" "sdks/ts/**/agent-tool-middleware-template" "sdks/ts/**/tool-middleware-template" "sdks/ts/**/wasm/*.wasm" "sdks/effect/**/.generated-types" "sdks/effect/**/.template-target" "sdks/effect/**/golem-types-generated" "sdks/effect/**/coverage" "sdks/effect/**/agent-template" "sdks/effect/**/agent-tool-middleware-template" "sdks/effect/**/tool-middleware-template" "sdks/effect/**/wasm/*.wasm" "sdks/effect/**/wasm/artifact-provenance.json"
+    for path in ${scoped}
+        cleanup = concat ${cleanup} " \":(glob)${path}\" \":(glob)${path}/**\""
+    end
+end
+
+# Git preserves tracked fixtures and does not follow symlinks or remove nested repositories.
+directories = array target target-tarpaulin node_modules dist golem-temp _build .mooncakes .zig-cache zig-cache __pycache__ build-out .bloop .bsp .scala-build
+for scope in ${scopes}
+    for directory in ${directories}
+        cleanup = concat ${cleanup} " \":(glob)${scope}/**/${directory}\" \":(glob)${scope}/**/${directory}/**\""
+    end
+end
+wasm_scopes = array test-components
+if not equals ${components_only} true
+    wasm_scopes = array test-components builtin-tools plugins
+end
+for scope in ${wasm_scopes}
+    cleanup = concat ${cleanup} " \":(glob)${scope}/**/*.wasm\" \":(glob)${scope}/**/*.wat\""
+end
+cleanup = concat ${cleanup} " test-components/tool-streaming-scala/.generated test-components/tool-streaming-scala/.golem"
+cache_clean_code = exec --get-exit-code git clean ${mode} -e tmp/ -e data/ -e logs/ -e research/ -- %{cleanup}
+if not equals ${cache_clean_code} 0
+    echo "Warning: cache cleanup failed; continuing with Cargo cleanup"
+    failed = set true
+end
+
+if not equals ${components_only} true
+    if ${dry_run}
+        echo "Would run cargo clean for the configured target directory"
+    else
+        # Cargo validates the configured target before deletion, including redirected external targets.
+        tracked = exec git ls-files -- "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}"
+        if is_empty ${tracked.stdout}
+            cargo_clean_code = exec --get-exit-code cargo clean
+            if not equals ${cargo_clean_code} 0
+                failed = set true
+            end
+        end
+    end
+end
+if ${failed}
+    trigger_error "Cleanup finished with failures; see the errors above"
+end
 '''

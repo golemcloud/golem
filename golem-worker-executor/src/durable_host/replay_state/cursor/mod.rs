@@ -17,7 +17,7 @@ pub(super) use selection::{
 pub(super) use selection::{missing_start_waits_for, nearest_active_body};
 pub(super) use settling::historical_reconstruction_owner_failure;
 
-use super::claims::{AdmissionRefusal, StartClaim, matching_admission_refusal};
+use super::claims::{AdmissionRefusal, RecordedStart, StartClaim, matching_admission_refusal};
 use super::{
     AbandonedStarts, AgentInvocationResult, AgentInvocationStartedEntry, Arc, AtomicBool,
     AtomicOplogIndex, AtomicU8, BlockedOn, CHUNK_SIZE, CompletionMarker, CompletionMarkers,
@@ -28,8 +28,9 @@ use super::{
     OplogEntryLookupResult, OplogIndex, OplogOps, OplogRegion, OplogScopeProjection, Ordering,
     OwnedAgentId, PublishedPosition, QuotaClass, ReplayCallHandle, ReplayCursor, ReplayEvent,
     ReplayState, ReplayToLiveOutcome, ReplayToLiveRole, ReplayTransitionPhase, Resolution,
-    RetainedStart, RetainedStartCounts, StartClaimAttempt, StreamObservationPositions,
-    ToolAttachmentReconstruction, TransactionMarkers, VecDeque, WorkerExecutorError, debug, warn,
+    RetainedStart, RetainedStartCounts, StartClaimAttempt, StartsByInvocationId,
+    StreamObservationPositions, ToolAttachmentReconstruction, TransactionMarkers, VecDeque,
+    WorkerExecutorError, debug, warn,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::{CardId, StoredCard};

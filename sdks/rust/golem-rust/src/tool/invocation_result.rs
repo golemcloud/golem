@@ -89,6 +89,7 @@ impl<T: Clone> InvocationResultDriver<T> {
         }
     }
 
+    #[cfg_attr(not(feature = "export_golem_agentic"), allow(dead_code))]
     pub(crate) fn detach(&self) -> bool {
         if self.detached.replace(true) {
             return false;
@@ -144,6 +145,7 @@ impl<T: Clone> InvocationResultDriver<T> {
         }
     }
 
+    #[cfg_attr(not(feature = "export_golem_agentic"), allow(dead_code))]
     pub(crate) async fn drive(self: Rc<Self>) {
         poll_fn(|cx| self.poll_progress(cx)).await
     }

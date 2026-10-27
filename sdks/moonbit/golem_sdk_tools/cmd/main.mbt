@@ -140,41 +140,29 @@ fn main {
   }
   if args[1] == "reexports" {
     let options = @lib.parse_reexports_command_args(command_args) catch {
-      @lib.ComponentRoleError(message) => {
-        println("Error: \{message}")
+      e => {
+        println("Error: \{@lib.error_message(e)}")
         @sys.exit(1)
         return
       }
     }
     run_reexports(options.sdk_path, options.target_dir) catch {
-      @lib.ComponentRoleError(message) => {
-        println("Error: \{message}")
-        @sys.exit(1)
-      }
       e => {
-        println("Error: \{e}")
+        println("Error: \{@lib.error_message(e)}")
         @sys.exit(1)
       }
     }
   } else if args[1] == "agents" {
     let options = @lib.parse_agents_command_args(command_args) catch {
-      @lib.ComponentRoleError(message) => {
-        println("Error: \{message}")
+      e => {
+        println("Error: \{@lib.error_message(e)}")
         @sys.exit(1)
         return
       }
     }
     run_agents(options.project_root, options.component_dir) catch {
-      @lib.ComponentRoleError(message) => {
-        println("Error: \{message}")
-        @sys.exit(1)
-      }
-      @lib.ToolEmitError(message) => {
-        println("Error: \{message}")
-        @sys.exit(1)
-      }
       e => {
-        println("Error: \{e}")
+        println("Error: \{@lib.error_message(e)}")
         @sys.exit(1)
       }
     }

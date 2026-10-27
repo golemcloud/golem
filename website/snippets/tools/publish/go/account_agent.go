@@ -11,7 +11,9 @@ var _ = Account.Implement(func(id AccountID) *AccountID {
 }).Handle(Describe, golem.Adapt((*AccountID).describe))
 
 func (*AccountID) describe(in DescribeIn) string {
-    // call the CRM's MCP tool through its generated typed client:
+    // a client generated from the MCP server's schemas:
+    // Golem checks, records and replays it like any tool call:
+    // a retry resends the same idempotency key to the server:
     call := golem.Must(crm.Root.Call(func(a *crm.RootArgs) { //@
         a.Email = in.Email //@
     }))

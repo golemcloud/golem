@@ -558,6 +558,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     key_context,
                     parent,
                     attempt_ordinal,
+                    invocation_id: crate::durable_host::concurrent::InvocationIdSource::HostTask,
                 },
                 command_path,
                 stdin,
@@ -624,9 +625,13 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
         let (response, (), ()) =
             tokio::try_join!(execute, drain(stdout_drain), drain(stderr_drain))
                 .map_err(wasmtime::Error::from_anyhow)?;
-        let response = admit_tool_response_secret_holds(accessor, response)
-            .await
-            .map_err(wasmtime::Error::from_anyhow)?;
+        let response = admit_tool_response_secret_holds(
+            accessor,
+            response,
+            crate::durable_host::concurrent::InvocationIdSource::HostTask,
+        )
+        .await
+        .map_err(wasmtime::Error::from_anyhow)?;
         if let Some((prepared, streams)) = &session {
             let value = ToolInvocationOutput {
                 outcome: response.clone(),
