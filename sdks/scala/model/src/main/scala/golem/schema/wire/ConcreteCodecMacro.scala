@@ -68,6 +68,7 @@ private[wire] object ConcreteCodecMacro {
         case '[BigDecimal]                           => '{ ConcreteCodec.bigDecimal }
         case '[golem.schema.GolemPath]               => '{ ConcreteCodec.path }
         case '[java.net.URI]                         => '{ ConcreteCodec.url }
+        case '[golem.schema.Text]                    => '{ ConcreteCodec.text }
         case _ if tpe.typeSymbol == unstructuredText =>
           tpe.typeArgs.head.asType match {
             case '[l] =>

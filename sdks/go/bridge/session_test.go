@@ -30,6 +30,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
 )
 
 // A scripted session server: each connection runs the next script.
@@ -637,18 +638,126 @@ func TestStreamOfLeavesTheCallersSliceAlone(t *testing.T) {
 }
 
 func TestAStreamIsReadOnce(t *testing.T) {
+	server := newFakeServer(t)
 	s := StreamOf[uint32](1)
 	if _, _, err := s.Next(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	encoded := EncodeStream(EncodeU32)(s)
-	if h := encoded.(schema.StreamValue).Handle.(*inputHandle); !errors.Is(h.err, ErrStreamConsumed) {
-		t.Fatalf("a read stream was given away: %v", h.err)
+	err := InvokeStreaming(ctxT(t), server.agent(t), "consume", streamParams(EncodeStream(EncodeU32)(s)))
+	if !errors.Is(err, ErrStreamConsumed) {
+		t.Fatalf("a read stream was given away: %v", err)
 	}
-	fresh := StreamOf[uint32](1)
-	EncodeStream(EncodeU32)(fresh)
-	if _, _, err := fresh.Next(context.Background()); !errors.Is(err, ErrStreamConsumed) {
-		t.Fatalf("a given stream was read: %v", err)
+	if n := server.connections(); n != 0 {
+		t.Fatalf("a call with a read stream connected %d times", n)
+	}
+}
+
+// Encoding a stream argument does not give it away: a call that fails to
+// encode a later argument leaves the stream with its caller, who can pass it
+// again.
+func TestAStreamOfACallThatFailedToEncodeStaysWithTheCaller(t *testing.T) {
+	items := make(chan []any, 1)
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		items <- consumeInput(c, 1)
+		noResult(c)
+		finished(c)
+		c.waitClose()
+	})
+	produced := make(chan error, 1)
+	s := ProduceStream(func(w *AgentStreamWriter[uint32]) error {
+		err := w.WriteAll(1, 2, 3)
+		produced <- err
+		return err
+	})
+	params := func(q values.Quantity[meters]) (schema.SchemaValue, error) {
+		return Encode(func() schema.SchemaValue {
+			return schema.RecordValue{Fields: []schema.SchemaValue{EncodeStream(EncodeU32)(s), EncodeQuantity(q)}}
+		})
+	}
+	ctx := ctxT(t)
+	if _, err := params(values.Quantity[meters]{Mantissa: 1, Unit: "mi"}); err == nil {
+		t.Fatal("a unit the quantity does not accept was encoded")
+	} else if ee := (*EncodeError)(nil); !errors.As(err, &ee) || !strings.Contains(err.Error(), `unit "mi"`) {
+		t.Fatalf("got %v, want an *EncodeError naming the unit", err)
+	}
+	good, err := params(values.Quantity[meters]{Mantissa: 1, Unit: "km"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := InvokeStreaming(ctx, server.agent(t), "calibrate", good); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-items; !reflect.DeepEqual(got, []any{float64(1), float64(2), float64(3)}) {
+		t.Fatalf("the server read %v", got)
+	}
+	select {
+	case err := <-produced:
+		if err != nil {
+			t.Fatalf("the producer failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the producer never finished")
+	}
+	if n := server.connections(); n != 1 {
+		t.Fatalf("connected %d times", n)
+	}
+}
+
+// An item its schema does not accept fails the call with the encode error;
+// the items before it were sent, and the input is cancelled.
+func TestAnItemItsSchemaRefusesFailsTheCall(t *testing.T) {
+	seen := make(chan []string, 1)
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		var kinds []string
+		for {
+			_, data, err := c.ws.Read(context.Background())
+			if err != nil {
+				break
+			}
+			var r received
+			if err := json.Unmarshal(data, &r.m); err != nil {
+				t.Errorf("client sent bad JSON: %v", err)
+				break
+			}
+			r.kind, _ = r.m["type"].(string)
+			kinds = append(kinds, r.kind)
+			switch r.kind {
+			case "inputStreamItem":
+				if v := r.m["value"].(map[string]any)["value"].(map[string]any); v["unit"] != "m" {
+					t.Errorf("the server got %v", v)
+				}
+				ack(c, 1, 1, false)
+			case "streamCancel":
+				if r.m["reason"] != "source-unavailable" {
+					t.Errorf("cancelled with %v", r.m)
+				}
+			}
+		}
+		seen <- kinds
+	})
+	s := StreamOf(
+		values.Quantity[meters]{Mantissa: 1, Unit: "m"},
+		values.Quantity[meters]{Mantissa: 2, Unit: "mi"},
+		values.Quantity[meters]{Mantissa: 3, Unit: "m"},
+	)
+	err := InvokeStreaming(ctxT(t), server.agent(t), "measure", streamParams(EncodeStream(EncodeQuantity[meters])(s)))
+	var ee *EncodeError
+	if !errors.As(err, &ee) || !strings.Contains(err.Error(), `unit "mi"`) {
+		t.Fatalf("got %v, want an *EncodeError naming the unit", err)
+	}
+	select {
+	case kinds := <-seen:
+		if !reflect.DeepEqual(kinds, []string{"inputStreamItem", "streamCancel"}) {
+			t.Fatalf("the server got %v", kinds)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the failed call kept its connection")
 	}
 }
 
@@ -688,6 +797,12 @@ func TestAStreamArgumentOfAFailedCallIsStopped(t *testing.T) {
 	params := schema.RecordValue{Fields: []schema.SchemaValue{given, again}}
 	if err := InvokeStreaming(ctxT(t), server.agent(t), "consumeTwo", params); !errors.Is(err, ErrStreamConsumed) {
 		t.Fatalf("got %v", err)
+	}
+	if n := server.connections(); n != 0 {
+		t.Fatalf("a call with a stream passed twice connected %d times", n)
+	}
+	if _, _, err := s.Next(context.Background()); !errors.Is(err, ErrStreamConsumed) {
+		t.Fatalf("a given stream was read: %v", err)
 	}
 	if err := w.Write(1); !errors.Is(err, ErrStreamClosed) {
 		t.Fatalf("the writer of a stopped argument wrote: %v", err)

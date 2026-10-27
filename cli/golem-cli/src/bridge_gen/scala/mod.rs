@@ -173,6 +173,9 @@ const GUEST_SCOPE_CARD: &str = "_root_.golem.host.PermissionsApi.ScopeCard";
 const GUEST_QUOTA_TOKEN: &str = "_root_.golem.host.QuotaApi.QuotaToken";
 const GUEST_NAMED_QUOTA_TOKEN: &str = "_root_.golem.host.QuotaApi.NamedQuotaToken";
 const GUEST_UNSTRUCTURED_TEXT: &str = "_root_.golem.schema.UnstructuredText";
+/// The Scala SDK's bare `text` type. The schema restrictions are not encoded in
+/// the type; the server checks them.
+const GUEST_TEXT: &str = "_root_.golem.schema.Text";
 /// The Scala SDK's unstructured binary type. Its `Inline` case is also the
 /// type of a bare `binary`, so both binary forms share one byte type.
 const GUEST_UNSTRUCTURED_BINARY: &str = "_root_.golem.schema.UnstructuredBinary";
@@ -314,6 +317,7 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "UnstructuredBinary",
     "Quantity",
     "QuantityUnit",
+    "Text",
     "Bridge",
     "BridgeProtocol",
     "AgentConfigEntry",
@@ -3126,10 +3130,14 @@ impl ScalaBridgeGenerator {
                     "{{ val {b} = {val_expr}; val {mime} = {b}.mimeType.map(_.toString); {check}; {GUEST_SV}.BinaryValue({b}.data.toVector, {mime}) }}"
                 )
             }
-            SchemaType::Text { .. } => bail!(
-                "Bare text rich scalars have no Scala bridge encoding; \
-                 wrap them in the unstructured text variant ({resolved:?})"
-            ),
+            SchemaType::Text { .. } => match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => {
+                    format!("{GUEST_TEXT}.intoSchema.toValue({val_expr})")
+                }
+                ScalaBridgeMode::ExternalRest => {
+                    format!("{RUNTIME_PKG}.Text.toSchemaValue({val_expr})")
+                }
+            },
             SchemaType::Stream { inner, .. } if self.mode == ScalaBridgeMode::ExternalRest => {
                 let inner = inner
                     .as_deref()
@@ -3336,10 +3344,14 @@ impl ScalaBridgeGenerator {
                     "{val_expr} match {{ case {GUEST_SV}.BinaryValue(bytes, {mime}) => {check}; {GUEST_UNSTRUCTURED_BINARY}.Inline[{allowed}](bytes.toArray, {mime}.asInstanceOf[_root_.scala.Option[{allowed}]]); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected binary value, got $other\") }}"
                 )
             }
-            SchemaType::Text { .. } => bail!(
-                "Bare text rich scalars have no Scala bridge decoding; \
-                 wrap them in the unstructured text variant ({resolved:?})"
-            ),
+            SchemaType::Text { .. } => match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => format!(
+                    "{GUEST_TEXT}.fromSchema.fromValue({val_expr}).fold(__err => throw __err, _root_.scala.Predef.identity)"
+                ),
+                ScalaBridgeMode::ExternalRest => {
+                    format!("{RUNTIME_PKG}.Text.fromSchemaValue({val_expr})")
+                }
+            },
             SchemaType::Stream { inner, .. } if self.mode == ScalaBridgeMode::ExternalRest => {
                 let inner = inner
                     .as_deref()
@@ -3586,10 +3598,10 @@ impl ScalaBridgeGenerator {
                 "{GUEST_UNSTRUCTURED_BINARY}.Inline[{}]",
                 guest_allow_list_type(restrictions.mime_types.as_deref())
             )),
-            SchemaType::Text { .. } => bail!(
-                "Bare text rich scalars have no Scala bridge type; \
-                 wrap them in the unstructured text variant ({resolved:?})"
-            ),
+            SchemaType::Text { .. } => Ok(match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => GUEST_TEXT.to_string(),
+                ScalaBridgeMode::ExternalRest => format!("{RUNTIME_PKG}.Text"),
+            }),
             SchemaType::Stream { inner, .. } if self.mode == ScalaBridgeMode::ExternalRest => {
                 let inner = inner
                     .as_deref()

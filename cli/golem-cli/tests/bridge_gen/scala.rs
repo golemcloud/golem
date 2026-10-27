@@ -32,7 +32,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::schema_type::{
     BinaryRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuotaTokenSpec,
-    UrlRestrictions,
+    TextRestrictions, UrlRestrictions,
 };
 use golem_common::schema::tool::{
     BoolFlagShape, CommandBody, CommandIndex, CommandTree, Doc, ErrorCase, ErrorKind, FlagShape,
@@ -3509,6 +3509,175 @@ fn guest_datetime_duration_url_path_use_sdk_and_java_types() {
     assert!(client.contains("_root_.golem.Datetime.fromInstant(when)"));
     assert!(client.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeDuration("));
     assert!(client.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.asUrl("));
+    assert!(!client.contains("golem.bridge.runtime"));
+    compile_guest_if_enabled(package_dir.as_path());
+}
+
+fn plain_text() -> SchemaType {
+    SchemaType::text(TextRestrictions::default())
+}
+
+fn localized_text() -> SchemaType {
+    SchemaType::text(TextRestrictions {
+        languages: Some(vec!["en".into(), "de".into()]),
+        ..Default::default()
+    })
+}
+
+fn refined_text() -> SchemaType {
+    SchemaType::text(TextRestrictions {
+        max_length: Some(16),
+        regex: Some("^[a-z]+$".into()),
+        ..Default::default()
+    })
+}
+
+/// An agent using bare `text` (unrestricted, with a language allow-list, and
+/// refined by length and regex) as a constructor parameter, a method
+/// parameter, a result, a nested field and a stream element. A user type named
+/// `text` also exists.
+fn bare_text_agent() -> AgentTypeSchema {
+    agent(
+        "CaptionAgent",
+        "scala",
+        vec![field("greeting", plain_text())],
+        vec![
+            method(
+                "caption",
+                vec![field("body", plain_text()), field("slug", refined_text())],
+                Some(localized_text()),
+            ),
+            method(
+                "annotate",
+                vec![field("note", ref_to("note"))],
+                Some(ref_to("note")),
+            ),
+            method(
+                "lines",
+                vec![field("input", SchemaType::stream(Some(refined_text())))],
+                Some(SchemaType::stream(Some(localized_text()))),
+            ),
+            method(
+                "describe",
+                vec![field("value", ref_to("text"))],
+                Some(SchemaType::option(plain_text())),
+            ),
+        ],
+        vec![
+            def(
+                "note",
+                SchemaType::record(vec![
+                    named_field("body", plain_text()),
+                    named_field("title", SchemaType::option(refined_text())),
+                    named_field("tags", SchemaType::list(localized_text())),
+                ]),
+            ),
+            def(
+                "text",
+                SchemaType::record(vec![named_field("value", SchemaType::s32())]),
+            ),
+        ],
+        AgentMode::Durable,
+    )
+}
+
+/// A bare `text` is the runtime `Text` (text and optional language) in
+/// external mode and goes through the native `TextValue` in both directions;
+/// the restrictions stay with the server.
+#[test]
+fn external_bare_text_maps_to_runtime_text() {
+    let pkg = GeneratedPackage::new(bare_text_agent());
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir
+            .join("src/main/scala/golem/bridge/client/caption_agent/CaptionAgentClient.scala"),
+    )
+    .unwrap();
+
+    for expected in [
+        "greeting: _root_.golem.bridge.runtime.Text",
+        "body: _root_.golem.bridge.runtime.Text",
+        "slug: _root_.golem.bridge.runtime.Text",
+        "title: _root_.scala.Option[_root_.golem.bridge.runtime.Text]",
+        "tags: _root_.scala.collection.immutable.List[_root_.golem.bridge.runtime.Text]",
+        "_root_.golem.bridge.runtime.AgentStream[_root_.golem.bridge.runtime.Text]",
+        "_root_.golem.bridge.runtime.Text.toSchemaValue(slug)",
+        "_root_.golem.bridge.runtime.Text.fromSchemaValue(",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
+    assert!(!client.contains("final case class Text("));
+    assert!(!client.contains("Bare text"));
+
+    let graph = SchemaGraph {
+        defs: vec![],
+        root: localized_text(),
+    };
+    let graph_json = serde_json::to_string(&serde_json::to_string(&graph).unwrap()).unwrap();
+    run_sbt_test(
+        package_dir.as_path(),
+        &r#"
+package golem.bridge.runtime
+
+import golem.bridge.client.caption_agent.{Codecs, Note}
+
+class StreamRuntimeTest extends munit.FunSuite {
+  test("bare text round-trips through the runtime codec and the generated record codec") {
+    assertEquals(Text.toSchemaValue(Text("hello")), SchemaValue.TextValue("hello", None))
+    assertEquals(Text.toSchemaValue(Text("hallo", Some("de"))), SchemaValue.TextValue("hallo", Some("de")))
+    assertEquals(Text.fromSchemaValue(SchemaValue.TextValue("hello", Some("en"))), Text("hello", Some("en")))
+    intercept[BridgeException](Text.fromSchemaValue(SchemaValue.StringValue("hello")))
+    val note = Note(Text("body"), Some(Text("slug")), List(Text("hi", Some("en")), Text("hallo", Some("de"))))
+    assertEquals(
+      Codecs.encodeNote(note),
+      SchemaValue.RecordValue(
+        List(
+          SchemaValue.TextValue("body", None),
+          SchemaValue.OptionValue(Some(SchemaValue.TextValue("slug", None))),
+          SchemaValue.ListValue(List(SchemaValue.TextValue("hi", Some("en")), SchemaValue.TextValue("hallo", Some("de"))))
+        )
+      )
+    )
+    assertEquals(Codecs.decodeNote(Codecs.encodeNote(note)), note)
+    val json = SchemaValueCodec.toJson(Codecs.encodeNote(note))
+    assertEquals(SchemaValueCodec.fromJson(json).map(Codecs.decodeNote), Right(note))
+  }
+  test("the public value codec carries bare text with and without a language") {
+    val codec = PublicValueCodec.fromSchemaGraphJson(__GRAPH__)
+    for (value <- List(SchemaValue.TextValue("hello", None), SchemaValue.TextValue("hallo", Some("de")))) {
+      assertEquals(codec.decode(codec.encode(value)), value)
+    }
+  }
+}
+"#
+        .replace("__GRAPH__", &graph_json),
+    );
+}
+
+/// A bare `text` is the SDK's `golem.schema.Text` in guest mode, encoded and
+/// decoded through its schema instances.
+#[test]
+fn guest_bare_text_uses_sdk_text() {
+    let pkg = GeneratedPackage::new_with_mode(bare_text_agent(), ScalaBridgeMode::GuestWasmRpc);
+    let package_dir = pkg.package_dir();
+    let client = std::fs::read_to_string(
+        package_dir
+            .join("src/main/scala/golem/bridge/client/caption_agent/CaptionAgentClient.scala"),
+    )
+    .unwrap();
+
+    for expected in [
+        "greeting: _root_.golem.schema.Text",
+        "body: _root_.golem.schema.Text",
+        "slug: _root_.golem.schema.Text",
+        "title: _root_.scala.Option[_root_.golem.schema.Text]",
+        "tags: _root_.scala.collection.immutable.List[_root_.golem.schema.Text]",
+        "_root_.golem.schema.AgentStream[_root_.golem.schema.Text]",
+        "_root_.golem.schema.Text.intoSchema.toValue(slug)",
+        "_root_.golem.schema.Text.fromSchema.fromValue(",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
     assert!(!client.contains("golem.bridge.runtime"));
     compile_guest_if_enabled(package_dir.as_path());
 }

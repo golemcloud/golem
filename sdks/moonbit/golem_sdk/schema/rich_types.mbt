@@ -445,10 +445,7 @@ pub impl WireSchema for Url with fn append_wire_type(encoder) {
 
 ///|
 pub impl[S] IntoWire for Text[S] with fn append_wire(self, encoder) {
-  let language = match self.language {
-    Some(language) => Some(wire_text(language, "text language"))
-    None => None
-  }
+  let language = wire_optional_text(self.language, "text language")
   encoder.push(
     @types.TextValue({ text: wire_text(self.value, "text"), language, }),
   )

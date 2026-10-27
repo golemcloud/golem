@@ -75,6 +75,8 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
 
   final case class Located(path: GolemPath, url: URI)
   object Located { implicit val schema: Schema[Located] = Schema.derived }
+  final case class Captioned(caption: Text, note: Option[Text], lines: List[Text])
+  object Captioned { implicit val schema: Schema[Captioned] = Schema.derived }
 
   private def decodeFailure[A](result: Try[A]): Boolean =
     result.failed.toOption.exists(_.isInstanceOf[SchemaDecodeError])
@@ -148,6 +150,28 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
         SchemaWire.schemaGraphFromWit(nested.graph) == IntoSchema[UuidHolder].graph,
         SchemaWire.schemaValueFromWit(nested.value) == IntoSchema[UuidHolder].toValue(holder),
         FromSchema[UuidHolder].fromValue(SchemaWire.schemaValueFromWit(nested.value)) == Right(holder)
+      )
+    },
+    test("bare text uses the text node and matches the schema-value path") {
+      val codec  = ConcreteCodec.derived[Captioned]
+      val record = Captioned(Text("caption", Some("en")), Some(Text("note")), List(Text("a"), Text("b", Some("de"))))
+      val nested = codec.encode(record)
+      assertTrue(
+        ConcreteCodec.text.graph == WitSchemaGraph(
+          Vector(WitSchemaTypeNode(WitSchemaTypeBody.TextType(TextRestrictions.empty), MetadataEnvelope.empty)),
+          Vector.empty,
+          0
+        ),
+        ConcreteCodec.text.encodeValue(Text("hi", Some("en"))) ==
+          WitSchemaValueTree(Vector(WitSchemaValueNode.TextValue(WitTextValuePayload("hi", Some("en")))), 0),
+        ConcreteCodec.text.decode(ConcreteCodec.text.encodeValue(Text("hi"))) == Text("hi"),
+        SchemaWire.schemaGraphFromWit(ConcreteCodec.text.graph) == IntoSchema[Text].graph,
+        codec.decode(nested.value) == record,
+        SchemaWire.schemaGraphFromWit(nested.graph) == IntoSchema[Captioned].graph,
+        SchemaWire.schemaValueFromWit(nested.value) == IntoSchema[Captioned].toValue(record),
+        FromSchema[Captioned].fromValue(SchemaWire.schemaValueFromWit(nested.value)) == Right(record),
+        encodeFailure(Try(ConcreteCodec.text.encodeValue(Text("a\ud800")))),
+        encodeFailure(Try(ConcreteCodec.text.encodeValue(Text("ok", Some("\udc00")))))
       )
     },
     test("sets use list carriers and decode with set semantics") {

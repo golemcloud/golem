@@ -196,6 +196,12 @@ func (in *inputStream) pump() {
 		if err != nil {
 			if in.s.life.Err() == nil {
 				in.unavailable()
+				// An item its schema does not accept is the caller's mistake,
+				// not the source's, so the call fails with it.
+				var invalid *EncodeError
+				if errors.As(err, &invalid) {
+					in.s.abort(err)
+				}
 			}
 			return
 		}
@@ -333,8 +339,8 @@ func (s *session) registerNested(v schema.SchemaValue) (schema.SchemaValue, erro
 		if !ok {
 			return nil, errors.New("golem: a stream inside a stream item must be a bridge.AgentStream")
 		}
-		if h.err != nil {
-			return nil, h.err
+		if err := h.claim(); err != nil {
+			return nil, err
 		}
 		in := &inputStream{s: s, h: h, provisional: newUUID(), wake: make(chan struct{}, 1)}
 		s.byProvisional[in.provisional] = in

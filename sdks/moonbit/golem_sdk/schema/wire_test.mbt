@@ -433,6 +433,21 @@ test "unpaired surrogates are rejected on both encode paths" {
       s,
       @schema.Path::new(s),
       @schema.Url::new(s),
+      (
+        @schema.UnstructuredText::Inline(text=s, language=None) :
+        @schema.UnstructuredText[@schema.AnyLanguage]),
+      (
+        @schema.UnstructuredText::Inline(text="ok", language=Some(s)) :
+        @schema.UnstructuredText[@schema.AnyLanguage]),
+      (
+        @schema.UnstructuredText::Url(s) :
+        @schema.UnstructuredText[@schema.AnyLanguage]),
+      (
+        @schema.UnstructuredBinary::Inline(bytes=b"ok", mime_type=Some(s)) :
+        @schema.UnstructuredBinary[@schema.AnyMimeType]),
+      (
+        @schema.UnstructuredBinary::Url(s) :
+        @schema.UnstructuredBinary[@schema.AnyMimeType]),
     ]
     for value in wire_values {
       try {
@@ -469,6 +484,27 @@ test "unpaired surrogates are rejected on both encode paths" {
   assert_eq(decoded, emoji)
   let tree = @model.schema_value_to_wit(@schema.IntoSchema::to_value(emoji))
   assert_eq(tree.value_nodes, [@types.StringValue(emoji)])
+  let text : @schema.UnstructuredText[@schema.AnyLanguage] = Inline(
+    text=emoji,
+    language=Some(emoji),
+  )
+  let decoded_text : @schema.UnstructuredText[@schema.AnyLanguage] = @schema.from_wire(
+    @schema.into_wire(text),
+  )
+  assert_eq(decoded_text, text)
+  let binary : @schema.UnstructuredBinary[@schema.AnyMimeType] = Inline(
+    bytes=b"ok",
+    mime_type=Some(emoji),
+  )
+  let decoded_binary : @schema.UnstructuredBinary[@schema.AnyMimeType] = @schema.from_wire(
+    @schema.into_wire(binary),
+  )
+  assert_eq(decoded_binary, binary)
+  let url : @schema.UnstructuredText[@schema.AnyLanguage] = Url(emoji)
+  let decoded_url : @schema.UnstructuredText[@schema.AnyLanguage] = @schema.from_wire(
+    @schema.into_wire(url),
+  )
+  assert_eq(decoded_url, url)
 }
 
 ///|
