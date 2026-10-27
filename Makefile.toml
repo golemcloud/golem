@@ -451,14 +451,7 @@ if [ -f target/.local-publish-marker ]; then
     echo "Scala SDK already published locally, skipping (delete sdks/scala/target/.local-publish-marker to force)"
 else
     ./scripts/generate-agent-guest-wasm.sh
-    sbt 'set every version := "0.0.0-SNAPSHOT"' \
-        '+modelJVM/publishLocal' \
-        '+modelJS/publishLocal' \
-        '+macros/publishLocal' \
-        'core/publishLocal' \
-        '+codegen/publishLocal' \
-        '++2.12.21' \
-        'sbtPlugin/publishLocal'
+    sbt golemPublishLocal
     mkdir -p target
     touch target/.local-publish-marker
 fi

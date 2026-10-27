@@ -74,7 +74,10 @@ pub use agent::{
     RedactedAgentInvocationResult, ScheduleId, ScheduledAction, SnapshotFiles,
     SuccessfulUpdateRecord, TimestampedAgentInvocation, UsableAutomaticSnapshot,
 };
-pub use card::{ReceivedCardTransferIndex, ReceivedCardTransferState};
+pub use card::{
+    ReceivedCardTransferIndex, ReceivedCardTransferState, SourceCardTransferIndex,
+    SourceCardTransferState,
+};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,

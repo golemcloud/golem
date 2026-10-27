@@ -200,6 +200,10 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 		}
 		declared := b.Cases[n.Case]
 		if n.Payload == nil {
+			if declared.Payload != nil {
+				return nil, fmt.Errorf("%s: variant case %q declares a payload but carries none",
+					pathOrRoot(path), declared.Name)
+			}
 			// A payload-less case is just its name.
 			return declared.Name, nil
 		}
@@ -315,15 +319,19 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 		if n.IsErr {
 			arm, declared = "err", b.Err
 		}
-		out := map[string]any{arm: nil}
-		if declared != nil && n.Value != nil {
-			rendered, err := u.render(*declared, *n.Value, child(path, arm))
-			if err != nil {
-				return nil, err
-			}
-			out[arm] = rendered
+		switch {
+		case declared == nil && n.Value != nil:
+			return nil, fmt.Errorf("%s: result arm %q carries a payload but declares none", pathOrRoot(path), arm)
+		case declared != nil && n.Value == nil:
+			return nil, fmt.Errorf("%s: result arm %q declares a payload but carries none", pathOrRoot(path), arm)
+		case declared == nil:
+			return map[string]any{arm: nil}, nil
 		}
-		return out, nil
+		rendered, err := u.render(*declared, *n.Value, child(path, arm))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{arm: rendered}, nil
 
 	case UnionType:
 		// A union is written as its branch body: the tag is recovered by the

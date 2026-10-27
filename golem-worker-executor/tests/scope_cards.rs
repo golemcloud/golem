@@ -8000,3 +8000,110 @@ async fn derived_templates_bind_to_the_install_target_and_survive_reconstruction
     }
     Ok(())
 }
+
+#[test]
+#[timeout("3m")]
+async fn template_transfer_repaired_after_its_derived_child_reuses_the_child(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor =
+        moonbit::start_local_card_transfer_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let grants = &mut config.initial_permissions.lower_bound.positive;
+            grants.extend(scope_card_initial_permissions());
+            grants.push(parse_polymorphic_permission("card(*) @ * : install : *").unwrap());
+            grants
+                .push(parse_polymorphic_permission("env(*/*/*/*/*) @ * : read : GOL905").unwrap());
+            grants.push(env_permission("GOL905_SCOPED"));
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "repaired-template-deriver");
+    let target = agent_id!("ScopeCardAgent", "repaired-template-recipient");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    executor.start_agent(&component.id, target.clone()).await?;
+
+    // The transfer commits the CardDerived of its installed child, and the crash comes before
+    // its queued retry payload is appended.
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor
+        .gate_next_source_transfer_queued_append(&caller_worker)
+        .await;
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "derive_and_install_template",
+            data_value!(component.id, target.to_string(), "template".to_string()),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
+    let created_before_crash = authority.create_card_count.load(Ordering::SeqCst);
+    gate.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(gate);
+    drop(executor);
+
+    let executor =
+        moonbit::start_local_card_transfer_executor(deps, &context, authority.clone()).await?;
+    let (_, _, checks) = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "derive_and_install_template",
+            data_value!(component.id, target.to_string(), "template".to_string()),
+        )
+        .await?
+        .into_typed::<(SchemaCardId, SchemaCardId, Vec<(String, bool)>)>()?;
+    for (name, passed) in &checks {
+        assert!(passed, "{name}");
+    }
+    assert_eq!(
+        authority.create_card_count.load(Ordering::SeqCst),
+        created_before_crash,
+        "the repaired transfer must reuse the installed child that its CardDerived recorded"
+    );
+
+    let entries = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardEventQueued(params)
+                    if matches!(params.event, PublicQueuedCardEvent::TransferStarted(_))
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::CardTransferConfirmed(_)))
+            .count(),
+        1
+    );
+    let installed = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "installed_template_grants",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<(SchemaCardId, Vec<SchemaCardId>, String)>>()?;
+    assert_eq!(installed.len(), 1);
+    Ok(())
+}

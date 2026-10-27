@@ -367,6 +367,7 @@ where
                 entity_parent_start_index: parent,
                 card: Box::new(created.clone()),
                 wallet_generation: 0,
+                transfer_id: None,
             })
             .await?;
         }
