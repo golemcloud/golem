@@ -1836,3 +1836,154 @@ func TestReconnectsAfterAnImmediateCloseBackOff(t *testing.T) {
 		t.Fatalf("five connections took only %v", elapsed)
 	}
 }
+
+// faultyItemCall runs a call whose one stream argument yields an item the
+// call cannot send, and returns what the server got after accepting it and
+// the call's error.
+func faultyItemCall(t *testing.T, arg schema.SchemaValue) ([]string, error) {
+	t.Helper()
+	seen := make(chan []string, 1)
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		var got []string
+		for {
+			r := c.readUntilClose()
+			if r.kind == "" {
+				break
+			}
+			got = append(got, r.kind)
+			if r.kind == "streamCancel" && r.m["reason"] != "source-unavailable" {
+				t.Errorf("cancelled with %v", r.m)
+			}
+		}
+		seen <- got
+	})
+	err := InvokeStreaming(ctxT(t), server.agent(t), "consume", streamParams(arg))
+	select {
+	case got := <-seen:
+		return got, err
+	case <-time.After(30 * time.Second):
+		t.Fatal("the failed call kept its connection")
+		return nil, nil
+	}
+}
+
+// readUntilClose reads the next message, or nothing once the client closed
+// the connection.
+func (c *fakeConn) readUntilClose() received {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	kind, data, err := c.ws.Read(ctx)
+	if err != nil {
+		return received{}
+	}
+	if kind == websocket.MessageBinary {
+		f, err := decodeBinary(data)
+		if err != nil {
+			c.t.Errorf("client sent a bad frame: %v", err)
+		}
+		return received{kind: f.kind, binary: &f}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		c.t.Errorf("client sent bad JSON: %v", err)
+	}
+	return received{kind: m["type"].(string), m: m}
+}
+
+// An item the call cannot send fails the call with a StreamItemError; the
+// input is cancelled as unavailable and nothing of the item is sent.
+func TestAnItemTheCallCannotSendFailsTheCall(t *testing.T) {
+	consumed := StreamOf[uint32](1)
+	if _, _, err := consumed.Next(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	notAMediaType := "png"
+	for _, tc := range []struct {
+		name    string
+		arg     schema.SchemaValue
+		message string
+		is      error
+	}{
+		{
+			name: "a u8 lane item that is not a u8",
+			arg: EncodeStream(func(uint8) schema.SchemaValue { return schema.StringValue{Value: "x"} })(
+				StreamOf[uint8](1)),
+			message: "expected a u8 value",
+		},
+		{
+			name: "a binary lane item that is not binary",
+			arg: EncodeStream(func(values.Binary) schema.SchemaValue { return schema.U8Value{Value: 1} })(
+				StreamOf(values.Binary{1})),
+			message: "expected a binary value",
+		},
+		{
+			name:    "a binary item over the size limit",
+			arg:     EncodeStream(EncodeBinary)(StreamOf(make(values.Binary, maxBinaryBytes+1))),
+			message: "exceeds 16 MiB",
+		},
+		{
+			name: "a binary item whose media type is not one",
+			arg: EncodeStream(func(v values.Binary) schema.SchemaValue {
+				return schema.BinaryValue{Bytes: v, MimeType: &notAMediaType}
+			})(StreamOf(values.Binary{1})),
+			message: `"png" is not a MIME type`,
+		},
+		{
+			name:    "a JSON item over the size limit",
+			arg:     EncodeStream(EncodeString)(StreamOf(strings.Repeat("\x01", maxBinaryBytes/6+1))),
+			message: "exceeds 16 MiB",
+		},
+		{
+			name:    "an item holding a stream that was already read",
+			arg:     EncodeStream(EncodeStream(EncodeU32))(StreamOf(consumed)),
+			message: "",
+			is:      ErrStreamConsumed,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := faultyItemCall(t, tc.arg)
+			var unsendable *StreamItemError
+			if !errors.As(err, &unsendable) || !strings.Contains(err.Error(), tc.message) {
+				t.Fatalf("got %v, want a *StreamItemError saying %q", err, tc.message)
+			}
+			if tc.is != nil && !errors.Is(err, tc.is) {
+				t.Fatalf("got %v, want one that is %v", err, tc.is)
+			}
+			if !reflect.DeepEqual(got, []string{"streamCancel"}) {
+				t.Fatalf("the server got %v", got)
+			}
+		})
+	}
+}
+
+// A source that fails only makes its input unavailable: the server decides
+// what that means for the call, and here it still completes it.
+func TestAFailingSourceDoesNotFailTheCall(t *testing.T) {
+	cancelled := make(chan map[string]any, 1)
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		c.expect("inputStreamItem")
+		ack(c, 1, 1, false)
+		cancelled <- c.expect("streamCancel").m
+		noResult(c)
+		finished(c)
+		c.waitClose()
+	})
+	source := ProduceStream(func(w *AgentStreamWriter[uint32]) error {
+		if err := w.Write(1); err != nil {
+			return err
+		}
+		return errors.New("disk gone")
+	})
+	if err := InvokeStreaming(ctxT(t), server.agent(t), "consume", streamParams(EncodeStream(EncodeU32)(source))); err != nil {
+		t.Fatalf("a failing source failed the call: %v", err)
+	}
+	if m := <-cancelled; m["reason"] != "source-unavailable" {
+		t.Fatalf("cancelled with %v", m)
+	}
+}

@@ -40,3 +40,13 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Err }
+
+// StreamItemError is an item of a stream argument that the call cannot send:
+// one of the wrong kind for its stream's lane, one over the protocol's size
+// limit, or one holding a stream that cannot be given away. It fails the call;
+// Err says what was wrong with the item.
+type StreamItemError struct{ Err error }
+
+func (e *StreamItemError) Error() string { return e.Err.Error() }
+
+func (e *StreamItemError) Unwrap() error { return e.Err }
