@@ -2908,6 +2908,17 @@ cached_handle_reports_card_expired_after_its_lifespan,
 derive_from_a_card_that_expires_before_its_creation_records_card_expired,
 a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_revoked}`.
 
+Source transfer progress is status state, not an oplog scan. The fold keeps
+`AgentStatusRecord::source_card_transfers` (`worker/status/fields.rs::calculate_source_card_transfers`):
+per transfer ID the first `CardDerived` (linked by its `transfer_id`), queued `TransferStarted`
+payload, `CardTransferStarted` and `CardTransferConfirmed`, or `Conflict` when two records of one
+kind differ. Every producer commits through the status actor, so the boundary's prepare and
+confirm steps and the guest `install-card` path read `get_repaired_status()` and no oplog entry.
+The index is sticky across skipped and deleted regions and keeps confirmed transfers. A repair
+after `CardDerived` reuses the recorded child instead of creating it again. Tests:
+`tests/api/mod.rs::pending_source_card_transfer_boundary_reads_no_oplog_entry`,
+`tests/scope_cards.rs::template_transfer_repaired_after_its_derived_child_reuses_the_child`.
+
 ### Card authorization decisions
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card

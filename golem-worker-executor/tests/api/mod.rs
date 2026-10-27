@@ -2075,6 +2075,116 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn pending_source_card_transfer_boundary_reads_no_oplog_entry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::base_model::oplog::QueuedCardEvent;
+    use golem_common::model::Timestamp;
+    use golem_common::model::card::{AgentCardHolder, CardHolder};
+    use golem_common::model::oplog::{LogLevel, OplogEntry, PublicOplogEntry};
+
+    // The old boundary read every entry from the queued transfer to the end of the oplog, so its
+    // cost grew with these entries.
+    const ENTRIES_AFTER_QUEUED_TRANSFER: u64 = 50;
+
+    let recorded_transfers = Arc::new(Mutex::new(Vec::new()));
+    let overrides = TestExecutorOverrides {
+        wrap_worker_proxy: Some(Arc::new({
+            let recorded_transfers = recorded_transfers.clone();
+            move |inner| recording_accepting_card_transfer_proxy(inner, recorded_transfers.clone())
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let run_id = uuid::Uuid::new_v4();
+    let source_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", format!("boundary-transfer-source-{run_id}")),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: AgentId {
+            component_id: component.id,
+            agent_id: agent_id!("Counter", format!("boundary-transfer-target-{run_id}"))
+                .to_string(),
+        },
+    });
+    let card = registry_test_card();
+    let transfer_id = uuid::Uuid::new_v4();
+
+    executor
+        .add_and_commit_oplog_entry(
+            &source_agent_id,
+            OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder,
+                )),
+            ),
+        )
+        .await?;
+    for index in 0..ENTRIES_AFTER_QUEUED_TRANSFER {
+        executor
+            .add_and_commit_oplog_entry(
+                &source_agent_id,
+                OplogEntry::Log {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    level: LogLevel::Info,
+                    context: String::new(),
+                    message: format!("after queued transfer {index}"),
+                    trace_context: None,
+                },
+            )
+            .await?;
+    }
+    assert!(recorded_transfers.lock().unwrap().is_empty());
+
+    // The next boundary starts, delivers and confirms the pending transfer. It must take the
+    // progress of the transfer from the status, not from the entries after the queued event.
+    let entries_read_before = executor.oplog_entries_read(&source_agent_id);
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let entries_read = executor.oplog_entries_read(&source_agent_id) - entries_read_before;
+
+    assert_eq!(recorded_transfers.lock().unwrap().len(), 1);
+    let entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferConfirmed(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries_read, 0,
+        "the wallet read, whose card event boundary prepares and confirms the pending source \
+         transfer, read {entries_read} oplog entries"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn pending_self_card_transfer_recovery_does_not_deadlock(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
