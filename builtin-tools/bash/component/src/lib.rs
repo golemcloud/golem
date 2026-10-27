@@ -70,7 +70,7 @@ pub enum BashError {
 /// Use shell commands, pipelines and redirections to inspect or modify files and call bound
 /// tools. Each call starts a fresh shell; shell variables, functions and jobs do not persist
 /// between calls. Filesystem changes do persist.
-#[tool_definition(version = "0.3.1")]
+#[tool_definition(version = "0.3.2")]
 pub trait Bash {
     /// Execute a Bash script and return stdout, stderr, exit code and the final working directory.
     ///
