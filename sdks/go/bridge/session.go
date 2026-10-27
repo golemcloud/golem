@@ -62,10 +62,11 @@ const (
 	// stableConnection is how long a connection must stay up for the next
 	// reconnect to start without a delay.
 	stableConnection = 5 * time.Second
-	// reconnectWindow bounds how long a session keeps trying to reach the
-	// server before it gives up.
-	reconnectWindow = 5 * time.Minute
 )
+
+// connectTimeout bounds one connection attempt: the TCP connect, the TLS
+// handshake and the WebSocket upgrade together.
+var connectTimeout = 10 * time.Second
 
 type session struct {
 	agent  *Agent
@@ -100,6 +101,12 @@ type session struct {
 	// nextDelay is the delay the next connection attempt waits after a
 	// connection that did not stay up.
 	nextDelay time.Duration
+	// progress is when the session last made progress: the open, or when
+	// it left an operation the server had accepted. The reconnect window
+	// runs from it.
+	progress time.Time
+	// lastCause is why the last connection attempt or connection failed.
+	lastCause error
 	// resumeOp is the operation of the pending resume: "resume", or
 	// "takeover" once the server refused a resume because the old
 	// attachment is still live. It stays "takeover" until a resume is
@@ -154,6 +161,7 @@ func openSession(a *Agent, method string, params schema.SchemaValue) (*session, 
 		cursors:       map[string]string{},
 		result:        make(chan sessionResult, 1),
 		done:          make(chan struct{}),
+		progress:      time.Now(),
 	}
 	seen := map[*inputHandle]bool{}
 	var err error
@@ -386,37 +394,65 @@ func (s *session) url() string {
 	return base + sessionEndpoint
 }
 
-// connect dials until a connection is up, then sends the frozen operation.
+// connect dials until a connection is up, then sends the frozen operation. It
+// fails the session with an *UnreachableError once the reconnect window has
+// passed without progress.
 func (s *session) connect(delay time.Duration) {
-	started := time.Now()
+	window := s.agent.configuration.reconnectWindow()
 	for {
+		s.mu.Lock()
+		progress := s.progress
+		s.mu.Unlock()
+		remaining := func() time.Duration {
+			if window == 0 {
+				return connectTimeout
+			}
+			return window - time.Since(progress)
+		}
 		if delay > 0 {
 			select {
-			case <-time.After(delay):
+			case <-time.After(min(delay, max(remaining(), 0))):
 			case <-s.life.Done():
 				return
 			}
 		}
 		delay = min(max(delay*2, firstRetryDelay), maxRetryDelay)
+		left := remaining()
+		if left <= 0 {
+			s.mu.Lock()
+			cause := s.lastCause
+			s.mu.Unlock()
+			s.fail(&UnreachableError{Endpoint: s.url(), Window: window, Cause: cause})
+			return
+		}
 		options := &websocket.DialOptions{
 			Subprotocols:    []string{sessionSubprotocol},
 			HTTPHeader:      http.Header{"Authorization": {"Bearer " + s.agent.configuration.Server.Token()}},
 			CompressionMode: websocket.CompressionDisabled,
 		}
 		options.HTTPClient = dialClient(s.agent.configuration.client())
-		ws, response, err := websocket.Dial(s.life, s.url(), options)
+		attempt, cancel := context.WithTimeout(s.life, min(left, connectTimeout))
+		ws, response, err := websocket.Dial(attempt, s.url(), options)
+		// An attempt cut short by the end of the window keeps the earlier cause.
+		cutShort := left < connectTimeout && attempt.Err() != nil
+		cancel()
 		if err != nil {
 			if s.life.Err() != nil {
 				return
 			}
-			if response != nil && !retryableStatus(response.StatusCode) {
-				s.fail(&Error{Endpoint: "invoke-agent-session", Status: response.StatusCode, Err: err})
-				return
+			failure := &Error{Endpoint: "invoke-agent-session", Err: err}
+			if response != nil {
+				failure.Status = response.StatusCode
+				if !retryableStatus(response.StatusCode) {
+					s.fail(failure)
+					return
+				}
 			}
-			if time.Since(started) > reconnectWindow {
-				s.fail(&Error{Endpoint: "invoke-agent-session", Err: err})
-				return
+			s.mu.Lock()
+			if !cutShort || s.lastCause == nil {
+				s.lastCause = failure
 			}
+			s.mu.Unlock()
 			continue
 		}
 		if ws.Subprotocol() != sessionSubprotocol {
@@ -468,7 +504,7 @@ func (s *session) write(c *sessionConn) {
 			err := c.ws.Write(s.life, kind, f.data)
 			c.endWrite()
 			if err != nil {
-				s.lost(c)
+				s.lost(c, err)
 				return
 			}
 		}
@@ -484,7 +520,7 @@ func (s *session) read(c *sessionConn) {
 	for {
 		kind, data, err := c.ws.Read(s.life)
 		if err != nil {
-			s.lost(c)
+			s.lost(c, err)
 			return
 		}
 		if kind == websocket.MessageText {
@@ -524,7 +560,7 @@ func (s *session) ping(c *sessionConn) {
 				pongMissedWhileParked(before, c.activity()) {
 				continue
 			}
-			s.lost(c)
+			s.lost(c, err)
 			return
 		}
 	}
@@ -532,13 +568,14 @@ func (s *session) ping(c *sessionConn) {
 
 // lost handles a connection that dropped: the session detaches every stream
 // and reconnects.
-func (s *session) lost(c *sessionConn) {
+func (s *session) lost(c *sessionConn, cause error) {
 	s.mu.Lock()
 	if s.conn != c || s.over {
 		s.mu.Unlock()
 		c.shut()
 		return
 	}
+	s.lastCause = &Error{Endpoint: "invoke-agent-session", Err: cause}
 	err := s.detach()
 	delay := s.retryDelay(c)
 	s.mu.Unlock()
@@ -565,6 +602,11 @@ func (s *session) retryDelay(c *sessionConn) time.Duration {
 // operation: the same start again before acceptance, a resume after it.
 // Called with s.mu held.
 func (s *session) detach() error {
+	// Leaving an accepted operation ends a period of progress, so the
+	// reconnect window starts again.
+	if s.accepted {
+		s.progress = time.Now()
+	}
 	s.conn = nil
 	clear(s.channels)
 	clear(s.tokenChannels)
@@ -774,7 +816,7 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 		if reason, err := m.str("reason"); err != nil || reason != "replaced" {
 			return protocolErrorf("invalid revocation reason")
 		}
-		s.lost(c)
+		s.lost(c, errors.New("the attachment was replaced"))
 		return nil
 	case "invocationFinished":
 		if err := m.members(kind, []string{"outcome"}); err != nil {
@@ -859,6 +901,7 @@ func (s *session) rejected(c *sessionConn, m message) error {
 			return &SessionError{Code: code, Message: text}
 		}
 		s.resumeOp = "takeover"
+		s.lastCause = &SessionError{Code: code, Message: text}
 		if err := s.detach(); err != nil {
 			s.mu.Unlock()
 			return err
@@ -879,6 +922,7 @@ func (s *session) rejected(c *sessionConn, m message) error {
 	}
 	// A retryable rejection means a new attempt may reach the agent: a resume
 	// once the call was accepted, otherwise a fresh start.
+	s.lastCause = &SessionError{Code: code, Message: text}
 	if err := s.detach(); err != nil {
 		s.mu.Unlock()
 		return err

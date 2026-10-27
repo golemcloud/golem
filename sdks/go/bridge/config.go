@@ -18,6 +18,16 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
+)
+
+const (
+	// DefaultReconnectWindow is the reconnect window of a configuration that
+	// does not set one.
+	DefaultReconnectWindow = 5 * time.Minute
+	// NoReconnectLimit is a reconnect window without a limit: a streaming
+	// call keeps reconnecting until its context ends.
+	NoReconnectLimit time.Duration = -1
 )
 
 // Configuration is what a generated client needs to reach an agent: the server,
@@ -30,6 +40,22 @@ type Configuration struct {
 	// which is fine for a script and wrong for a service that needs its own
 	// timeouts and connection pool.
 	HTTPClient *http.Client
+	// ReconnectWindow is how long a streaming call keeps reconnecting while
+	// the server accepts neither its start nor a resume. After the window the
+	// call fails with an *UnreachableError. Zero means DefaultReconnectWindow;
+	// NoReconnectLimit removes the limit.
+	ReconnectWindow time.Duration
+}
+
+// reconnectWindow is the effective window; zero means no limit.
+func (c Configuration) reconnectWindow() time.Duration {
+	switch c.ReconnectWindow {
+	case 0:
+		return DefaultReconnectWindow
+	case NoReconnectLimit:
+		return 0
+	}
+	return c.ReconnectWindow
 }
 
 // client is the HTTP client to send with, never nil.
@@ -48,6 +74,8 @@ func (c Configuration) validate() error {
 		return fmt.Errorf("golem: no application name configured")
 	case c.EnvName == "":
 		return fmt.Errorf("golem: no environment name configured")
+	case c.ReconnectWindow < 0 && c.ReconnectWindow != NoReconnectLimit:
+		return fmt.Errorf("golem: the reconnect window must be positive, zero or bridge.NoReconnectLimit")
 	}
 	return nil
 }

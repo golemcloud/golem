@@ -14,7 +14,10 @@
 
 package bridge
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Error is a call that did not produce a result. Endpoint always says which
 // call it was; Status and Body are set only when the server answered, so a
@@ -50,3 +53,20 @@ type StreamItemError struct{ Err error }
 func (e *StreamItemError) Error() string { return e.Err.Error() }
 
 func (e *StreamItemError) Unwrap() error { return e.Err }
+
+// UnreachableError is a streaming call that could not reach the server within
+// its reconnect window: the server accepted neither the start nor a resume. Endpoint
+// is the WebSocket URL; Cause is the last failure, such as an *Error with the
+// HTTP status of a refused upgrade, a *SessionError with a retryable
+// rejection, or a connection error.
+type UnreachableError struct {
+	Endpoint string
+	Window   time.Duration
+	Cause    error
+}
+
+func (e *UnreachableError) Error() string {
+	return fmt.Sprintf("golem: %s unreachable for %v: %v", e.Endpoint, e.Window, e.Cause)
+}
+
+func (e *UnreachableError) Unwrap() error { return e.Cause }
