@@ -17,8 +17,11 @@ import {
   publicValueCodec,
   schemaGraphFromWire,
   schemaType,
+  StreamingProtocolError,
+  StreamingUnreachableError,
   Uuid,
 } from '../dist/index.mjs';
+import { createServer as createTcpServer } from 'node:net';
 
 const outputMapping = {
   channel: 2,
@@ -842,7 +845,7 @@ test('uncertain pre-acceptance close exact-retries the frozen start', async () =
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value) => value.value.value,
@@ -906,7 +909,7 @@ test('packed u8 input uses native nodes and a v1 binary envelope', async () => {
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       ([input], register) => ({
         input: register(input, (value) => ({ kind: 'u8', value }), 'u8'),
@@ -982,7 +985,7 @@ test('binary input uses native record and binary nodes', async () => {
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       ([input], register) => ({
         kind: 'record',
@@ -1104,7 +1107,7 @@ test('input ACK high-water replays the unaccepted range without pulling ahead', 
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       ([input], register) => ({ input: register(input, (value) => value) }),
       () => undefined,
@@ -1228,7 +1231,7 @@ test('resume remaps and trims a partially accepted packed u8 input batch', async
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       ([input], register) => ({
         input: register(input, (value) => ({ kind: 'u8', value }), 'u8'),
@@ -1331,7 +1334,7 @@ test('resume checkpoints output only after language-level delivery', async () =>
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
@@ -1410,7 +1413,7 @@ test('packed u8 cursor advances only after the final byte is delivered', async (
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value, stream) => stream(value.value.value.streamToken, (item) => item.value, 'u8', 'u8'),
@@ -1436,7 +1439,7 @@ test('malformed server message is rejected with a stable protocol error', async 
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value) => value,
@@ -1469,7 +1472,7 @@ test('streaming invocation rejects a value inconsistent with its returned graph'
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({ kind: 'record', value: { fields: [] } }),
       () => {
@@ -1494,7 +1497,7 @@ test('strict JSON rejects non-JSON whitespace and unpaired Unicode surrogates', 
     });
     try {
       const method = createStreamingRemoteMethod(
-        () => local.endpoint,
+        () => ({ server: local.endpoint }),
         () => descriptor,
         () => ({}),
         (value) => value,
@@ -1741,7 +1744,7 @@ test('definitive WebSocket handshake failure does not retry', async () => {
   };
   try {
     const method = createStreamingRemoteMethod(
-      () => endpoint,
+      () => ({ server: endpoint }),
       () => descriptor,
       () => ({}),
       (value) => value,
@@ -1787,7 +1790,7 @@ test('normal close before invocation finish reconnects with a fresh resume', asy
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value) => value.value.value,
@@ -1836,7 +1839,7 @@ test('uncertain resume close exact-retries the frozen resume descriptor', async 
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value) => value.value.value,
@@ -1940,7 +1943,7 @@ for (const secondRejection of [undefined, false, true]) {
     });
     try {
       const method = createStreamingRemoteMethod(
-        () => local.endpoint,
+        () => ({ server: local.endpoint }),
         () => descriptor,
         () => ({}),
         (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
@@ -2012,7 +2015,7 @@ test('retryable rejection after acceptance creates a fresh resume attempt', asyn
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value) => value.value.value,
@@ -2042,7 +2045,7 @@ test('mapping installation rejects duplicate channels without accepting the sess
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value) => value,
@@ -2145,7 +2148,7 @@ test('input cancellation is replayed on the remapped channel after reconnect', a
       },
     });
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       ([input], register) => ({ input: register(input, (value) => value) }),
       () => undefined,
@@ -2219,7 +2222,7 @@ test('consumer drop sends cancellation and remains distinct from protocol termin
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
@@ -2272,7 +2275,7 @@ test('generated output decode failure rejects delivery and terminates without cu
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value, stream) =>
@@ -2341,7 +2344,7 @@ test('packed u8 output larger than the queue item limit is delivered lazily', as
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value, stream) => stream(value.value.value.streamToken, (item) => item.value, 'u8', 'u8'),
@@ -2407,7 +2410,7 @@ test('binary output passes a native binary node to the generated decoder', async
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value, stream) =>
@@ -2476,7 +2479,7 @@ test('invocation failure preserves an already-received output terminal', async (
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
@@ -2544,7 +2547,7 @@ test('concurrent output pulls each settle in stream order', async () => {
   });
   try {
     const method = createStreamingRemoteMethod(
-      () => local.endpoint,
+      () => ({ server: local.endpoint }),
       () => descriptor,
       () => ({}),
       (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
@@ -2562,6 +2565,362 @@ test('concurrent output pulls each settle in stream order', async () => {
       { done: false, value: 'first' },
       { done: false, value: 'second' },
     ]);
+  } finally {
+    await local.close();
+  }
+});
+
+/** A WebSocket server whose upgrades first get the given HTTP statuses. */
+async function refusingServer(statuses, handler) {
+  const wss = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (protocols) => [...protocols][0],
+  });
+  wss.on('connection', handler);
+  let upgrades = 0;
+  const http = createHttpServer();
+  http.on('upgrade', (request, socket, head) => {
+    const status = statuses[upgrades++];
+    if (status !== undefined) {
+      socket.end(`HTTP/1.1 ${status} Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+      return;
+    }
+    wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+  });
+  http.listen(0, '127.0.0.1');
+  await once(http, 'listening');
+  return {
+    endpoint: { type: 'custom', url: `http://127.0.0.1:${http.address().port}`, token: 'test' },
+    upgrades: () => upgrades,
+    close: () => {
+      for (const client of wss.clients) client.terminate();
+      http.closeAllConnections();
+      return new Promise((resolve) => http.close(resolve));
+    },
+  };
+}
+
+function finishWith(socket, start, value = 1) {
+  socket.send(JSON.stringify(accepted(start)));
+  socket.send(
+    JSON.stringify({
+      version: 1,
+      type: 'invocationResult',
+      mappings: [],
+      result: { kind: 'value', graph: u32Graph, value: { kind: 'u32', value } },
+    }),
+  );
+  socket.send(
+    JSON.stringify({ version: 1, type: 'invocationFinished', outcome: { kind: 'success' } }),
+  );
+}
+
+function plainMethod(configuration) {
+  return createStreamingRemoteMethod(
+    () => configuration,
+    () => descriptor,
+    () => ({}),
+    (value) => value.value.value,
+  );
+}
+
+test('a start against a closed port fails with StreamingUnreachableError after the window', async () => {
+  const tcp = createTcpServer();
+  tcp.listen(0, '127.0.0.1');
+  await once(tcp, 'listening');
+  const port = tcp.address().port;
+  await new Promise((resolve) => tcp.close(resolve));
+  const started = Date.now();
+  const error = await plainMethod({
+    server: { type: 'custom', url: `http://127.0.0.1:${port}`, token: 'test' },
+    reconnectWindowMs: 300,
+  })().then(
+    () => assert.fail('connected to a closed port'),
+    (error) => error,
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(error instanceof StreamingUnreachableError, String(error));
+  assert.equal(error.reconnectWindowMs, 300);
+  assert.match(error.endpoint, new RegExp(`^ws://127\\.0\\.0\\.1:${port}/`));
+  assert.ok(error.lastCause instanceof Error);
+  assert.ok(elapsed >= 290 && elapsed < 3000, `gave up after ${elapsed} ms`);
+});
+
+test('an upgrade that never completes is abandoned within the window', async () => {
+  const held = [];
+  const tcp = createTcpServer((socket) => held.push(socket));
+  tcp.listen(0, '127.0.0.1');
+  await once(tcp, 'listening');
+  try {
+    const started = Date.now();
+    const error = await plainMethod({
+      server: { type: 'custom', url: `http://127.0.0.1:${tcp.address().port}`, token: 'test' },
+      reconnectWindowMs: 400,
+    })().then(
+      () => assert.fail('an upgrade that never completed connected'),
+      (error) => error,
+    );
+    assert.ok(Date.now() - started < 3000);
+    assert.ok(error instanceof StreamingUnreachableError, String(error));
+    assert.match(error.lastCause.message, /no WebSocket connection within/);
+  } finally {
+    for (const socket of held) socket.destroy();
+    await new Promise((resolve) => tcp.close(resolve));
+  }
+});
+
+test('429 and 5xx on the upgrade are retried', async () => {
+  const local = await refusingServer([503, 429, 502], (socket) => {
+    socket.once('message', (data) => finishWith(socket, JSON.parse(data), 7));
+  });
+  try {
+    assert.equal(await plainMethod({ server: local.endpoint, reconnectWindowMs: 10_000 })(), 7);
+    assert.equal(local.upgrades(), 4);
+  } finally {
+    await local.close();
+  }
+});
+
+test('another upgrade status fails at once', async () => {
+  const local = await refusingServer([403], () => assert.fail('upgraded after a refusal'));
+  try {
+    const error = await plainMethod({ server: local.endpoint })().then(
+      () => assert.fail('a refused upgrade connected'),
+      (error) => error,
+    );
+    assert.ok(error instanceof StreamingProtocolError);
+    assert.equal(error.code, 'handshake-failed');
+    assert.equal(local.upgrades(), 1);
+  } finally {
+    await local.close();
+  }
+});
+
+test('retryable upgrade statuses past the window are unreachable', async () => {
+  const local = await refusingServer(Array(1000).fill(503), () => assert.fail('upgraded'));
+  try {
+    const error = await plainMethod({ server: local.endpoint, reconnectWindowMs: 300 })().then(
+      () => assert.fail('connected through a refusing server'),
+      (error) => error,
+    );
+    assert.ok(error instanceof StreamingUnreachableError, String(error));
+    assert.equal(error.lastCause.code, 'handshake-failed');
+    assert.match(error.lastCause.message, /HTTP 503/);
+  } finally {
+    await local.close();
+  }
+});
+
+test('an unlimited reconnect window keeps retrying', async () => {
+  const local = await refusingServer([503, 503, 503, 503, 503], (socket) => {
+    socket.once('message', (data) => finishWith(socket, JSON.parse(data), 3));
+  });
+  try {
+    assert.equal(
+      await plainMethod({ server: local.endpoint, reconnectWindowMs: 'unlimited' })(),
+      3,
+    );
+  } finally {
+    await local.close();
+  }
+});
+
+test('an invalid reconnect window is rejected', async () => {
+  await assert.rejects(
+    plainMethod({ server: { type: 'local' }, reconnectWindowMs: -1 })(),
+    (error) => error instanceof StreamingProtocolError && error.code === 'validation-error',
+  );
+});
+
+test('a retryable rejection before acceptance starts a new attempt', async () => {
+  const starts = [];
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      const start = JSON.parse(data);
+      starts.push(start);
+      if (starts.length === 1) {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationRejected',
+            attemptId: start.attemptId,
+            code: 'routing-miss',
+            message: 'moving',
+            retryable: true,
+          }),
+        );
+        return;
+      }
+      const provisionalRef = start.methodParameters.input.value.provisionalRef;
+      socket.send(
+        JSON.stringify(
+          accepted(start, [
+            {
+              channel: 1,
+              direction: 'input',
+              streamToken: 'input',
+              provisionalRef,
+              inputHighWater: { sequence: '0', terminal: false },
+            },
+          ]),
+        ),
+      );
+      socket.on('message', (frame) => {
+        const message = JSON.parse(frame);
+        const end = message.type === 'inputStreamEnd';
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'inputStreamAck',
+            channel: 1,
+            highestContiguousSequence: end
+              ? message.sequence
+              : String(Number(message.sequence) + 1),
+            mappings: [],
+            terminal: end,
+          }),
+        );
+        if (!end) return;
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationResult',
+            mappings: [],
+            result: { kind: 'value', graph: u32Graph, value: { kind: 'u32', value: 5 } },
+          }),
+        );
+        socket.send(
+          JSON.stringify({ version: 1, type: 'invocationFinished', outcome: { kind: 'success' } }),
+        );
+      });
+    });
+  });
+  try {
+    const method = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint, reconnectWindowMs: 10_000 }),
+      () => descriptor,
+      ([input], register) => ({ input: register(input, (value) => value) }),
+      (value) => value.value.value,
+    );
+    assert.equal(
+      await method(
+        agentStream(
+          (async function* () {
+            yield { kind: 'u32', value: 1 };
+          })(),
+        ),
+      ),
+      5,
+    );
+    assert.equal(starts.length, 2);
+    assert.notEqual(starts[1].attemptId, starts[0].attemptId);
+    assert.equal(starts[1].idempotencyKey, starts[0].idempotencyKey);
+    assert.notEqual(
+      starts[1].methodParameters.input.value.provisionalRef,
+      starts[0].methodParameters.input.value.provisionalRef,
+    );
+  } finally {
+    await local.close();
+  }
+});
+
+test('retryable rejections past the window are unreachable', async () => {
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'invocationRejected',
+          attemptId: JSON.parse(data).attemptId,
+          code: 'routing-miss',
+          message: 'moving',
+          retryable: true,
+        }),
+      );
+    });
+  });
+  try {
+    const error = await plainMethod({ server: local.endpoint, reconnectWindowMs: 400 })().then(
+      () => assert.fail('a rejected start succeeded'),
+      (error) => error,
+    );
+    assert.ok(error instanceof StreamingUnreachableError, String(error));
+    assert.equal(error.lastCause.code, 'routing-miss');
+  } finally {
+    await local.close();
+  }
+});
+
+test('a server that drops every start is unreachable after the window, with backoff', async () => {
+  let connections = 0;
+  const local = await server((socket) => {
+    connections += 1;
+    socket.once('message', () => socket.terminate());
+  });
+  try {
+    const error = await plainMethod({ server: local.endpoint, reconnectWindowMs: 400 })().then(
+      () => assert.fail('a dropped start succeeded'),
+      (error) => error,
+    );
+    assert.ok(error instanceof StreamingUnreachableError, String(error));
+    assert.ok(connections >= 2 && connections <= 8, `connected ${connections} times`);
+  } finally {
+    await local.close();
+  }
+});
+
+test('the reconnect window starts again when an accepted connection is lost', async () => {
+  const operations = [];
+  let idempotencyKey;
+  const local = await server((socket) => {
+    socket.once('message', async (data) => {
+      const operation = JSON.parse(data);
+      operations.push(operation);
+      if (operations.length === 1) {
+        idempotencyKey = operation.idempotencyKey;
+        socket.send(JSON.stringify(accepted(operation)));
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        socket.terminate();
+        return;
+      }
+      socket.send(JSON.stringify(accepted(operation, [], idempotencyKey)));
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'invocationResult',
+          mappings: [],
+          result: { kind: 'value', graph: u32Graph, value: { kind: 'u32', value: 8 } },
+        }),
+      );
+      socket.send(
+        JSON.stringify({ version: 1, type: 'invocationFinished', outcome: { kind: 'success' } }),
+      );
+    });
+  });
+  try {
+    assert.equal(await plainMethod({ server: local.endpoint, reconnectWindowMs: 300 })(), 8);
+    assert.equal(operations[1].type, 'resumeAttach');
+  } finally {
+    await local.close();
+  }
+});
+
+test('aborting a start that cannot connect stops its retries', async () => {
+  const local = await refusingServer(Array(1000).fill(503), () => assert.fail('upgraded'));
+  try {
+    const controller = new AbortController();
+    const call = plainMethod({ server: local.endpoint, reconnectWindowMs: 'unlimited' })
+      .abortable(controller.signal)
+      .then(
+        () => assert.fail('an aborted call succeeded'),
+        (error) => error,
+      );
+    await waitFor(() => local.upgrades() >= 2);
+    controller.abort();
+    assert.equal((await call).name, 'AbortError');
+    const upgrades = local.upgrades();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(local.upgrades(), upgrades);
   } finally {
     await local.close();
   }
