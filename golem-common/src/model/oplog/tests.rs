@@ -2206,6 +2206,7 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
             entity_parent_start_index: None,
             card: Box::new(source_card.clone().into()),
             wallet_generation: 3,
+            transfer_id: Some(transfer_id),
         },
         OplogEntry::CardRevoked {
             timestamp,

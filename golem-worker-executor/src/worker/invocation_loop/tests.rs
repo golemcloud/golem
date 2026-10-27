@@ -241,7 +241,6 @@ async fn blocked_idle_permit_wait_joins_establishment_and_retains_commands() {
         assert_eq!(acquisitions.load(Ordering::SeqCst), 1);
         assert_eq!(cancelled.load(Ordering::SeqCst), 0);
 
-        sender.send(WorkerCommand::ResumeReplay).unwrap();
         let (update, updated) = futures::channel::oneshot::channel();
         sender
             .send(WorkerCommand::UpdateFilesystemLimit {
@@ -279,10 +278,6 @@ async fn blocked_idle_permit_wait_joins_establishment_and_retains_commands() {
         assert_eq!(acquisitions.load(Ordering::SeqCst), 1);
         assert_eq!(cancelled.load(Ordering::SeqCst), 1);
         assert_eq!(semaphore.available_permits(), 0);
-        assert!(matches!(
-            deferred.pop_front(),
-            Some(WorkerCommand::ResumeReplay)
-        ));
         let Some(WorkerCommand::UpdateFilesystemLimit {
             allocated_bytes,
             sender,
@@ -710,8 +705,6 @@ async fn delayed_retry_coalesces_only_the_captured_work_prefix() {
     commands.send(WorkerCommand::WorkAvailable).unwrap();
     commands.send(WorkerCommand::WorkAvailable).unwrap();
     commands.send(WorkerCommand::InternalStatusChanged).unwrap();
-    commands.send(WorkerCommand::ResumeReplay).unwrap();
-    commands.send(WorkerCommand::ResumeReplay).unwrap();
     commands
         .send(WorkerCommand::UpdateFilesystemLimit {
             allocated_bytes: 4096,
@@ -725,7 +718,6 @@ async fn delayed_retry_coalesces_only_the_captured_work_prefix() {
     let captured =
         coalesce_delayed_retry_prefix::<Context>(&mut receiver, &mut deferred_wakeups, prefix_len);
 
-    assert!(captured.resume_replay);
     assert_eq!(captured.filesystem_limit_updates.len(), 1);
     assert_eq!(deferred_wakeups.len(), 1);
     assert!(matches!(
@@ -737,54 +729,9 @@ async fn delayed_retry_coalesces_only_the_captured_work_prefix() {
         Ok(WorkerCommand::WorkAvailable)
     ));
 
-    let mut final_decision = Some(RetryDecision::Delayed(Duration::from_secs(1)));
-    apply_delayed_retry_commands_after_unload::<Context>(
-        captured,
-        &mut final_decision,
-        false,
-        &mut deferred_wakeups,
-    );
-    assert_eq!(final_decision, Some(RetryDecision::Immediate));
-    assert!(matches!(
-        deferred_wakeups.pop_front(),
-        Some(WorkerCommand::ResumeReplay)
-    ));
+    apply_delayed_retry_commands_after_unload(captured);
     assert!(deferred_wakeups.is_empty());
     assert!(limit_result.await.unwrap().is_ok());
-}
-
-#[test]
-async fn delayed_retry_commands_remain_owned_when_a_later_interrupt_wins() {
-    for decision in [RetryDecision::Immediate, RetryDecision::None] {
-        let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let (limit_sender, limit_result) = futures::channel::oneshot::channel();
-        commands.send(WorkerCommand::ResumeReplay).unwrap();
-        commands
-            .send(WorkerCommand::UpdateFilesystemLimit {
-                allocated_bytes: 4096,
-                sender: limit_sender,
-            })
-            .unwrap();
-        let mut deferred_wakeups = VecDeque::new();
-        let captured =
-            coalesce_delayed_retry_prefix::<Context>(&mut receiver, &mut deferred_wakeups, 2);
-        let mut final_decision = Some(decision.clone());
-
-        apply_delayed_retry_commands_after_unload::<Context>(
-            captured,
-            &mut final_decision,
-            false,
-            &mut deferred_wakeups,
-        );
-
-        assert_eq!(final_decision, Some(decision));
-        assert!(limit_result.await.unwrap().is_ok());
-        assert!(matches!(
-            deferred_wakeups.pop_front(),
-            Some(WorkerCommand::ResumeReplay)
-        ));
-        assert!(deferred_wakeups.is_empty());
-    }
 }
 
 #[test]

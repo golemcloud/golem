@@ -121,7 +121,7 @@ the prepared callee fingerprint differs from the new owner: output materializati
 fork's own oplog without waiting for the original consumer to attach. It grants no inherited
 attachment authority and does not reactivate the source's topology.
 
-When the retained history ends at `AgentInvocationStarted`, `resume_replay` completes the
+When the retained history ends at `AgentInvocationStarted`, `replay` completes the
 guarded replay-to-live transition before entering the guest. It keeps `InvocationMode::Replay`
 to reuse that start record, but publishes stderr and handles traps as live execution even if
 the guest makes no positional host call. Cursor exhaustion alone does not publish liveness.

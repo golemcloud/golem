@@ -78,6 +78,7 @@ impl Fixture {
                 max_operations_before_commit,
                 1,
                 100,
+                32,
                 RetryConfig::default(),
             )
             .await,

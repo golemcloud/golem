@@ -19,6 +19,7 @@ use super::owner_wallet::{OwnerWallet, WalletBaseline};
 use super::state_actor::OwnerCommitController;
 use super::tasks::RuntimeAppendTasks;
 use super::{ObservedPrimaryStore, Worker};
+use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
@@ -51,7 +52,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
-use wasmtime::{AsContextMut, Store, StoreMemory, UpdateDeadline};
+use wasmtime::{AsContextMut, CallHook, Store, StoreMemory, UpdateDeadline};
 
 fn resource_capacity_trap(
     agent_mode: golem_common::model::agent::AgentMode,
@@ -503,10 +504,7 @@ impl OwnerExecution {
     }
 
     pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogRefusal> {
-        self.commit
-            .commit_and_update_state(level)
-            .await
-            .map(|(index, _)| index)
+        self.commit.commit_and_update_state(level).await
     }
 }
 
@@ -775,14 +773,37 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let owner = self.owner()?;
         let engine = owner.engine();
         let mut store = ObservedPrimaryStore::new(&engine, context, self.release_scope.as_ref());
-        let runtime = super::suspension::RuntimeStore::new(self.owner_execution.suspension());
+        let guest_imports = store.data().durable_ctx().guest_imports.clone();
+        let runtime = super::suspension::RuntimeStore::with_guest_imports(
+            self.owner_execution.suspension(),
+            guest_imports.clone(),
+        );
         store.data_mut().durable_ctx_mut().runtime_suspension = Some(runtime.clone());
         store
             .as_context_mut()
             .set_runtime_observer(runtime)
             .map_err(anyhow::Error::from)?;
-        if store.data().fuel_metering_enabled() {
-            store.call_hook(|mut store, boundary| {
+        let fuel_metering = store.data().fuel_metering_enabled();
+        store.call_hook(move |mut store, boundary| {
+            // Wasmtime reports the import's runtime activity right after `CallingHost`, before
+            // the import's host code runs; see `GuestImportNumbering`.
+            match boundary {
+                CallHook::CallingHost => {
+                    let custom_invocation_scope = store
+                        .guest_task_context::<CustomInvocationContext>()?
+                        .as_deref()
+                        .and_then(CustomInvocationContext::current);
+                    guest_imports.number_next_import(
+                        store
+                            .data()
+                            .durable_ctx()
+                            .guest_import_numbering(custom_invocation_scope),
+                    );
+                }
+                CallHook::ReturningFromHost => guest_imports.host_call_returned(),
+                CallHook::CallingWasm | CallHook::ReturningFromWasm => {}
+            }
+            if fuel_metering {
                 let current = store.get_fuel()?;
                 if store
                     .data_mut()
@@ -790,9 +811,9 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 {
                     store.set_epoch_deadline(0);
                 }
-                Ok(())
-            });
-        }
+            }
+            Ok(())
+        });
         store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);

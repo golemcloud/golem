@@ -287,8 +287,6 @@ impl RunningWorker {
         let idle_since_millis_clone = Arc::clone(&idle_since_millis);
         let interrupts = parent.interrupt_signal.clone();
         let interrupts_clone = interrupts.clone();
-        let resume_replay_pending = Arc::new(AtomicBool::new(false));
-        let resume_replay_pending_clone = resume_replay_pending.clone();
         let memory_grant = Arc::new(StdMutex::new(memory_grant));
         let memory_grant_registration =
             LinearMemoryGrantRegistration::new(parent.clone(), memory_grant);
@@ -311,7 +309,6 @@ impl RunningWorker {
                 filesystem_snapshot_slot_clone,
                 unload_request_clone,
                 idle_since_millis_clone,
-                resume_replay_pending_clone,
                 start_attempt,
                 worker_trace,
             )
@@ -359,7 +356,6 @@ impl RunningWorker {
             unload_request,
             idle_since_millis,
             interrupts,
-            resume_replay_pending,
             start_attempt,
             owner_generation_started: false,
         })
@@ -382,7 +378,6 @@ impl RunningWorker {
         filesystem_snapshot_slot: filesystem_snapshots::SnapshotSlot,
         unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
         idle_since_millis: Arc<AtomicU64>,
-        resume_replay_pending: Arc<AtomicBool>,
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
     ) {
@@ -405,7 +400,6 @@ impl RunningWorker {
             last_periodic_attempt: None,
             unload_request,
             idle_since_millis,
-            resume_replay_pending,
             start_attempt,
             worker_trace,
         };

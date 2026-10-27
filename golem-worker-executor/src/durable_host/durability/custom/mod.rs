@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    DurableCallTrapContext, OplogEntryVersion, PersistedDurableFunctionInvocation,
-    is_write_side_effect, reserve_invocation_id,
+    DurableCallTrapContext, GuestImportIdentity, OplogEntryVersion,
+    PersistedDurableFunctionInvocation, is_write_side_effect,
 };
 use crate::durable_host::concurrent::{
     self, DropEvent, Resolution, ResolutionOutcome, finish_prepared_access_to_live,
@@ -61,7 +61,7 @@ enum CustomLiveContinuation {
 }
 
 /// The Store identity a custom durable invocation was admitted from, captured synchronously with
-/// worker state before the claim. Mirrors `PreparedAccessStart` for the accessor path so both
+/// worker state before the claim. Mirrors `BegunCall` for the accessor path so both
 /// paths take the same replay-to-live transition for the same Store.
 struct CustomStoreAdmission<Ctx: WorkerCtx> {
     primary_runtime: bool,
@@ -902,7 +902,16 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 "custom durable invocation parent {parent} is not active"
             ));
         }
-        let invocation_id = reserve_invocation_id(ctx, activity, anchor)?;
+        let invocation_id = match ctx.guest_imports.reserve_import_identity(activity)? {
+            GuestImportIdentity::Id(invocation_id) if invocation_id.anchor == anchor => {
+                invocation_id
+            }
+            identity => {
+                return Err(anyhow::anyhow!(
+                    "custom durable invocation under {anchor} has guest import identity {identity:?}"
+                ));
+            }
+        };
         let child_initiation = parent_start_index
             .and_then(|parent| ctx.state.active_custom_invocations.get(&parent))
             .map(|parent| CustomChildInitiation::new(parent.initiating_children.clone()));

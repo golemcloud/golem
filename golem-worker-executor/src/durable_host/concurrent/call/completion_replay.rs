@@ -73,7 +73,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
                 .await?;
                 access
-                    .finish_scope(self.retry.function_type().clone(), self.begin_index())
+                    .finish_scope(self.retry.function_type().clone())
                     .await?;
                 Ok(CallReplayOutcome::Replayed(response))
             }
@@ -143,7 +143,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.reproduce_refusal_for_claimed_start(&mut AccessorContext::new(store, get_ctx))
             .await?;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
@@ -197,8 +196,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 if destination == AccessResultDestination::Guest {
                     CompletionDelivery::replay_delivered(
                         disposition,
@@ -310,7 +308,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     {
         self.ensure_accessor_terminal_supported("replay_reconstruction_access")?;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
@@ -336,8 +333,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 CompletionDelivery::replay_delivered(
                     disposition,
                     self.start_idx,
@@ -358,8 +354,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 cancelled_idx,
             }) => {
                 self.finished = true;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 Err(WorkerExecutorError::unexpected_oplog_entry(
                     "entity cancellation with partial terminal provenance",
                     format!("Cancelled without partial at {cancelled_idx}"),
@@ -475,7 +470,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.ensure_accessor_terminal_supported("replay_access_deferred")?;
         self.reproduce_refusal_for_claimed_start(access).await?;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = access.with_ctx(|ctx| {
             (
                 ctx.state.replay_state.clone(),
@@ -499,7 +493,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                access.finish_scope(function_type, begin_index).await?;
+                access.finish_scope(function_type).await?;
                 // The delivery token is constructed only after the fallible decode / scope close
                 // succeeded: a token dropped on the error path would log a spurious
                 // unconsumed-token warning.
@@ -537,7 +531,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                access.finish_scope(function_type, begin_index).await?;
+                access.finish_scope(function_type).await?;
                 // As above, the token is constructed only after the fallible operations.
                 Ok(DeferredCallReplayOutcome::Replayed(
                     response,
@@ -743,8 +737,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                ctx.finish_scope(self.retry.function_type().clone(), self.begin_index())
-                    .await?;
+                ctx.finish_scope(self.retry.function_type().clone()).await?;
                 Ok(response)
             }
             ReplayedResolution::Undelivered(terminal) => {

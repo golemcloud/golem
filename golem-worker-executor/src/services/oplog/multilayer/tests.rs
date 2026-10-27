@@ -47,6 +47,7 @@ async fn archive_failure_backoff_is_per_agent_and_resets_on_success() {
             100,
             100,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -102,6 +103,7 @@ async fn open_idle_multilayer(
             100,
             100,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -231,12 +233,21 @@ async fn observer_open_after_primary_growth(archived: u64) {
         100,
         100,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
     let observer_service = Arc::new(
-        PrimaryOplogService::new(indexed.clone(), blob, 100, 100, 100, RetryConfig::default())
-            .await,
+        PrimaryOplogService::new(
+            indexed.clone(),
+            blob,
+            100,
+            100,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let first: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
         indexed.clone(),

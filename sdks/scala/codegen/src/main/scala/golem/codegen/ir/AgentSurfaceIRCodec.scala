@@ -46,7 +46,14 @@ object AgentSurfaceIRCodec {
         "snapshotting" -> a.metadata.snapshotting
       ),
       "methods"      -> ujson.Arr.from(a.methods.map(methodToJson)),
-      "configFields" -> ujson.Arr.from(a.configFields.map(configFieldToJson))
+      "configFields" -> ujson.Arr.from(a.configFields.map(configFieldToJson)),
+      "sourceScopes" -> ujson.Arr.from(a.sourceScopes.map(sourceScopeToJson))
+    )
+
+  private def sourceScopeToJson(scope: SourceScopeSurface): ujson.Value =
+    ujson.Obj(
+      "packageRef" -> scope.packageRef,
+      "imports"    -> ujson.Arr.from(scope.imports.map(ujson.Str(_)))
     )
 
   private def methodToJson(m: MethodSurface): ujson.Value =
@@ -91,9 +98,16 @@ object AgentSurfaceIRCodec {
         )
       },
       methods = obj.get("methods").map(_.arr.toList.map(methodFromJson)).getOrElse(Nil),
-      configFields = obj.get("configFields").map(_.arr.toList.map(configFieldFromJson)).getOrElse(Nil)
+      configFields = obj.get("configFields").map(_.arr.toList.map(configFieldFromJson)).getOrElse(Nil),
+      sourceScopes = obj.get("sourceScopes").map(_.arr.toList.map(sourceScopeFromJson)).getOrElse(Nil)
     )
   }
+
+  private def sourceScopeFromJson(v: ujson.Value): SourceScopeSurface =
+    SourceScopeSurface(
+      packageRef = v("packageRef").str,
+      imports = v("imports").arr.toList.map(_.str)
+    )
 
   private def configFieldFromJson(v: ujson.Value): ConfigFieldSurface =
     ConfigFieldSurface(

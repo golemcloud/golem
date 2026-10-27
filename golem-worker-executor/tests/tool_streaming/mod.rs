@@ -114,6 +114,7 @@ mod path_policy_acceptance;
 mod python_sidecar;
 mod rust_sdk_gol40_conformance;
 mod snapshot_attachments;
+mod tool_result_delivery;
 mod trapped_leaf_observers;
 
 static SINGLE_STORE_PROBE_PERMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -4877,12 +4878,6 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         }),
         "no entity result may become visible before the producer finishes"
     );
-    assert!(
-        before_crash.iter().all(|entry| {
-            !matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::tool::internal::observe-results")
-        }),
-        "typed stream reconstruction must not use a separate result-observation call"
-    );
 
     invocation.abort();
     let _ = invocation.await;
@@ -4958,9 +4953,6 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         entity_ends, 3,
         "every middleware and provider layer settles once"
     );
-    assert!(oplog.iter().all(|entry| {
-        !matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::tool::internal::observe-results")
-    }));
     assert!(provider_checkpoints.try_recv().is_err());
     assert!(caller_checkpoints.try_recv().is_err());
     provider_checkpoint_server.abort();
@@ -8684,6 +8676,191 @@ async fn large_tool_output_reconstructs_with_one_chunk_capacity(
             .count(),
         512,
         "reconstruction must not append replacement output writes"
+    );
+    executor.delete_worker(&worker).await?;
+    Ok(())
+}
+
+/// Guest read observations of a durable owner become durable with the next owner-oplog commit,
+/// not with a commit of their own. Crashing while a large stream is being consumed must still
+/// deliver every chunk exactly once, and each consumed byte must belong to exactly one original
+/// read payload.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn large_tool_output_survives_crashes_while_it_is_consumed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentReadObservation, ToolAttachmentSlot,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.limits.max_tool_attachment_bytes = 4096;
+                config.retry.max_attempts = 0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (checkpoint_port, _checkpoint_server, mut checkpoints) =
+        start_promise_checkpoint_server().await;
+    let agent = agent_id!("ToolStreamingCaller", "crash-while-consumed");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([(
+                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                checkpoint_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        "collect",
+        data_value!("large", Vec::<u8>::new(), 1_u32),
+    );
+    tokio::pin!(invocation);
+    let crashes = async {
+        for chunks_before_crash in [16, 128, 320] {
+            let checkpoint = next_promise_checkpoint(
+                &mut checkpoints,
+                &format!("large-output-consumed-{chunks_before_crash}"),
+            )
+            .await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+            // The paused consumer leaves the producer in a write without an End.
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    executor.commit_oplog(&worker).await?;
+                    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                    let ended = entries
+                        .iter()
+                        .filter_map(|entry| match &entry.entry {
+                            PublicOplogEntry::End(end) => Some(end.start_index),
+                            _ => None,
+                        })
+                        .collect::<BTreeSet<_>>();
+                    if entries.iter().any(|entry| {
+                        matches!(
+                            &entry.entry,
+                            PublicOplogEntry::Start(start)
+                                if start.function_name
+                                    == "golem::tool::streams::tool-output-writer::write"
+                        ) && !ended.contains(&entry.oplog_index)
+                    }) {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await??;
+            executor.simulated_crash(&worker).await?;
+            executor
+                .complete_promise(
+                    &PromiseId {
+                        agent_id: worker.clone(),
+                        oplog_idx: checkpoint.oplog_idx,
+                    },
+                    Vec::new(),
+                )
+                .await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::select! {
+        result = invocation.as_mut() => panic!("the stream finished before the last crash: {result:?}"),
+        crashed = crashes => crashed?,
+    }
+    let result: StreamEvidence = tokio::time::timeout(Duration::from_secs(120), invocation)
+        .await??
+        .into_typed()?;
+    let expected: Vec<u8> = (0..512_u32)
+        .flat_map(|index| std::iter::repeat_n((index % 251) as u8, 4096))
+        .collect();
+    assert_eq!(result.output.len(), expected.len());
+    assert!(
+        result.output == expected,
+        "every chunk is delivered once and in order"
+    );
+    assert_eq!(result.completion, "ok");
+
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::tool::streams::tool-output-writer::write"
+            ))
+            .count(),
+        512,
+        "recovery must not append replacement output writes"
+    );
+    let mut consumed = Vec::new();
+    for entry in &oplog {
+        if let PublicOplogEntry::ToolAttachmentRead(read) = &entry.entry
+            && let Some(bytes) = &read.payload
+        {
+            let observation =
+                ToolAttachmentReadObservation::from_value(read.observation.value()).unwrap();
+            assert!(observation.reobserves.is_none());
+            if matches!(
+                observation.attachment.slot,
+                ToolAttachmentSlot::Stdout | ToolAttachmentSlot::Output
+            ) {
+                consumed.extend_from_slice(bytes);
+            }
+        }
+    }
+    assert_eq!(consumed.len(), expected.len());
+    assert!(
+        consumed == expected,
+        "original read observations own exactly the consumed bytes"
     );
     executor.delete_worker(&worker).await?;
     Ok(())
@@ -22188,7 +22365,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 ReplayAdmissionStage::AfterToolOutputAccepted,
             )
         });
-        let failure_gate = storage_failure.then(|| {
+        let mut failure_gate = storage_failure.then(|| {
             executor.gate_next_oplog_function_end(
                 &worker,
                 golem_common::model::oplog::host_functions::HostFunctionName::GolemToolOutputWrite,
@@ -22205,7 +22382,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         let synchronize = async {
             let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
-            if let Some((entered, release)) = failure_gate {
+            if let Some((entered, _)) = failure_gate.as_mut() {
                 tokio::time::timeout(Duration::from_secs(30), entered).await??;
                 executor
                     .complete_promise(
@@ -22228,10 +22405,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                         tokio::task::yield_now().await;
                     }
                 }).await??;
-                release
-                    .send(())
-                    .expect("output End receipt remains owned after guest cancellation");
-                return Ok(());
+                return Ok(None);
             }
             let accepted = if let Some(acceptance) = acceptance.as_mut() {
                 tokio::time::timeout(Duration::from_secs(30), acceptance.entered()).await?;
@@ -22385,20 +22559,24 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 }
                 regeneration.release();
             }
-            executor
-                .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: after.oplog_idx,
-                    },
-                    Vec::new(),
-                )
-                .await?;
-            Ok::<(), anyhow::Error>(())
+            Ok::<_, anyhow::Error>(Some(PromiseId {
+                agent_id: worker.clone(),
+                oplog_idx: after.oplog_idx,
+            }))
         };
-        tokio::select! {
+        let after = tokio::select! {
             result = invocation.as_mut() => panic!("invocation settled before unread checkpoint: {result:?}"),
             checkpoint = synchronize => checkpoint?,
+        };
+        // Releasing either gate can settle the invocation before the release returns.
+        // Only race invocation completion against reaching the checkpoint, not releasing it.
+        if let Some(after) = after {
+            executor.complete_promise(&after, Vec::new()).await?;
+        }
+        if let Some((_, release)) = failure_gate {
+            release
+                .send(())
+                .expect("output End receipt remains owned after guest cancellation");
         }
         let result = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut()).await?;
         if storage_failure {

@@ -1,7 +1,7 @@
 type Email struct{ ID, Body string }
 
 // each inbox gets its own agent, in its own WebAssembly VM:
-type TriageID struct{ Inbox string } //@
+type TriageID struct{ Inbox string }
 type TriageIn struct{ Emails []Email } //@
 
 var Triager = golem.DefineAgent[TriageID](
@@ -15,7 +15,7 @@ func (t *TriageID) triage(in TriageIn) map[string]Label {
     labels := map[string]Label{}
     for _, email := range in.Emails {
         label := parseLabel(classify(email.Body))
-        // after a crash or restart, it resumes inside this loop:
+        // it resumes here after a crash, with memory and files:
         applyLabel(t.Inbox, email.ID, label) //@
         labels[email.ID] = label
     }

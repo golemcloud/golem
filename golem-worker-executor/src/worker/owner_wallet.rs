@@ -27,7 +27,7 @@ use crate::services::card_interest::{
 };
 use crate::services::component::ComponentService;
 use crate::services::oplog::Oplog;
-use crate::services::{HasCardService, HasOplog, HasWorkerProxy};
+use crate::services::{HasCardService, HasWorkerProxy};
 use crate::worker::Worker;
 use crate::worker::tasks::{RuntimeAppendTasks, WorkerTasks};
 use crate::workerctx::WorkerCtx;
@@ -1093,10 +1093,10 @@ impl OwnerWallet {
                                 ))
                             })?;
                         let confirmation = owner.lock_boundary().await?;
-                        if !retry
-                            .is_confirmed(worker.oplog().as_ref(), &worker.owned_agent_id.agent_id)
-                            .await?
-                        {
+                        if !retry.is_confirmed(
+                            worker.get_repaired_status().await?.as_ref(),
+                            &worker.owned_agent_id.agent_id,
+                        )? {
                             owner
                                 .commit(
                                     &worker,
@@ -1144,24 +1144,19 @@ impl OwnerWallet {
         Vec<crate::durable_host::permissions::PendingSourceCardTransferRetry>,
         WorkerExecutorError,
     > {
-        let pending = worker
-            .get_last_known_status()
-            .await
-            .pending_card_events
-            .clone();
+        let status = worker.get_repaired_status().await?;
         let mut retries = Vec::new();
-        for pending in pending {
+        for pending in &status.pending_card_events {
             let QueuedCardEvent::TransferStarted(transfer) = &pending.event else {
                 continue;
             };
             let Some(mut retry) =
                 crate::durable_host::permissions::prepare_pending_source_card_transfer_retry(
-                    worker.oplog().as_ref(),
+                    &status,
                     &worker.owned_agent_id.agent_id,
-                    &pending,
+                    pending,
                     transfer,
-                )
-                .await?
+                )?
             else {
                 continue;
             };

@@ -6,7 +6,7 @@ const Label = Schema.Literals(["urgent", "billing", "other"])
 export const Triage = defineAgent({
   name: "TriageAgent",
   // each inbox gets its own agent, in its own WebAssembly VM:
-  id: { inbox: Schema.String }, //@
+  id: { inbox: Schema.String },
   methods: {
     triage: method({
       input: { emails: Schema.Array(Email) }, //@
@@ -21,7 +21,7 @@ export const Triage = defineAgent({
       for (const email of emails) {
         const label = yield* classify(email.body).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(Label)))
-        // after a crash or restart, it resumes inside this loop:
+        // it resumes here after a crash, with memory and files:
         yield* applyLabel(inbox, email.id, label) //@
         labels[email.id] = label
       }

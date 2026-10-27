@@ -155,6 +155,34 @@ func TestResultArms(t *testing.T) {
 	if got := roundTrip(t, bare, `{"ok":null}`); got != `{"ok":null}` {
 		t.Errorf("a payload-less ok arm round-tripped to %s", got)
 	}
+	mustReject(t, bare, `{"ok":5}`, "arm declares no payload")
+}
+
+// TestUnpackRejectsPayloadPresenceMismatch — a value built by hand can carry a
+// payload its arm or case does not declare, or lack one it does; rendering
+// fails instead of dropping or inventing the payload.
+func TestUnpackRejectsPayloadPresenceMismatch(t *testing.T) {
+	var five SchemaValue = S32Value{Value: 5}
+	result := typ(ResultType{Ok: &SchemaType{Body: S32Type{}}})
+	variant := typ(VariantType{Cases: []VariantCase{
+		{Name: "none"},
+		{Name: "some", Payload: &SchemaType{Body: S32Type{}}},
+	}})
+	for _, tc := range []struct {
+		root    SchemaType
+		value   SchemaValue
+		wantMsg string
+	}{
+		{result, ResultValue{}, `arm "ok" declares a payload but carries none`},
+		{result, ResultValue{IsErr: true, Value: &five}, `arm "err" carries a payload but declares none`},
+		{variant, VariantValue{Case: 1}, `case "some" declares a payload but carries none`},
+		{variant, VariantValue{Case: 0, Payload: &five}, `case "none" carries a payload but declares none`},
+	} {
+		_, err := NewRef(SchemaGraph{Root: tc.root}).UnpackJSON(tc.value)
+		if err == nil || !strings.Contains(err.Error(), tc.wantMsg) {
+			t.Errorf("UnpackJSON(%#v) = %v, want an error mentioning %q", tc.value, err, tc.wantMsg)
+		}
+	}
 }
 
 // TestVariantPayloadShape — a case with no payload is its bare name; one with

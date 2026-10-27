@@ -136,6 +136,7 @@ async fn build_service(
             ENTRY_COUNT + 1,
             ENTRY_COUNT + 1,
             1024 * 1024,
+            32,
             RetryConfig::default(),
         )
         .await,

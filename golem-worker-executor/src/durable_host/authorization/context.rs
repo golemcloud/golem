@@ -14,46 +14,49 @@
 
 use super::super::*;
 
+/// The ID of the runtime card that the durable call at `oplog_index` derives.
+pub(crate) fn derived_card_id(
+    owned_agent_id: &OwnedAgentId,
+    invocation_key: &IdempotencyKey,
+    oplog_index: OplogIndex,
+) -> CardId {
+    CardId(derive_permission_uuid(
+        DERIVED_CARD_ID_CONTEXT,
+        owned_agent_id,
+        invocation_key,
+        oplog_index,
+    ))
+}
+
+/// The ID of the card transfer that the durable call at `oplog_index` performs.
+pub(crate) fn transfer_id(
+    owned_agent_id: &OwnedAgentId,
+    invocation_key: &IdempotencyKey,
+    oplog_index: OplogIndex,
+) -> Uuid {
+    derive_permission_uuid(
+        TRANSFER_ID_CONTEXT,
+        owned_agent_id,
+        invocation_key,
+        oplog_index,
+    )
+}
+
+/// The ID of the child card that the durable call at `oplog_index` installs.
+pub(crate) fn installed_child_card_id(
+    owned_agent_id: &OwnedAgentId,
+    invocation_key: &IdempotencyKey,
+    oplog_index: OplogIndex,
+) -> CardId {
+    CardId(derive_permission_uuid(
+        INSTALLED_CHILD_CARD_ID_CONTEXT,
+        owned_agent_id,
+        invocation_key,
+        oplog_index,
+    ))
+}
+
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(crate) fn derive_card_id(
-        &self,
-        invocation_key: &IdempotencyKey,
-        oplog_index: OplogIndex,
-    ) -> CardId {
-        CardId(derive_permission_uuid(
-            DERIVED_CARD_ID_CONTEXT,
-            &self.owned_agent_id,
-            invocation_key,
-            oplog_index,
-        ))
-    }
-
-    pub(crate) fn derive_transfer_id(
-        &self,
-        invocation_key: &IdempotencyKey,
-        oplog_index: OplogIndex,
-    ) -> Uuid {
-        derive_permission_uuid(
-            TRANSFER_ID_CONTEXT,
-            &self.owned_agent_id,
-            invocation_key,
-            oplog_index,
-        )
-    }
-
-    pub(crate) fn derive_installed_child_card_id(
-        &self,
-        invocation_key: &IdempotencyKey,
-        oplog_index: OplogIndex,
-    ) -> CardId {
-        CardId(derive_permission_uuid(
-            INSTALLED_CHILD_CARD_ID_CONTEXT,
-            &self.owned_agent_id,
-            invocation_key,
-            oplog_index,
-        ))
-    }
-
     pub(crate) fn derive_scope_card_id(
         &self,
         invocation_key: &IdempotencyKey,
