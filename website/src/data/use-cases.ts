@@ -11,21 +11,21 @@ export const hero = {
   eyebrow: "Use cases",
   heading: "Build agents for work that matters",
   lead: "Build software. Investigate questions. Help customers. Put agents to work inside your product.",
-  body: "Build, deploy, and operate custom agents, tools, and reliable APIs with Golem. After a fault or interruption, the whole VM resumes mid-function with its memory, call stack, and files. Agent and tool calls run exactly once, under policies your agents cannot bypass.",
-  note: "Write your agents and their tools with any Golem SDK. Choose the models, frameworks, and integrations your application needs.",
-  actions: [
-    { label: "Start building", href: "https://learn.golem.cloud/quickstart" },
-    { label: "Explore use cases", href: "#coding" },
-  ],
   navigationLabel: "What are you building?",
+  exploreLabel: "Explore use case",
 };
 
 export const featuredCase = {
   id: "coding",
   navLabel: "Software development",
+  example: "Build a coding assistant that creates apps, fixes bugs, and maintains codebases.",
   title: "Coding agents that build and maintain software",
   pain: "A coding agent has to do more than suggest a patch. It edits files, calls tools, checks results, and publishes changes. A failure inside a tool should not lose the running work or apply the same change twice.",
   exampleTitle: "Build the coding assistant your product needs",
+  runtime:
+    "Build, deploy, and operate custom agents, tools, and reliable APIs with Golem. After a fault or interruption, the whole VM resumes mid-function with its memory, call stack, and files. Agent and tool calls run exactly once, under policies your agents cannot bypass.",
+  toolChoice:
+    "Write your agents and their tools with any Golem SDK. Choose the models, frameworks, and integrations your application needs.",
   parts: [
     {
       title: "Your agent",

@@ -2,6 +2,7 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
+import PageIntro from "../components/PageIntro.astro";
 import {
   meta,
   hero,
@@ -22,32 +23,16 @@ const navigation = [featuredCase, ...jobs];
   <main class="use-cases-page" id="main-content" tabindex="-1">
     <section class="hero" aria-labelledby="page-title">
       <div class="container">
-        <span class="eyebrow">{hero.eyebrow}</span>
-        <h1 id="page-title">{hero.heading}</h1>
-        <p class="hero-lead">{hero.lead}</p>
-        <p class="hero-body">{hero.body}</p>
-        <p class="pattern-note">{hero.note}</p>
-        <div class="actions">
-          {
-            hero.actions.map((link, index) => (
-              <a
-                class:list={["btn", index === 0 ? "btn-primary" : "btn-secondary"]}
-                href={link.href}
-              >
-                {link.label}
-              </a>
-            ))
-          }
-        </div>
+        <PageIntro {...hero} headingId="page-title" />
         <nav class="job-navigation" aria-label={hero.navigationLabel}>
-          <p class="navigation-label">{hero.navigationLabel}</p>
           <ul>
             {
               navigation.map((job) => (
                 <li>
-                  <a href={`#${job.id}`}>
-                    {job.navLabel}
-                    <span aria-hidden="true"> ↘</span>
+                  <a class="case-card" href={`#${job.id}`} aria-labelledby={`${job.id}-overview`}>
+                    <h2 id={`${job.id}-overview`}>{job.navLabel}</h2>
+                    <p>{job.example}</p>
+                    <span aria-hidden="true">{hero.exploreLabel} →</span>
                   </a>
                 </li>
               ))
@@ -65,6 +50,8 @@ const navigation = [featuredCase, ...jobs];
         </div>
         <div class="worked-example">
           <h3 class="example-title">{featuredCase.exampleTitle}</h3>
+          <p class="runtime-copy">{featuredCase.runtime}</p>
+          <p class="tool-choice">{featuredCase.toolChoice}</p>
           <div class="example-parts">
             {
               featuredCase.parts.map((part) => (
@@ -202,14 +189,6 @@ const navigation = [featuredCase, ...jobs];
   [id] {
     scroll-margin-top: 5.5rem;
   }
-  h1 {
-    max-width: 20ch;
-    font-size: clamp(2.3rem, 4.8vw, 3.5rem);
-    letter-spacing: -0.035em;
-    line-height: 1.08;
-    margin-bottom: 1.5rem;
-    text-wrap: balance;
-  }
   h2 {
     font-size: clamp(1.6rem, 2.7vw, 2.05rem);
     margin-bottom: 1rem;
@@ -219,20 +198,7 @@ const navigation = [featuredCase, ...jobs];
     line-height: 1.65;
   }
   .hero {
-    padding: clamp(3rem, 7vw, 5rem) 0 2.5rem;
-  }
-  .hero-lead {
-    max-width: 52ch;
-    color: var(--text);
-    font-size: clamp(1.1rem, 1.7vw, 1.25rem);
-    margin-bottom: 1rem;
-  }
-  .hero-body {
-    max-width: 76ch;
-  }
-  .pattern-note {
-    margin-top: 1rem;
-    font-size: 0.9rem;
+    padding: 0 0 3.5rem;
   }
   .actions {
     display: flex;
@@ -243,39 +209,37 @@ const navigation = [featuredCase, ...jobs];
   .actions .btn {
     white-space: normal;
   }
-  .job-navigation {
-    margin-top: 2.5rem;
-    border-top: 1px solid var(--border);
-    padding-top: 1.5rem;
-  }
-  .navigation-label {
-    color: var(--text-secondary);
-    font-size: 0.85rem;
-    margin-bottom: 0.75rem;
-  }
   .job-navigation ul {
     list-style: none;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.25rem;
+  }
+  .case-card {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
-  }
-  .job-navigation a {
-    display: inline-flex;
-    gap: 0.9rem;
-    align-items: center;
-    min-height: 44px;
-    border: 1px solid var(--border-strong);
-    border-radius: 6px;
-    padding: 0.5rem 0.85rem;
+    flex-direction: column;
+    height: 100%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.75rem;
     color: var(--text);
-    font-size: 0.92rem;
   }
-  .job-navigation a:hover {
+  .case-card:hover {
     border-color: var(--accent-border);
-    background: var(--accent-dim);
   }
-  .job-navigation a span {
+  .case-card h2 {
+    font-size: 1.15rem;
+    margin-bottom: 0.75rem;
+    text-wrap: initial;
+  }
+  .case-card p {
+    flex: 1;
+    margin-bottom: 1.25rem;
+  }
+  .case-card span {
     color: var(--accent);
+    font-size: 0.9rem;
   }
   .featured-section {
     border-block: 1px solid var(--border);
@@ -295,7 +259,15 @@ const navigation = [featuredCase, ...jobs];
   .example-title {
     font-size: 1.15rem;
     line-height: 1.4;
+    margin-bottom: 1rem;
+  }
+  .runtime-copy {
+    max-width: 85ch;
+  }
+  .tool-choice {
+    margin-top: 1rem;
     margin-bottom: 1.75rem;
+    font-size: 0.94rem;
   }
   .example-parts {
     display: grid;
@@ -417,9 +389,6 @@ const navigation = [featuredCase, ...jobs];
     }
   }
   @media (max-width: 640px) {
-    .hero {
-      padding-top: 2.5rem;
-    }
     .example-parts,
     .job,
     .fit-grid {
@@ -432,6 +401,17 @@ const navigation = [featuredCase, ...jobs];
     .documentation-links {
       flex-direction: column;
       align-items: flex-start;
+    }
+  }
+  @media (max-width: 600px) {
+    .hero {
+      padding-bottom: 2.5rem;
+    }
+    .job-navigation ul {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .case-card {
+      padding: 1.35rem;
     }
   }
 </style>
