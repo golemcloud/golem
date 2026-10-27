@@ -1,7 +1,7 @@
 # Bash built-in tool
 
 This standalone Golem application builds the `bash` component, which the registry provisions as
-the grantable `bash@0.3.0` system tool. It exports one command, `run`, for finite shell execution. A
+the grantable `bash@0.3.2` system tool. It exports one command, `run`, for finite shell execution. A
 call accepts a starting directory and a script, runs the script in a fresh shell, then returns
 captured stdout, captured stderr, the exit code and the directory the script ended in.
 
@@ -52,7 +52,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: bash
-      version: "0.3.0"
+      version: "0.3.2"
 agents:
   MyAgent:
     tools:
