@@ -10,6 +10,10 @@ on:
       - "[0-9]+.[0-9]+.x"
   pull_request:
 
+concurrency:
+  group: publish-golem-ts-${{ startsWith(github.ref, 'refs/tags/golem-ts-v') && 'publication' || github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   WASM_RQUICKJS_VERSION: "0.4.13"
@@ -81,10 +85,9 @@ jobs:
         working-directory: sdks/ts
         run: |
           VERSION=${{ steps.get_version.outputs.version }}
-          case "$VERSION" in
-            *-*) DIST_TAG=next ;;
-            *) DIST_TAG=latest ;;
-          esac
-          pnpm -r publish --access public --no-git-checks --tag "$DIST_TAG"
+          for package in @golemcloud/golem-ts-sdk @golemcloud/golem-ts-bridge @golemcloud/golem-ts-repl; do
+            DIST_TAG=$(node ../../.github/scripts/release-channel.mjs npm "$VERSION" "$package")
+            pnpm --filter "$package" publish --access public --no-git-checks --tag "$DIST_TAG"
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

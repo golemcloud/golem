@@ -15,16 +15,19 @@ Do not push tags, dispatch workflows, publish releases, or change settings witho
 explicit authorization for those actions. Draft publication is a separate human
 decision; preparation never publishes the Golem draft. Commands below are a
 runbook, not authorization. Substitute approved versions and commit IDs.
-Release authorization does not authorize direct pushes or merges to `main`.
+Release authorization does not authorize direct pushes or merges to the release
+target branch.
 
 Run `cargo make check-release-start` from clean committed source first. This
 read-only check verifies GitHub authentication and the protected environment's
 App configuration names. It does not validate secret values or registry access.
 
-At release start, record the current public `main` commit and create a preparation
-branch from it. Keep that baseline throughout the release. Commit release fixes
-and version pins on the preparation branch; do not merge or rebase later `main`
-changes into it. Development on `main` can continue independently.
+At release start, select `main` or the matching `<major>.<minor>.x` maintenance
+branch. Record its public commit and create a preparation branch from it. Keep
+that baseline throughout the release. Commit release fixes and version pins on
+the preparation branch; do not merge or rebase later development into it.
+Development on `main` can continue independently. Create the maintenance branch
+before breaking development starts, and land tooling changes on both active lines.
 
 An administrator must configure GitHub Environment `golem-release` to allow only
 release tags. Required reviewers are recommended. Set its variable
@@ -115,20 +118,22 @@ versions are separate: all eight use the Golem version without its leading `v`.
 ## 3. Tag and prepare Golem
 
 The source must be clean, the exact public tag must match the checked source, and
-its commit must be the exact head of a PR merged into `golemcloud/golem`'s `main`.
-The PR's merge commit must remain reachable from public `main`. Validation uses
-the GitHub API and requires an authenticated `gh` session with pull requests read
-access. In CI, `GITHUB_TOKEN` supplies that read access independently of the
-contents-only publication token in `GH_TOKEN`.
-A maintenance-only PR does not qualify. A shared tag on another history path
-does not fix snapshot selection.
+its commit must be the exact head of a PR merged into `golemcloud/golem`'s `main`
+or the maintenance branch matching the tag (`1.6.x` for `v1.6.2`).
+The PR's merge commit must remain reachable from that public target branch.
+Validation uses the GitHub API and requires an authenticated `gh` session with
+pull requests read access. In CI, `GITHUB_TOKEN` supplies that read access
+independently of the contents-only publication token in `GH_TOKEN`.
+A PR into a different maintenance line does not qualify. A shared tag on another
+history path does not fix snapshot selection.
 The preparation workflow must be available on the default branch for dispatch and
 present at the selected tag. Do not dispatch on a branch or pass a separate tag input.
-Use a reviewed PR to merge the preparation branch into `main` without importing
-newer `main` changes into the release source. Use the repository's normal squash
-merge. Record the PR's exact head before merging, then tag that preparation-branch
-commit, not the squash commit on `main`. The tag preserves the frozen source and
-its first-parent shared snapshot; validation proves that this exact source was merged.
+Use a reviewed PR to merge the preparation branch into the selected target
+without importing newer development into the release source. Use the repository's
+normal squash merge. Record the PR's exact head before merging, then tag that
+preparation-branch commit, not the squash commit on the target. The tag preserves
+the frozen source and its first-parent shared snapshot; validation proves that
+this exact source was merged.
 Obtain explicit approval before merging. With authorization:
 
 ```shell
@@ -160,12 +165,32 @@ gh release view v1.6.0 --repo golemcloud/golem --web
 Review the successful preparation, native binaries, release notes, draft state, all eight public
 built-in asset sets, provenance, licenses, applicable SBOMs, checksums, and the
 uploaded manifest. Follow [publishing-builtin-artifacts](../publishing-builtin-artifacts/SKILL.md)
-for packaging details. Do not commit the generated manifest. A human publishes
-the reviewed draft in GitHub. That event starts `publish-golem-release.yaml`,
+for packaging details. Do not commit the generated manifest. After explicit
+approval, publish the reviewed draft without promoting Latest:
+
+```shell
+gh release edit v1.6.0 --repo golemcloud/golem --draft=false --latest=false
+```
+
+In the GitHub UI, uncheck **Set as latest release** before publishing. Do not
+rely on the draft's initial flag. Only the publication workflow must promote
+Latest; a manual promotion can race its channel selection.
+The publication event starts `publish-golem-release.yaml`,
 which checks successful preparation of the exact tag before running the existing
 Docker jobs. It does not repeat full CI or native builds. Preparation itself never
-publishes the Golem draft. Release branches do not also start push CI; PR CI and
-the tagged preparation remain in place.
+publishes the Golem draft. Maintenance branches also run push CI.
+
+New drafts disable the Latest designation. After a human publishes a draft, the
+publication workflow selects GitHub Latest and Docker `:latest` by the highest
+published stable Golem version, not branch ancestry. npm uses each package's
+published versions: prereleases use `next`, older stable versions use
+`release-<major>.<minor>`, and the highest stable version uses `latest`.
+Golem 1.6 patches remain the default while Golem 2.0 is prerelease-only, but cannot
+replace stable Golem 2.0. SDK versions are independent of Golem versions; npm
+compares each package's own versions. Lookup failures stop publication.
+Publication workflows serialize uploads across release lines. GitHub Actions
+retains only one pending run per concurrency group; let a queued publication
+start before triggering another.
 
 ## Recovery
 
