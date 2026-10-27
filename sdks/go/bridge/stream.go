@@ -369,37 +369,46 @@ func laneOf[T any]() lane {
 // inputHandle is a stream argument on its way into a session: its items as
 // schema values, and the lane they travel on.
 type inputHandle struct {
-	lane  lane
+	lane lane
+	// claim gives the stream away. The session claims every stream argument
+	// right before it sends the call, so a call that fails earlier leaves its
+	// streams with the caller; next, ready and stop are used only once claim
+	// succeeded.
+	claim func() error
 	next  func(ctx context.Context) (schema.SchemaValue, bool, error)
 	ready func() bool
 	stop  func(reason string)
-	// err is set when the stream could not be given away; the session
-	// reports it instead of sending the call.
-	err error
 }
 
 // Release does nothing: an input is released by the session that read it.
 func (*inputHandle) Release() {}
 
 // EncodeStream is the encoder of a stream argument. The stream is given to the
-// session that sends the call, which reads it and encodes each value with item.
+// session that sends the call, which reads it and encodes each value with
+// item. A value item does not accept fails the call with its [EncodeError].
 func EncodeStream[T any](item Encoder[T]) Encoder[AgentStream[T]] {
 	return func(s AgentStream[T]) schema.SchemaValue {
-		src, err := s.claim(streamGiven)
-		if err != nil {
-			return schema.StreamValue{Handle: &inputHandle{err: err}}
-		}
+		var src source[T]
 		return schema.StreamValue{Handle: &inputHandle{
 			lane: laneOf[T](),
+			claim: func() error {
+				var err error
+				src, err = s.claim(streamGiven)
+				return err
+			},
 			next: func(ctx context.Context) (schema.SchemaValue, bool, error) {
 				v, ok, err := src.next(ctx)
 				if err != nil || !ok {
 					return nil, ok, err
 				}
-				return item(v), true, nil
+				sv, err := Encode(func() schema.SchemaValue { return item(v) })
+				if err != nil {
+					return nil, false, err
+				}
+				return sv, true, nil
 			},
-			ready: src.ready,
-			stop:  src.stop,
+			ready: func() bool { return src.ready() },
+			stop:  func(reason string) { src.stop(reason) },
 		}}
 	}
 }

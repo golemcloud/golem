@@ -932,7 +932,15 @@ fn quantity_agent() -> AgentTypeSchema {
             method(
                 "weigh",
                 vec![field("load", kilograms.clone())],
-                Some(kilograms),
+                Some(kilograms.clone()),
+            ),
+            method(
+                "calibrate",
+                vec![
+                    field("readings", SchemaType::stream(Some(SchemaType::u32()))),
+                    field("reference", kilograms),
+                ],
+                None,
             ),
             method("measure", vec![], Some(SchemaType::list(lengths.clone()))),
             method(
@@ -1032,6 +1040,12 @@ func TestAUnitTheCalleeDoesNotAcceptIsRefusedBeforeSending(t *testing.T) {{
 	_, err = client.ScheduleWeigh(ctx, time.Now(), pound)
 	refused("schedule", err)
 	refused("nested", client.Record(ctx, []values.Quantity[UnitM]{{{{Mantissa: 1, Unit: "km"}}, {{Mantissa: 1, Unit: "mi"}}}}))
+	// A stream before the refused argument stays with the caller.
+	readings := bridge.StreamOf[uint32](1, 2)
+	refused("streaming call", client.Calibrate(ctx, readings, pound))
+	if got, err := readings.Collect(ctx); err != nil || len(got) != 2 {{
+		t.Fatalf("the stream of a refused call read %v, %v", got, err)
+	}}
 }}
 "#
         ),

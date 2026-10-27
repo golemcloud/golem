@@ -162,11 +162,11 @@ func openSession(a *Agent, method string, params schema.SchemaValue) (*session, 
 		if !ok {
 			return nil, errors.New("golem: a stream argument must be a bridge.AgentStream")
 		}
-		if h.err != nil {
-			return nil, h.err
-		}
 		if seen[h] {
 			return nil, ErrStreamConsumed
+		}
+		if err := h.claim(); err != nil {
+			return nil, err
 		}
 		seen[h] = true
 		s.inputs = append(s.inputs, &inputStream{s: s, h: h, wake: make(chan struct{}, 1)})
@@ -174,12 +174,12 @@ func openSession(a *Agent, method string, params schema.SchemaValue) (*session, 
 	})
 	if err != nil {
 		end()
-		stopStreamArguments(params)
+		stopInputs(s.inputs)
 		return nil, fmt.Errorf("golem: %s.%s arguments: %w", a.typeName, method, err)
 	}
 	if err := s.prepareStart(); err != nil {
 		end()
-		stopStreamArguments(params)
+		stopInputs(s.inputs)
 		return nil, err
 	}
 	go s.connect(0)
@@ -697,17 +697,6 @@ func stopInputs(inputs []*inputStream) {
 	for _, in := range inputs {
 		in.h.stop("cancelled")
 	}
-}
-
-// stopStreamArguments stops every stream argument in params that could be
-// given away, for a call that is never sent.
-func stopStreamArguments(params schema.SchemaValue) {
-	_, _ = mapStreams(params, func(v schema.StreamValue) (schema.SchemaValue, error) {
-		if h, ok := v.Handle.(*inputHandle); ok && h.err == nil {
-			h.stop("cancelled")
-		}
-		return v, nil
-	})
 }
 
 // await waits for the result. A caller that gives up first cancels the call.
