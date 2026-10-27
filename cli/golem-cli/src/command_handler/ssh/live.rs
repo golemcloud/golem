@@ -19,7 +19,7 @@ use crate::command_handler::tool::{ToolOwner, public_target, public_typed_value}
 use crate::context::Context;
 use golem_client::invocation_session::{
     InvocationSession, InvocationSessionRequestProvider, InvocationSessionStateSnapshot,
-    SessionTransportError, drive_native_tool_session_with_stop,
+    ReconnectPolicy, SessionTransportError, drive_native_tool_session_with_stop,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_session_public::{
@@ -99,7 +99,7 @@ async fn open_and_drive(
 ) -> Result<PublicInvocationResult, SessionTransportError> {
     tokio::pin!(give_up);
     let session = tokio::select! {
-        session = InvocationSession::open(requests, None, initial, false, Arc::new(())) => session?,
+        session = InvocationSession::open(requests, None, ReconnectPolicy::Unlimited, initial, false, Arc::new(())) => session?,
         _ = tokio::time::sleep(open_wait) => {
             return Err(SessionTransportError::Connect(tungstenite::Error::Io(
                 std::io::Error::new(

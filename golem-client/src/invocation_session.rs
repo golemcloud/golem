@@ -52,6 +52,23 @@ const GENERATED_STREAM_ITEMS: usize = 256;
 const GENERATED_INPUT_BYTES: usize = MAX_LOGICAL_VALUE_SIZE;
 const GENERATED_INPUT_ITEMS: usize = 256;
 const PACKED_U8_FLUSH_DELAY: Duration = Duration::from_millis(2);
+const FIRST_RECONNECT_DELAY: Duration = Duration::from_millis(50);
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(3);
+/// Bounds one connection attempt: the TCP connect, the TLS handshake and the WebSocket upgrade
+/// together.
+const CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long an invocation session keeps reconnecting while the server accepts neither its start
+/// nor a resume.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReconnectPolicy {
+    /// Reconnects until the caller drops the session.
+    Unlimited,
+    /// Fails with [`SessionTransportError::Unreachable`] once the window passes without progress.
+    /// The window starts when the session opens, and again when a connection whose operation the
+    /// server accepted is lost.
+    Within(Duration),
+}
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -104,6 +121,13 @@ pub enum SessionTransportError {
         code: PublicErrorCode,
         message: String,
     },
+    #[error("invocation session endpoint {endpoint} was unreachable for {window:?}: {last_cause}")]
+    Unreachable {
+        endpoint: String,
+        window: Duration,
+        #[source]
+        last_cause: Box<SessionTransportError>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,6 +145,7 @@ pub struct GeneratedInvocationRequest {
     pub idempotency_key: String,
     pub input_graph: SchemaGraph,
     pub output_graph: Option<SchemaGraph>,
+    pub reconnect: ReconnectPolicy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1487,6 +1512,81 @@ pub struct InvocationSession {
     attachment_state: AttachmentState,
     /// How many times the session has left a connection for a new one.
     reconnects: u64,
+    reconnect: ReconnectClock,
+}
+
+/// Paces reconnects and ends them once the reconnect window passes without progress.
+struct ReconnectClock {
+    policy: ReconnectPolicy,
+    /// When the session last made progress: its open, or the loss of an accepted operation.
+    progress: tokio::time::Instant,
+    /// The delay before the next attempt; `None` makes the next attempt at once.
+    delay: Option<Duration>,
+    endpoint: String,
+    last_cause: Option<SessionTransportError>,
+}
+
+impl ReconnectClock {
+    fn new(policy: ReconnectPolicy) -> Self {
+        Self {
+            policy,
+            progress: tokio::time::Instant::now(),
+            delay: None,
+            endpoint: String::new(),
+            last_cause: None,
+        }
+    }
+
+    /// Restarts the window, and makes the next attempt at once.
+    fn progressed(&mut self) {
+        self.progress = tokio::time::Instant::now();
+        self.delay = None;
+    }
+
+    /// Records a failed attempt; the next one waits longer.
+    fn failed(&mut self, cause: SessionTransportError) {
+        self.last_cause = Some(cause);
+        self.failed_again();
+    }
+
+    /// Records a failed attempt that keeps the earlier cause.
+    fn failed_again(&mut self) {
+        self.delay = Some(
+            self.delay
+                .map(|delay| (delay * 2).min(MAX_RECONNECT_DELAY))
+                .unwrap_or(FIRST_RECONNECT_DELAY),
+        );
+    }
+
+    fn remaining(&self) -> Option<Duration> {
+        match self.policy {
+            ReconnectPolicy::Unlimited => None,
+            ReconnectPolicy::Within(window) => Some(window.saturating_sub(self.progress.elapsed())),
+        }
+    }
+
+    /// Waits for the next attempt, and returns how long that attempt may take; fails once the
+    /// window has passed.
+    async fn next_attempt(&mut self) -> Result<Duration, SessionTransportError> {
+        if let Some(delay) = self.delay {
+            tokio::time::sleep(self.remaining().map_or(delay, |left| delay.min(left))).await;
+        }
+        match (self.policy, self.remaining()) {
+            (_, None) => Ok(CONNECT_ATTEMPT_TIMEOUT),
+            (ReconnectPolicy::Within(window), Some(left)) if left.is_zero() => {
+                Err(SessionTransportError::Unreachable {
+                    endpoint: self.endpoint.clone(),
+                    window,
+                    last_cause: Box::new(
+                        self.last_cause
+                            .take()
+                            .unwrap_or(SessionTransportError::Closed),
+                    ),
+                })
+            }
+            (_, Some(left)) => Ok(left.min(CONNECT_ATTEMPT_TIMEOUT)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1504,7 +1604,10 @@ enum AttachmentState {
 struct RegisteredInput {
     buffer: InputReplayBuffer,
     channel: Option<u32>,
+    /// The reference the caller registered the input with.
     provisional_ref: uuid::Uuid,
+    /// The reference the pending start carries; a new start attempt replaces it.
+    wire_ref: uuid::Uuid,
     stream_token: Option<String>,
 }
 
@@ -1512,6 +1615,7 @@ impl InvocationSession {
     pub async fn open(
         request_provider: Arc<dyn InvocationSessionRequestProvider>,
         connector: Option<Connector>,
+        reconnect: ReconnectPolicy,
         initial: InvocationSessionStateSnapshot,
         pending_operation_is_retry: bool,
         observer: Arc<dyn InvocationSessionStateObserver>,
@@ -1525,9 +1629,14 @@ impl InvocationSession {
             .state_changed(&initial)
             .map_err(SessionTransportError::StatePersistence)?;
         let deliveries = DeliveryTracker::new(initial, observer)?;
-        let transport =
-            connect_for_pending_operation(&request_provider, connector.clone(), &deliveries)
-                .await?;
+        let mut reconnect = ReconnectClock::new(reconnect);
+        let transport = connect_for_pending_operation(
+            &request_provider,
+            connector.clone(),
+            &deliveries,
+            &mut reconnect,
+        )
+        .await?;
         Ok(Self {
             transport,
             request_provider,
@@ -1538,6 +1647,7 @@ impl InvocationSession {
                 exact_retry: pending_operation_is_retry,
             },
             reconnects: 0,
+            reconnect,
         })
     }
 
@@ -1575,6 +1685,7 @@ impl InvocationSession {
             buffer,
             channel: None,
             provisional_ref,
+            wire_ref: provisional_ref,
             stream_token,
         });
         Ok(())
@@ -1664,7 +1775,7 @@ impl InvocationSession {
         match self.transport.send_message(message).await {
             Ok(()) => Ok(SessionSendOutcome::Sent),
             Err(error) if is_transport_detach(&error) => {
-                self.recover().await?;
+                self.recover(error).await?;
                 Ok(SessionSendOutcome::Reconnected)
             }
             Err(error) => Err(error),
@@ -1681,7 +1792,7 @@ impl InvocationSession {
         match self.transport.send_binary(message).await {
             Ok(()) => Ok(SessionSendOutcome::Sent),
             Err(error) if is_transport_detach(&error) => {
-                self.recover().await?;
+                self.recover(error).await?;
                 Ok(SessionSendOutcome::Reconnected)
             }
             Err(error) => Err(error),
@@ -1695,7 +1806,7 @@ impl InvocationSession {
         if !is_transport_detach(&error) {
             return Err(error);
         }
-        self.recover().await
+        self.recover(error).await
     }
 
     pub async fn receive(&mut self) -> Result<ReceivedFrame, SessionTransportError> {
@@ -1716,7 +1827,7 @@ impl InvocationSession {
             let mut frame = match self.transport.receive().await {
                 Ok(frame) => frame,
                 Err(error) if recover_transport && is_transport_detach(&error) => {
-                    self.recover().await?;
+                    self.recover(error).await?;
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -1770,7 +1881,11 @@ impl InvocationSession {
                     };
                 }
                 PublicServerMessage::InvocationRejected {
-                    attempt_id, code, ..
+                    attempt_id,
+                    code,
+                    message,
+                    retryable,
+                    ..
                 } => {
                     match self.attachment_state {
                         AttachmentState::Pending { .. } => {
@@ -1795,6 +1910,21 @@ impl InvocationSession {
                                 *attempt_id = uuid::Uuid::new_v4();
                                 *operation = PublicResumeOperation::Takeover;
                                 self.deliveries.set_attachment_state(Some(pending), None)?;
+                                self.reconnect.failed(SessionTransportError::Rejected {
+                                    code: *code,
+                                    message: message.clone(),
+                                });
+                                self.connect_pending(false).await?;
+                                continue;
+                            }
+                            // A refused takeover ends the session even when retryable; the
+                            // takeover above is the one fallback for a refused resume.
+                            if *retryable && *code != PublicErrorCode::InvalidAttachmentState {
+                                self.renew_pending_attempt(pending)?;
+                                self.reconnect.failed(SessionTransportError::Rejected {
+                                    code: *code,
+                                    message: message.clone(),
+                                });
                                 self.connect_pending(false).await?;
                                 continue;
                             }
@@ -1802,7 +1932,18 @@ impl InvocationSession {
                         AttachmentState::Accepted {
                             attempt_id: accepted_attempt_id,
                             ..
-                        } if *attempt_id == Some(accepted_attempt_id) => {}
+                        } if *attempt_id == Some(accepted_attempt_id) => {
+                            if *retryable && *code != PublicErrorCode::InvalidAttachmentState {
+                                self.reconnect.progressed();
+                                self.reconnect.failed(SessionTransportError::Rejected {
+                                    code: *code,
+                                    message: message.clone(),
+                                });
+                                self.install_new_resume(PublicResumeOperation::Resume)?;
+                                self.connect_pending(false).await?;
+                                continue;
+                            }
+                        }
                         _ => return Err(SessionTransportError::UnexpectedAttempt),
                     }
                     self.deliveries.set_attachment_state(None, None)?;
@@ -1817,7 +1958,7 @@ impl InvocationSession {
                         }
                     ) =>
                 {
-                    self.recover().await?;
+                    self.recover(SessionTransportError::Closed).await?;
                     continue;
                 }
                 PublicServerMessage::AttachmentRevoked { .. } => {
@@ -1879,10 +2020,46 @@ impl InvocationSession {
         self.deliveries.set_attachment_state(Some(request), None)
     }
 
-    async fn recover(&mut self) -> Result<(), SessionTransportError> {
+    /// Replaces a rejected pending operation with a new attempt of it: a new attempt ID, and
+    /// for a start new provisional references, as only an exact retry may reuse them.
+    fn renew_pending_attempt(
+        &mut self,
+        mut pending: PublicClientMessage,
+    ) -> Result<(), SessionTransportError> {
+        match &mut pending {
+            PublicClientMessage::InvocationStart {
+                attempt_id,
+                method_parameters,
+                ..
+            } => {
+                *attempt_id = uuid::Uuid::new_v4();
+                let mut renamed = HashMap::new();
+                renew_provisional_refs(method_parameters, &mut renamed);
+                for input in &mut self.inputs {
+                    if let Some(wire_ref) = renamed.get(&input.wire_ref) {
+                        input.wire_ref = *wire_ref;
+                    }
+                }
+            }
+            PublicClientMessage::ToolStart { attempt_id, .. }
+            | PublicClientMessage::ResumeAttach { attempt_id, .. } => {
+                *attempt_id = uuid::Uuid::new_v4();
+            }
+            _ => return Err(SessionTransportError::UnexpectedAttempt),
+        }
+        self.deliveries.set_attachment_state(Some(pending), None)
+    }
+
+    /// Reconnects after the transport detached with `cause`. Leaving an accepted operation
+    /// restarts the reconnect window; losing a pending one counts as a failed attempt.
+    async fn recover(&mut self, cause: SessionTransportError) -> Result<(), SessionTransportError> {
         let exact_retry = match self.attachment_state {
-            AttachmentState::Pending { .. } => true,
+            AttachmentState::Pending { .. } => {
+                self.reconnect.failed(cause);
+                true
+            }
             AttachmentState::Accepted { .. } => {
+                self.reconnect.progressed();
                 self.install_new_resume(PublicResumeOperation::Resume)?;
                 false
             }
@@ -1904,6 +2081,7 @@ impl InvocationSession {
             &self.request_provider,
             self.connector.clone(),
             &self.deliveries,
+            &mut self.reconnect,
         )
         .await?;
         Ok(())
@@ -1932,7 +2110,7 @@ impl InvocationSession {
                         .stream_token
                         .as_ref()
                         .map(|token| token == &mapping.stream_token)
-                        .unwrap_or(mapping.provisional_ref == Some(input.provisional_ref))
+                        .unwrap_or(mapping.provisional_ref == Some(input.wire_ref))
                         .then_some(index)
                 })
                 .collect::<Vec<_>>();
@@ -2633,38 +2811,79 @@ async fn connect_for_pending_operation(
     request_provider: &Arc<dyn InvocationSessionRequestProvider>,
     connector: Option<Connector>,
     deliveries: &DeliveryTracker,
+    reconnect: &mut ReconnectClock,
 ) -> Result<InvocationSessionTransport, SessionTransportError> {
     let operation = deliveries.snapshot().pending_operation.ok_or_else(|| {
         SessionTransportError::Protocol(
             "cannot connect without a pending attachment operation".to_string(),
         )
     })?;
-    let mut delay = None;
     loop {
-        if let Some(delay) = delay {
-            tokio::time::sleep(delay).await;
-        }
+        let attempt_timeout = reconnect.next_attempt().await?;
         let request = request_provider.request().await?;
-        match InvocationSessionTransport::connect_with_tracker(
-            request,
-            connector.clone(),
-            deliveries.clone(),
+        reconnect.endpoint = request.uri().to_string();
+        let cause = match tokio::time::timeout(
+            attempt_timeout,
+            InvocationSessionTransport::connect_with_tracker(
+                request,
+                connector.clone(),
+                deliveries.clone(),
+            ),
         )
         .await
         {
-            Ok(transport) => match transport.send_message(&operation).await {
+            Ok(Ok(transport)) => match transport.send_message(&operation).await {
                 Ok(()) => return Ok(transport),
-                Err(error) if is_transport_detach(&error) => {}
+                Err(error) if is_transport_detach(&error) => error,
                 Err(error) => return Err(error),
             },
-            Err(error) if is_retryable_connect(&error) => {}
-            Err(error) => return Err(error),
+            Ok(Err(error)) if is_retryable_connect(&error) => error,
+            Ok(Err(error)) => return Err(error),
+            // An attempt cut short by the end of the window keeps the earlier cause.
+            Err(_)
+                if attempt_timeout < CONNECT_ATTEMPT_TIMEOUT && reconnect.last_cause.is_some() =>
+            {
+                reconnect.failed_again();
+                continue;
+            }
+            Err(_) => SessionTransportError::Connect(tungstenite::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("no WebSocket connection within {attempt_timeout:?}"),
+            ))),
+        };
+        reconnect.failed(cause);
+    }
+}
+
+/// Gives every provisional stream reference in a start's method parameters a new UUID, and
+/// records the old and new reference.
+fn renew_provisional_refs(
+    value: &mut serde_json::Value,
+    renamed: &mut HashMap<uuid::Uuid, uuid::Uuid>,
+) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if object.get("kind").and_then(|kind| kind.as_str()) == Some("stream")
+                && let Some(serde_json::Value::Object(reference)) = object.get_mut("value")
+                && let Some(provisional) = reference.get_mut("provisionalRef")
+                && let Some(old) = provisional
+                    .as_str()
+                    .and_then(|old| uuid::Uuid::parse_str(old).ok())
+            {
+                let new = *renamed.entry(old).or_insert_with(uuid::Uuid::new_v4);
+                *provisional = serde_json::Value::String(new.to_string());
+                return;
+            }
+            for nested in object.values_mut() {
+                renew_provisional_refs(nested, renamed);
+            }
         }
-        delay = Some(
-            delay
-                .map(|delay: Duration| (delay * 2).min(Duration::from_secs(3)))
-                .unwrap_or(Duration::from_millis(50)),
-        );
+        serde_json::Value::Array(items) => {
+            for item in items {
+                renew_provisional_refs(item, renamed);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2695,11 +2914,14 @@ fn is_transport_detach(error: &SessionTransportError) -> bool {
 }
 
 fn is_retryable_connect(error: &SessionTransportError) -> bool {
-    matches!(
-        error,
-        SessionTransportError::Connect(error)
-            if !matches!(error, tungstenite::Error::Http(_))
-    ) || is_transport_detach(error)
+    match error {
+        SessionTransportError::Connect(tungstenite::Error::Http(response)) => {
+            let status = response.status();
+            status == tungstenite::http::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+        }
+        SessionTransportError::Connect(_) => true,
+        error => is_transport_detach(error),
+    }
 }
 
 async fn run_socket(
@@ -2860,6 +3082,7 @@ where
         selector: Box::new(request.selector),
         version: INVOCATION_SESSION_VERSION,
     };
+    let reconnect = request.reconnect;
     let provider: Arc<dyn InvocationSessionRequestProvider> =
         Arc::new(GeneratedSessionRequestProvider {
             base_url: request.base_url,
@@ -2871,7 +3094,8 @@ where
         pending_operation: Some(start),
         session_token: None,
     };
-    let session = InvocationSession::open(provider, None, initial, false, Arc::new(())).await?;
+    let session =
+        InvocationSession::open(provider, None, reconnect, initial, false, Arc::new(())).await?;
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(run_generated_invocation(
         session,
@@ -4533,6 +4757,7 @@ mod tests {
         let session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -4672,6 +4897,7 @@ mod tests {
         let session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -4832,6 +5058,7 @@ mod tests {
         let session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -5111,6 +5338,7 @@ mod tests {
         let session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -5764,6 +5992,7 @@ mod tests {
         let session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -5887,6 +6116,7 @@ mod tests {
         let session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -6075,6 +6305,7 @@ mod tests {
         let session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -6634,6 +6865,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -6805,6 +7037,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -6960,6 +7193,7 @@ mod tests {
             let mut session = InvocationSession::open(
                 Arc::new(StaticRequestProvider(format!("ws://{address}"))),
                 None,
+                ReconnectPolicy::Unlimited,
                 InvocationSessionStateSnapshot {
                     delivered_output_cursors: BTreeMap::new(),
                     stable_stream_bindings: BTreeMap::new(),
@@ -7073,6 +7307,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -7215,6 +7450,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -7351,6 +7587,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -7423,6 +7660,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -7480,7 +7718,7 @@ mod tests {
                         attempt_id: Some(attempt_id),
                         code: PublicErrorCode::InputConflict,
                         message: "input conflict".to_string(),
-                        retryable: true,
+                        retryable: false,
                         version: 1,
                     })
                     .unwrap()
@@ -7494,6 +7732,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -7597,6 +7836,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -7677,6 +7917,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -7752,6 +7993,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -7822,6 +8064,7 @@ mod tests {
         let mut session = InvocationSession::open(
             Arc::new(StaticRequestProvider(format!("ws://{address}"))),
             None,
+            ReconnectPolicy::Unlimited,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -7906,6 +8149,526 @@ mod tests {
         assert!(matches!(
             error,
             SessionTransportError::UnsupportedSubprotocol
+        ));
+        server.await.unwrap();
+    }
+
+    fn empty_snapshot(pending: PublicClientMessage) -> InvocationSessionStateSnapshot {
+        InvocationSessionStateSnapshot {
+            delivered_output_cursors: BTreeMap::new(),
+            stable_stream_bindings: BTreeMap::new(),
+            pending_operation: Some(pending),
+            session_token: None,
+        }
+    }
+
+    async fn open_within(
+        address: std::net::SocketAddr,
+        reconnect: ReconnectPolicy,
+        pending: PublicClientMessage,
+    ) -> Result<InvocationSession, SessionTransportError> {
+        InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            reconnect,
+            empty_snapshot(pending),
+            false,
+            Arc::new(()),
+        )
+        .await
+    }
+
+    async fn accept_session(
+        listener: &TcpListener,
+    ) -> tokio_tungstenite::WebSocketStream<TcpStream> {
+        let (socket, _) = listener.accept().await.unwrap();
+        accept_hdr_async(socket, |request: &Request, response: Response| {
+            Ok(select_session_subprotocol(request, response))
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Answers the next upgrade request with an HTTP status instead of a WebSocket.
+    async fn refuse_upgrade(listener: &TcpListener, status: &str) {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 1024];
+        while !request.ends_with(b"\r\n\r\n") {
+            let read = tokio::io::AsyncReadExt::read(&mut socket, &mut buffer)
+                .await
+                .unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+        }
+        tokio::io::AsyncWriteExt::write_all(
+            &mut socket,
+            format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn send_server(
+        socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+        message: PublicServerMessage,
+    ) {
+        socket
+            .send(Message::Text(encode_text(&message).unwrap().into()))
+            .await
+            .unwrap();
+    }
+
+    fn accepted(attempt_id: uuid::Uuid, mappings: Vec<PublicStreamMapping>) -> PublicServerMessage {
+        PublicServerMessage::InvocationAccepted {
+            attempt_id,
+            idempotency_key: "invocation-key".to_string(),
+            mappings,
+            session_token: "session-token".to_string(),
+            version: 1,
+        }
+    }
+
+    fn retryable_rejection(attempt_id: uuid::Uuid) -> PublicServerMessage {
+        PublicServerMessage::InvocationRejected {
+            attempt_id: Some(attempt_id),
+            code: PublicErrorCode::RoutingMiss,
+            message: "moving".to_string(),
+            retryable: true,
+            version: 1,
+        }
+    }
+
+    #[test]
+    async fn a_start_against_a_closed_port_is_unreachable_after_the_window() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let started = tokio::time::Instant::now();
+        let error = match open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_millis(300)),
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        {
+            Ok(_) => panic!("connected to a closed port"),
+            Err(error) => error,
+        };
+        let elapsed = started.elapsed();
+        let SessionTransportError::Unreachable {
+            endpoint,
+            window,
+            last_cause,
+        } = error
+        else {
+            panic!("expected an unreachable error, got {error}")
+        };
+        assert!(endpoint.contains(&address.to_string()), "{endpoint}");
+        assert_eq!(window, Duration::from_millis(300));
+        assert!(matches!(*last_cause, SessionTransportError::Connect(_)));
+        assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    }
+
+    #[test]
+    async fn an_upgrade_that_never_completes_is_abandoned_within_the_window() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                held.push(socket);
+            }
+        });
+        let started = tokio::time::Instant::now();
+        let error = match open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_millis(400)),
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        {
+            Ok(_) => panic!("an upgrade that never completed connected"),
+            Err(error) => error,
+        };
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let SessionTransportError::Unreachable { last_cause, .. } = error else {
+            panic!("expected an unreachable error, got {error}")
+        };
+        assert!(matches!(
+            *last_cause,
+            SessionTransportError::Connect(tungstenite::Error::Io(ref error))
+                if error.kind() == std::io::ErrorKind::TimedOut
+        ));
+        server.abort();
+    }
+
+    #[test]
+    async fn retryable_upgrade_statuses_are_retried() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let initial = start_request(uuid::Uuid::new_v4());
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            refuse_upgrade(&listener, "503 Service Unavailable").await;
+            refuse_upgrade(&listener, "429 Too Many Requests").await;
+            let mut socket = accept_session(&listener).await;
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            let attempt_id = operation_attempt_id(&server_initial).unwrap();
+            send_server(&mut socket, accepted(attempt_id, Vec::new())).await;
+            socket.close(None).await.unwrap();
+        });
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_secs(10)),
+            initial,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            session
+                .receive_without_transport_recovery()
+                .await
+                .unwrap()
+                .frame(),
+            ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
+        ));
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn another_upgrade_status_fails_at_once() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            refuse_upgrade(&listener, "403 Forbidden").await;
+        });
+        let error = match open_within(
+            address,
+            ReconnectPolicy::Unlimited,
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        {
+            Ok(_) => panic!("a refused upgrade connected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            SessionTransportError::Connect(tungstenite::Error::Http(ref response))
+                if response.status() == 403
+        ));
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn no_reconnect_limit_keeps_retrying() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let initial = start_request(uuid::Uuid::new_v4());
+        let server = tokio::spawn(async move {
+            for _ in 0..5 {
+                refuse_upgrade(&listener, "502 Bad Gateway").await;
+            }
+            let mut socket = accept_session(&listener).await;
+            receive_client_message(&mut socket).await;
+        });
+        open_within(address, ReconnectPolicy::Unlimited, initial)
+            .await
+            .unwrap();
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn retryable_statuses_past_the_window_are_unreachable() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                refuse_upgrade(&listener, "503 Service Unavailable").await;
+            }
+        });
+        let error = match open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_millis(300)),
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        {
+            Ok(_) => panic!("connected through a refusing server"),
+            Err(error) => error,
+        };
+        let SessionTransportError::Unreachable { last_cause, .. } = error else {
+            panic!("expected an unreachable error, got {error}")
+        };
+        assert!(matches!(
+            *last_cause,
+            SessionTransportError::Connect(tungstenite::Error::Http(ref response))
+                if response.status() == 503
+        ));
+        server.abort();
+    }
+
+    #[test]
+    async fn a_retryable_rejection_before_acceptance_starts_a_new_attempt() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let provisional_ref = uuid::Uuid::new_v4();
+        let PublicClientMessage::InvocationStart {
+            attempt_id,
+            config,
+            idempotency_key,
+            selector,
+            version,
+            ..
+        } = start_request(uuid::Uuid::new_v4())
+        else {
+            unreachable!()
+        };
+        let initial = PublicClientMessage::InvocationStart {
+            attempt_id,
+            config,
+            idempotency_key,
+            method_parameters: serde_json::json!({"kind":"record","value":{"fields":[
+                {"kind":"stream","value":{"provisionalRef":provisional_ref}}
+            ]}}),
+            selector,
+            version,
+        };
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_session(&listener).await;
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            send_server(&mut socket, retryable_rejection(attempt_id)).await;
+            socket.close(None).await.unwrap();
+
+            let mut socket = accept_session(&listener).await;
+            let retry = receive_client_message(&mut socket).await;
+            let PublicClientMessage::InvocationStart {
+                attempt_id: retry_attempt,
+                idempotency_key,
+                method_parameters,
+                ..
+            } = &retry
+            else {
+                panic!("expected a start, got {retry:?}")
+            };
+            assert_ne!(*retry_attempt, attempt_id);
+            assert_eq!(idempotency_key, "invocation-key");
+            let retry_ref: uuid::Uuid = serde_json::from_value(
+                method_parameters["value"]["fields"][0]["value"]["provisionalRef"].clone(),
+            )
+            .unwrap();
+            assert_ne!(retry_ref, provisional_ref);
+            send_server(
+                &mut socket,
+                accepted(
+                    *retry_attempt,
+                    vec![PublicStreamMapping {
+                        channel: 1,
+                        direction: PublicStreamDirection::Input,
+                        byte_role: None,
+                        input_high_water: Some(PublicInputHighWater {
+                            sequence: DecimalU64(0),
+                            terminal: false,
+                        }),
+                        provisional_ref: Some(retry_ref),
+                        stream_token: "input".to_string(),
+                    }],
+                ),
+            )
+            .await;
+            socket.close(None).await.unwrap();
+        });
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_secs(10)),
+            initial,
+        )
+        .await
+        .unwrap();
+        let buffer = InputReplayBuffer::new(1024, 16);
+        session
+            .register_input(provisional_ref, None, buffer.clone())
+            .unwrap();
+        assert!(matches!(
+            session.receive().await.unwrap().frame(),
+            ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
+        ));
+        assert_eq!(
+            session.input_binding(&buffer),
+            Some((1, "input".to_string()))
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn retryable_rejections_past_the_window_are_unreachable() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let mut socket = accept_session(&listener).await;
+                let start = receive_client_message(&mut socket).await;
+                send_server(
+                    &mut socket,
+                    retryable_rejection(operation_attempt_id(&start).unwrap()),
+                )
+                .await;
+                let _ = socket.close(None).await;
+            }
+        });
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_millis(400)),
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+        let error = match session.receive().await {
+            Ok(frame) => panic!("received {:?}", frame.frame()),
+            Err(error) => error,
+        };
+        let SessionTransportError::Unreachable { last_cause, .. } = error else {
+            panic!("expected an unreachable error, got {error}")
+        };
+        assert!(matches!(
+            *last_cause,
+            SessionTransportError::Rejected {
+                code: PublicErrorCode::RoutingMiss,
+                ..
+            }
+        ));
+        server.abort();
+    }
+
+    #[test]
+    async fn a_server_that_drops_every_start_is_unreachable_after_the_window_with_backoff() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_connections = connections.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let mut socket = accept_session(&listener).await;
+                server_connections.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                receive_client_message(&mut socket).await;
+                drop(socket);
+            }
+        });
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_millis(400)),
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+        let error = match session.receive().await {
+            Ok(frame) => panic!("received {:?}", frame.frame()),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, SessionTransportError::Unreachable { .. }),
+            "expected an unreachable error, got {error}"
+        );
+        let connections = connections.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            (2..=8).contains(&connections),
+            "connected {connections} times"
+        );
+        server.abort();
+    }
+
+    #[test]
+    async fn the_window_starts_again_when_an_accepted_connection_is_lost() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let initial = start_request(uuid::Uuid::new_v4());
+        let server = tokio::spawn(async move {
+            let mut socket = accept_session(&listener).await;
+            let start = receive_client_message(&mut socket).await;
+            send_server(
+                &mut socket,
+                accepted(operation_attempt_id(&start).unwrap(), Vec::new()),
+            )
+            .await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            socket.close(None).await.unwrap();
+
+            let mut socket = accept_session(&listener).await;
+            let resume = receive_client_message(&mut socket).await;
+            assert!(matches!(
+                resume,
+                PublicClientMessage::ResumeAttach {
+                    operation: PublicResumeOperation::Resume,
+                    ..
+                }
+            ));
+            send_server(
+                &mut socket,
+                accepted(operation_attempt_id(&resume).unwrap(), Vec::new()),
+            )
+            .await;
+            socket.close(None).await.unwrap();
+        });
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_millis(300)),
+            initial,
+        )
+        .await
+        .unwrap();
+        session.receive().await.unwrap();
+        assert!(matches!(
+            session.receive().await.unwrap().frame(),
+            ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
+        ));
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn a_retryable_rejection_after_acceptance_resumes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let initial = start_request(uuid::Uuid::new_v4());
+        let server = tokio::spawn(async move {
+            let mut socket = accept_session(&listener).await;
+            let start = receive_client_message(&mut socket).await;
+            let attempt_id = operation_attempt_id(&start).unwrap();
+            send_server(&mut socket, accepted(attempt_id, Vec::new())).await;
+            send_server(&mut socket, retryable_rejection(attempt_id)).await;
+            socket.close(None).await.unwrap();
+
+            let mut socket = accept_session(&listener).await;
+            let resume = receive_client_message(&mut socket).await;
+            assert!(matches!(
+                resume,
+                PublicClientMessage::ResumeAttach {
+                    operation: PublicResumeOperation::Resume,
+                    ..
+                }
+            ));
+            send_server(
+                &mut socket,
+                accepted(operation_attempt_id(&resume).unwrap(), Vec::new()),
+            )
+            .await;
+            socket.close(None).await.unwrap();
+        });
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_secs(10)),
+            initial,
+        )
+        .await
+        .unwrap();
+        session.receive().await.unwrap();
+        assert!(matches!(
+            session.receive().await.unwrap().frame(),
+            ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
         ));
         server.await.unwrap();
     }
