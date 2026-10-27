@@ -39,6 +39,12 @@ object RichTypesSpec extends ZIOSpecDefault {
     implicit val schema: Schema[RichRecord] = Schema.derived
   }
 
+  final case class Captioned(caption: Text, note: Option[Text], lines: List[Text])
+
+  object Captioned {
+    implicit val schema: Schema[Captioned] = Schema.derived
+  }
+
   final case class TwoQuantities(size: Quantity[Bytes], timeout: Quantity[Seconds])
 
   object TwoQuantities {
@@ -79,6 +85,40 @@ object RichTypesSpec extends ZIOSpecDefault {
         FromSchema[Instant].fromValue(IntoSchema[Instant].toValue(instant)) == Right(instant),
         FromSchema[JDuration].fromValue(IntoSchema[JDuration].toValue(duration)) == Right(duration),
         FromSchema[Quantity[Bytes]].fromValue(IntoSchema[Quantity[Bytes]].toValue(quantity)) == Right(quantity)
+      )
+    },
+    test("bare text uses the text node and roundtrips with and without a language") {
+      val plain     = Text("hello")
+      val localized = Text("árvíz", Some("hu"))
+      assertTrue(
+        IntoSchema[Text].graph.root.body == SchemaTypeBody.TextType(TextRestrictions.empty),
+        IntoSchema[Text].toValue(plain) == SchemaValue.TextValue("hello", None),
+        IntoSchema[Text].toValue(localized) == SchemaValue.TextValue("árvíz", Some("hu")),
+        FromSchema[Text].fromValue(SchemaValue.TextValue("hello", None)) == Right(plain),
+        FromSchema[Text].fromValue(IntoSchema[Text].toValue(localized)) == Right(localized),
+        FromSchema[Text].fromValue(SchemaValue.StringValue("hello")).isLeft,
+        scala.util.Try(IntoSchema[Text].toValue(Text("a\ud800"))).isFailure,
+        scala.util.Try(IntoSchema[Text].toValue(Text("ok", Some("\udc00")))).isFailure
+      )
+    },
+    test("derived record text fields use the text node and roundtrip") {
+      val record = Captioned(Text("caption", Some("en")), Some(Text("note")), List(Text("a"), Text("b", Some("de"))))
+      val empty  = Captioned(Text(""), None, Nil)
+      val text   = SchemaTypeBody.TextType(TextRestrictions.empty)
+      val fields = recordFieldBodies[Captioned]
+      assertTrue(
+        fields.head == text,
+        fields(1).asInstanceOf[SchemaTypeBody.OptionType].element.body == text,
+        fields(2).asInstanceOf[SchemaTypeBody.ListType].element.body == text,
+        IntoSchema[Captioned].toValue(record) == SchemaValue.RecordValue(
+          List(
+            SchemaValue.TextValue("caption", Some("en")),
+            SchemaValue.OptionValue(Some(SchemaValue.TextValue("note", None))),
+            SchemaValue.ListValue(List(SchemaValue.TextValue("a", None), SchemaValue.TextValue("b", Some("de"))))
+          )
+        ),
+        FromSchema[Captioned].fromValue(IntoSchema[Captioned].toValue(record)) == Right(record),
+        FromSchema[Captioned].fromValue(IntoSchema[Captioned].toValue(empty)) == Right(empty)
       )
     },
     test("native Java time schemas use rich structural values") {

@@ -72,6 +72,41 @@ object Url {
     }
 }
 
+/**
+ * Bare text with an optional language code. Its schema is `text` without
+ * restrictions; a callee may publish a refined `text` schema (languages,
+ * length, regex), which the server checks.
+ */
+final case class Text(text: String, language: Option[String] = None)
+
+object Text {
+  val defaultRestrictions: TextRestrictions = TextRestrictions.empty
+
+  implicit val schema: Schema[Text] = Schema.derived
+
+  private[golem] def toSchemaValue(value: Text): SchemaValue =
+    SchemaValue.TextValue(
+      UnicodeText.encodeText("text", value.text),
+      value.language.map(UnicodeText.encodeText("text language", _))
+    )
+
+  implicit val intoSchema: IntoSchema[Text] =
+    new IntoSchema[Text] {
+      override lazy val graph: SchemaGraph =
+        SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.TextType(defaultRestrictions)))
+      override def toValue(value: Text): SchemaValue = toSchemaValue(value)
+    }
+
+  implicit val fromSchema: FromSchema[Text] =
+    new FromSchema[Text] {
+      override def fromValue(value: SchemaValue): Either[FromSchemaError, Text] =
+        value match {
+          case SchemaValue.TextValue(text, language) => Right(Text(text, language))
+          case other                                 => Left(FromSchemaError(s"expected text value for Text, got $other"))
+        }
+    }
+}
+
 final case class Quantity[U](mantissa: Long, scale: Int, unit: String)
 
 object Quantity {

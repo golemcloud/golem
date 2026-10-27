@@ -37,7 +37,7 @@ import scala.util.control.NonFatal
  *
  * The engine is host-agnostic and has no `js.*` imports.
  *
- * Rich types with a dedicated schema node (path, url, datetime, duration,
+ * Rich types with a dedicated schema node (path, url, text, datetime, duration,
  * quantity, and the role-marked [[UnstructuredText]] / [[UnstructuredBinary]]
  * variants) are recognized by their `TypeId` before structural unwrapping.
  * `golem.config.Secret` is rejected loudly rather than silently unwrapped.
@@ -47,6 +47,7 @@ private[golem] object Derivation {
   private final val SecretFqn    = "golem.config.Secret"
   private final val PathFqn      = "golem.schema.GolemPath"
   private final val UrlFqn       = "golem.schema.Url"
+  private final val TextFqn      = "golem.schema.Text"
   private final val QuantityFqn  = "golem.schema.Quantity"
   private final val TupleConsFqn = "scala.*:"
 
@@ -188,6 +189,7 @@ private[golem] object Derivation {
 
   private def isPath(reflect: Reflect.Bound[?]): Boolean                    = normalizedName(reflect) == PathFqn
   private def isUrl(reflect: Reflect.Bound[?]): Boolean                     = normalizedName(reflect) == UrlFqn
+  private def isText(reflect: Reflect.Bound[?]): Boolean                    = normalizedName(reflect) == TextFqn
   private def isInstant(reflect: Reflect.Bound[?]): Boolean                 = TypeId.structurallyEqual(reflect.typeId, instantTypeId)
   private def isDuration(reflect: Reflect.Bound[?]): Boolean                = TypeId.structurallyEqual(reflect.typeId, durationTypeId)
   private def quantitySpec(reflect: Reflect.Bound[?]): Option[QuantitySpec] =
@@ -217,6 +219,7 @@ private[golem] object Derivation {
   private def richBody(reflect: Reflect.Bound[?]): Option[SchemaTypeBody] =
     if (isPath(reflect)) Some(SchemaTypeBody.PathType(GolemPath.defaultSpec))
     else if (isUrl(reflect)) Some(SchemaTypeBody.UrlType(Url.defaultRestrictions))
+    else if (isText(reflect)) Some(SchemaTypeBody.TextType(Text.defaultRestrictions))
     else if (isInstant(reflect)) Some(SchemaTypeBody.DatetimeType)
     else if (isDuration(reflect)) Some(SchemaTypeBody.DurationType)
     else quantitySpec(reflect).map(SchemaTypeBody.QuantityType.apply)
@@ -483,6 +486,12 @@ private[golem] object Derivation {
     if (isPath(reflect))
       SchemaValue.PathValue(UnicodeText.encodeText("path", stringFromSingleValueRecord(d, "GolemPath")))
     else if (isUrl(reflect)) SchemaValue.UrlValue(UnicodeText.encodeText("url", stringFromSingleValueRecord(d, "Url")))
+    else if (isText(reflect))
+      Text.toSchemaValue(
+        Text.schema
+          .fromDynamicValue(d)
+          .fold(e => throw SchemaEncodeError(s"Text expected record dynamic value: $e"), identity)
+      )
     else if (isInstant(reflect))
       d match {
         case DV.Primitive(PrimitiveValue.Instant(instant)) =>
@@ -794,6 +803,11 @@ private[golem] object Derivation {
       value match {
         case SchemaValue.UrlValue(v) => DV.Record(Chunk("value" -> DV.Primitive(PrimitiveValue.String(v))))
         case other                   => throw FromSchemaError(s"expected url value for Url, got $other")
+      }
+    else if (isText(reflect))
+      value match {
+        case SchemaValue.TextValue(text, language) => Text.schema.toDynamicValue(Text(text, language))
+        case other                                 => throw FromSchemaError(s"expected text value for Text, got $other")
       }
     else if (isInstant(reflect))
       value match {

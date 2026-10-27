@@ -83,6 +83,7 @@ Generated Scala bridge clients follow the same conventions as agent-to-agent RPC
 - For ephemeral targets, awaited methods return `Future[golem.bridge.runtime.InvocationResult[T]]`; stream-free trigger and schedule methods return `Future[golem.bridge.runtime.InvocationReceipt]`.
 - External JVM factories return futures (as in the example), unlike synchronous guest factories. External phantom UUIDs are `java.util.UUID`, as in guest code. External REST bridge types live under `golem.bridge.runtime`, not `golem.runtime.rpc`. CLI-generated internal guest clients use `golem.runtime.rpc.InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` for ephemeral operations.
 - Bridge clients omit trigger and schedule helpers for recursively stream-bearing methods; use awaited streaming calls.
+- A bare `text` schema, also a refined one with languages, a length or a regex, maps to `golem.bridge.runtime.Text(text, language)` in external bridges and to the SDK's `golem.schema.Text(text, language)` in internal clients. The client does not check the restrictions; the server does.
 
 ## Generate Scala Internal Clients for Component-to-Component Calls
 

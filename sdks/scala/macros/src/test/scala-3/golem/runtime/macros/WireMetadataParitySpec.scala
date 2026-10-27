@@ -26,7 +26,9 @@ import golem.schema.{
   QuantityValue,
   SchemaGraph,
   SchemaType,
-  SchemaTypeBody
+  SchemaTypeBody,
+  Text,
+  TextRestrictions
 }
 import golem.schema.wire.{ConcreteCodec, SchemaWire, WitSchemaValueNode, WitSchemaValueTree}
 import zio.blocks.schema.Schema
@@ -51,6 +53,9 @@ private[macros] object WireMetadataParityTypes {
 
   final case class Load(weight: Quantity[Kg], legs: List[Quantity[Length]])
   object Load { implicit val schema: Schema[Load] = Schema.derived }
+
+  final case class Captioned(caption: Text, note: Option[Text], lines: List[Text])
+  object Captioned { implicit val schema: Schema[Captioned] = Schema.derived }
 
   type Wide = (
     Int,
@@ -95,14 +100,18 @@ object WireMetadataParitySpec extends ZIOSpecDefault {
     def wide(value: Wide): Future[Wide]
     def timed(value: Timed): Future[Timed]
     def load(value: Load): Future[Load]
+    def text(value: Text): Future[Text]
+    def captioned(value: Captioned): Future[Captioned]
   }
 
   final class ParityAgentImpl() extends ParityAgent {
-    override def set(value: Set[Int]): Future[Set[Int]] = Future.successful(value)
-    override def animal(value: Animal): Future[Animal]  = Future.successful(value)
-    override def wide(value: Wide): Future[Wide]        = Future.successful(value)
-    override def timed(value: Timed): Future[Timed]     = Future.successful(value)
-    override def load(value: Load): Future[Load]        = Future.successful(value)
+    override def set(value: Set[Int]): Future[Set[Int]]         = Future.successful(value)
+    override def animal(value: Animal): Future[Animal]          = Future.successful(value)
+    override def wide(value: Wide): Future[Wide]                = Future.successful(value)
+    override def timed(value: Timed): Future[Timed]             = Future.successful(value)
+    override def load(value: Load): Future[Load]                = Future.successful(value)
+    override def text(value: Text): Future[Text]                = Future.successful(value)
+    override def captioned(value: Captioned): Future[Captioned] = Future.successful(value)
   }
 
   private val metadata = AgentMacros.agentMetadata[ParityAgent]
@@ -159,6 +168,24 @@ object WireMetadataParitySpec extends ZIOSpecDefault {
             SchemaTypeBody.ListType(SchemaType(SchemaTypeBody.QuantityType(QuantitySpec("m", List("m", "cm", "km")))))
           ),
           agree("load", ConcreteCodec.derived[Load], List(value))
+        )
+      },
+      test("bare text is the text node on every path") {
+        val text   = SchemaTypeBody.TextType(TextRestrictions.empty)
+        val value  = Captioned(Text("caption", Some("en")), Some(Text("note")), List(Text("a"), Text("b", Some("de"))))
+        val fields = input("captioned").defs.values.head.body.body match {
+          case SchemaTypeBody.RecordType(fields) => fields.map(_.body.body)
+          case _                                 => Nil
+        }
+        assertTrue(
+          input("text").root.body == text,
+          fields == List(
+            text,
+            SchemaTypeBody.OptionType(SchemaType(text)),
+            SchemaTypeBody.ListType(SchemaType(text))
+          ),
+          agree("text", ConcreteCodec.derived[Text], List(Text("hello"), Text("árvíz", Some("hu")))),
+          agree("captioned", ConcreteCodec.derived[Captioned], List(value, Captioned(Text(""), None, Nil)))
         )
       },
       test("the wire codec rejects quantity units the spec does not allow") {

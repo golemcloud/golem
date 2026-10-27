@@ -118,6 +118,7 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         case '[golem.ULong]                        => t.u64
         case '[GolemPath]                          => SchemaType(SchemaTypeBody.PathType(GolemPath.defaultSpec))
         case '[Url]                                => SchemaType(SchemaTypeBody.UrlType(Url.defaultRestrictions))
+        case '[golem.schema.Text]                  => SchemaType(SchemaTypeBody.TextType(golem.schema.Text.defaultRestrictions))
         case '[java.time.Instant]                  => SchemaType(SchemaTypeBody.DatetimeType)
         case '[java.time.Duration]                 => SchemaType(SchemaTypeBody.DurationType)
         case '[java.util.UUID]                     => t.uuid
