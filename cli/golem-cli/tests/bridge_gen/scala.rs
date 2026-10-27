@@ -3275,10 +3275,11 @@ fn bare_binary_agent() -> AgentTypeSchema {
 }
 
 /// A bare `binary` uses the `Inline` case of the SDK's unstructured binary
-/// type, typed by the schema's MIME allow-list, and the guest bridge checks
-/// the MIME type against the schema in both directions.
+/// type, typed by the schema's MIME allow-list. The guest bridge passes the
+/// MIME type through unchecked in both directions, like a bare `text`'s
+/// language: the executor checks the value against its schema.
 #[test]
-fn guest_bare_binary_uses_sdk_inline_binary_and_checks_mime_types() {
+fn guest_bare_binary_uses_sdk_inline_binary_and_passes_mime_types_through() {
     let pkg = GeneratedPackage::new_with_mode(bare_binary_agent(), ScalaBridgeMode::GuestWasmRpc);
     let package_dir = pkg.package_dir();
     let client = std::fs::read_to_string(
@@ -3291,9 +3292,11 @@ fn guest_bare_binary_uses_sdk_inline_binary_and_checks_mime_types() {
         "chunks: _root_.scala.collection.immutable.List[_root_.golem.schema.UnstructuredBinary.Inline[_root_.scala.Predef.String]]"
     ));
     assert!(client.contains(
-        "val __allowed = _root_.scala.collection.immutable.List(\"image/png\"); mime0.foreach("
+        "_root_.golem.schema.SchemaValue.BinaryValue(b0.data.toVector, b0.mimeType.map(_.toString))"
     ));
-    assert!(client.contains("_root_.golem.schema.UnstructuredBinary.Inline[\"image/png\"](bytes.toArray, mime0.asInstanceOf[_root_.scala.Option[\"image/png\"]])"));
+    assert!(client.contains("case _root_.golem.schema.SchemaValue.BinaryValue(bytes, mime0) => _root_.golem.schema.UnstructuredBinary.Inline[\"image/png\"](bytes.toArray, mime0.asInstanceOf[_root_.scala.Option[\"image/png\"]])"));
+    assert!(!client.contains("__allowed"));
+    assert!(!client.contains("is not allowed"));
     assert!(client.contains("file: _root_.golem.schema.UnstructuredBinary[\"application/pdf\"]"));
     assert!(client.contains(
         "_root_.golem.schema.UnstructuredBinary.intoSchema[\"application/pdf\"].toValue(file)"

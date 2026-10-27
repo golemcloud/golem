@@ -3122,12 +3122,10 @@ impl ScalaBridgeGenerator {
             SchemaType::Binary { .. } if self.mode == ScalaBridgeMode::ExternalRest => {
                 format!("{SV}.BinaryValue({val_expr}.bytes, {val_expr}.mimeType)")
             }
-            SchemaType::Binary { restrictions, .. } => {
+            SchemaType::Binary { .. } => {
                 let b = format!("b{depth}");
-                let mime = format!("mime{depth}");
-                let check = guest_mime_type_check(&mime, restrictions.mime_types.as_deref());
                 format!(
-                    "{{ val {b} = {val_expr}; val {mime} = {b}.mimeType.map(_.toString); {check}; {GUEST_SV}.BinaryValue({b}.data.toVector, {mime}) }}"
+                    "{{ val {b} = {val_expr}; {GUEST_SV}.BinaryValue({b}.data.toVector, {b}.mimeType.map(_.toString)) }}"
                 )
             }
             SchemaType::Text { .. } => match self.mode {
@@ -3338,10 +3336,9 @@ impl ScalaBridgeGenerator {
             ),
             SchemaType::Binary { restrictions, .. } => {
                 let mime = format!("mime{depth}");
-                let check = guest_mime_type_check(&mime, restrictions.mime_types.as_deref());
                 let allowed = guest_allow_list_type(restrictions.mime_types.as_deref());
                 format!(
-                    "{val_expr} match {{ case {GUEST_SV}.BinaryValue(bytes, {mime}) => {check}; {GUEST_UNSTRUCTURED_BINARY}.Inline[{allowed}](bytes.toArray, {mime}.asInstanceOf[_root_.scala.Option[{allowed}]]); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected binary value, got $other\") }}"
+                    "{val_expr} match {{ case {GUEST_SV}.BinaryValue(bytes, {mime}) => {GUEST_UNSTRUCTURED_BINARY}.Inline[{allowed}](bytes.toArray, {mime}.asInstanceOf[_root_.scala.Option[{allowed}]]); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected binary value, got $other\") }}"
                 )
             }
             SchemaType::Text { .. } => match self.mode {
@@ -3695,24 +3692,6 @@ fn guest_allow_list_type(values: Option<&[String]>) -> String {
             .collect::<Vec<_>>()
             .join(" | "),
         _ => STRING.to_string(),
-    }
-}
-
-/// A statement that throws when the `Option[String]` MIME type in `mime` is
-/// outside the schema's non-empty allow-list; a missing MIME type passes.
-fn guest_mime_type_check(mime: &str, allowed: Option<&[String]>) -> String {
-    match allowed {
-        Some(allowed) if !allowed.is_empty() => {
-            let list = allowed
-                .iter()
-                .map(|value| scala_string_literal(value))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "{{ val __allowed = {LIST}({list}); {mime}.foreach(m => if (!__allowed.contains(m)) throw {GUEST_CLIENT_ERROR}(s\"MIME type `$m` is not allowed. Allowed types: ${{__allowed.mkString(\", \")}}\")) }}"
-            )
-        }
-        _ => "()".to_string(),
     }
 }
 
