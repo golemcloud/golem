@@ -32,13 +32,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         }
 
-        // No scope opens, so nothing is written before the side effect runs and a fence
-        // already latched would only surface at the commit after it - by which time the
-        // effect has happened and the shard's new owner, having no record of it, runs it
-        // again. Reading the latch costs no storage round trip, so a write whose effect is
-        // about to run is refused here instead. It does not close the window where the shard
-        // moves *during* the call: that one needs a round trip per call, which is exactly what
-        // an idempotent write is declared to avoid.
+        // Refuse a known lost shard before preparing the call. The durable-call start path
+        // also commits before a remote effect, detecting a takeover not yet latched here.
         if self.state.is_live()
             && matches!(function_type, DurableFunctionType::WriteRemote)
             && let Some(fence) = self.state.oplog.fence()

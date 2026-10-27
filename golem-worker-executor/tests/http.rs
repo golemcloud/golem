@@ -3729,6 +3729,157 @@ async fn outgoing_http_contains_idempotency_key(
     Ok(())
 }
 
+#[test]
+#[test_r::timeout("3m")]
+async fn outgoing_http_commits_random_key_before_dispatch(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogEntry;
+    use golem_worker_executor::services::golem_config::OplogConfig;
+    use golem_worker_executor_test_utils::start_with_oplog_config;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    for explicit_key in [true, false] {
+        let context = TestContext::new(last_unique_id);
+        // A threshold flush must not accidentally supply the pre-dispatch barrier.
+        let config = OplogConfig {
+            max_operations_before_commit: 100_000,
+            ..Default::default()
+        };
+        let executor = start_with_oplog_config(deps, &context, Some(config.clone())).await?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let effects = Arc::new(Mutex::new(HashSet::new()));
+        let (arrived, mut requests) = mpsc::unbounded_channel();
+        let server = tokio_util::task::AbortOnDropHandle::new(spawn({
+            let effects = effects.clone();
+            async move {
+                let first_attempt = Arc::new(AtomicBool::new(true));
+                let route = Router::new().route(
+                    "/reservations",
+                    post(move |headers: HeaderMap| {
+                        let effects = effects.clone();
+                        let arrived = arrived.clone();
+                        let first_attempt = first_attempt.clone();
+                        async move {
+                            let key = headers["idempotency-key"].to_str().unwrap().to_string();
+                            let reservation =
+                                headers["x-reservation-id"].to_str().unwrap().to_string();
+                            effects.lock().unwrap().insert(key.clone());
+                            arrived.send((key, reservation)).unwrap();
+                            if first_attempt.swap(false, Ordering::SeqCst) {
+                                // The receiver applied the effect, but the executor sees no response.
+                                std::future::pending::<()>().await;
+                            }
+                            http::StatusCode::NO_CONTENT
+                        }
+                    }),
+                );
+                axum::serve(listener, route).await.unwrap();
+            }
+        }));
+        let component = executor
+            .component_dep(&context.default_environment_id, http_tests)
+            .store()
+            .await?;
+        let agent = agent_id!("HttpClient");
+        let worker = executor
+            .start_agent_with(
+                &component.id,
+                agent.clone(),
+                HashMap::from([("PORT".to_string(), port.to_string())]),
+                Vec::new(),
+            )
+            .await?;
+        let invocation_key = IdempotencyKey::fresh();
+        executor
+            .invoke_agent_with_key(
+                &component,
+                &agent,
+                &invocation_key,
+                "send_with_random_key",
+                data_value!(explicit_key),
+            )
+            .await?;
+        let first = timeout(Duration::from_secs(30), requests.recv())
+            .await?
+            .unwrap();
+        if explicit_key {
+            assert_eq!(first.0, first.1);
+        }
+        // Read storage, not the live oplog handle, which also contains buffered entries.
+        let stored = executor.stored_oplog(&worker).await;
+        let send = stored
+            .iter()
+            .position(|entry| {
+                matches!(entry, OplogEntry::Start { function_name, .. }
+                if function_name.to_string() == "http::client::send")
+            })
+            .expect("HTTP Start must be durable before the receiver observes the request");
+        assert_eq!(
+            stored[..send]
+                .iter()
+                .filter(|entry| {
+                    matches!(entry, OplogEntry::Start { function_name, .. }
+                if function_name.to_string() == "random::random::get-random-u64")
+                })
+                .count(),
+            2,
+            "the random inputs must be in the committed prefix"
+        );
+        drop(executor);
+
+        let executor = start_with_oplog_config(deps, &context, Some(config)).await?;
+        let recovered = timeout(
+            Duration::from_secs(30),
+            executor.invoke_and_await_agent_with_key(
+                &component,
+                &agent,
+                &invocation_key,
+                "send_with_random_key",
+                data_value!(explicit_key),
+            ),
+        )
+        .await??
+        .into_typed::<String>()?;
+        let second = timeout(Duration::from_secs(30), requests.recv())
+            .await?
+            .unwrap();
+        assert_eq!(
+            second, first,
+            "recovery must preserve both the key and guest input"
+        );
+        assert_eq!(recovered, first.1);
+        assert_eq!(
+            effects.lock().unwrap().len(),
+            1,
+            "the receiver must apply one reservation"
+        );
+        let fresh = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                "send_with_random_key",
+                data_value!(explicit_key),
+            )
+            .await?
+            .into_typed::<String>()?;
+        let third = timeout(Duration::from_secs(30), requests.recv())
+            .await?
+            .unwrap();
+        assert_ne!(third.0, first.0, "a fresh invocation needs a distinct key");
+        assert_eq!(fresh, third.1);
+        assert_eq!(effects.lock().unwrap().len(), 2);
+        executor.check_oplog_is_queryable(&worker).await?;
+        drop(executor);
+        drop(server);
+    }
+    Ok(())
+}
+
 /// A guest task `spawn`ed during an invocation that performs its durable HTTP call only after
 /// the export has returned must be drained before the invocation completes: the durable
 /// `Start`/`End` entries of the spawned task's `http::client::send` land *before* the

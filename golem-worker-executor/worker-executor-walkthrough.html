@@ -1505,6 +1505,8 @@ grant → same-key durable repair
 <h3 id="incomplete-call-types">Incomplete calls: four types, explicit protocol ownership</h3>
 <p>When replay finds a <code>Start</code> without a terminal, <code>prepare_incomplete_live_repair</code> switches the handle to <em>live completion of the existing <code>Start</code></em> — no second <code>Start</code> is appended. The four <code>DurableFunctionType</code> cases classify the effect, not transaction membership or parentage:</p>
 
+<p id="remote-write-barrier"><strong>Commit before dispatch.</strong> Both shared durable-call start paths append a live <code>WriteRemote</code> Start and await <code>CommitLevel::DurableOnly</code> before allowing the effect. For durable agents this commits the preceding guest observations too, including random inputs used in a guest-supplied HTTP idempotency key. A failed commit prevents dispatch. Completion still commits the End. Snapshot calls record nothing, and the barrier does not force storage for ephemeral agents. The receiver must still deduplicate the ambiguous effect-before-End window.</p>
+
 <div class="table-wrap">
 <table>
   <thead><tr><th scope="col">Function type</th><th scope="col">Examples</th><th scope="col">Ordinary incomplete-call repair</th></tr></thead>
@@ -2847,7 +2849,7 @@ Fork input:   [A, B] ── cut ── [X, Y]
         { lane: 0, idx: '#53', kind: 'AgentInvocationFinished', cls: 'pos' }
       ],
       windows: [
-        { t: 'No crash', cls: 'ok', body: 'Four steps: <code>Start</code> is appended, the effect runs, <code>End</code> records the response, and the guest\u2019s observation is fixed by <code>CompletionDelivered</code>.' },
+        { t: 'No crash', cls: 'ok', body: '<code>Start</code> is appended' + (effectNote === 'WriteRemote' ? ' and committed with its preceding history before dispatch' : '') + ', the effect runs, <code>End</code> records the response, and the guest\u2019s observation is fixed by <code>CompletionDelivered</code>.' },
         { t: 'Crash after Start, before the effect', cls: w1cls, body: w1 + ' The executor cannot know whether the effect happened. These examples are ordinary calls; explicit protocol children require owner authorization, not a different function type.' },
         { t: 'Crash after the effect, before End', cls: w1cls, body: 'Same oplog as the previous window (the effect leaves no entry), so replay behaves identically: ' + w1.charAt(0).toLowerCase() + w1.slice(1) },
         { t: 'Crash after End, before delivery', cls: 'ok', body: w3 },
@@ -2859,7 +2861,7 @@ Fork input:   [A, B] ── cut ── [X, Y]
   var delivered = 'Replay finds <code>End</code> #51 with no marker after it: resolution <code>Delivered/AtReplayTail</code>. The effect is <em>not</em> re-run. The recorded response is withheld until the cursor drains (<code>await_natural_tail_end</code>) and then handed to the guest as its first live observation, which appends the missing marker.';
   TL.hostcall = {
     read: hostcallVariant('keyvalue/get', 'ReadRemote', 'Incomplete <code>Start</code>. This ordinary read runs live again and completes the existing <code>Start</code> by appending <code>End</code>. Ambient entity lineage does not transfer its recovery ownership.', 'warn', delivered),
-    writeidem: hostcallVariant('http/send', 'WriteRemote', 'Repair completes the existing <code>Start</code> #50 with the same derived key. External peers must deduplicate ambiguous writes. Neighboring completed calls replay unchanged.', 'warn', delivered),
+    writeidem: hostcallVariant('http/send', 'WriteRemote', 'The shared start barrier commits <code>Start</code> #50 and preceding guest observations before dispatch. Repair keeps the same Start, derived key and recorded inputs for a guest-supplied key. External peers must still deduplicate ambiguous writes. Neighboring completed calls replay unchanged.', 'warn', delivered),
     readlocal: hostcallVariant('filesystem/read', 'ReadLocal', 'Incomplete <code>Start</code>. Read the reconstructed local filesystem and complete the same <code>Start</code>; neighboring completed calls retain their recorded outcomes.', 'warn', delivered),
     writelocal: hostcallVariant('filesystem/write', 'WriteLocal', 'Incomplete <code>Start</code>. Repair this local write under its existing <code>Start</code> in the reconstructed filesystem. Completed neighboring calls are not deleted or retried as a group.', 'warn', delivered)
   };
