@@ -457,7 +457,11 @@ deliberate differences have per-case fixtures.
 A bound tool that declares stderr has it read alongside its stdout. When the call ends, the shell
 writes the call's stdout, then its stderr to the command's fd 1 and fd 2, so pipes, `2>`, `2>&1` and
 `2>/dev/null` apply. The stderr is the provider's bytes, followed by any diagnostics about the call
-(`tool error: …`, a denied or missing tool, the 16 MiB per-channel limit). Nothing records how the two
+(`tool error: …`, a denied or missing tool, the 16 MiB per-channel limit). The line about a failed
+stdout or stderr stream, or a failed write to stdin, starts with the tool and its subcommand, as in
+`report export: stdout: resource exhausted`. When the call's error repeats the failure text of the
+stream, as after a panic in the tool, the line ends at `failed`, and the text follows once, as the
+call's error. Nothing records how the two
 channels interleaved, so under `2>&1` a sibling's stdout always comes before its stderr, on replay
 too. The SDK's optional-argument encoding correction is a separate integration gate; tests use
 supported sibling argument shapes. See [acceptance evidence](ACCEPTANCE.md).
@@ -642,6 +646,6 @@ cargo test -p golem-cli --test integration -- app::builtin_bash --report-time
 The [CLI fixture](../../cli/golem-cli/test-data/builtin-bash/README.md) documents the HTTP and
 recovery tests, and the [conformance matrix](conformance/README.md) the standalone Bash-oracle
 tests. The matrix runs the shell under WASI CLI and Wasmtime, whereas the fixture invokes the
-provisioned component through a real Golem server. The fixture's tests refuse a
-`builtin-tools/bash.wasm` that differs from the lock, so after a local rebuild that changed the
-bytes, point the lock entry at the new SHA-256 while developing.
+provisioned component through a real Golem server. The fixture's tests use the
+`builtin-tools/bash.wasm` in the checkout, with no checksum check, so after a change to this
+workspace, rebuild it (`cargo make build-bash-tool`) before you run them.
