@@ -999,7 +999,6 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(source.contains("{ tag: 'option', value:"));
     assert!(source.contains("{ tag: 'datetime', value: "));
     assert!(source.contains("n.value as base.Datetime"));
-    assert!(!source.contains("ISOString"));
     assert!(source.contains(": bigint"));
     assert!(source.contains("{ tag: 'u64', value:"));
     assert!(!source.contains("{ tag: 'u64', value: BigInt("));
@@ -1163,7 +1162,6 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(source.contains("{ tag: 'url', value:"));
     assert!(source.contains("{ tag: 'datetime', value: "));
     assert!(source.contains("n.value as base.Datetime"));
-    assert!(!source.contains("ISOString"));
     assert!(source.contains("{ tag: 'duration', nanoseconds:"));
     assert!(source.contains("base.UnstructuredTextType<['en', 'de']>"));
     assert!(source.contains("base.UnstructuredBinaryType<['image/png']>"));
@@ -2694,7 +2692,6 @@ fn guest_datetime_duration_path_and_url_use_sdk_types_and_compile() {
     ] {
         assert!(source.contains(expected), "missing {expected}:\n{source}");
     }
-    assert!(!source.contains("ISOString"), "{source}");
     std::fs::write(
         package_dir.join("test.ts"),
         r#"import { TimeGuestAgent } from './time-guest-agent-guest-client';

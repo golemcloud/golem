@@ -32,7 +32,7 @@ const MAX_TEXT_SECONDS = 253_402_300_799n;
 const RFC3339 =
   /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/u;
 
-function checkDatetime(value: Datetime): void {
+function checkDatetimeFields(value: Datetime): void {
   if (typeof value.seconds !== 'bigint') throw new TypeError('Datetime seconds must be a bigint');
   if (
     !Number.isInteger(value.nanoseconds) ||
@@ -40,6 +40,18 @@ function checkDatetime(value: Datetime): void {
     value.nanoseconds >= NANOS_PER_SECOND
   )
     throw new RangeError(`Datetime nanoseconds out of range: ${value.nanoseconds}`);
+}
+
+/**
+ * Checks that a datetime has bigint seconds, nanoseconds in
+ * `[0, 1_000_000_000)`, and an instant in the years 0000..9999 in UTC.
+ */
+export function checkDatetime(value: Datetime): void {
+  checkDatetimeFields(value);
+  if (value.seconds < MIN_TEXT_SECONDS || value.seconds > MAX_TEXT_SECONDS)
+    throw new RangeError(
+      `Datetime seconds ${value.seconds} are outside the years 0000..9999 in UTC`,
+    );
 }
 
 function daysFromCivil(year: number, month: number, day: number): number {
@@ -131,10 +143,6 @@ export const Datetime = {
    */
   toISOString(value: Datetime): string {
     checkDatetime(value);
-    if (value.seconds < MIN_TEXT_SECONDS || value.seconds > MAX_TEXT_SECONDS)
-      throw new RangeError(
-        `Datetime seconds ${value.seconds} are outside the years 0000..9999 in UTC`,
-      );
     const seconds = Number(value.seconds);
     const days = Math.floor(seconds / SECONDS_PER_DAY);
     const secondOfDay = seconds - days * SECONDS_PER_DAY;
@@ -161,7 +169,7 @@ export const Datetime = {
    * Throws when the instant is outside the `Date` range.
    */
   toDate(value: Datetime): Date {
-    checkDatetime(value);
+    checkDatetimeFields(value);
     const milliseconds =
       Number(value.seconds) * 1_000 + Math.floor(value.nanoseconds / NANOS_PER_MILLISECOND);
     if (!(Math.abs(milliseconds) <= MAX_DATE_MILLISECONDS))

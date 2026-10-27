@@ -80,6 +80,7 @@ import {
 import { PERMISSION_CARD_INTERNAL } from './permissionCardInternal';
 import { SchemaDecodeError, SchemaEncodeError } from './errors';
 import { Uuid } from '../../uuid';
+import { checkDatetime } from '../../datetime';
 
 // ============================================================
 // Schema type / graph
@@ -630,22 +631,13 @@ export function assertSchemaValueRepresentable(
         throw new SchemaEncodeError('uuid bits must be in the u64 range');
       }
       return;
-    case 'datetime': {
-      const ns = v.value.nanoseconds;
-      if (!Number.isInteger(ns) || ns < 0 || ns >= 1_000_000_000) {
-        throw new SchemaEncodeError(
-          `invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${ns}`,
-        );
-      }
-      if (
-        typeof v.value.seconds !== 'bigint' ||
-        v.value.seconds < S64_MIN ||
-        v.value.seconds > S64_MAX
-      ) {
-        throw new SchemaEncodeError(`datetime seconds out of range: ${v.value.seconds}`);
+    case 'datetime':
+      try {
+        checkDatetime(v.value);
+      } catch (error) {
+        throw new SchemaEncodeError(`invalid datetime value: ${(error as Error).message}`);
       }
       return;
-    }
     case 'duration':
       if (typeof v.nanoseconds !== 'bigint' || v.nanoseconds < S64_MIN || v.nanoseconds > S64_MAX) {
         throw new SchemaEncodeError(`duration nanoseconds out of range: ${v.nanoseconds}`);
@@ -1540,15 +1532,10 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
       case 'url-value':
         return { tag: 'url', value: n.val };
       case 'datetime-value':
-        if (
-          typeof n.val.seconds !== 'bigint' ||
-          !Number.isInteger(n.val.nanoseconds) ||
-          n.val.nanoseconds < 0 ||
-          n.val.nanoseconds >= 1_000_000_000
-        ) {
-          throw new SchemaDecodeError(
-            'datetime-value requires bigint seconds and integer nanoseconds in [0, 1000000000)',
-          );
+        try {
+          checkDatetime(n.val);
+        } catch (error) {
+          throw new SchemaDecodeError(`invalid datetime-value: ${(error as Error).message}`);
         }
         return { tag: 'datetime', value: n.val };
       case 'duration-value':

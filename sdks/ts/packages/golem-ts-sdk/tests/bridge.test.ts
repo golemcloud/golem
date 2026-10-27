@@ -1167,6 +1167,37 @@ describe('public bridge runtime', () => {
     );
   });
 
+  describe('wire datetime range', () => {
+    const datetimeTree = (seconds: bigint, nanoseconds: number) => ({
+      valueNodes: [{ tag: 'datetime-value' as const, val: { seconds, nanoseconds } }],
+      root: 0,
+    });
+
+    it.each([
+      ['0000-01-01T00:00:00Z', -62_167_219_200n, 0],
+      ['9999-12-31T23:59:59.999999999Z', 253_402_300_799n, 999_999_999],
+    ])('round-trips %s', (text, seconds, nanoseconds) => {
+      const value = { seconds, nanoseconds };
+      expect(bridge.Datetime.toISOString(value)).toBe(text);
+      const tree = bridge.schemaValueToWit({ tag: 'datetime', value });
+      expect(tree).toEqual(datetimeTree(seconds, nanoseconds));
+      expect(bridge.schemaValueFromWit(tree)).toEqual({ tag: 'datetime', value });
+    });
+
+    it.each([
+      ['one nanosecond before 0000-01-01T00:00:00Z', -62_167_219_201n, 999_999_999],
+      ['10000-01-01T00:00:00Z', 253_402_300_800n, 0],
+    ])('rejects %s in both directions', (_, seconds, nanoseconds) => {
+      const value = { seconds, nanoseconds };
+      expect(() => bridge.schemaValueToWit({ tag: 'datetime', value })).toThrow(
+        /invalid datetime value: .*outside the years 0000\.\.9999/,
+      );
+      expect(() => bridge.schemaValueFromWit(datetimeTree(seconds, nanoseconds))).toThrow(
+        /invalid datetime-value: .*outside the years 0000\.\.9999/,
+      );
+    });
+  });
+
   it.each(['2023-02-29T00:00:00Z', '2024-02-30T00:00:00Z', '2024-01-01', '2024-01-01T00:00:00'])(
     'rejects invalid or incomplete ISO instants (%s)',
     (value) => {
