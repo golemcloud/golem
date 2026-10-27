@@ -16,12 +16,32 @@
 
 package golem.bridge.runtime
 
+import scala.concurrent.duration.FiniteDuration
+
 /**
  * Error raised by the generated Golem bridge client. Future-based client
  * methods surface failures as a failed `Future` carrying this exception.
  */
-final class BridgeException(message: String, cause: Throwable)
+class BridgeException(message: String, cause: Throwable)
     extends RuntimeException(message, cause)
+
+/**
+ * A streaming call that could not reach the server within its reconnect
+ * window. `lastCause` is the last failure: a `WebSocketHandshakeException` for
+ * a refused upgrade, a [[BridgeException]] for a retryable rejection, or the
+ * connection error.
+ */
+final class BridgeUnreachableException(
+  val endpoint: String,
+  val reconnectWindow: FiniteDuration,
+  val lastCause: Throwable
+) extends BridgeException(
+      s"$endpoint was unreachable for $reconnectWindow: ${lastCause.getMessage}",
+      lastCause
+    )
+
+/** A streaming call its [[CancellationToken]] cancelled. */
+final class BridgeCancelledException extends BridgeException("the invocation was cancelled", null)
 
 object BridgeException {
   def apply(message: String): BridgeException             = new BridgeException(message, null)

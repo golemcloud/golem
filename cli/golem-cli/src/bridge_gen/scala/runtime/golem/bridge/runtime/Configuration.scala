@@ -18,21 +18,35 @@ package golem.bridge.runtime
 
 import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.ExecutionContext
+import scala.concurrent.duration._
 
 /**
  * Connection configuration shared by all generated bridge clients in this
  * project. Holds the target [[GolemServer]], the application/environment names
  * the agents live in, and the [[ExecutionContext]] used to complete the
  * Future-based client calls.
+ *
+ * `reconnectWindow` is how long a streaming call keeps reconnecting while the
+ * server accepts neither its start nor a resume; after it the call fails with
+ * a [[BridgeUnreachableException]]. `Duration.Inf` removes the limit.
  */
 final case class Configuration(
   server: GolemServer,
   appName: String,
   envName: String,
-  executionContext: ExecutionContext
-)
+  executionContext: ExecutionContext,
+  reconnectWindow: Duration = Configuration.DefaultReconnectWindow
+) {
+  require(
+    reconnectWindow == Duration.Inf || (reconnectWindow.isFinite && reconnectWindow > Duration.Zero),
+    "reconnectWindow must be positive or Duration.Inf"
+  )
+}
 
 object Configuration {
+  /** The reconnect window of a configuration that does not set one. */
+  val DefaultReconnectWindow: FiniteDuration = 5.minutes
+
   // Replaceable so REPL sessions and tests can reconfigure the target server
   // without restarting the process. The Rust/TS bridges use a write-once cell;
   // here we deliberately allow replacement.
@@ -46,9 +60,10 @@ object Configuration {
     server: GolemServer,
     appName: String,
     envName: String,
-    executionContext: ExecutionContext = ExecutionContext.global
+    executionContext: ExecutionContext = ExecutionContext.global,
+    reconnectWindow: Duration = DefaultReconnectWindow
   ): Unit =
-    current.set(Some(Configuration(server, appName, envName, executionContext)))
+    current.set(Some(Configuration(server, appName, envName, executionContext, reconnectWindow)))
 
   /** Replace the active configuration wholesale. */
   def set(configuration: Configuration): Unit =

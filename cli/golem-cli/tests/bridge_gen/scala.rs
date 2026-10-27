@@ -1068,7 +1068,7 @@ class StreamRuntimeTest extends munit.FunSuite {
       codec,
       None,
       List.empty,
-    )
+    )._1
 
     intercept[Throwable](Await.result(stream.consume(), 1.second))
     Await.ready(invocation, 1.second)
@@ -1092,6 +1092,29 @@ fn stream_resume_rejection_takes_over_scala_session() {
     run_sbt_test(
         pkg.package_dir().as_path(),
         include_str!("scala_session_recovery.scala"),
+    );
+}
+
+#[test]
+fn stream_reconnect_window_and_cancellation_execute() {
+    let pkg = GeneratedPackage::new(agent(
+        "StreamerAgent",
+        "scala",
+        vec![],
+        vec![
+            method("run", vec![], None),
+            method(
+                "numbers",
+                vec![],
+                Some(SchemaType::stream(Some(SchemaType::u32()))),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    ));
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        include_str!("scala_reconnect_window.scala"),
     );
 }
 
@@ -1898,7 +1921,7 @@ fn generates_client_surface() {
     // Configuration helpers delegate to the shared runtime cell.
     assert!(client.contains("object Agent1Client {"));
     assert!(client.contains(
-        "def configure(server: _root_.golem.bridge.runtime.GolemServer, appName: _root_.scala.Predef.String, envName: _root_.scala.Predef.String, executionContext: _root_.scala.concurrent.ExecutionContext = _root_.scala.concurrent.ExecutionContext.global)"
+        "def configure(server: _root_.golem.bridge.runtime.GolemServer, appName: _root_.scala.Predef.String, envName: _root_.scala.Predef.String, executionContext: _root_.scala.concurrent.ExecutionContext = _root_.scala.concurrent.ExecutionContext.global, reconnectWindow: _root_.scala.concurrent.duration.Duration = _root_.golem.bridge.runtime.Configuration.DefaultReconnectWindow)"
     ));
     assert!(client.contains(
         "def getConfiguration: _root_.golem.bridge.runtime.Configuration = _root_.golem.bridge.runtime.Configuration.get"
