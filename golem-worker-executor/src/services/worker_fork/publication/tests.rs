@@ -130,6 +130,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
         1,
         1,
         1,
+        32,
         RetryConfig::default(),
     )
     .await;

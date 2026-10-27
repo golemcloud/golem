@@ -143,7 +143,6 @@ pub(super) fn running_lifecycle(
         unload_request: Default::default(),
         idle_since_millis: Default::default(),
         interrupts,
-        resume_replay_pending: Default::default(),
         start_attempt,
         owner_generation_started,
     })

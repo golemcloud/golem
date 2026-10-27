@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::{
-    FutureInvokeResultEntry, FutureInvokeResultState, WasmRpcEntry, WasmRpcEntryPayload,
-    create_embedded_invocation_span, invocation_metadata, invocation_target_agent_id,
-    restore_embedded_span,
+    FutureInvokeResultEntry, FutureInvokeResultState, RpcCallTarget, WasmRpcEntry,
+    WasmRpcEntryPayload, embedded_invocation_span_builder, invocation_metadata,
+    invocation_target_agent_id, restore_embedded_span,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::BegunCall;
@@ -170,30 +170,28 @@ pub(super) async fn persist_invoke_and_await_denial<Ctx: WorkerCtx>(
         DurableFunctionType::WriteRemote,
     )
     .await?;
-    persist_invoke_and_await_denial_from_begun(
-        ctx,
-        begun,
-        None,
-        remote_agent_id,
-        method_name,
-        error,
-    )
-    .await
+    persist_invoke_and_await_denial_from_begun(ctx, begun, remote_agent_id, method_name, error)
+        .await
 }
 
 pub(super) async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    begun: BegunCall<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>,
-    reserved_idempotency_key: Option<IdempotencyKey>,
+    begun: BegunCall<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable, Ctx>,
     remote_agent_id: OwnedAgentId,
     method_name: String,
     error: RpcError,
 ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
+    let key_position = begun.idempotency_key_position(ctx);
     let details = rpc_denied_details(error);
-    let idempotency_key =
-        reserved_idempotency_key.unwrap_or_else(|| ctx.derive_idempotency_key(begun.begin_index()));
-    let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name);
-    let response = begun.start_live_denied(ctx, request, details).await?;
+    let (_, response, _) = begun
+        .start_live_denied_at_index(ctx, details, move |start_index| {
+            let idempotency_key = key_position.derive(start_index);
+            Ok((
+                denied_rpc_request(&remote_agent_id, &idempotency_key, method_name),
+                None,
+            ))
+        })
+        .await?;
     Ok(Err(denied_rpc_failure(response.result)?.into()))
 }
 
@@ -213,15 +211,22 @@ pub(super) async fn persist_invoke_denial<Ctx: WorkerCtx>(
 
 pub(super) async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    begun: BegunCall<GolemRpcWasmRpcInvoke, NotCancellable>,
+    begun: BegunCall<GolemRpcWasmRpcInvoke, NotCancellable, Ctx>,
     remote_agent_id: OwnedAgentId,
     method_name: String,
     error: RpcError,
 ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
+    let key_position = begun.idempotency_key_position(ctx);
     let details = rpc_denied_details(error);
-    let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
-    let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name);
-    let response = begun.start_live_denied(ctx, request, details).await?;
+    let (_, response, _) = begun
+        .start_live_denied_at_index(ctx, details, move |start_index| {
+            let idempotency_key = key_position.derive(start_index);
+            Ok((
+                denied_rpc_request(&remote_agent_id, &idempotency_key, method_name),
+                None,
+            ))
+        })
+        .await?;
     Ok(Err(denied_rpc_failure(response.result)?.into()))
 }
 
@@ -240,7 +245,6 @@ pub(super) async fn persist_async_invoke_denial<Ctx: WorkerCtx>(
     persist_async_invoke_denial_from_begun(
         ctx,
         begun,
-        None,
         resource,
         logical_remote_agent_id,
         method_name,
@@ -262,49 +266,41 @@ pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
         DurableFunctionType::WriteLocal,
     )
     .await?;
-    let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
-    let remote_agent_id = invocation_target_agent_id(
+    let call_target = RpcCallTarget::new(
+        begun.idempotency_key_position(ctx),
         logical_remote_agent_id,
         ephemeral_logical_agent_id,
-        &idempotency_key,
-    )?;
-    let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
+    );
     let serializable_error: SerializableRpcError = error.clone().into();
-    let request = HostRequestGolemRpcAsyncInvokeRejection {
-        remote_agent_id: remote_agent_id.agent_id(),
-        idempotency_key: idempotency_key.clone(),
-        method_name: method_name.to_string(),
-        error: serializable_error.clone(),
-    };
     let expected = HostResponseGolemRpcInvokeAndAwait {
-        result: Err(serializable_error),
+        result: Err(serializable_error.clone()),
     };
     let mut handle = match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
-            let (span, started) = create_embedded_invocation_span(
-                ctx,
-                connection_span_id,
-                method_name,
-                &idempotency_key,
-            )?;
+            let span_started =
+                embedded_invocation_span_builder(ctx, connection_span_id, method_name)?;
+            let call_target = call_target.clone();
+            let method_name = method_name.to_string();
             begun
-                .start_live_with_span(ctx, request, started)
+                .start_live_with_index_and_span(ctx, move |start_index| {
+                    let (idempotency_key, remote_agent_id) = call_target.at(start_index)?;
+                    let started = span_started(&idempotency_key);
+                    Ok((
+                        HostRequestGolemRpcAsyncInvokeRejection {
+                            remote_agent_id: remote_agent_id.agent_id(),
+                            idempotency_key,
+                            method_name,
+                            error: serializable_error,
+                        },
+                        started,
+                    ))
+                })
                 .await?
-                .complete_with_span(
-                    ctx,
-                    expected,
-                    SpanFinished {
-                        span_id: span.span_id().clone(),
-                        finished_at: golem_common::model::Timestamp::now_utc(),
-                        outcome: SpanOutcome::Failed,
-                    },
-                )
-                .await?;
-            finish_span_in_memory(ctx, span.span_id())?;
-            return bake_closed_async_error(ctx, metadata, error);
         }
         ResolvedCall::Replay(handle) => handle,
     };
+    let (idempotency_key, remote_agent_id) = call_target.at(handle.start_index())?;
+    let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
     let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
         WorkerExecutorError::unexpected_oplog_entry(
             "async RPC validation rejection Start carrying span_started",
@@ -315,28 +311,31 @@ pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
         )
     })?;
     let span = restore_embedded_span(ctx, &started)?;
-    match handle.replay(ctx).await? {
-        CallReplayOutcome::Replayed(response) if response == expected => {}
-        CallReplayOutcome::Replayed(response) => {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                format!("async RPC validation rejection {expected:?}"),
-                format!("{response:?}"),
-            )
-            .into());
-        }
-        CallReplayOutcome::Incomplete(live) => {
-            handle = live;
-            handle
-                .complete_with_span(
-                    ctx,
-                    expected,
-                    SpanFinished {
-                        span_id: span.span_id().clone(),
-                        finished_at: golem_common::model::Timestamp::now_utc(),
-                        outcome: SpanOutcome::Failed,
-                    },
+    let span_finished = SpanFinished {
+        span_id: span.span_id().clone(),
+        finished_at: golem_common::model::Timestamp::now_utc(),
+        outcome: SpanOutcome::Failed,
+    };
+    if handle.is_live() {
+        handle
+            .complete_with_span(ctx, expected, span_finished)
+            .await?;
+    } else {
+        match handle.replay(ctx).await? {
+            CallReplayOutcome::Replayed(response) if response == expected => {}
+            CallReplayOutcome::Replayed(response) => {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    format!("async RPC validation rejection {expected:?}"),
+                    format!("{response:?}"),
                 )
-                .await?;
+                .into());
+            }
+            CallReplayOutcome::Incomplete(live) => {
+                handle = live;
+                handle
+                    .complete_with_span(ctx, expected, span_finished)
+                    .await?;
+            }
         }
     }
     finish_span_in_memory(ctx, span.span_id())?;
@@ -360,8 +359,7 @@ fn bake_closed_async_error<Ctx: WorkerCtx>(
 
 pub(super) async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    begun: BegunCall<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>,
-    reserved_idempotency_key: Option<IdempotencyKey>,
+    begun: BegunCall<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable, Ctx>,
     resource: &Resource<WasmRpcEntry>,
     logical_remote_agent_id: OwnedAgentId,
     method_name: String,
@@ -380,20 +378,29 @@ pub(super) async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
             payload.span_id.clone(),
         )
     };
-    let idempotency_key =
-        reserved_idempotency_key.unwrap_or_else(|| ctx.derive_idempotency_key(begun.begin_index()));
-    let remote_agent_id = invocation_target_agent_id(
+    let call_target = RpcCallTarget::new(
+        begun.idempotency_key_position(ctx),
         &logical_remote_agent_id,
         ephemeral_logical_agent_id.as_ref(),
-        &idempotency_key,
-    )?;
+    );
+    let span_started = embedded_invocation_span_builder(ctx, &connection_span_id, &method_name)?;
+    let (start_index, response, started) = {
+        let call_target = call_target.clone();
+        begun
+            .start_live_denied_at_index(ctx, details, move |start_index| {
+                let (idempotency_key, remote_agent_id) = call_target.at(start_index)?;
+                let started = span_started(&idempotency_key);
+                Ok((
+                    denied_rpc_request(&remote_agent_id, &idempotency_key, method_name),
+                    Some(started),
+                ))
+            })
+            .await?
+    };
+    let (idempotency_key, remote_agent_id) = call_target.at(start_index)?;
     let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-    let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name.clone());
-    let (span, started) =
-        create_embedded_invocation_span(ctx, &connection_span_id, &method_name, &idempotency_key)?;
-    let response = begun
-        .start_live_denied_with_span(ctx, request, details, started)
-        .await?;
+    let started = started.expect("the denied asynchronous RPC records its span");
+    let span = restore_embedded_span(ctx, &started)?;
     finish_span_in_memory(ctx, span.span_id())?;
     bake_closed_async_error(ctx, metadata, denied_rpc_failure(response.result)?)
 }
@@ -472,23 +479,30 @@ pub(super) async fn persist_schedule_denial<Ctx: WorkerCtx>(
 
 pub(super) async fn persist_schedule_denial_from_begun<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    begun: BegunCall<GolemRpcWasmRpcScheduleInvocation, NotCancellable>,
+    begun: BegunCall<GolemRpcWasmRpcScheduleInvocation, NotCancellable, Ctx>,
     remote_agent_id: OwnedAgentId,
     datetime: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
     method_name: String,
     error: RpcError,
 ) -> anyhow::Result<Result<Resource<CancellationToken>, RpcError>> {
+    let key_position = begun.idempotency_key_position(ctx);
     let details = rpc_denied_details(error);
-    let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
-    let request = HostRequestGolemRpcScheduledInvocation {
-        remote_agent_id: remote_agent_id.agent_id(),
-        idempotency_key,
-        method_name,
-        input: SchemaValue::Tuple { elements: vec![] },
-        datetime: datetime.into(),
-        remote_agent_type: None,
-        remote_agent_parameters: None,
-    };
-    let response = begun.start_live_denied(ctx, request, details).await?;
+    let datetime: golem_common::model::oplog::types::SerializableDateTime = datetime.into();
+    let (_, response, _) = begun
+        .start_live_denied_at_index(ctx, details, move |start_index| {
+            Ok((
+                HostRequestGolemRpcScheduledInvocation {
+                    remote_agent_id: remote_agent_id.agent_id(),
+                    idempotency_key: key_position.derive(start_index),
+                    method_name,
+                    input: SchemaValue::Tuple { elements: vec![] },
+                    datetime,
+                    remote_agent_type: None,
+                    remote_agent_parameters: None,
+                },
+                None,
+            ))
+        })
+        .await?;
     Ok(Err(denied_rpc_failure(response.result)?.into()))
 }

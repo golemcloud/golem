@@ -101,7 +101,7 @@ use crate::preview2::golem::permissions::types as permissions_types;
 use crate::preview2::golem::permissions::wallet as permissions_wallet;
 use crate::services::HasWorker;
 use crate::services::card::{CardRevokeResult, CardState, RuntimeCardCreation};
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::{DateTime, TimeDelta, Utc};

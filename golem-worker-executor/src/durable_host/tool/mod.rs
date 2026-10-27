@@ -73,9 +73,9 @@ use endpoints::create_underlying_stdin;
 use endpoints::materialize_output_writer;
 use endpoints::native_output_handles;
 use endpoints::reject_output;
-use execution::await_tool_invoke_plans;
 pub use execution::fence_tool_operations_for_jump;
 use execution::get_tool_invoke_results;
+use execution::observe_tool_invoke_plans;
 pub(crate) use execution::prepare_tool_parent_end;
 pub(crate) use execution::prepare_tool_parent_end_owned;
 pub(crate) use execution::settle_tool_children;
@@ -503,6 +503,9 @@ struct ToolInvocationAttempt {
     key_context: EntityInvocationKeyContext,
     parent: crate::worker::owner_lane::OwnerInvocationId,
     attempt_ordinal: u64,
+    /// Where the entity invocation `Start` gets its invocation id: the guest import that makes
+    /// the tool call, or none for a tool call that a client started.
+    invocation_id: crate::durable_host::concurrent::InvocationIdSource,
 }
 
 #[derive(Clone)]

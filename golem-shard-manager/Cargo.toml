@@ -28,6 +28,7 @@ golem-schema = { workspace = true, features = ["protobuf"] }
 golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }
+arc-swap = { workspace = true }
 async-rwlock = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }

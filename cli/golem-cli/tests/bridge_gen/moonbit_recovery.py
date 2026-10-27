@@ -47,12 +47,15 @@ def send(conn, **message):
 listener = socket.socket()
 listener.bind(("127.0.0.1", 0))
 listener.listen()
-listener.settimeout(15)
+# The first connection waits for the native build of the client, which can take
+# minutes on a loaded machine; every later step has the short timeout.
+listener.settimeout(600)
 print(listener.getsockname()[1], flush=True)
 
 
 def connect():
     conn, _ = listener.accept()
+    listener.settimeout(15)
     conn.settimeout(15)
     request = b""
     while b"\r\n\r\n" not in request:

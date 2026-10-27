@@ -206,7 +206,7 @@ rather than broken. The rule, rather than a list that goes stale: any span built
 off. For example the invocation hand-off (`invocation_queue_pickup`), the retry tasks
 (`rpc_invoke_retry`, `http_request_retry`), the oplog transfer and flush spans, and every
 worker phase span (`create_instance`, `recover_instance_state`, `suspend_worker`,
-`resume_replay`, and the admission waits). Check the link, not the parent.
+and the admission waits). Check the link, not the parent.
 
 What this is good for is spotting a span that is *neither* a linked root *nor* connected
 — that is a genuine propagation gap.

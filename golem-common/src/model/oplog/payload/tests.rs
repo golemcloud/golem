@@ -1988,6 +1988,33 @@ fn tool_response_secret_hold_admission_payload_pair_roundtrips() {
 }
 
 #[test]
+fn tool_await_invoke_results_payload_pair_roundtrips() {
+    use crate::model::oplog::{
+        HostRequestGolemToolAwaitInvokeResults, HostResponseGolemToolAwaitInvokeResults,
+    };
+    assert_eq!(
+        host_functions::GolemToolAwaitInvokeResults::FQFN,
+        "golem::tool::internal::await-invoke-results"
+    );
+    // Not sorted: the recorded order is the order of the awaited futures.
+    let request = HostRequestGolemToolAwaitInvokeResults {
+        invocations: vec![
+            OplogIndex::from_u64(61),
+            OplogIndex::from_u64(7),
+            OplogIndex::from_u64(4_294_967_296),
+        ],
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolAwaitInvokeResults>(
+        request.clone(),
+        HostResponseGolemToolAwaitInvokeResults {},
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolAwaitInvokeResults>(
+        request,
+        HostResponseGolemToolAwaitInvokeResults {},
+    );
+}
+
+#[test]
 fn prepared_revert_payload_pair_roundtrips() {
     let agent_id = AgentId {
         component_id: ComponentId::new(),

@@ -21,8 +21,8 @@
 use crate::durable_host::DurableWorkerCtx;
 pub(crate) use crate::durable_host::concurrent::EntitySettlementContext;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, DurableCallSession, HistoricalReconstruction, LeaveIncompleteOnDrop,
-    ReconstructionReplayOutcome, ReplayAccessStartOutcome,
+    AccessClaimOptions, DurableCallSession, HistoricalReconstruction, InvocationIdSource,
+    LeaveIncompleteOnDrop, ReconstructionReplayOutcome, ReplayAccessStartOutcome,
 };
 use crate::durable_host::durable_session::strip_typed_streams;
 use crate::durable_host::replay_state::ReplayState;
@@ -314,6 +314,7 @@ impl EntityInvocationDurability {
         operation: EntityInvocationDescriptor,
         plan: EntityInvocationPlanReference,
         input: TypedSchemaValue,
+        invocation_id: InvocationIdSource,
     ) -> Result<Self, WorkerExecutorError>
     where
         T: 'static,
@@ -368,6 +369,7 @@ impl EntityInvocationDurability {
                 AccessClaimOptions {
                     parent_start_index: Some(parent_start_index),
                     incomplete_repair_authorized_by_scope: true,
+                    invocation_id,
                     ..AccessClaimOptions::default()
                 },
                 request,
@@ -393,6 +395,7 @@ impl EntityInvocationDurability {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
         key_context: &EntityInvocationKeyContext,
+        invocation_id: InvocationIdSource,
     ) -> Result<ToolInvocationReplayOutcome, WorkerExecutorError>
     where
         T: 'static,
@@ -410,6 +413,7 @@ impl EntityInvocationDurability {
                     ),
                     parent_start_index: Some(parent_start_index),
                     incomplete_repair_authorized_by_scope: true,
+                    invocation_id,
                     ..AccessClaimOptions::default()
                 },
             )
@@ -1182,11 +1186,12 @@ fn take_entity_resources(
     resources.lock().unwrap().take()
 }
 
-pub async fn record_tool_rejection_access<T, D, Ctx>(
+pub(crate) async fn record_tool_rejection_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     parent: OwnerInvocationId,
     mut request: HostRequestGolemToolInvocationRejected,
+    invocation_id: InvocationIdSource,
 ) -> Result<HostResponseEntityInvocation, WorkerExecutorError>
 where
     T: 'static,
@@ -1238,6 +1243,7 @@ where
         AccessClaimOptions {
             parent_start_index: Some(parent.start_index()),
             incomplete_repair_authorized_by_scope: true,
+            invocation_id,
             ..AccessClaimOptions::default()
         },
         request,

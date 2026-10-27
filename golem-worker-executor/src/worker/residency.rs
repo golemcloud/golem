@@ -287,21 +287,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             queue.retain(|invocation| !invocation.is_abandoned());
             !queue.is_empty()
         };
-        let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
         let has_interrupt = running.interrupts.lock().await.has_interrupt();
         let has_filesystem_effects = self.has_active_filesystem_effects(running);
         let has_concurrent_agent_permit =
             running.concurrent_agent_permit_held.load(Ordering::Acquire);
 
         debug!(
-            "Worker {} idle check: waiting_for_command={waiting_for_command} has_pending_invocations={has_pending_invocations} has_queued_internal_work={has_queued_internal_work} has_resume_replay={has_resume_replay} has_interrupt={has_interrupt} has_filesystem_effects={has_filesystem_effects} has_concurrent_agent_permit={has_concurrent_agent_permit}",
+            "Worker {} idle check: waiting_for_command={waiting_for_command} has_pending_invocations={has_pending_invocations} has_queued_internal_work={has_queued_internal_work} has_interrupt={has_interrupt} has_filesystem_effects={has_filesystem_effects} has_concurrent_agent_permit={has_concurrent_agent_permit}",
             self.owned_agent_id
         );
 
         waiting_for_command
             && !has_pending_invocations
             && !has_queued_internal_work
-            && !has_resume_replay
             && !has_interrupt
             && !has_filesystem_effects
             && !has_concurrent_agent_permit
@@ -399,7 +397,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     queue.retain(|invocation| !invocation.is_abandoned());
                     !queue.is_empty()
                 };
-                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupts.lock().await.has_interrupt();
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
                 let has_concurrent_agent_permit =
@@ -409,7 +406,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if !running_worker_can_be_evicted(
                     waiting_for_command,
                     has_queued_internal_work,
-                    has_resume_replay,
                     has_interrupt,
                     has_filesystem_effects,
                     has_concurrent_agent_permit,
@@ -466,7 +462,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     queue.retain(|invocation| !invocation.is_abandoned());
                     !queue.is_empty()
                 };
-                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupts.lock().await.has_interrupt();
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
                 let has_concurrent_agent_permit =
@@ -475,7 +470,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if !running_worker_can_be_evicted(
                     waiting_for_command,
                     has_queued_internal_work,
-                    has_resume_replay,
                     has_interrupt,
                     has_filesystem_effects,
                     has_concurrent_agent_permit,
@@ -719,14 +713,12 @@ pub(in crate::worker) fn startup_component_requirement(
 pub(in crate::worker) fn running_worker_can_be_evicted(
     waiting_for_command: bool,
     has_queued_internal_work: bool,
-    has_resume_replay: bool,
     has_interrupt: bool,
     has_filesystem_effects: bool,
     has_concurrent_agent_permit: bool,
 ) -> bool {
     waiting_for_command
         && !has_queued_internal_work
-        && !has_resume_replay
         && !has_interrupt
         && !has_filesystem_effects
         && !has_concurrent_agent_permit

@@ -53,7 +53,7 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
    (replay, transport retry, incomplete-call repair) share a durable key. An executing target persists one
    invocation and result; read-only cache hits/followers persist neither. Attempts are not executions. Owner:
    `durable_host/rpc/mod.rs`
-   (`derive_idempotency_key(begin_index)`), `worker/mod.rs::enqueue_worker_invocation_with_effect`
+   (`IdempotencyKeyPosition::derive(start_index)`), `worker/mod.rs::enqueue_worker_invocation_with_effect`
    (`lookup_invocation_result` dedupe before appending `PendingAgentInvocation`).
 
 ```diagram
@@ -161,8 +161,21 @@ stays outside the fence: blob uploads of large payloads.
 
 `worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
-threshold flushes and replica waits can commit outside the status actor, so even an empty receipt
-may hide a committed suffix. Ephemeral threshold flushes hand batches to a bounded asynchronous
+threshold flushes and replica waits commit outside an explicit commit. After such a commit the
+primary oplog calls its auto-commit listener (`Oplog::set_auto_commit_listener`, held weakly),
+which queues one coalesced `StatusJob::FoldAutoCommits`. That job commits nothing: it folds the
+entries returned by `CommitLevel::ReportOnly`, so `status.oplog_idx` follows the committed index
+during a long invocation, while a buffered append below the threshold stays invisible until a
+commit. The primary oplog keeps the entries of its latest auto commits in memory until that
+report, which normally follows at once, up to `oplog.max_retained_auto_commit_batches` batches;
+beyond it the report reads the oldest unreported entries back from storage. An ephemeral oplog
+calls no listener and reports nothing for `ReportOnly`: ephemeral agents fold at the explicit
+commit that ends each invocation. The job wakes the invocation loop only when a field other than the index changed; a
+caller of `add_and_commit_oplog_internal` sends its own wakeup after every successful commit,
+because the fold of a threshold commit can take its entry first. As the status follows the
+oplog, each status-cache write catches up the stream-session and invocation-result indexes over
+only the entries since the previous write. Even an empty receipt may still hide a committed
+suffix. Ephemeral threshold flushes hand batches to a bounded asynchronous
 writer; read snapshots include both handed-off entries and the buffered tail after the persisted
 writer watermark. Up to 32 batch receipts are retained for status folding. If that cap creates a
 receipt gap, exceptional catch-up forces storage only after the completion receipt has already
@@ -182,7 +195,7 @@ replay tolerance.
 | Replay cursor | `durable_host/replay_state/{mod.rs,cursor.rs,claims.rs}` | Single cursor lock, speculative read vs commit, identity claims, Replaying→Settling→Live |
 | Durable calls | `durable_host/concurrent/{mod.rs,call.rs,delivery.rs,replay.rs}` | `DurableCallSession` state machine, drop policies, completion delivery tokens |
 | Durability guard | `durable_host/durability.rs` | `begin_durable_function`/`end_durable_function`, `DurableFunctionType`, in-function retry |
-| Host context | `durable_host/mod.rs` | `prepare_instance`, `resume_replay`, `switch_to_live`, `PendingReplayToLive`, idempotency-key derivation, snapshot boundary checks |
+| Host context | `durable_host/mod.rs`, `durable_host/recovery.rs` | `prepare_instance`, `replay`, `switch_to_live`, `PendingReplayToLive`, `IdempotencyKeyPosition`, snapshot boundary checks |
 | Tail work | `durable_host/tail_work.rs` | Keeps store tasks running until no durable work is active before `AgentInvocationFinished` |
 | RPC | `durable_host/rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance/mod.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
@@ -208,7 +221,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 ┌─────────────────────────────────────────────────────────────────────┐
 │ outer loop (one iteration = one resident instance)                  │
 │  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
-│    durable agent:  handle PendingUpdate ▸ try snapshot ▸ resume_replay│
+│    durable agent:  handle PendingUpdate ▸ try snapshot ▸ replay       │
 │    ephemeral:      constructor-only replay, append Restart          │
 │  ──▶ inner loop: pop durable queue, run invocation, persist Finished │
 │  ──▶ instance ends (idle / interrupt / trap / suspend)               │
@@ -216,7 +229,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-`resume_replay` (`durable_host/mod.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
+`DurableWorkerCtx::replay` (`durable_host/recovery.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
 each recorded invocation in `InvocationMode::Replay`, and when there is no further
 `AgentInvocationStarted` it switches to live. Ephemeral owners replay at most one recorded
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
@@ -262,13 +275,6 @@ Registry revisions arrive through the existing refresh path; stale refreshes mus
 older policy. Admission in `worker/invocation_loop.rs` checks the latest cached capacity before
 instance creation, replay resumption, and invocation. Reconstruction must pass those checks too;
 a resume or queued invocation cannot bypass an exhausted applicable cap.
-
-Internal `Worker::resume_replay` acknowledges enqueue, not replay completion. The invocation loop
-clears its pending wake before checking monthly admission, so refusal cannot strand a pending-work
-flag. Duplicate replay wakes coalesce, as in main; there is no per-command replay-completion reply.
-This is distinct from the ordinary agent-resume RPC and does not weaken invocation commit-before-
-notify. See [replay-resume request acknowledgement](reference/testing-patterns.md#replay-resume-request-acknowledgement)
-for the real held-input regression and the retired reply-only assertions.
 
 `WorkAvailable` and `InternalStatusChanged` are wake notifications, not work reservations. Before
 reacquiring an idle concurrent-agent permit, the loop checks resident requests, pending interrupts,
@@ -1062,10 +1068,9 @@ restart does not fail the invocation waiter or append `Interrupted`.
 When a trap chooses `RetryDecision::Delayed`, the invocation loop snapshots the finite command
 prefix already queued before teardown. Duplicate `WorkAvailable` edges in that prefix collapse to
 one resident-work hint; commands arriving after the snapshot remain queued and can shorten the
-delay. `ResumeReplay` is retained as one coalesced demand and applied after successful unload even if
-a newer restart changes the retry decision. This preserves replay demand and lifecycle-control
-semantics without treating every edge notification as independent work or claiming blanket FIFO
-ordering between coalesced hints and replay requests.
+delay. This preserves lifecycle-control semantics without treating every edge notification as
+independent work. Replay always runs to the oplog tail during instance preparation; there is no
+paused replay and no command that resumes one.
 
 Environment and application deletion invalidate component metadata, environment state and agent
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
@@ -1466,6 +1471,15 @@ result or repairs an admitted incomplete call without re-authorizing. Resolution
 guarded replay-tail transition and refresh authority capture. Snapshot calls remain unpersisted;
 resolving one as `Live` does not publish Store liveness or lift snapshot restrictions.
 
+Accessor and direct (Store-holding) calls build the same `BegunCall` (`DurableCallSession::new_begun`)
+and resolve it through the one `BegunCall::resolve_against_history` (`concurrent/call/claims.rs`).
+It claims the recorded `Start`, or continues live at the replay tail. When the replay target grew
+while the transition was settling (`BeginReplayToLive::ReplayResumed`), it claims again, so the
+call replays the `Start` the grown target covers instead of failing. Both paths append the live
+`Start` through `append_start`. A call whose request or identity depends on its own `Start` index
+(RPC keys, schedule IDs, runtime card IDs, transfer IDs) builds the request in the
+`start_live_at_index` callback; there is no separate begin index.
+
 Every nondeterministic host function goes through `begin_durable_function` /
 `end_durable_function` (`durability.rs`). Concurrent (p3 accessor) calls and direct
 (Store-holding) calls run inside a `DurableCallSession` (`concurrent/call.rs`) with the same
@@ -1648,8 +1662,11 @@ outcome cuts are still rejected. Test: `reverted_completion_marker_can_be_replac
 speculatively, `commit_consumed_entry` commits, `move_replay_idx` advances and emits
 `ReplayFinished` exactly once. Concurrent accessor host calls may append `Start` entries in
 scheduling order that replay does not reproduce, so `claim_start_matching` claims the *first
-unclaimed matching* `Start` between cursor and target. That is the only justified use of
-scan-ahead: it routes concurrent completions to the right awaiter. It does not license the guest
+unclaimed matching* `Start` between cursor and target. A claim with an invocation id is a lookup:
+the cursor indexes the recorded `Start`s by invocation id (`start_invocation_ids`, built when the
+replay target is set and kept in step with it), and the claim takes the first unclaimed entry
+before the next delivery boundary. Only claims without an id scan the oplog. Either way the
+lookup routes concurrent completions to the right awaiter. It does not license the guest
 to make different calls; when no matching `Start` exists, replay fails with a divergence error
 (after any active entity body that owns the cursor head has consumed it; see below).
 
@@ -1684,15 +1701,24 @@ custom scopes across concurrent continuations; do not infer a cross-SDK concurre
 The synchronous exchange binding (`store | trappable`, not async) is essential: an async import
 would capture host-task context too early for the per-poll switch.
 
-- A concurrent guest import reserves its id (`reserve_invocation_id`, `durability.rs`) before the
-  guest can make another import call. `RuntimeStore` (`worker/suspension.rs`) records the Store's
-  newest guest import and refuses a later reservation, and all durable calls of one import share
-  its id. A host function that `await`s before its first durable call reserves at entry
-  (`reserve_invocation_id_before_await`); a task it spawns receives the id
-  (`InvocationIdSource::Reserved`).
-- A direct (Store-holding) call reserves the next ordinal when it begins
-  (`direct_call_invocation_id`, `durable_host/mod.rs`); it holds the Store, so it reserves in
-  guest call order.
+- A guest import reserves its id (`GuestImportNumbering::reserve_import_identity`,
+  `durability/invocation_id`) at its first durable call, while it is still the guest's newest
+  import; a later reservation is refused. The Store's call hook (`CallHook::CallingHost`) decides
+  the anchor from the calling guest task's custom invocation scope, and the runtime observer
+  (`RuntimeStore::observe`, `worker/suspension`) registers the import, both inside the guest's
+  call. Wasmtime reports every import, including polls and custom-context exchanges whose count
+  depends on scheduling, so only reserving imports take an ordinal. A host function that `await`s
+  before its first durable call reserves at entry (`reserve_invocation_id_before_await`). All
+  durable calls of one import share its id. Imports inside a custom invocation body are numbered
+  under that invocation's `Start`, so they do not shift the ordinals of their root siblings. A new
+  root restarts the ordinals.
+- A task that an import spawns is not a guest import: it must receive the id explicitly
+  (`InvocationIdSource::Reserved`). A durable call from an unidentified activity fails. Host
+  tasks that no guest import issued, such as a tool call a client started, record no id
+  (`InvocationIdSource::HostTask`).
+- A direct (Store-holding) call takes the identity of the running import
+  (`direct_call_invocation_id`, `entity_context.rs`). Store-holding host code that runs between
+  guest calls takes the next ordinal under the root.
 - A call recorded inside an open durable scope records the id of the call that opened the scope,
   and a host-internal child records the id of its owner. Records the host adds for a call, such
   as the span cleanup of a P3 HTTP send, carry the id of that call.
@@ -1737,7 +1763,7 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   through `commit_retained_entry`, which does not advance `last_replayed_non_hint_index`; the
   position is published by `publish_claimed_position` only when the owner claims the `Start`.
   A durable call that derives its position from that index (`begin_function` without a scope:
-  the replay-time begin index and retry point) therefore observes the same value the live run
+  the retry point) therefore observes the same value the live run
   saw as the oplog tip before its own `Start` was appended, not a position advanced by entries
   no caller has consumed. The same holds for replay events: a `CardDerived` or `CardInstalled`
   hint trailing a retained `Start` or its terminal is a side effect of that call, and its owner
@@ -1936,8 +1962,10 @@ targets return `LiveOnly(PermissionTarget)`; their asynchronous permission check
 Denials use `persist_*_denial_from_begun` to record on the already-begun call, not begin another
 one. Recorded calls, including incomplete repairs, retain admission without re-authorizing.
 
-1. The caller opens a durable call; its `Start` index `begin_index` is the call identity.
-2. `derive_idempotency_key(begin_index)` (`durable_host/mod.rs`) yields
+1. The caller opens a durable call; its own `Start` index is the call identity. Live
+   computes the request when it appends the `Start` (`start_live_at_index`), so the request
+   can embed the index; replay reads the index from the claimed `Start`.
+2. `IdempotencyKeyPosition::derive(start_index)` (`durable_host/mod.rs`) yields
    a key derived from the caller invocation key and this call's own physical `Start` index.
    Incomplete-call repair reuses that `Start` and key. Streaming RPC also uses the exact `Start`
    index to distinguish concurrent calls. Its session descriptor excludes retry tracing and
@@ -2044,7 +2072,7 @@ record. A record with a name on an executor without filesystem snapshots gives `
   already be live, and `finalize_pending_snapshot_update` loads it into the new revision. It writes
   `SuccessfulUpdate` only after the load completed.
 - `SnapshotAssistedAutomatic` — `try_load_snapshot` loads the application snapshot of the selected
-  record `S` into the target, after `materialize` restored its filesystem snapshot. `resume_replay`
+  record `S` into the target, after `materialize` restored its filesystem snapshot. `replay`
   replays the stopped-source tail with the source revision's metadata: the executable metadata,
   `GOLEM_COMPONENT_REVISION`, the config and the initial files. At `ReplayFinished`,
   `prepare_revision_update` (`durable_host/revision_update.rs`) fetches the target metadata and
@@ -2052,7 +2080,7 @@ record. A record with a name on an executor without filesystem snapshots gives `
   replay does. Then `SuccessfulUpdate` is written. A later start from the promoted `S` restores
   the same filesystem snapshot and applies the rule at the replayed `SuccessfulUpdate`, in the
   same order.
-- `Automatic` — `try_load_snapshot` loads the authoritative baseline, if any, then `resume_replay`
+- `Automatic` — `try_load_snapshot` loads the authoritative baseline, if any, then `replay`
   replays the remaining old history against the new component; success is recorded during that
   replay.
 - No pending update — `try_load_snapshot` loads the selected periodic record.
@@ -2502,8 +2530,11 @@ failure table in the executor walkthrough.
 
 Recorded async events reach the guest only at a blocked wait, at most one event per block,
 live and replay alike. Native stream items and terminals (including producer cancellation),
-timers and accessor completions share `RuntimeStore::await_guest_blocked` in the consuming
-Store; an entity body uses its own Store, not the owner's. The gate consumes one unconsumed
+timers, accessor completions and tool results share `RuntimeStore::await_guest_blocked` in the
+consuming Store; an entity body uses its own Store, not the owner's. A tool result reaches the
+guest through `golem::tool::internal::await-invoke-results` (`tool/execution.rs::observe_tool_invoke_plans`),
+a guest-facing durable call that the host records around the result await; it is not a WIT import. Its `CompletionDelivered` marker records
+the guest's receipt; the entity terminal records only how the body ended. The gate consumes one unconsumed
 `DriverBlocked` edge, promoted only after the outer driver returns Pending. A delivery that
 becomes ready after the guest blocked consumes that already-published edge immediately.
 Waking the waiting host future invalidates the blocked generation, so checking the current
@@ -2828,7 +2859,7 @@ Detailed mechanics, including scheduling and memory admission: `reference/tools.
 | Durable Golem agent (RPC) | Exactly-once logical invocation and result | Target's durable queue + shared key |
 | Ephemeral Golem agent (RPC) | At-most-once per accepted invocation; no resumption after target loss | Fail-stop target, deterministic phantom id |
 | Oplog-processor plugin | Exactly-once delivery of each oplog batch | `services/oplog/plugin.rs`: deterministic batch key (`oplog_processor_idempotency_key`: source agent, grant id, first/last index → UUIDv5) and per-plugin `confirmed_up_to`/`sending_up_to` checkpoints persisted in `AgentStatusRecord.oplog_processor_checkpoints` |
-| External HTTP/TCP/DB/etc. | Exactly-once only if the peer honours an idempotency key; otherwise retries in the ambiguous crash window are visible | Golem attaches an `idempotency-key` header to outgoing HTTP from `derive_idempotency_key(begin_index)` (`http/policy.rs`, unless the guest set one) and offers `golem:api/host.generate-idempotency-key`; the peer must deduplicate |
+| External HTTP/TCP/DB/etc. | Exactly-once only if the peer honours an idempotency key; otherwise retries in the ambiguous crash window are visible | Golem attaches an `idempotency-key` header to outgoing HTTP from `derive_idempotency_key(start_index)` (`http/policy.rs`, unless the guest set one) and offers `golem:api/host.generate-idempotency-key`; the peer must deduplicate |
 
 Four exactly-once contracts coexist and must not be conflated: RPC exactly-once (one logical
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item
@@ -2876,6 +2907,17 @@ externally_revoked_cached_handle_returns_typed_errors_and_its_accessors_trap,
 cached_handle_reports_card_expired_after_its_lifespan,
 derive_from_a_card_that_expires_before_its_creation_records_card_expired,
 a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_revoked}`.
+
+Source transfer progress is status state, not an oplog scan. The fold keeps
+`AgentStatusRecord::source_card_transfers` (`worker/status/fields.rs::calculate_source_card_transfers`):
+per transfer ID the first `CardDerived` (linked by its `transfer_id`), queued `TransferStarted`
+payload, `CardTransferStarted` and `CardTransferConfirmed`, or `Conflict` when two records of one
+kind differ. Every producer commits through the status actor, so the boundary's prepare and
+confirm steps and the guest `install-card` path read `get_repaired_status()` and no oplog entry.
+The index is sticky across skipped and deleted regions and keeps confirmed transfers. A repair
+after `CardDerived` reuses the recorded child instead of creating it again. Tests:
+`tests/api/mod.rs::pending_source_card_transfer_boundary_reads_no_oplog_entry`,
+`tests/scope_cards.rs::template_transfer_repaired_after_its_derived_child_reuses_the_child`.
 
 ### Card authorization decisions
 

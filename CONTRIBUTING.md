@@ -13,9 +13,6 @@ Once a maintainer vouches for you, you can open pull requests normally.
 To work on **Golem** you need to install (via package installers or manually) the following tools:
 
 - [rustup](https://rustup.rs/)
-- [Protobuf](https://github.com/protocolbuffers/protobuf#protobuf-compiler-installation)
-  - The [prost crate](https://crates.io/crates/prost) requires `protoc`
-  - Requires **version 28** or later
 - For integration tests
   - [redis](https://redis.io/downloads/)
   - [docker](https://www.docker.com)
@@ -25,7 +22,7 @@ To work on **Golem** you need to install (via package installers or manually) th
 
 ### OSX
 ```sh
-brew install rustup protobuf redis docker lnav nginx
+brew install rustup redis docker lnav nginx
 ```
 
 ## Rust Installation
@@ -246,6 +243,10 @@ to `main`.
    entries, and uploads the verified manifest. All built-in packages must finish
    before the first built-in upload. The existing native matrix then builds,
    signs, notarizes, and attaches all Golem and CLI binaries to the draft.
+   Generated notes start at the highest earlier published stable Golem version,
+   excluding SDK releases, shared crate releases, drafts, and prereleases.
+   The workflow passes that tag explicitly because release tags on squash-merged
+   PR heads do not form an ancestor chain. Existing drafts keep their notes.
    It never publishes the Golem draft.
 5. **Review and publish Golem.** Wait for successful preparation. Review the draft,
    binaries, and manifest, then explicitly publish the draft. This starts
