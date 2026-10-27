@@ -36,17 +36,43 @@ pub(super) enum CompletionMarkerKind {
     Discarded,
 }
 
-pub(super) enum OrderedAppend {
+#[derive(Debug)]
+pub enum OrderedAppend {
     Task(tokio::task::JoinHandle<Result<(), WorkerExecutorError>>),
+    Receipt(oneshot::Receiver<Result<(), WorkerExecutorError>>),
+}
+
+impl From<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>> for OrderedAppend {
+    fn from(task: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>) -> Self {
+        Self::Task(task)
+    }
+}
+
+impl Future for OrderedAppend {
+    type Output = Result<Result<(), WorkerExecutorError>, tokio::task::JoinError>;
+
+    fn poll(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match self.get_mut() {
+            Self::Task(task) => Pin::new(task).poll(cx),
+            Self::Receipt(receipt) => Pin::new(receipt).poll(cx).map(|result| {
+                Ok(result.unwrap_or_else(|error| {
+                    Err(WorkerExecutorError::runtime(format!(
+                        "durable effect coordinator stopped without a receipt: {error}"
+                    )))
+                }))
+            }),
+        }
+    }
 }
 
 impl OrderedAppend {
     async fn wait(self) -> Result<(), WorkerExecutorError> {
-        match self {
-            Self::Task(task) => task.await.map_err(|err| {
-                WorkerExecutorError::runtime(format!("ordered oplog append task failed: {err}"))
-            })?,
-        }
+        self.await.map_err(|err| {
+            WorkerExecutorError::runtime(format!("ordered oplog append task failed: {err}"))
+        })?
     }
 }
 
@@ -398,14 +424,14 @@ impl CompletionDelivery {
     /// with this token so discard and teardown settlement cannot overtake the terminal.
     pub async fn wait_terminal(
         &mut self,
-        terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+        terminal: impl Into<OrderedAppend>,
     ) -> Result<(), TerminalCallError> {
         let CompletionDeliveryState::Live(live) = &mut self.state else {
             panic!("only a live completion can own a pending terminal");
         };
         let trap_context = live.trap_context;
-        live.pending_append = Some(OrderedAppend::Task(terminal));
-        let Some(OrderedAppend::Task(terminal)) = &mut live.pending_append else {
+        live.pending_append = Some(terminal.into());
+        let Some(terminal) = &mut live.pending_append else {
             unreachable!();
         };
         let result = terminal

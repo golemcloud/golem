@@ -2164,8 +2164,34 @@ async fn filesystem_capable_incapable_capable_chain_serializes_fanout_lanes(
         2,
         "one inner invocation per fanout branch"
     );
-    inner_starts.sort_by_key(|(index, _)| *index);
+    let first_filesystem_access = |start| {
+        oplog
+            .iter()
+            .find(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(parameters)
+                    if parameters.function_name == "filesystem::permissions::check")
+                    && matches!(&entry.attribution, PublicOplogEntryAttribution::Entity(context)
+                        if context.invocation.start_index == start)
+            })
+            .expect("each capable inner body accesses the owner filesystem")
+            .oplog_index
+    };
+    // Each apply is a separate await, not one eligibility batch. An invocation Start can
+    // precede admission, so order the bodies by their recorded filesystem access instead.
+    inner_starts.sort_by_key(|(start, _)| first_filesystem_access(*start));
     assert_ne!(inner_starts[0].1, inner_starts[1].1);
+    let first_terminal = oplog
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(end)
+                if end.start_index == inner_starts[0].0)
+        })
+        .expect("the first inner body completed")
+        .oplog_index;
+    assert!(
+        first_terminal < first_filesystem_access(inner_starts[1].0),
+        "the sibling must not access the filesystem before the first body releases its lane"
+    );
     let expected_lane_log = [b'O', inner_starts[0].1, inner_starts[1].1];
     assert_eq!(
         executor
@@ -2173,6 +2199,41 @@ async fn filesystem_capable_incapable_capable_chain_serializes_fanout_lanes(
             .await?,
         expected_lane_log.as_slice()
     );
+
+    executor.simulated_crash(&worker_id).await?;
+    executor.resume(&worker_id, true).await?;
+    let reconstructed: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/middleware-lanes.log"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(reconstructed.as_bytes(), expected_lane_log.as_slice());
+    let after_replay = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        entity_starts(
+            &after_replay,
+            PublicAgentEntityKind::ToolMiddleware,
+            "streaming-filesystem-inner",
+        )
+        .len(),
+        2,
+        "reconstruction must retain the original inner invocations"
+    );
+    let finished = after_replay
+        .iter()
+        .find(|entry| {
+            matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+                && entry.oplog_index > first_terminal
+        })
+        .expect("the fanout invocation finished")
+        .oplog_index;
+    for (start, _) in inner_starts {
+        assert_one_terminal_before_finished(&after_replay, start, finished);
+    }
     Ok(())
 }
 

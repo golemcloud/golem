@@ -1,6 +1,25 @@
 {
   "components": {
     "schemas": {
+      "ErrorsBody": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "errors"
+        ],
+        "title": "ErrorsBody",
+        "type": "object"
+      },
       "Input_golem_it_agent_sdk_rust.http.model.JsonBodyResponse": {
         "additionalProperties": false,
         "properties": {
@@ -550,6 +569,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -692,6 +721,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -724,6 +763,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -876,6 +925,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -930,6 +989,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -984,6 +1053,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1043,6 +1122,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1106,6 +1195,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1149,6 +1248,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1195,6 +1304,16 @@
                 "style": "simple"
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1252,6 +1371,16 @@
                 "style": "simple"
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           },
           "404": {
             "description": "Response 404"
@@ -1335,6 +1464,16 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "404": {
             "description": "Response 404"
           },
@@ -1379,6 +1518,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1404,6 +1553,16 @@
         "responses": {
           "204": {
             "description": "Response 204"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1462,6 +1621,16 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "404": {
             "description": "Response 404"
           }
@@ -1507,6 +1676,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           },
           "404": {
             "description": "Response 404"
@@ -1554,6 +1733,16 @@
             },
             "description": "Response 200"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -1596,6 +1785,16 @@
             },
             "description": "Response 200"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "500": {
             "description": "Response 500"
           }
@@ -1623,6 +1822,16 @@
         "responses": {
           "204": {
             "description": "Response 204"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           },
           "500": {
             "content": {
@@ -1677,6 +1886,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1736,6 +1955,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1779,6 +2008,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1838,6 +2077,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1883,6 +2132,16 @@
         "responses": {
           "204": {
             "description": "Response 204"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []
@@ -1915,6 +2174,16 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
         "security": []

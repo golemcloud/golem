@@ -5,7 +5,7 @@ enum Label derives Schema:
 @agentDefinition()
 trait TriageAgent extends BaseAgent:
   // each inbox gets its own agent, in its own WebAssembly VM:
-  class Id(val inbox: String) //@
+  class Id(val inbox: String)
   def triage(emails: List[Email]): Future[Map[String, Label]] //@
 
 @agentImplementation()
@@ -16,6 +16,6 @@ final class TriageAgentImpl(inbox: String) extends TriageAgent:
         for
           done <- labels
           label <- classify(email.body).map(Label.valueOf)
-          // after a crash or restart, it resumes inside this loop:
+          // it resumes here after a crash, with memory and files:
           _ <- applyLabel(inbox, email.id, label) //@
         yield done + (email.id -> label)

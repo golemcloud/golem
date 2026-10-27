@@ -105,6 +105,78 @@ The shard manager records the source IP address of each executor's registration,
 
 The executor's agent files are in temporary directories by default, and nothing of an executor needs a volume. To keep agent files across executors, see [Filesystem snapshots](/next/operate/filesystem_snapshots).
 
+## TLS between the services
+
+The services talk to each other over gRPC. Each gRPC server can require TLS, and each gRPC client can use it. The services always use mutual TLS: a server with TLS enabled requires a client certificate that its client CA signed, and a client checks the server certificate against its server CA.
+
+Every service has a server setting `grpc.tls` (`GOLEM__GRPC__TLS__TYPE`). Every client of a service has its own setting `<section>.tls`, with the same keys on both sides. The sections are:
+
+| Service | Client sections |
+| --- | --- |
+| Registry service | `component_compilation.config.tls` |
+| Worker service | `registry_service.tls`, `shard_manager.tls`, `worker_executor.tls` |
+| Shard manager | `registry_service.tls`, `worker_executors.tls` |
+| Worker executor | `registry_service.tls`, `shard_manager.tls`, `public_worker_api.tls` |
+| Component compilation service | `compile_worker.tls` |
+
+Set `TYPE` to `Enabled` and give the settings of the table below. Each certificate, key and CA comes from a PEM file (the `_file` setting) or from an inline value (the PEM in standard Base64 on one line), not both. A service refuses a configuration that sets both, or neither, for an item.
+
+| Server (`grpc.tls.config.`) | Client (`<section>.tls.config.`) |
+| --- | --- |
+| `server_cert_file` or `server_cert` | `client_cert_file` or `client_cert` |
+| `server_key_file` or `server_key` | `client_key_file` or `client_key` |
+| `client_ca_cert_file` or `client_ca_cert` | `server_ca_cert_file` or `server_ca_cert` |
+| | `server_domain_name` (optional) |
+
+The environment name of a setting is `GOLEM__GRPC__TLS__CONFIG__SERVER_CERT_FILE` on the server, and for example `GOLEM__REGISTRY_SERVICE__TLS__CONFIG__CLIENT_CERT_FILE` on the client of the registry service. Without `server_domain_name`, a client checks the server certificate against the host of the address it connects to.
+
+```yaml
+# In the pod template of a service that serves gRPC and calls the registry service
+containers:
+  - name: golem-worker-service
+    env:
+      - name: GOLEM__GRPC__TLS__TYPE
+        value: Enabled
+      - name: GOLEM__GRPC__TLS__CONFIG__SERVER_CERT_FILE
+        value: /etc/golem-grpc-tls/tls.crt
+      - name: GOLEM__GRPC__TLS__CONFIG__SERVER_KEY_FILE
+        value: /etc/golem-grpc-tls/tls.key
+      - name: GOLEM__GRPC__TLS__CONFIG__CLIENT_CA_CERT_FILE
+        value: /etc/golem-grpc-tls/ca.crt
+      - name: GOLEM__REGISTRY_SERVICE__TLS__TYPE
+        value: Enabled
+      - name: GOLEM__REGISTRY_SERVICE__TLS__CONFIG__CLIENT_CERT_FILE
+        value: /etc/golem-grpc-tls/tls.crt
+      - name: GOLEM__REGISTRY_SERVICE__TLS__CONFIG__CLIENT_KEY_FILE
+        value: /etc/golem-grpc-tls/tls.key
+      - name: GOLEM__REGISTRY_SERVICE__TLS__CONFIG__SERVER_CA_CERT_FILE
+        value: /etc/golem-grpc-tls/ca.crt
+    volumeMounts:
+      - name: golem-grpc-tls
+        mountPath: /etc/golem-grpc-tls   # the whole Secret as a directory, never subPath
+        readOnly: true
+volumes:
+  - name: golem-grpc-tls
+    secret:
+      secretName: golem-grpc-tls   # the cert-manager Certificate's Secret
+```
+
+### Renew certificates
+
+A service reloads renewed files without a restart. It polls the files of every `_file` setting every 60 seconds, which matches how often the kubelet updates a mounted Secret. When the bytes of a certificate, key or CA change, the service checks the new set and then uses it:
+
+- A server uses the new set for every TLS handshake that starts after the reload. It requires a client certificate in every handshake, and drops a handshake that takes longer than 10 seconds.
+- A client uses the new set for every new connection. A connection that is open keeps the old certificate until it closes, so a renewal does not interrupt a call or a stream.
+- The check parses the certificate, the key and the CA, and refuses a set in which the key does not belong to the certificate, the certificate is expired or not valid yet, or every CA certificate has expired.
+
+A set that fails the check is not used. The service goes on with the old one, logs the error "Changed TLS files cannot be used; keeping the current certificate" once for each distinct set of files, and counts it in `golem_tls_certificate_reload_failures_total`. It checks the same files again on every poll. A successful reload logs "TLS certificate reloaded" with the subject, the end of validity and the SHA-256 fingerprint.
+
+A client whose files cannot be loaded at startup, for example because the Secret is not mounted yet, starts anyway. Its calls fail with a TLS configuration error, and it tries to load the files again, at most every 60 seconds, until they load. A server refuses to start with a bad set.
+
+Two metrics help to watch the renewal. `golem_tls_certificate_not_after_seconds{use}` is the Unix time at which the certificate in use expires; alert when it comes close to the current time. `golem_tls_certificate_reload_failures_total{use}` rises when changed files cannot be used. The `use` label names the user of the certificate: `grpc server`, `<target> client` for a gRPC client (for example `registry client` or `worker_executor client`), and `etcd client` for the [shard manager's etcd connection](/next/operate/shard-manager#secure-the-etcd-connection). See [Metrics](/next/operate/metrics).
+
+**Mount the Secret as a directory, not with `subPath`**: with `subPath` the files in the pod never change. An inline value changes only with a restart.
+
 ## Ingress
 
 The management API is split between two services. A reverse proxy or load balancer sends the management host to them by path:

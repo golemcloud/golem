@@ -1,4 +1,9 @@
 use super::*;
+use golem_common::base_model::oplog::QueuedCardEventTransfer;
+use golem_common::model::card::{
+    SourceCardTransferConfirmed, SourceCardTransferIndex, SourceCardTransferRecords,
+    SourceCardTransferStarted, SourceCardTransferState, StoredCard,
+};
 
 pub(super) fn calculate_revoked_cards(
     mut revoked_cards: HashSet<golem_common::model::card::CardId>,
@@ -223,6 +228,98 @@ pub(super) fn calculate_received_card_transfers(
                 }
             }
         }
+    }
+
+    transfers
+}
+
+/// Folds the source-side records of each transfer that the agent started. The first record of
+/// each kind is kept; a later record of the same kind that differs from it puts the transfer in
+/// conflict.
+pub(super) fn calculate_source_card_transfers(
+    mut transfers: SourceCardTransferIndex,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> SourceCardTransferIndex {
+    enum SourceRecord<'a> {
+        Derived(&'a StoredCard),
+        Queued(&'a QueuedCardEventTransfer),
+        Started(SourceCardTransferStarted),
+        Confirmed(SourceCardTransferConfirmed),
+    }
+
+    fn keep_first<T: PartialEq>(slot: &mut Option<T>, value: T) -> bool {
+        match slot {
+            None => {
+                *slot = Some(value);
+                true
+            }
+            Some(existing) => *existing == value,
+        }
+    }
+
+    for entry in entries.values() {
+        let (transfer_id, record) = match entry {
+            OplogEntry::CardDerived {
+                transfer_id: Some(transfer_id),
+                card,
+                ..
+            } => (*transfer_id, SourceRecord::Derived(card.as_ref())),
+            OplogEntry::CardEventQueued { event, .. } => {
+                let QueuedCardEvent::TransferStarted(transfer) = event.as_ref() else {
+                    continue;
+                };
+                (transfer.transfer_id, SourceRecord::Queued(transfer))
+            }
+            OplogEntry::CardTransferStarted {
+                transfer_id,
+                card_id,
+                source_holder,
+                target_holder,
+                ..
+            } => (
+                *transfer_id,
+                SourceRecord::Started(SourceCardTransferStarted {
+                    card_id: *card_id,
+                    source_holder: source_holder.clone(),
+                    target_holder: target_holder.clone(),
+                }),
+            ),
+            OplogEntry::CardTransferConfirmed {
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+                ..
+            } => (
+                *transfer_id,
+                SourceRecord::Confirmed(SourceCardTransferConfirmed {
+                    source_card_id: *source_card_id,
+                    installed_card_id: *installed_card_id,
+                    target_holder: target_holder.clone(),
+                }),
+            ),
+            _ => continue,
+        };
+
+        let mut records = match transfers.get(&transfer_id) {
+            None => SourceCardTransferRecords::default(),
+            Some(SourceCardTransferState::Recorded(records)) => records.clone(),
+            Some(SourceCardTransferState::Conflict) => continue,
+        };
+        let consistent = match record {
+            SourceRecord::Derived(card) => keep_first(&mut records.derived_card, card.clone()),
+            SourceRecord::Queued(transfer) => keep_first(&mut records.queued, transfer.clone()),
+            SourceRecord::Started(started) => keep_first(&mut records.started, started),
+            SourceRecord::Confirmed(confirmed) => keep_first(&mut records.confirmed, confirmed),
+        };
+        transfers.insert(
+            transfer_id,
+            if consistent {
+                SourceCardTransferState::Recorded(records)
+            } else {
+                SourceCardTransferState::Conflict
+            },
+        );
     }
 
     transfers

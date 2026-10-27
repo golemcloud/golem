@@ -29,6 +29,10 @@ impl Debug for PrimaryOplogService {
                 &self.max_operations_before_commit_ephemeral,
             )
             .field("max_payload_size", &self.max_payload_size)
+            .field(
+                "max_retained_auto_commit_batches",
+                &self.max_retained_auto_commit_batches,
+            )
             .field("retry_config", &self.retry_config)
             .field("oplogs", &self.oplogs)
             .field("stream_session_index", &self.stream_session_index)
@@ -43,6 +47,7 @@ impl PrimaryOplogService {
         max_operations_before_commit: u64,
         max_operations_before_commit_ephemeral: u64,
         max_payload_size: usize,
+        max_retained_auto_commit_batches: usize,
         retry_config: RetryConfig,
     ) -> Self {
         let replicas = retry_storage_op(&retry_config, "number_of_replicas", "global", || {
@@ -57,6 +62,7 @@ impl PrimaryOplogService {
             max_operations_before_commit,
             max_operations_before_commit_ephemeral,
             max_payload_size,
+            max_retained_auto_commit_batches,
             retry_config,
             oplogs: OpenOplogs::new("primary oplog"),
             stream_session_index: Arc::new(std::sync::OnceLock::new()),
@@ -162,6 +168,7 @@ impl PrimaryOplogService {
                     self.replicas,
                     max_operations_before_commit,
                     self.max_payload_size,
+                    self.max_retained_auto_commit_batches,
                     self.retry_config.clone(),
                     key,
                     last_oplog_index,
@@ -356,6 +363,7 @@ impl OplogService for PrimaryOplogService {
             self.replicas,
             self.max_operations_before_commit,
             self.max_payload_size,
+            self.max_retained_auto_commit_batches,
             self.retry_config.clone(),
             namespace,
             key,

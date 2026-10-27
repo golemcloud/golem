@@ -278,6 +278,7 @@ impl<T, E> TypedUnderlyingInvocation<T, E> {
 
     /// Waits for the structured result while forwarding both underlying outputs
     /// to the writers supplied to this middleware invocation.
+    #[cfg(feature = "export_golem_agentic")]
     pub async fn get_forwarding_outputs(
         mut self,
         stdout: Option<OutputStream>,
@@ -518,6 +519,7 @@ impl UnderlyingTool {
 
     /// Invokes the next layer while forwarding both outputs to the writers
     /// supplied to this middleware invocation.
+    #[cfg(feature = "export_golem_agentic")]
     pub async fn invoke_forwarding_outputs(
         &self,
         command_path: Vec<String>,
@@ -695,7 +697,7 @@ where
     .await
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(feature = "export_golem_agentic")]
 async fn join_three<A, B, C>(a: A, b: B, c: C) -> (A::Output, B::Output, C::Output)
 where
     A: Future,

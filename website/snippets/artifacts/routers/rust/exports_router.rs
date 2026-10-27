@@ -1,29 +1,29 @@
 struct ExportsRouter;
+// asked to export results as CSV, the agent replies with a link:
+// the router sets the status, content type and download headers:
 #[http_router(name = "ExportsRouter", mount = "/exports")]
 impl HttpRouter for ExportsRouter {
   type Config = ();
   fn new(_: Config<()>) -> Self { Self }
   async fn handle(&self, request: HttpRequest) -> HttpResponse {
-    let id = request.path.strip_prefix("/exports/")
-      .and_then(|rest| rest.strip_suffix(".csv"))
-      .filter(|id| !id.is_empty() && id.chars().all(is_word));
-    let Some(id) = id.filter(|_| request.method == "GET") else {
-      let body = AgentStream::new().1;
-      return HttpResponse { status: 404, headers: vec![], body };
-    };
-    // stream the CSV from the agent that builds this export:
-    let rows = ExportAgentClient::get(id.to_string()).csv().await; //@
-    HttpResponse {
-      status: 200,
-      headers: vec![
-        Header { name: "content-type".into(), //@
-          value: b"text/csv".to_vec() }, //@
-        // browsers save it as a file instead of opening it:
-        Header { name: "content-disposition".into(), value: //@
-          format!("attachment; filename=\"{id}.csv\"") //@
-            .into_bytes() },
-      ],
-      body: rows,
-    }
+    export(request).await.unwrap_or_else(failed)
   }
+}
+async fn export(request: HttpRequest)
+  -> Result<HttpResponse, AppError> {
+  let path = Regex::new(r"^/exports/([\w-]+)/([\w-]{36})\.csv$")?;
+  let m = path.captures(&request.path); //@
+  let Some(m) = m.filter(|_| request.method == "GET") else { //@
+    return Ok(HttpResponse { status: 404, headers: vec![], //@
+      body: empty() });
+  };
+  // that user's agent builds the CSV now and streams it:
+  let csv = AnalystAgentClient::get(m[1].to_string())? //@
+    .export_csv(m[2].to_string()).await?;
+  Ok(HttpResponse { status: 200, headers: vec![
+    header("content-type", "text/csv"), //@
+    // the browser saves it as a download:
+    header("content-disposition", //@
+      "attachment; filename=\"results.csv\""), //@
+  ], body: csv }) //@
 }

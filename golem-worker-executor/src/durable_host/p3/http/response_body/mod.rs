@@ -23,7 +23,7 @@ use super::*;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DurableDemandItem,
     DurableDemandStream, InvocationIdSource, ScopeReplayDecision, ScopeReplayRecovery,
-    demand_channel, reserve_import_invocation_id,
+    demand_channel, import_invocation_id,
 };
 use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::durability::{
@@ -241,7 +241,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             InvocationIdSource::Reserved(None)
         } else {
             let mut store_ctx = store.as_context_mut();
-            reserve_import_invocation_id(
+            import_invocation_id(
                 durable_worker_ctx::<Ctx, U>(store_ctx.data_mut()),
                 response_state
                     .as_ref()

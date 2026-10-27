@@ -2,9 +2,9 @@
 
 The Rust ports of the per-feature home-page snippets live in
 `website/snippets/<chapter>/<feature>/rust/*.rs`, one file per feature
-(17 in all: every TypeScript feature; Rust has embedded SQLite, so
-`agents/sqlite` is ported, and `tools/publish` is now a code snippet, so the
-old shared `golem.yaml` is gone and nothing in this harness reads YAML).
+(21 in all, seven per chapter: every TypeScript feature; Rust has embedded
+SQLite, so `agents/sqlite` is ported, and `tools/publish` is a code snippet,
+so nothing in this harness reads YAML).
 
 A line ending in ` //@` is highlighted on the page while its snippet shows;
 the page strips the marker, and so does this harness before every rule and
@@ -26,10 +26,14 @@ file marks the line(s) corresponding to every marked TypeScript line.
 | tools/permissions | `orders_access.rs` | `share_orders`, `revoke_orders` |
 | tools/secrets | `support_agent.rs` | `SupportAgent` (config `stripe_key`), calls tool `refund` |
 | tools/publish | `account_agent.rs` | `AccountAgent`, calls MCP-imported tool `crm_find_customer` |
-| artifacts/overview | `brief_agent.rs` | `BriefAgent` |
-| artifacts/routes | `board_agent.rs` | `BoardAgent` |
-| artifacts/routers | `exports_router.rs` | router `ExportsRouter` (calls `ExportAgent`) |
-| artifacts/login | `payslip_agent.rs` | `PayslipAgent` |
+| tools/middleware | `refund_policy.rs` | typed middleware `refund-policy` wrapping tools/secrets' `refund` |
+| artifacts/overview | `analyst_agent.rs` | `AnalystAgent` (model tool `chart`) |
+| artifacts/routes | `app_tool.rs` | tool `present`, `AppAgent` |
+| artifacts/files | `chart_agent.rs` | `ChartAgent` |
+| artifacts/login | `private_charts_agent.rs` | `PrivateChartsAgent` |
+| artifacts/peruser | `dashboard_agent.rs` | `DashboardAgent` |
+| artifacts/routers | `exports_router.rs` | raw HTTP router `ExportsRouter`, calls `AnalystAgent.export_csv` |
+| artifacts/signin | `billing_agent.rs` | `BillingAgent` |
 
 ## Re-running
 
@@ -106,6 +110,8 @@ Both print every command and its exit code. To compile by hand:
 - `rusqlite 0.38.0` (`bundled`, `wasm32-wasi-vfs`), with `rusqlite` and
   `libsqlite3-sys` patched to `https://github.com/golemcloud/rusqlite` rev
   `40024c3f7a2e1dfc2b36aac33e3d84ee04bfb700` (Golem fork with a WASI VFS).
+- `regex 1` (1.13.1 locked; artifacts/routers' path pattern, as TS's
+  regex literal; `AppError` converts from `regex::Error`).
 - `serde`, `serde_json`, `serde_urlencoded 0.7.1`, `http =1.3.1` (the
   version golem-rust already uses; only for `http::Error`, the request
   builder's error, in `AppError`).
@@ -160,6 +166,8 @@ TypeScript does.
    not on its own line (string and char literals are masked first, so
    `https://` is fine), a comment not ending with `:`, a file over 31 lines,
    a feature with a TypeScript original but no Rust file (or vice versa),
+   a banned phrase ("deny by default", "stopped", "as if nothing
+   happened", "variables persist", "storage") anywhere in the file,
    and comments whose wording or order differs from the TypeScript original
    (`agents/team` expects `from a TypeScript ResearchAgent` instead of `from a
    Rust ResearchAgent`, so the Rust call stays cross-language; the TypeScript
@@ -177,10 +185,15 @@ TypeScript does.
    registration-time HTTP validation (`validate_wire_agent_http`: mount
    variables vs constructor parameters, endpoint variables, principals,
    auth/CORS) that the wasm build only runs at component start. It asserts
-   the 17 agent/router types and the `outline` (`requires_filesystem`),
-   `refund` (version `1.0.0`) and `summarize` tools are registered; that
-   `AccountAgent.describe` carries the description `Summarize a customer
-   account by email`; that `StockAgent.level` is read-only; and it decodes
+   the 19 agent types (including the router `ExportsRouter`, registered
+   with kind `HttpRouter`) and the `outline` and `present` (both
+   `requires_filesystem`; `present`'s descriptor carries the slug regex
+   `^[a-z0-9-]{1,40}$`), `refund` (version `1.0.0`) and `summarize` tools
+   are registered; that the middleware `refund-policy` is registered,
+   presents `refund` with a result carrying `customer_email`, and has no
+   `caller` input (the principal is auto-injected); that `AccountAgent.describe` carries the description
+   `Summarize a customer account by email` and `ChartAgent.chart` the
+   description `Draw a sales chart for one quarter`; that `StockAgent.level` is read-only; and it decodes
    `SupportAgent`'s descriptor and asserts a config declaration with path
    `["stripe_key"]` and source `Secret` (the Rust macro declares the field
    name as written; the platform canonicalises secret paths to camelCase,
@@ -212,18 +225,14 @@ functions that can fail return `Result` and propagate with `?`:
   `golem-rust-macro/src/agentic/helpers.rs:18`), so they do no fallible
   work. `NotesAgent` opens SQLite lazily: a displayed `fn open() ->
   Result<Connection, AppError>` (create `/data`, open, create the table) is
-  called by each method; the agent struct is a unit struct. `BoardAgent`
-  (artifacts/routes) must write its page when it is created, as the
-  TypeScript `init` does, so its constructor uses `.expect("...")` on the
-  file write (a panic fails agent creation, as a throw in TS `init` does).
-- `PayslipAgent.latest` returns `Result<Option<Pdf>, AppError>`: `Ok(None)`
-  is the 404 (TS `undefined`), and a failed file read propagates with `?`
-  (TS `readFileSync` throws).
-- `HttpRouter::handle` returns a plain `HttpResponse`
-  (`sdks/rust/golem-rust/src/agentic/http/router.rs`), so the router
-  (artifacts/routers) has no `?`: an unmatched path returns 404, and the
-  generated non-fallible `ExportAgentClient::csv()` panics on an RPC
-  failure (the invocation fails, as an uncaught throw does in TS).
+  called by each method; the agent struct is a unit struct.
+- `PrivateChartsAgent.open` returns `Option<Png>`: `None` is the 404 (TS
+  `undefined`). Its only fallible step is the asker key; see
+  "Deviations".
+- The `chart` tool body in artifacts/overview is an async closure whose
+  `?` propagates `AppError`; the loop helper turns an `Err` into a tool
+  failure sent back to the model (as the AI SDK does with a throwing
+  `execute`).
 - `spawn_local` takes `Future<Output = ()>`, so a stream producer task
   (agents/stream) cannot use `?`, and a bare
   `AgentStream` has no terminal error payload; per the SDK streaming guide
@@ -249,12 +258,16 @@ functions that can fail return `Result` and propagate with `?`:
 | `tools_custom` | bash client stub, `Headings = Vec<String>`, and the unit structs `OutlineImpl` and `BuildAgentImpl` (omitted from the display file to fit 31 lines) |
 | `tools_requests` | `http`, `Request`, `AUTHORIZATION`, `CONTENT_TYPE` |
 | `tools_permissions` | `AgentId`, `permissions::{self, Bounds, Holder, Lifespan, PatternGrant, PersistentCard}` |
-| `tools_secrets` | `Config`, `Secret` (`golem_rust::agentic::Secret<T>`), `ConfigSchema`; the real `refund` tool (`#[tool_definition(version = "1.0.0")] trait Refund`, `api_key: GuestSecretHandle`, reveals the key and POSTs to Stripe), its `Receipt` result and so the real macro-generated `RefundClient` (this tool was the tools/overview snippet before the reorganization) |
+| `tools_secrets` | `Config`, `Secret` (`golem_rust::agentic::Secret<T>`), `ConfigSchema`; the real `refund` tool (`#[tool_definition(version = "1.0.0")] trait Refund`, `api_key: GuestSecretHandle`, an auto-injected `caller: golem_rust::tool::Principal` that is not tool input and that `RefundClient` does not take, reveals the key and POSTs to Stripe with `expand[]=charge`), its `Receipt { id, status, customer_email }` result (pub fields; `customer_email` is the charge's billing email) and so the real macro-generated `RefundClient`, `RefundMiddleware` and `RefundUnderlying` |
+| `tools_middleware` | `use crate::tools_secrets::{Receipt, RefundMiddleware, RefundUnderlying}` (the same tool, not a second `refund`); `GuestSecretHandle`, `tool::{Principal, ToolInvokeError}`, `PromiseId`, `create_promise`, `await_promise`, `tool_middleware`; the unit struct `RefundPolicy` with `new()` (height); `ask_finance` (TS `askFinance`: POSTs the promise id, charge and amount to finance), `approved` (TS `approved`: JSON `approved === true`), `check_rate_limit` (TS `checkRateLimit`, returns `ToolInvokeError::ConstraintViolation` over the limit), `audit` |
+| `artifacts_peruser` | agent macros, `Uuid` (`golem_rust::Uuid`), `fs`; `dashboard_for` (TS `dashboardFor`) |
+| `artifacts_routers` | `AgentStream`, `Config`, `Header`, `HttpRequest`, `HttpResponse`, `HttpRouter`, `http_router`, `agent_client`, `Regex`; the caller-owned client `#[agent_client(type_name = "AnalystAgent")] trait AnalystAgent { fn new(chat: String) -> Self; fn export_csv(&self, id: String) -> AgentStream<Vec<u8>>; }` (TS prelude `Analyst`; generates the real `AnalystAgentClient` without defining a second `AnalystAgent` in this component); `header` and `empty` (TS helpers); `failed` (an error becomes a 500 with an empty body) |
+| `artifacts_signin` | `Principal`, agent macros; `Invoice`, `invoices_of`, `page_for` (TS helpers) |
 | `tools_publish` | `agent_definition`/`agent_implementation`, `description`; `use crate::stubs::crm_find_customer_tool_guest_client;` so the displayed `use crm_find_customer_tool_guest_client::CrmFindCustomerClient;` resolves to the stand-in |
-| `artifacts_overview` | `crate::llm` helpers, OpenAI provider, `fs` |
-| `artifacts_routes` | `agent_definition`/`agent_implementation`, `endpoint`, `fs` |
-| `artifacts_routers` | `Config`, `Header`, `HttpRequest`, `HttpResponse`, `HttpRouter`, `http_router`, `AgentStream`; a real `ExportAgent` (`new(id: String)`, `csv(&self) -> AgentStream<Vec<u8>>`), so `ExportAgentClient` is the SDK-generated client; `is_word` (the regex's `[\w-]`) |
-| `artifacts_login` | `Principal`, `UnstructuredBinary`, `AllowedMimeTypes`, `endpoint`, `fs` |
+| `artifacts_overview` | `model`, `run_tool_loop` (`crate::llm`), golem-ai-llm `ToolDefinition`, `fs`; `Quarter` (TS `Quarter`: a newtype with `SCHEMA`, the JSON Schema with `pattern` `^Q[1-4]-\d{4}$`, and `ToolInput::parse`, which rejects anything else before the tool body runs, so only a valid quarter reaches a path); `chart_png` (TS `chartPng`); `page_for` (TS `pageFor`, same HTML) |
+| `artifacts_routes` | `Schema`, agent and tool macros, `fs`; `Row` (TS `Row`), `type Rows = Vec<Row>` (TS `z.array(Row)`, so the impl line fits 68 columns), `query_sales` (TS `querySales`); the unit structs `PresentImpl` and `AppAgentImpl` (height) |
+| `artifacts_files` | `UnstructuredBinary`, `AllowedMimeTypes`, `description`, `endpoint`; `SaleRow`, `query_sales`, `draw_chart` (TS helpers) |
+| `artifacts_login` | `Principal`, `UnstructuredBinary`, `AllowedMimeTypes`, `endpoint`; `Chart { asked_by, png }` (TS `Chart`), `answer_with_chart` (TS `answerWithChart`), `user_key` (TS `userKey`: JSON `[issuer, sub]` of an OIDC principal, an error otherwise) |
 
 ## Invented libraries and stubs
 
@@ -265,7 +278,17 @@ model calls (models, stream, artifacts/overview); the Golem `rusqlite` fork
 for SQLite.
 
 **Helpers (`src/llm.rs`, not a library)** over the real golem-ai-llm data
-model, so the display code calls the real `OpenAI::send` / `Anthropic::send`
+model. `run_tool_loop` (artifacts/overview; TS `generateText({ model,
+prompt, tools: { chart }, stopWhen: stepCountIs(5) })`) is the labelled
+model-loop helper. golem-ai-llm has no loop of its own (its `tools`
+module "does not call an LLM, approve calls, or run a conversation loop",
+`golem-ai-llm-0.5.4/src/tools.rs:1-7`, and is behind the `golem` feature,
+`src/lib.rs:6`). The helper puts the displayed `ToolDefinition` in
+`Config::tools`, calls `OpenAI::send`, parses each `Response::tool_calls`
+entry with `ToolInput::parse`, awaits the displayed tool closure, sends
+`Event::Response` and `Event::ToolResults` back, and returns the reply
+text once no tool is called (at most five model steps). The other helpers
+let the display code call the real `OpenAI::send` / `Anthropic::send`
 without spelling out every `Config` field: `user(text)`, `assistant(text)`
 (message `Event`s), `model(name)` (a plain `Config`), `json_model::<T>(name)`
 (a `Config` whose `provider_options` carry a JSON Schema rendered from `T`'s
@@ -310,8 +333,8 @@ runtime:
   displayed (the snippet reads `result.structured` and its fields);
   `content` is reduced to a text case.
 
-Generated clients for agents in the same crate (`MailerAgentClient`,
-`ExportAgentClient`) and for tools defined with `#[tool_definition]`
+Generated clients for agents in the same crate (`MailerAgentClient`)
+and for tools defined with `#[tool_definition]`
 (`OutlineClient`, `RefundClient`, `SummarizeClient`) are the real
 macro-generated ones.
 
@@ -325,9 +348,8 @@ description in the descriptor.
 
 - agents/overview: TS `Label` (`z.enum`) is a `#[derive(Schema)]` unit enum
   and the `z.record` result is `HashMap<String, Label>`; `classify` returns a
-  typed `Label`, so there is no separate `Label.parse`. TS marks the `id`
-  line; Rust marks the constructor `fn new(inbox: String)`, which declares
-  the agent id.
+  typed `Label`, so there is no separate `Label.parse`. The constructor
+  `fn new(inbox: String)` (TS `id`) is unmarked, as in TS.
 - agents/team: the comment names a TypeScript ResearchAgent (not Rust). Each
   TS marked statement spans two Rust lines (`?` and `.await` chains,
   `collect::<Vec<_>>().join`), so Rust marks 9 lines for TS's 5. Tool types
@@ -355,31 +377,45 @@ description in the descriptor.
   `const { name, plan } = ...structured`; Rust binds `customer =
   result.structured` (marked) and then the two fields, because the generated
   record's type name is not known offline.
-- artifacts/overview: TS `openai.responses.create` is golem-ai-llm's
-  `OpenAI::send` (as in agents/stream); `exposeFiles` is
-  `filesystem_bindings`, with the comment between `mount` and the bindings.
-- artifacts/routes: `boardPage` is `const BOARD_PAGE: &str = r#"..."#`, byte
-  identical to the TS template literal. The "URL names the agent" comment and
-  the marked `mount = ...` sit inside `#[agent_definition(...)]`; TS `init` is
-  the constructor (`.expect`, see "Errors").
-- artifacts/routers: TS `defineHttpRouter(..).mount(..).implementRaw(..)`
-  is `#[http_router(name, mount)]` on `impl HttpRouter` with `handle`, the
-  SDK's raw handler. The regex `^/exports/([\w-]+)\.csv$` is
-  `strip_prefix`/`strip_suffix` plus a non-empty `[\w-]` filter; the method
-  check and the 404 sit in a `let ... else`. TS's empty
-  `AgentStream.from([])` is `AgentStream::new().1` (the writer is dropped at
-  once, which ends the stream). Headers are plain `Header { name, value }`
-  records with byte values (`b"text/csv".to_vec()`,
-  `format!(..).into_bytes()`), as TS uses records and its `bytes` helper;
-  each TS header line is two Rust lines, so Rust marks 5 lines for TS's 4.
-  `ExportAgentClient::get(id.to_string()).csv().await` returns the remote
-  `AgentStream<Vec<u8>>`, forwarded unread as the body.
-- artifacts/login: `Pdf` is `type Pdf = UnstructuredBinary<PdfType>` with a
-  `#[derive(AllowedMimeTypes)]` enum for `application/pdf` (TS
-  `s.unstructuredBinary({ mimeTypes })`); `s.option(Pdf)` is `Option<Pdf>`
-  inside `Result` (see "Errors"). The TS one-line principal check is a
-  two-line `matches!` (both marked). The principal is a host-injected
-  `Principal` parameter (`Principal::Oidc(user)`, `user.sub`).
+- artifacts/overview: TS `tool({ description, inputSchema: Quarter,
+  execute })` is a real golem-ai-llm `ToolDefinition { name, description,
+  parameters_schema }` (marked on its first line) plus the tool body as an
+  async closure `async |Quarter(q)| { ... }`, passed with the question and
+  `model("gpt-4.1")` to the labelled prelude loop `run_tool_loop` (TS
+  `generateText`/`stepCountIs(5)`); a full golem-ai-llm loop does not fit
+  31 lines. The closure's `create_dir_all` and the two marked writes are
+  visible. `exposeFiles: [{ route: '/*', path: '/out/$1' }]` is
+  `filesystem_bindings = [("/*", "/out/$1")]`, with the comment between
+  `mount` and the bindings. The tool returns the page path as a string;
+  the loop JSON-encodes it as the tool result.
+- artifacts/routes: TS `toolDefinition('present', { requiresFilesystem })
+  .body(b => b.positional('name', Name).positional('html', ...))` is
+  `#[tool_definition(requires_filesystem = true)] trait Present` with
+  `fn present(&self, name: String, html: String)`. Scalar parameters are
+  positional by default (`golem-rust-macro/src/tool/descriptor.rs:1206-1219`),
+  and TS's `Name` regex is the real `#[arg(name, regex = "...")]` text
+  refinement (`golem-rust-macro/src/tool/arg.rs:83`), which the executor
+  enforces on tool input (`golem-worker-executor/src/durable_host/tool/command.rs:236`,
+  `validate_value`; regex check in `golem-schema/src/schema/validation/value.rs:552`).
+  So the regex is on screen, where TS keeps `Name` in its prelude. TS
+  `ok(...)` is `Ok(...)`; `z.array(Row)` is the prelude alias `Rows`; the
+  impl unit structs are in the prelude (height).
+- artifacts/files: TS `s.unstructuredBinary({ mimeTypes: ['image/png'] })`
+  is `type Png = UnstructuredBinary<PngType>` with a
+  `#[derive(AllowedMimeTypes)]` enum. The "reply is the PNG" comment sits
+  between the `fn chart(...)` line and its marked `-> Result<Png,
+  AppError>` line. TS's one-line `drawChart(await querySales(...))` is two
+  lines (query, then the marked draw). `{ tag: 'inline', val, mimeType }`
+  is `Png::from_inline(data, PngType::Png)` (marked).
+- artifacts/login: the same `Png` type, with no blank line after it
+  (height). The mount is one unmarked line
+  `#[agent_definition(mount = "/private/{team}", auth = true)]`, as TS. `z.number()` is `u32`. TS `this.charts[n - 1]` is
+  `self.charts.get(n.checked_sub(1)? as usize)?`, so `n = 0` is a 404. TS
+  `userKey(caller)` throws for a non-OIDC principal in both methods; in
+  Rust `ask` propagates that error with `?`, and `open` returns `None`
+  (404) through `.ok()?`, because `open` returns `Option<Png>` to fit 31
+  lines. With `auth = true` every caller is an OIDC user, so the two only
+  differ for a principal that cannot reach this mount.
 - agents/stream: the "clients resume this Durable Stream" comment sits
   between `#[endpoint(post = "/draft")]` and the `fn` whose
   `AgentStream<String>` return type it describes. Streams are produced with
@@ -392,6 +428,53 @@ description in the descriptor.
   `SupportConfig` struct; the "opaque handle" comment sits above the
   secret field. The result type is `Receipt` (the `refund` tool's trait is
   already named `Refund`).
+- tools/middleware: TS `refund.middleware({ name, implementation })` is
+  `#[tool_middleware(name = "refund-policy", constructor =
+  RefundPolicy::new)] impl RefundMiddleware for RefundPolicy` (both the
+  attribute's first line and the `impl` line marked for TS's one line);
+  the unit struct is in the prelude (height). TS gets `principal` from the
+  middleware context; the Rust typed middleware receives only the tool's
+  own parameters, so the `refund` tool declares an auto-injected
+  `caller: Principal` parameter (filled by Golem, not part of the tool
+  input, not taken by `RefundClient` or `RefundUnderlying::refund`) and the
+  middleware reads it. TS `refuse` builds `new ToolInvokeError({ tag:
+  'constraint-violation' })`; Rust `refuse` returns
+  `ToolInvokeError::ConstraintViolation`. TS `throw` is `return Err(..)`.
+  TS `createPromise()`/`awaitPromise(p)` are `create_promise()` and
+  `await_promise(&p).await` (bytes). TS `underlying.refund(args)` is
+  `underlying.refund(charge.clone(), amount, api_key).await?` (two lines;
+  `charge` is reused by `audit`). TS `{ ...receipt, customerEmail }` is
+  struct update syntax. `ask_finance`/`audit` errors (`AppError`) become
+  `ToolInvokeError::Tool` through `?`.
+- artifacts/peruser: TS `crypto.randomUUID()` is `Uuid::new_v4()`
+  (`golem_rust::Uuid`, the `uuid` crate re-exported at
+  `sdks/rust/golem-rust/src/lib.rs:18`, `v4` feature enabled in
+  `sdks/rust/golem-rust/Cargo.toml:90`; the SDK's own `new_phantom` uses
+  it, `docs/src/content/v1.6/how-to-guides/rust/golem-multi-instance-agent-rust.mdx:96`).
+  TS `auth: true` is the unmarked `auth = true,` line of the mount, as in
+  artifacts/login and artifacts/signin. TS `init` is `fn new(user)`
+  (marked). `ask` keeps `&mut self` though it no longer mutates state.
+- artifacts/routers: TS `defineHttpRouter('ExportsRouter').mount('/exports')
+  .implementRaw(...)` is `#[http_router(name = "ExportsRouter", mount =
+  "/exports")] impl HttpRouter for ExportsRouter` with `type Config = ()`
+  and `fn new` (required trait items) and a displayed `struct
+  ExportsRouter;`. `HttpRouter::handle` returns `HttpResponse`, not a
+  `Result`, so it calls a displayed `async fn export(request) ->
+  Result<HttpResponse, AppError>` and maps an error to the prelude's
+  `failed` (500, empty body) instead of `.unwrap()`; in TS the exception
+  escapes the router. The regex is the `regex` crate (compiled per
+  request; `Regex::new(..)?`). TS's `request.method !== 'GET' || !m` is a
+  `let Some(m) = m.filter(|_| request.method == "GET") else { 404 }`.
+  TS `Analyst.client.get({ chat }).exportCsv({ id })` is
+  `AnalystAgentClient::get(chat)?.export_csv(id).await?` (the generated
+  client from the prelude's `#[agent_client]` trait). The 200 response
+  puts `status` and `headers: vec![` on one line and closes with `], body:
+  csv })` (height); the `body` marker is on that closing line.
+- artifacts/signin: TS `if (caller.tag !== 'oidc') throw` is `let
+  Principal::Oidc(user) = caller else { return Err(..) };`; TS `const {
+  issuer, sub } = caller` is `let (issuer, sub) = (user.issuer, user.sub)`.
+  The "passes in the user" comment sits between `#[endpoint(post =
+  "/ask")]` and the marked `fn ask(.., caller: Principal)` line.
 - agents/waits: TS `setTimeout as sleep` maps to
   `golem_rust::wasip3::clocks::monotonic_clock::wait_for as sleep` (ns).
 
@@ -413,15 +496,19 @@ display file has no case, then restores the positive build and deletes
 | agents/stream | `AgentStream::channel()` | E0599 |
 | agents/team | `.gather()?` without `.await` | E0277 `?` on a future |
 | agents/waits | `schedule_remind_cancelable` | E0599 on `MailerAgentClient` |
-| artifacts/login | `user.subject` | E0609 no field on `OidcPrincipal` |
-| artifacts/overview | mount `/briefs/{name}` | macro: filesystem mount capture `{name}` must bind one constructor parameter |
-| artifacts/routers | `.csv()` without `.await` | E0308 expected `AgentStream<Vec<u8>>`, found future |
-| artifacts/routes | mount `/boards/{tm}` | macro: filesystem mount capture `{tm}` must bind one constructor parameter |
+| artifacts/files | `Png::from_inline(data, "image/png")` | E0308 expected `PngType`, found `&str` |
+| artifacts/login | owner check `made.asked_by != caller` (the raw `Principal`) | E0277 can't compare `String` with `Principal` |
+| artifacts/overview | mount `/chats/{name}` | macro: filesystem mount capture `{name}` must bind one constructor parameter |
+| artifacts/routes | `regex = 40` | macro: regex must be a string literal |
 | tools/custom | `requires_filesystem = "yes"` | macro: must be a bool literal |
 | tools/overview | `SummarizeClient::new().summarize(url, 280)` | E0061 generated tool client takes 1 argument |
 | tools/permissions | `Holder::Worker` | E0599 no variant |
 | tools/publish | `call.collect().result?` (no `.await`) | E0609 no field `result` on the real SDK's `collect()` future |
 | tools/requests | body without `.into_bytes()` | E0308 `Request<Vec<u8>>` |
+| tools/middleware | pass the auto-injected `caller` to `underlying.refund(..)` | E0061 the underlying handle takes 3 arguments, not 4 |
+| artifacts/peruser | mount `/dashboards/{name}` | macro: filesystem mount capture `{name}` must bind one constructor parameter |
+| artifacts/routers | drop `type Config = ();` | E0046 missing `Config` in `HttpRouter` impl |
+| artifacts/signin | `user.subject` | E0609 no field `subject` on `OidcPrincipal` (it is `sub`) |
 | tools/secrets | pass `config.stripe_key` (the `Secret<String>` wrapper) instead of `.handle()?` | E0308 expected `GuestSecretHandle`, found `Secret<String>` |
 
 ## Known limits (compiles; nothing is deployed or run)
@@ -435,15 +522,22 @@ display file has no case, then restores the positive build and deletes
   release is verified against this SDK with its Golem integration enabled.
   Whether OpenAI/Anthropic accept the `provider_options` JSON-schema keys is
   untested.
+- The middleware's ordering, unbypassability and promise suspension, the
+  router's 404/streamed CSV and `AnalystAgent.export_csv` (no AnalystAgent
+  in this component has that method; the `#[agent_client]` client is
+  checked against the trait only), and the OIDC-only branch of
+  `BillingAgent.ask` are type-checked and registration-checked only.
 - Generated cross-component clients (bash, `ResearchAgent`, `SlackAgent`,
   the MCP-imported `crm_find_customer`) are stubs, so their calls are checked
   only against the stub shapes (the MCP client's `ToolInvocation`/`collect`
   are real SDK types).
 - SQLite file persistence under `/data`, durable `wait_for`,
   scheduled/cancelled reminders, secret reveal, permission-card
-  derivation/installation/revocation, file exposure (`/out/index.html`,
-  `/app`), read-only caching, the payslip 404/PDF body, and the router
-  forwarding a remote agent's byte stream as its response body are
+  derivation/installation/revocation, live-file exposure (`/*` →
+  `/out/$1`), the model tool loop (whether OpenAI calls `chart` and
+  accepts the `pattern` schema), the `present` tool writing into the
+  calling agent's files, the regex refinement rejecting a bad name,
+  read-only caching, and the PNG replies and private-chart 404 are
   type-checked (and, for HTTP shapes, registration-validated) only.
 - The secret-to-tool path (config handle forwarded to `refund`) is
   type-checked and registration-checked only; no host checks that a
@@ -472,3 +566,49 @@ erases `T`, so a `Secret<u64>` config handle would also type-check as a
 string-secret tool argument. A fix would be a typed `SecretHandle<T>`
 returned by `Secret<T>::handle()` and accepted by tool parameters, with the
 schema taken from `T`.
+
+## SDK APIs behind the new snippets (read from source, compiled)
+
+- Typed middleware: `#[tool_middleware(name, constructor)]`
+  (`golem-rust-macro/src/lib.rs:158`; keys and the required zero-argument
+  constructor in `golem-rust-macro/src/tool/middleware_authoring.rs:97-153`).
+  `#[tool_definition]` generates `<Tool>Middleware` and `<Tool>Underlying`
+  (`golem-rust-macro/src/tool/middleware_surface.rs:31-32`); each middleware
+  method is `async fn <cmd>(&self, underlying: &U, <tool params>) ->
+  Result<T, ToolInvokeError<E>>` (`middleware_surface.rs:778-783`). A tool
+  parameter of type `golem_rust::tool::Principal` is auto-injected
+  (`golem-rust-macro/src/tool/definition.rs:864-887`), filled from the
+  invocation principal for the middleware (`middleware_surface.rs:964-981`)
+  and dropped from the underlying handle's arguments
+  (`middleware_surface.rs:815-830`) and the tool client
+  (`golem-rust-macro/src/tool/client.rs:1394-1417`). Rejections use
+  `ToolInvokeError::ConstraintViolation`
+  (`sdks/rust/golem-rust/src/tool/tool_middleware.rs:130-143`). Usage
+  matches `docs/src/content/v1.6/how-to-guides/rust/golem-tools-middleware-rust.mdx`.
+- Promises: `golem_rust::create_promise() -> PromiseId`
+  (`sdks/rust/golem-rust/src/lib.rs:993`) and `async fn
+  await_promise(&PromiseId) -> Vec<u8>` (`lib.rs:1066`), as in
+  `docs/src/content/v1.6/develop/promises.mdx` (Rust tab).
+- Raw router: `#[http_router(name, mount)]`
+  (`golem-rust-macro/src/lib.rs:110`) on `impl HttpRouter`
+  (`sdks/rust/golem-rust/src/agentic/http/router.rs:118-125`: `type
+  Config`, `fn new(Config<..>) -> Self`, `async fn handle(&self,
+  HttpRequest) -> HttpResponse`); `Header { name, value: Vec<u8> }`,
+  `HttpRequest { method, path, .. }`, `HttpResponse { status, headers,
+  body: AgentStream<Vec<u8>> }` (`router.rs:9-35`), as in
+  `docs/src/content/v1.6/invoke/making-custom-apis/http-routers.mdx`.
+  Router-to-agent client: `#[agent_client(type_name = "...")]`
+  (`golem-rust-macro/src/lib.rs:118`; a `new` constructor requires
+  `type_name`, `golem-rust-macro/src/agentic/agent_client_impl.rs:164`),
+  documented in `docs/src/content/v1.6/develop/reflection.mdx`
+  (`XClient::get(..)?` then `.method(..).await?`).
+- OIDC principal: `Principal::Oidc(OidcPrincipal { issuer, sub, .. })`
+  (the WIT `golem:agent/common` principal re-exported as
+  `golem_rust::agentic::Principal`, `sdks/rust/golem-rust/src/agentic/mod.rs:15`).
+
+No SDK gap was found for these four features: every call compiles against
+the in-tree SDK without a shim.
+
+## artifacts/overview: UUID file names (Oct 22 2026)
+
+The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `let name = Uuid::new_v4();` (`golem_rust::Uuid`, imported in `prelude/artifacts_overview.rs`; `page_for` takes the `Uuid`). The PNG write is wrapped onto two highlighted lines to fit 68 columns. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.

@@ -298,7 +298,7 @@ pub const TOOL_METADATA_WIT_VERSION: &str = "0.1.0";
 pub const BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL: &str = "builtin-tool-owner@golem.cloud";
 
 /// Version of the built-in `bash` tool release that a server provisions.
-pub const BUILTIN_BASH_TOOL_VERSION: &str = "0.3.0";
+pub const BUILTIN_BASH_TOOL_VERSION: &str = "0.3.1";
 
 /// A built-in tool release that the CLI adds to every deployment, bound to every agent type,
 /// unless the environment opts out of the default tools.

@@ -9,6 +9,94 @@ use std::process::Command;
 use tempfile::TempDir;
 use test_r::test;
 
+#[test]
+fn draft_notes_start_at_the_previous_stable_golem_release() {
+    let fixture = TempDir::new().unwrap();
+    let workflow: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(
+            crate::workspace_path().join(".github/workflows/prepare-golem-release.yaml"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let steps = workflow["jobs"]["publish-builtins"]["steps"]
+        .as_sequence()
+        .unwrap();
+    let script = steps
+        .iter()
+        .find(|step| step["name"].as_str() == Some("Create or resume the draft"))
+        .unwrap()["run"]
+        .as_str()
+        .unwrap();
+    let gh = fixture.path().join("gh");
+    fs::write(
+        &gh,
+        r#"#!/bin/sh
+set -eu
+case "$1 $2" in
+    'release view') exit "$DRAFT_EXISTS" ;;
+    'api --paginate') cat "$RELEASE_TEST_PAGES" ;;
+    'release create') printf '%s\n' "$@" ;;
+    *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let pages = fixture.path().join("pages.json");
+    // Separate pages deliberately mix publication order, release families, and version order.
+    fs::write(
+        &pages,
+        r#"[
+          {"tag_name":"v1.6.2","draft":true,"prerelease":false},
+          {"tag_name":"golem-shared-v1.6.1","draft":false,"prerelease":false},
+          {"tag_name":"v1.6.1-rc1","draft":false,"prerelease":true},
+          {"tag_name":"v1.5.9","draft":false,"prerelease":false},
+          {"tag_name":"v1.5.10","draft":false,"prerelease":false}
+        ]
+        [
+          {"tag_name":"golem-rust-v3.0.1","draft":false,"prerelease":false},
+          {"tag_name":"v1.6.0","draft":false,"prerelease":false},
+          {"tag_name":"v1.6.1","draft":false,"prerelease":false}
+        ]"#,
+    )
+    .unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(fixture.path().to_path_buf())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    for (tag, previous, exists) in [
+        ("v1.6.1", Some("v1.6.0"), false),
+        ("v1.6.1-rc2", Some("v1.6.0"), false),
+        ("v1.5.11", Some("v1.5.10"), false),
+        ("v1.0.0", None, false),
+        ("v1.6.1", None, true),
+    ] {
+        let output = Command::new("bash")
+            .args(["-c", script])
+            .env("PATH", &path)
+            .env("GITHUB_REF_NAME", tag)
+            .env("RELEASE_TEST_PAGES", &pages)
+            .env("DRAFT_EXISTS", if exists { "0" } else { "1" })
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let args: Vec<_> = stdout.lines().collect();
+        if exists {
+            assert!(args.is_empty(), "an existing draft must not be changed");
+        } else {
+            assert!(args.contains(&"--generate-notes"));
+            let actual = args
+                .windows(2)
+                .find(|pair| pair[0] == "--notes-start-tag")
+                .map(|pair| pair[1]);
+            assert_eq!(actual, previous, "{tag}: {stdout}");
+        }
+    }
+}
+
 fn git(repo: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(repo)
