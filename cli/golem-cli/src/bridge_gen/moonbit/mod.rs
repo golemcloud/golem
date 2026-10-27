@@ -1165,13 +1165,13 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
 
         // configure delegates to the shared runtime configuration cell.
         writer.doc(
-            "Configures every generated bridge client in this module to target the given server.",
+            "Configures every generated bridge client in this module to target the given server. `reconnect` bounds how long a streaming call keeps reconnecting while the server accepts neither its start nor a resume.",
         );
         writer.line(format!(
-            "pub fn {agent}::configure(server : @runtime.GolemServer, app_name : String, env_name : String) -> Unit {{"
+            "pub fn {agent}::configure(server : @runtime.GolemServer, app_name : String, env_name : String, reconnect? : @runtime.ReconnectPolicy = @runtime.default_reconnect_policy) -> Unit {{"
         ));
         writer.indent();
-        writer.line("@runtime.configure(server, app_name, env_name)");
+        writer.line("@runtime.configure(server, app_name, env_name, reconnect~)");
         writer.dedent();
         writer.line("}");
         writer.blank();

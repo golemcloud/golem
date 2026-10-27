@@ -1,4 +1,7 @@
 ///|
+let resolved_reconnect : ReconnectPolicy = __RECONNECT__
+
+///|
 async fn run_recovery() -> Unit {
   let codec = public_value_codec(
     "{\"root\":{\"kind\":\"tuple\",\"value\":{\"elements\":[]}}}",
@@ -11,6 +14,7 @@ async fn run_recovery() -> Unit {
       server: Custom("http://127.0.0.1:__PORT__", "test"),
       app_name: "app",
       env_name: "env",
+      reconnect: resolved_reconnect,
     },
     agent_type_name: "RecoveryAgent",
     parameters: TupleValue([]),
@@ -40,8 +44,14 @@ async fn run_recovery() -> Unit {
 
 ///|
 async test "streaming recovery rejects or completes" {
+  connect_attempt_timeout_ms.val = 200
   let expected = "__ERROR__"
   try run_recovery() catch {
+    Unreachable(endpoint~, window_ms~, ..) => {
+      assert_eq(expected, "unreachable")
+      assert_true(endpoint.contains("127.0.0.1:__PORT__/"))
+      assert_eq(Within(window_ms), resolved_reconnect)
+    }
     BridgeError(message) => assert_eq(message, expected)
     error => raise error
   } noraise {

@@ -4,6 +4,7 @@ import json
 import socket
 import struct
 import sys
+import time
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "success"
 
@@ -81,6 +82,19 @@ def connect():
     return conn
 
 
+def refuse(status):
+    conn, _ = listener.accept()
+    listener.settimeout(15)
+    with conn:
+        conn.settimeout(15)
+        request = b""
+        while b"\r\n\r\n" not in request:
+            request += read_exact(conn, 1)
+        conn.sendall(
+            f"HTTP/1.1 {status} Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode()
+        )
+
+
 def terminal():
     listener.settimeout(0.5)
     try:
@@ -92,9 +106,57 @@ def terminal():
     raise AssertionError("terminal rejection caused another attachment attempt")
 
 
+# A closed port: the client gives up after its reconnect window.
+if mode == "start-closed":
+    listener.close()
+    sys.exit(0)
+
+# A peer that accepts TCP connections but never answers the upgrade: each
+# attempt is abandoned, and the client gives up after its reconnect window.
+if mode == "start-blackhole":
+    held = [listener.accept()[0]]
+    listener.settimeout(3)
+    try:
+        while True:
+            held.append(listener.accept()[0])
+    except TimeoutError:
+        pass
+    assert len(held) >= 2, f"the client dialed {len(held)} times"
+    for conn in held:
+        conn.close()
+    listener.close()
+    sys.exit(0)
+
+# 429 and 5xx on the upgrade are retried.
+if mode == "start-503":
+    refuse(503)
+    refuse(429)
+if mode == "start-no-limit":
+    for _ in range(5):
+        refuse(503)
+
+# A retryable rejection of the start is retried as a new attempt of the same
+# invocation.
+first_start = None
+if mode == "start-retryable":
+    with connect() as conn:
+        first_start = receive(conn)
+        send(
+            conn,
+            type="invocationRejected",
+            attemptId=first_start["attemptId"],
+            code="routing-miss",
+            message="moving",
+            retryable=True,
+        )
+
 with connect() as conn:
     start = receive(conn)
     assert start["type"] == "invocationStart"
+    if first_start is not None:
+        assert start["attemptId"] != first_start["attemptId"]
+        assert start["idempotencyKey"] == first_start["idempotencyKey"]
+        assert start["methodParameters"] == first_start["methodParameters"]
     if mode == "initial":
         send(
             conn,
@@ -148,12 +210,39 @@ with connect() as conn:
         signal.sendall(
             b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         )
+    # The accepted connection outlives the reconnect window; the window starts
+    # again when it is lost.
+    if mode == "window-reset":
+        time.sleep(1.5)
+
+# Past acceptance, a server that stays away makes the call unreachable after
+# the window.
+if mode == "resume-unreachable":
+    listener.close()
+    sys.exit(0)
+
+# A retryable rejection of a resume is retried as a new resume attempt.
+rejected_resume = None
+if mode == "resume-routing-miss":
+    with connect() as conn:
+        rejected_resume = json.loads(receive_frame(conn))
+        assert rejected_resume["operation"] == "resume"
+        send(
+            conn,
+            type="invocationRejected",
+            attemptId=rejected_resume["attemptId"],
+            code="routing-miss",
+            message="moving",
+            retryable=True,
+        )
 
 # Losing a response must retry the exact frozen resume descriptor.
 with connect() as conn:
     frozen_resume = receive_frame(conn)
     resume = json.loads(frozen_resume)
     assert resume["operation"] == "resume"
+    if rejected_resume is not None:
+        assert resume["attemptId"] != rejected_resume["attemptId"]
     assert resume["sessionToken"] == "original-session"
     assert resume["outputCursors"] == ["cursor-1"]
 
