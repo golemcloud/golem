@@ -1,347 +1,437 @@
 ---
-// Markup only — all copy lives in src/data/use-cases.ts.
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
-import Quickstart from "../components/Quickstart.astro";
 import {
   meta,
   hero,
-  featuredSection,
-  classicSection,
-  featured,
-  classicDE,
+  featuredCase,
+  jobs,
+  tools,
+  fit,
+  experiment,
+  accessibility,
 } from "../data/use-cases";
+
+const navigation = [featuredCase, ...jobs];
 ---
 
 <BaseLayout title={meta.title} description={meta.description}>
+  <a class="skip-link" href="#main-content">{accessibility.skip}</a>
   <Nav />
-  <main>
-    <!-- ============================================================
-         Section 1 — Hero
-    ============================================================ -->
-    <section class="hero">
+  <main class="use-cases-page" id="main-content" tabindex="-1">
+    <section class="hero" aria-labelledby="page-title">
       <div class="container">
         <span class="eyebrow">{hero.eyebrow}</span>
-        <h1 class="hero-title">{hero.heading}</h1>
-        <p class="hero-lede">{hero.lede}</p>
+        <h1 id="page-title">{hero.heading}</h1>
+        <p class="hero-lead">{hero.lead}</p>
+        <p class="hero-body">{hero.body}</p>
+        <p class="pattern-note">{hero.note}</p>
+        <div class="actions">
+          {
+            hero.actions.map((link, index) => (
+              <a
+                class:list={["btn", index === 0 ? "btn-primary" : "btn-secondary"]}
+                href={link.href}
+              >
+                {link.label}
+              </a>
+            ))
+          }
+        </div>
+        <nav class="job-navigation" aria-label={hero.navigationLabel}>
+          <p class="navigation-label">{hero.navigationLabel}</p>
+          <ul>
+            {
+              navigation.map((job) => (
+                <li>
+                  <a href={`#${job.id}`}>
+                    {job.navLabel}
+                    <span aria-hidden="true"> ↘</span>
+                  </a>
+                </li>
+              ))
+            }
+          </ul>
+        </nav>
       </div>
     </section>
 
-    <!-- ============================================================
-         Section 2 — Featured agent use cases
-    ============================================================ -->
-    <section class="featured-section">
+    <section class="featured-section" aria-labelledby={featuredCase.id}>
       <div class="container">
-        <header class="section-header">
-          <span class="eyebrow">{featuredSection.eyebrow}</span>
-          <h2 class="section-heading">{featuredSection.heading}</h2>
-        </header>
-        <div class="solution-grid">
-          {
-            featured.map((d) => (
-              <article class="solution-card">
-                <h3 class="solution-title">{d.title}</h3>
-                <p class="class-of-problem">{d.intro}</p>
-
-                <div class="examples-block">
-                  <h4 class="block-label">Examples</h4>
-                  <ul class="examples-list">
-                    {d.examples.map((e) => (
-                      <li>{e}</li>
-                    ))}
-                  </ul>
+        <div class="section-intro">
+          <h2 id={featuredCase.id} tabindex="-1">{featuredCase.title}</h2>
+          <p>{featuredCase.pain}</p>
+        </div>
+        <div class="worked-example">
+          <h3 class="example-title">{featuredCase.exampleTitle}</h3>
+          <div class="example-parts">
+            {
+              featuredCase.parts.map((part) => (
+                <div class="example-part">
+                  <h4>{part.title}</h4>
+                  <p>{part.body}</p>
                 </div>
-
-                <aside class="fit-box">
-                  <h4 class="fit-heading">Why Golem</h4>
-                  <ul class="fit-list">
-                    {d.fits.map((f) => (
-                      <li>
-                        <span class="fit-title">{f.title}</span>
-                        <p class="fit-body">{f.body}</p>
-                      </li>
-                    ))}
-                  </ul>
-                </aside>
-              </article>
+              ))
+            }
+          </div>
+          <aside class="recovery" aria-labelledby="recovery-title">
+            <h4 id="recovery-title">{featuredCase.recoveryLabel}</h4>
+            <p>{featuredCase.recovery}</p>
+          </aside>
+        </div>
+        <p class="integration-note">
+          <strong>{featuredCase.integrationLabel}.</strong>
+          {featuredCase.integration}
+        </p>
+        <div class="documentation-links">
+          {
+            featuredCase.links.map((link) => (
+              <a href={link.href}>
+                {link.label}
+                <span aria-hidden="true"> →</span>
+              </a>
             ))
           }
         </div>
       </div>
     </section>
 
-    <!-- ============================================================
-         Section 3 — Beyond agents
-    ============================================================ -->
-    <section class="classic-section">
-      <div class="container">
-        <header class="section-header">
-          <span class="eyebrow">{classicSection.eyebrow}</span>
-          <h2 class="section-heading">{classicDE.title}</h2>
-        </header>
+    <div class="job-sections container">
+      {
+        jobs.map((job) => (
+          <section class="job" aria-labelledby={job.id}>
+            <div class="job-intro">
+              <h2 id={job.id} tabindex="-1">
+                {job.title}
+              </h2>
+              <p>{job.pain}</p>
+            </div>
+            <div class="job-detail">
+              <p class="application-example">{job.example}</p>
+              <p>{job.help}</p>
+              <div class="documentation-links">
+                {job.links.map((link) => (
+                  <a href={link.href}>
+                    {link.label}
+                    <span aria-hidden="true"> →</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          </section>
+        ))
+      }
+    </div>
 
-        <article class="solution-card solution-card-wide">
-          <div class="wide-grid">
-            <div class="wide-col">
-              <h4 class="block-label">Overview</h4>
-              <p class="overview-text">{classicDE.overview}</p>
-            </div>
-            <div class="wide-col">
-              <h4 class="block-label">Examples</h4>
-              <ul class="examples-list">
-                {classicDE.examples.map((e) => <li>{e}</li>)}
-              </ul>
-            </div>
-            <div class="wide-col">
-              <h4 class="block-label">Why Golem</h4>
-              <ul class="examples-list">
-                {classicDE.fits.map((f) => <li>{f}</li>)}
-              </ul>
-            </div>
+    <section class="tools-section" aria-labelledby="tools-title">
+      <div class="container">
+        <div class="tools-copy">
+          <h2 id="tools-title">{tools.title}</h2>
+          <p>{tools.body}</p>
+          <div class="documentation-links">
+            <a href={tools.link.href}>{tools.link.label}<span aria-hidden="true"> →</span></a>
           </div>
-        </article>
+        </div>
       </div>
     </section>
 
-    <!-- ============================================================
-         Section 4 — Closing CTA (shared Quickstart component)
-    ============================================================ -->
-    <Quickstart />
+    <section class="fit-section" aria-labelledby="fit-title">
+      <div class="container">
+        <h2 id="fit-title">{fit.title}</h2>
+        <div class="fit-grid">
+          {
+            fit.items.map((item) => (
+              <div class="fit-item">
+                <h3>{item.title}</h3>
+                <p>{item.body}</p>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <section class="experiment" aria-labelledby="experiment-title">
+      <div class="container">
+        <div class="experiment-copy">
+          <h2 id="experiment-title">{experiment.title}</h2>
+          <p class="experiment-intro">{experiment.intro}</p>
+          {experiment.paragraphs.map((paragraph) => <p>{paragraph}</p>)}
+          <div class="actions">
+            {
+              experiment.actions.map((link, index) => (
+                <a
+                  class:list={["btn", index === 0 ? "btn-primary" : "btn-secondary"]}
+                  href={link.href}
+                >
+                  {link.label}
+                </a>
+              ))
+            }
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
   <Footer />
 </BaseLayout>
 
 <style>
-  main {
-    overflow-x: hidden;
+  .skip-link {
+    position: fixed;
+    z-index: 100;
+    top: 0.5rem;
+    left: 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 6px;
+    transform: translateY(-200%);
   }
-
-  /* ============================================================
-     Hero
-  ============================================================ */
-  .hero {
-    padding: clamp(3.5rem, 7vw, 5.5rem) 0 clamp(2rem, 4vw, 3.5rem);
-    position: relative;
+  .skip-link:focus {
+    transform: translateY(0);
   }
-  .hero::before {
-    content: "";
-    position: absolute;
-    top: -20%;
-    left: 60%;
-    width: 700px;
-    height: 500px;
-    background: radial-gradient(ellipse, rgba(245, 176, 62, 0.08), transparent 65%);
-    pointer-events: none;
-    z-index: -1;
+  .use-cases-page :global(a:focus-visible),
+  [tabindex="-1"]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 5px;
+    border-radius: 3px;
+    transition: none;
   }
-  .hero-title {
-    font-size: clamp(2.3rem, 4.8vw, 3.4rem);
-    font-weight: 600;
-    letter-spacing: -0.025em;
-    line-height: 1.05;
-    margin: 0.5rem 0 1.25rem;
-    background: linear-gradient(to bottom, #ffffff 30%, #b0b0bc 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
+  [id] {
+    scroll-margin-top: 5.5rem;
   }
-  .hero-lede {
-    font-size: clamp(1rem, 1.4vw, 1.15rem);
-    line-height: 1.6;
-    color: var(--text-secondary);
-    max-width: 720px;
-    margin: 0;
-  }
-
-  /* ============================================================
-     Section headers
-  ============================================================ */
-  .featured-section,
-  .classic-section {
-    padding: 3.5rem 0 3rem;
-    border-top: 1px solid var(--border);
-  }
-  .section-header {
-    margin-bottom: 2rem;
-  }
-  .section-heading {
-    font-size: clamp(1.55rem, 2.8vw, 2.05rem);
-    font-weight: 600;
-    color: var(--text);
-    margin: 0;
-    letter-spacing: -0.02em;
-  }
-
-  /* ============================================================
-     Solution cards — subgrid keeps section boundaries aligned
-     across cards in the same row (3 cards / row on desktop).
-     Each card has 4 row tracks: title, intro, examples, fit.
-  ============================================================ */
-  .solution-grid {
-    display: grid;
-    grid-template-columns: 1fr;
-    grid-auto-rows: auto;
-    gap: 1.25rem;
-  }
-  @media (min-width: 760px) {
-    .solution-grid {
-      grid-template-columns: repeat(2, 1fr);
-    }
-  }
-  @media (min-width: 1100px) {
-    .solution-grid {
-      grid-template-columns: repeat(3, 1fr);
-    }
-  }
-
-  .solution-card {
-    display: grid;
-    grid-template-rows: subgrid;
-    grid-row: span 4;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.75rem 1.6rem 1.6rem;
-    transition: border-color 200ms;
-  }
-  .solution-card:hover {
-    border-color: var(--border-strong);
-  }
-
-  /* Fallback for browsers without subgrid: flexbox column with
-     auto-pushed fit-box. Modern browsers ignore this. */
-  @supports not (grid-template-rows: subgrid) {
-    .solution-card {
-      display: flex;
-      flex-direction: column;
-    }
-    .fit-box {
-      margin-top: auto;
-    }
-  }
-
-  /* Section spacing inside each card. Subgrid ignores the card's own
-     `gap` declaration, so we use per-section margins. */
-  .solution-title {
-    font-size: 1.2rem;
-    font-weight: 600;
-    color: var(--text);
-    margin: 0 0 1rem;
-    letter-spacing: -0.01em;
-    line-height: 1.25;
-  }
-  .class-of-problem {
-    font-size: 0.94rem;
-    line-height: 1.6;
-    color: var(--text-secondary);
-    margin: 0 0 1.5rem;
-  }
-  .examples-block {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+  h1 {
+    max-width: 20ch;
+    font-size: clamp(2.3rem, 4.8vw, 3.5rem);
+    letter-spacing: -0.035em;
+    line-height: 1.08;
     margin-bottom: 1.5rem;
+    text-wrap: balance;
   }
-  .block-label {
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    letter-spacing: 0.14em;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    margin: 0;
-    font-weight: 500;
+  h2 {
+    font-size: clamp(1.6rem, 2.7vw, 2.05rem);
+    margin-bottom: 1rem;
+    text-wrap: balance;
   }
-  .examples-list {
-    margin: 0;
-    padding-left: 1.1rem;
-    font-size: 0.9rem;
-    line-height: 1.5;
-    color: var(--text-secondary);
+  p {
+    line-height: 1.65;
   }
-  .examples-list li {
-    margin-bottom: 0.3rem;
+  .hero {
+    padding: clamp(3rem, 7vw, 5rem) 0 2.5rem;
   }
-  .examples-list li:last-child {
-    margin-bottom: 0;
-  }
-
-  /* ============================================================
-     "Why Golem" box — visually distinct (elevated background,
-     amber left border). Stays at the bottom of the card.
-  ============================================================ */
-  .fit-box {
-    background: var(--bg-elevated);
-    border-left: 3px solid var(--accent);
-    border-radius: 8px;
-    padding: 1.1rem 1.25rem;
-    align-self: stretch;
-  }
-  .fit-heading {
-    font-size: 0.78rem;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.16em;
-    color: var(--accent);
-    margin: 0 0 0.85rem;
-    font-weight: 600;
-  }
-  .fit-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.85rem;
-  }
-  .fit-list > li {
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .fit-title {
-    font-size: 0.92rem;
-    font-weight: 600;
+  .hero-lead {
+    max-width: 52ch;
     color: var(--text);
-    line-height: 1.35;
+    font-size: clamp(1.1rem, 1.7vw, 1.25rem);
+    margin-bottom: 1rem;
   }
-  .fit-body {
-    margin: 0;
-    font-size: 0.86rem;
-    line-height: 1.55;
+  .hero-body {
+    max-width: 76ch;
+  }
+  .pattern-note {
+    margin-top: 1rem;
+    font-size: 0.9rem;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+  .actions .btn {
+    white-space: normal;
+  }
+  .job-navigation {
+    margin-top: 2.5rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1.5rem;
+  }
+  .navigation-label {
     color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
   }
-
-  /* ============================================================
-     Wide "classic-DE" card — 3-column layout inside one card.
-     Doesn't use subgrid because it stands alone, not in a row.
-  ============================================================ */
-  .solution-card-wide {
-    display: block;
-    padding: 2rem 1.9rem;
+  .job-navigation ul {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
   }
-  .wide-grid {
+  .job-navigation a {
+    display: inline-flex;
+    gap: 0.9rem;
+    align-items: center;
+    min-height: 44px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 0.5rem 0.85rem;
+    color: var(--text);
+    font-size: 0.92rem;
+  }
+  .job-navigation a:hover {
+    border-color: var(--accent-border);
+    background: var(--accent-dim);
+  }
+  .job-navigation a span {
+    color: var(--accent);
+  }
+  .featured-section {
+    border-block: 1px solid var(--border);
+    background: var(--bg-elevated);
+    padding: 3rem 0;
+  }
+  .section-intro {
+    max-width: 78ch;
+  }
+  .worked-example {
+    margin-top: 2rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    background: var(--bg);
+    padding: clamp(1.25rem, 3vw, 2rem);
+  }
+  .example-title {
+    font-size: 1.15rem;
+    line-height: 1.4;
+    margin-bottom: 1.75rem;
+  }
+  .example-parts {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    list-style: none;
     gap: 1.5rem;
   }
-  @media (min-width: 960px) {
-    .wide-grid {
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 2.5rem;
-      align-items: start;
+  .example-part {
+    border-top: 1px solid var(--border-strong);
+    padding-top: 1rem;
+  }
+  .example-parts h4 {
+    font-size: 1rem;
+    margin-bottom: 0.6rem;
+    line-height: 1.4;
+  }
+  .example-parts p {
+    font-size: 0.94rem;
+  }
+  .recovery {
+    margin-top: 1.75rem;
+    padding: 1rem 1.25rem;
+    border-left: 3px solid var(--accent);
+    background: var(--bg-elevated);
+  }
+  .recovery h4 {
+    font-size: 0.95rem;
+    margin-bottom: 0.4rem;
+  }
+  .recovery p {
+    font-size: 0.94rem;
+    max-width: 96ch;
+  }
+  .integration-note {
+    max-width: 85ch;
+    margin-top: 1.5rem;
+  }
+  .documentation-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.75rem;
+    margin-top: 1rem;
+  }
+  .documentation-links a {
+    display: inline-block;
+    padding-block: 0.4rem;
+    text-decoration: underline;
+    text-underline-offset: 0.25em;
+    text-decoration-color: var(--accent-border);
+  }
+  .documentation-links a:hover {
+    text-decoration-color: currentColor;
+  }
+  .job {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: clamp(2rem, 6vw, 5rem);
+    border-bottom: 1px solid var(--border);
+    padding: 2.75rem 0;
+  }
+  .job:last-child {
+    border-bottom: 0;
+  }
+  .job h2 {
+    font-size: clamp(1.4rem, 2.2vw, 1.7rem);
+  }
+  .application-example {
+    color: var(--text);
+    font-size: 0.95rem;
+    font-weight: 500;
+    margin-bottom: 1rem;
+    border-left: 2px solid var(--accent-border);
+    padding-left: 1rem;
+  }
+  .tools-section {
+    padding: 2.75rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .tools-copy {
+    max-width: 85ch;
+  }
+  .integration-note strong {
+    color: var(--text);
+  }
+  .fit-section {
+    padding: 3rem 0;
+    background: var(--bg-elevated);
+    border-block: 1px solid var(--border);
+  }
+  .fit-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.75rem 3rem;
+    margin-top: 1.75rem;
+  }
+  .fit-item h3 {
+    font-size: 1rem;
+    margin-bottom: 0.6rem;
+  }
+  .fit-item p {
+    font-size: 0.95rem;
+  }
+  .experiment {
+    padding: 3.5rem 0;
+  }
+  .experiment-copy {
+    max-width: 80ch;
+  }
+  .experiment p + p {
+    margin-top: 1rem;
+  }
+  .experiment-intro {
+    color: var(--text);
+  }
+  @media (max-width: 960px) {
+    .example-parts,
+    .fit-grid {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
-  .wide-col {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .overview-text {
-    margin: 0;
-    font-size: 0.9rem;
-    line-height: 1.5;
-    color: var(--text-secondary);
+  @media (max-width: 640px) {
+    .hero {
+      padding-top: 2.5rem;
+    }
+    .example-parts,
+    .job,
+    .fit-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .job {
+      gap: 1.25rem;
+      padding: 2.25rem 0;
+    }
+    .documentation-links {
+      flex-direction: column;
+      align-items: flex-start;
+    }
   }
 </style>
