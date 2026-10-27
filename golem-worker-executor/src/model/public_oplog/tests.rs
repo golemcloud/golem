@@ -596,6 +596,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -663,6 +664,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1265,6 +1267,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1442,6 +1445,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1982,6 +1986,7 @@ async fn open_test_oplog(
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,

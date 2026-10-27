@@ -18,95 +18,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn begin_function(
         &mut self,
         function_type: &DurableFunctionType,
-        invocation_id: Option<DurableInvocationId>,
-    ) -> Result<OplogIndex, WorkerExecutorError> {
-        self.begin_function_impl(function_type, None, invocation_id)
-            .await
-            .map(|(index, _)| index)
-    }
-
-    pub async fn begin_function_with_span(
-        &mut self,
-        function_type: &DurableFunctionType,
-        span_started: golem_common::model::oplog::SpanStarted,
-        invocation_id: Option<DurableInvocationId>,
-    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
-        let (index, recorded) = self
-            .begin_function_impl(function_type, Some(span_started), invocation_id)
-            .await?;
-        let recorded = recorded.ok_or_else(|| {
-            WorkerExecutorError::unexpected_oplog_entry(
-                "durable scope Start carrying span_started",
-                format!("durable scope Start at {index} without span metadata"),
-            )
-        })?;
-        Ok((index, recorded))
+    ) -> Result<(), WorkerExecutorError> {
+        self.begin_function_impl(function_type).await
     }
 
     /// Checks the effect fence and selects the retry fallback without writing protocol entries.
     async fn begin_function_impl(
         &mut self,
         function_type: &DurableFunctionType,
-        span_started: Option<golem_common::model::oplog::SpanStarted>,
-        _invocation_id: Option<DurableInvocationId>,
-    ) -> Result<(OplogIndex, Option<golem_common::model::oplog::SpanStarted>), WorkerExecutorError>
-    {
+    ) -> Result<(), WorkerExecutorError> {
         if self.state.durability_is_suppressed() {
-            let begin_index = self.state.current_oplog_index().await;
-            self.state.current_retry_point = begin_index;
-            return Ok((begin_index, span_started));
+            self.state.current_retry_point = self.state.current_oplog_index().await;
+            return Ok(());
         }
 
+        // No scope opens, so nothing is written before the side effect runs and a fence
+        // already latched would only surface at the commit after it - by which time the
+        // effect has happened and the shard's new owner, having no record of it, runs it
+        // again. Reading the latch costs no storage round trip, so a write whose effect is
+        // about to run is refused here instead. It does not close the window where the shard
+        // moves *during* the call: that one needs a round trip per call, which is exactly what
+        // an idempotent write is declared to avoid.
+        if self.state.is_live()
+            && matches!(function_type, DurableFunctionType::WriteRemote)
+            && let Some(fence) = self.state.oplog.fence()
         {
-            // No scope opens, so nothing is written before the side effect runs and a fence
-            // already latched would only surface at the commit after it - by which time the
-            // effect has happened and the shard's new owner, having no record of it, runs it
-            // again. Reading the latch costs no storage round trip, so a write whose effect is
-            // about to run is refused here instead. It does not close the window where the shard
-            // moves *during* the call: that one needs a round trip per call, which is exactly what
-            // an idempotent write is declared to avoid.
-            if self.state.is_live()
-                && matches!(function_type, DurableFunctionType::WriteRemote)
-                && let Some(fence) = self.state.oplog.fence()
-            {
-                return Err(WorkerExecutorError::from(OplogError::Fenced(fence)));
-            }
-
-            // Hints are nondeterministic and cannot serve as retry points.
-
-            let begin_index = if self.state.is_live() {
-                self.state.oplog.current_oplog_index().await
-            } else {
-                self.state.replay_state.last_replayed_non_hint_index()
-            };
-
-            let new_retry_point = self
-                .state
-                .oplog
-                .last_added_non_hint_entry()
-                .await
-                .unwrap_or(self.state.replay_state.last_replayed_non_hint_index());
-            self.state.current_retry_point = new_retry_point;
-
-            Ok((begin_index, span_started))
+            return Err(WorkerExecutorError::from(OplogError::Fenced(fence)));
         }
-    }
 
-    pub async fn end_function(
-        &mut self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        self.end_function_impl(function_type, begin_index, None)
+        // Hints are nondeterministic and cannot serve as retry points.
+        let new_retry_point = self
+            .state
+            .oplog
+            .last_added_non_hint_entry()
             .await
-    }
-
-    pub(in crate::durable_host) async fn end_function_impl(
-        &mut self,
-        _function_type: &DurableFunctionType,
-        _begin_index: OplogIndex,
-        _span_finished: Option<golem_common::model::oplog::SpanFinished>,
-    ) -> Result<(), WorkerExecutorError> {
+            .unwrap_or(self.state.replay_state.last_replayed_non_hint_index());
+        self.state.current_retry_point = new_retry_point;
         Ok(())
     }
 
@@ -187,7 +134,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
-        let invocation_id = self.direct_call_invocation_id(&DurableFunctionType::WriteRemote)?;
+        let invocation_id = self.direct_call_invocation_id()?;
         // A transaction begun after the live transition claims first while unclaimed retained
         // `Start`s exist (see `WorkerState::durable_call_is_live`) and begins a fresh live
         // transaction only once replay reports that no scope `Start` remains.

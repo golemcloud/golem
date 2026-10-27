@@ -33,8 +33,13 @@ class PublicationMatrixSpec extends munit.FunSuite {
   private def read(path: String): String =
     new String(Files.readAllBytes(repositoryRoot.resolve(path)), StandardCharsets.UTF_8)
 
-  private def assertPublishesBoth(command: String, task: String, source: String): Unit = {
-    val switchIndex = command.indexOf(scala212Switch)
+  private def assertPublishesBoth(
+    command: String,
+    task: String,
+    source: String,
+    switch: String = scala212Switch
+  ): Unit = {
+    val switchIndex = command.indexOf(switch)
     assert(switchIndex >= 0, s"$source does not switch to the sbt host's Scala 2.12 version")
 
     val scala3Tasks   = command.substring(0, switchIndex)
@@ -52,17 +57,30 @@ class PublicationMatrixSpec extends munit.FunSuite {
     assertPublishesBoth(command, "codegen/publishSigned", ".github/workflows/publish-golem-scala.yaml")
   }
 
-  test("local CI publication publishes codegen for Scala 3 and the Scala 2.12 sbt host") {
-    val workflowPaths = Seq(
+  test("the local publication alias publishes codegen for Scala 3 and the Scala 2.12 sbt host") {
+    val build = read("sdks/scala/build.sbt")
+    val start = build.indexOf("\"golemPublishLocal\"")
+    assert(start >= 0, "The golemPublishLocal alias was not found in sdks/scala/build.sbt")
+    val alias = build.substring(start, build.indexOf(".stripMargin", start))
+    assertPublishesBoth(alias, "codegen/publishLocal", "sdks/scala/build.sbt", "++$Scala212")
+  }
+
+  test("every local Scala publication runs the golemPublishLocal alias") {
+    val paths = Seq(
       ".github/workflows/ci.yaml",
-      ".github/actions/run-skill-harness/action.yml"
+      ".github/actions/run-skill-harness/action.yml",
+      "Makefile.toml"
     )
 
-    workflowPaths.foreach { path =>
+    paths.foreach { path =>
       val commands =
-        read(path).linesIterator.filter(line => line.contains("sbt -batch") && line.contains("publishLocal")).toList
+        read(path).linesIterator
+          .filter(line => line.contains("sbt ") && line.toLowerCase.contains("publishlocal"))
+          .toList
       assert(commands.nonEmpty, s"No Scala local-publication command found in $path")
-      commands.foreach(command => assertPublishesBoth(command, "codegen/publishLocal", path))
+      commands.foreach { command =>
+        assert(command.contains("golemPublishLocal"), s"$path publishes without the golemPublishLocal alias: $command")
+      }
     }
   }
 }

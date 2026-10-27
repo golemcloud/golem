@@ -621,6 +621,109 @@ async fn resume_during_persistence_survives_suspend_handoff(
     .await
 }
 
+/// Local durable calls commit nothing themselves, so only the commit threshold commits them. The
+/// status follows those commits: while the invocation still waits for its promise, its oplog index
+/// covers the calls made before the wait.
+#[test]
+#[timeout("60s")]
+async fn status_follows_threshold_commits_while_the_invocation_runs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const CALLS: u64 = 500;
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_grace = Duration::from_secs(300);
+                config.oplog.max_operations_before_commit = 16;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "status-follows-threshold-commits");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let promise_id = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .expect("create_promise must return an id");
+    let before = executor
+        .get_worker_metadata(&worker_id)
+        .await?
+        .last_oplog_index;
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "local_calls_then_await_promise",
+            crate::raw_params(vec![SchemaValue::U64(CALLS), promise_id.clone()]),
+        )
+        .await?;
+
+    // Each call appends at least one entry. Without a fold on the threshold commits the index
+    // stays at the start of the invocation until the promise completes.
+    let covered = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            if metadata.last_oplog_index.as_u64() >= before.as_u64() + CALLS {
+                return Ok::<_, anyhow::Error>(metadata);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    let covered = covered
+        .map_err(|_| anyhow::anyhow!("the status did not follow the threshold commits"))??;
+    assert_eq!(covered.status, AgentStatus::Running);
+    assert!(
+        !executor
+            .get_oplog(&worker_id, before.next())
+            .await?
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+    );
+
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx: promise_oplog_index(&promise_id),
+            },
+            vec![5],
+        )
+        .await?;
+    let params = crate::raw_params(vec![SchemaValue::U64(CALLS), promise_id]);
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &agent_id,
+                &key,
+                "local_calls_then_await_promise",
+                params,
+            )
+            .await?
+            .into_typed::<Vec<u8>>()?,
+        vec![5]
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
 #[test]
 #[timeout("30s")]
 async fn promise_completed_before_wait_returns_without_suspending(

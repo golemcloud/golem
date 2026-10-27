@@ -6277,6 +6277,176 @@ fn polymorphic_transfer_confirmation_matches_source_and_installed_child_ids() {
 }
 
 #[test]
+fn source_card_transfer_records_fold_across_a_cached_baseline() {
+    use golem_common::model::Timestamp;
+    use golem_common::model::card::{
+        AgentCardHolder, CardHolder, SourceCardTransferConfirmed, SourceCardTransferRecords,
+        SourceCardTransferStarted, SourceCardTransferState, StoredCard,
+    };
+
+    let holder = |name: &str| {
+        CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: name.to_string(),
+            },
+        })
+    };
+    let source_holder = holder("source");
+    let target_holder = holder("target");
+    let source_card_id = golem_common::model::card::CardId::new();
+    let child = StoredCard::from(test_card(golem_common::model::card::CardId::new()));
+    let unrelated = StoredCard::from(test_card(golem_common::model::card::CardId::new()));
+    let transfer_id = uuid::Uuid::new_v4();
+    let derived = |card: &StoredCard, transfer_id| OplogEntry::CardDerived {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        card: Box::new(card.clone()),
+        wallet_generation: 0,
+        transfer_id,
+    };
+    let queued = OplogEntry::card_event_queued(
+        None,
+        Box::new(QueuedCardEvent::transfer_started_with_source(
+            transfer_id,
+            source_card_id,
+            child.clone(),
+            target_holder.clone(),
+        )),
+    );
+
+    // The baseline ends between the derived child and the queued retry payload, so the tail
+    // fold must attach the later records to the transfer that the baseline already holds.
+    let baseline = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        BTreeMap::from([
+            (OplogIndex::from_u64(1), derived(&unrelated, None)),
+            (OplogIndex::from_u64(2), derived(&child, Some(transfer_id))),
+        ]),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(baseline.source_card_transfers.iter().count(), 1);
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        baseline,
+        BTreeMap::from([
+            (OplogIndex::from_u64(3), queued.clone()),
+            (
+                OplogIndex::from_u64(4),
+                OplogEntry::card_transfer_started(
+                    None,
+                    transfer_id,
+                    source_card_id,
+                    source_holder.clone(),
+                    target_holder.clone(),
+                    1,
+                ),
+            ),
+            // An equal second record of a kind is not a conflict.
+            (OplogIndex::from_u64(5), queued),
+            (
+                OplogIndex::from_u64(6),
+                OplogEntry::card_transfer_confirmed(
+                    None,
+                    transfer_id,
+                    source_card_id,
+                    child.card_id(),
+                    target_holder.clone(),
+                ),
+            ),
+        ]),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        status.source_card_transfers.get(&transfer_id),
+        Some(&SourceCardTransferState::Recorded(
+            SourceCardTransferRecords {
+                derived_card: Some(child.clone()),
+                queued: Some(golem_common::base_model::oplog::QueuedCardEventTransfer {
+                    transfer_id,
+                    card_id: source_card_id,
+                    card: Some(child.clone()),
+                    target_holder: target_holder.clone(),
+                }),
+                started: Some(SourceCardTransferStarted {
+                    card_id: source_card_id,
+                    source_holder,
+                    target_holder: target_holder.clone(),
+                }),
+                confirmed: Some(SourceCardTransferConfirmed {
+                    source_card_id,
+                    installed_card_id: child.card_id(),
+                    target_holder,
+                }),
+            }
+        ))
+    );
+    assert_eq!(status.source_card_transfers.iter().count(), 1);
+    assert!(status.pending_card_events.is_empty());
+}
+
+#[test]
+fn source_card_transfer_with_two_distinct_records_of_a_kind_stays_in_conflict() {
+    use golem_common::model::card::{AgentCardHolder, CardHolder, SourceCardTransferState};
+
+    let holder = |name: &str| {
+        CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: name.to_string(),
+            },
+        })
+    };
+    let target_holder = holder("target");
+    let source_card_id = golem_common::model::card::CardId::new();
+    let card = test_card(source_card_id);
+    let transfer_id = uuid::Uuid::new_v4();
+    let queued = |target_holder: &CardHolder| {
+        OplogEntry::card_event_queued(
+            None,
+            Box::new(QueuedCardEvent::transfer_started_with_source(
+                transfer_id,
+                source_card_id,
+                card.clone(),
+                target_holder.clone(),
+            )),
+        )
+    };
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        BTreeMap::from([
+            (OplogIndex::from_u64(1), queued(&target_holder)),
+            (OplogIndex::from_u64(2), queued(&holder("other-target"))),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::card_transfer_started(
+                    None,
+                    transfer_id,
+                    source_card_id,
+                    holder("source"),
+                    target_holder,
+                    1,
+                ),
+            ),
+        ]),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        status.source_card_transfers.get(&transfer_id),
+        Some(&SourceCardTransferState::Conflict)
+    );
+}
+
+#[test]
 fn polymorphic_transfer_confirmation_with_conflicting_source_keeps_pending_intent() {
     use golem_common::model::card::{AgentCardHolder, CardHolder};
 

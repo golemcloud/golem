@@ -205,20 +205,16 @@ impl StartClaim {
     }
 
     pub(super) fn matches_start_identity(&self, entry: &OplogEntry) -> bool {
-        matches!(entry, OplogEntry::Start {
-            function_name,
-            invocation_id,
-            observational_owner,
-            request,
-            durable_function_type,
-            parent_start_index,
-            ..
-        } if self.matches_function_name(function_name)
-            && *durable_function_type == self.function_type
-            && *invocation_id == self.invocation_id
-            && *observational_owner == self.observational_owner
-            && request.is_some() == self.carries_request()
-            && *parent_start_index == self.parent_start_index)
+        RecordedStart::of(entry).is_some_and(|recorded| self.matches_recorded(&recorded))
+    }
+
+    pub(super) fn matches_recorded(&self, recorded: &RecordedStart) -> bool {
+        self.matches_function_name(&recorded.function_name)
+            && recorded.function_type == self.function_type
+            && recorded.invocation_id == self.invocation_id
+            && recorded.observational_owner == self.observational_owner
+            && recorded.carries_request == self.carries_request()
+            && recorded.parent_start_index == self.parent_start_index
     }
 
     /// Human-readable description of the expected `Start`, used as the "expected" side of an
@@ -239,6 +235,41 @@ impl StartClaim {
         match self.invocation_id {
             Some(invocation_id) => format!("{description} with invocation id {invocation_id}"),
             None => description,
+        }
+    }
+}
+
+/// The identity of a recorded `Start` entry: the fields a [`StartClaim`] matches.
+#[derive(Debug, Clone)]
+pub(super) struct RecordedStart {
+    function_name: HostFunctionName,
+    function_type: DurableFunctionType,
+    parent_start_index: Option<OplogIndex>,
+    observational_owner: Option<OplogIndex>,
+    invocation_id: Option<DurableInvocationId>,
+    carries_request: bool,
+}
+
+impl RecordedStart {
+    pub(super) fn of(entry: &OplogEntry) -> Option<Self> {
+        match entry {
+            OplogEntry::Start {
+                function_name,
+                invocation_id,
+                observational_owner,
+                request,
+                durable_function_type,
+                parent_start_index,
+                ..
+            } => Some(Self {
+                function_name: function_name.clone(),
+                function_type: durable_function_type.clone(),
+                parent_start_index: *parent_start_index,
+                observational_owner: *observational_owner,
+                invocation_id: *invocation_id,
+                carries_request: request.is_some(),
+            }),
+            _ => None,
         }
     }
 }

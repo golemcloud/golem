@@ -499,6 +499,8 @@ message RawCardDerivedParameters {
   google.protobuf.Timestamp timestamp = 1;
   bytes card = 2;
   uint64 wallet_generation = 3;
+  // Set when a transfer derived the card as the installed child of a polymorphic source.
+  golem.common.UUID transfer_id = 4;
 }
 
 // Source-agent durable transfer intent. source_wallet_generation belongs only to

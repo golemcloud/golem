@@ -880,35 +880,178 @@ async fn postgres_append_many_rolls_back_across_statement_chunks(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let storage = storage.get_indexed_storage().await;
-    storage
-        .append(
-            "svc",
-            "api",
-            "entity",
-            ns.ns.clone(),
-            "atomic",
-            1025,
-            b"original".to_vec(),
-            None,
-        )
+    for count in [1024, 1025] {
+        for epoch in [None, Some(ShardEpoch(7))] {
+            let key = format!("atomic-{count}-{epoch:?}");
+            if let Some(epoch) = epoch {
+                storage
+                    .set_key_epoch("svc", "api", ns.ns.clone(), &key, epoch)
+                    .await
+                    .unwrap();
+            }
+            storage
+                .append(
+                    "svc",
+                    "api",
+                    "entity",
+                    ns.ns.clone(),
+                    &key,
+                    count,
+                    b"original".to_vec(),
+                    epoch,
+                )
+                .await
+                .unwrap();
+            let pairs: Arc<[(u64, Bytes)]> = (1..=count)
+                .map(|id| (id, Bytes::from_static(b"new")))
+                .collect::<Vec<_>>()
+                .into();
+            assert!(matches!(
+                storage
+                    .append_many("svc", "api", "entity", &ns.ns, &key, pairs, epoch)
+                    .await,
+                Err(IndexedStorageError::Conflict(_))
+            ));
+            assert_eq!(
+                storage
+                    .read("svc", "api", "entity", ns.ns.clone(), &key, 0, 2000)
+                    .await
+                    .unwrap(),
+                vec![(count, b"original".to_vec())]
+            );
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("60s")]
+async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let wrapper = PostgresIndexedStorageWrapper {
+        postgres: DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await,
+    };
+    let config = wrapper.fresh_database().await;
+    let storage = Arc::new(PostgresIndexedStorage::configured(&config).await.unwrap());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(3)
+        .connect_with(config.postgres.connect_options())
         .await
         .unwrap();
-    let pairs: Arc<[(u64, Bytes)]> = (1..=1025)
-        .map(|id| (id, Bytes::from_static(b"new")))
-        .collect::<Vec<_>>()
-        .into();
+
+    for (key, actual) in [
+        ("takeover", Some(8i64)),
+        ("deleted", None),
+        ("corrupt", Some(-1)),
+    ] {
+        storage
+            .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+            .await
+            .unwrap();
+        assert_fenced(
+            storage
+                .append(
+                    "svc",
+                    "api",
+                    "entity",
+                    ns.ns.clone(),
+                    key,
+                    1,
+                    vec![17],
+                    Some(ShardEpoch(u64::MAX)),
+                )
+                .await,
+            u64::MAX,
+            Some(7),
+        );
+        let mut tx = pool.begin().await.unwrap();
+        if let Some(epoch) = actual {
+            sqlx::query("UPDATE indexed_key_epoch SET epoch = $1 WHERE key = $2")
+                .bind(epoch)
+                .bind(key)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        } else {
+            sqlx::query("DELETE FROM indexed_key_epoch WHERE key = $1")
+                .bind(key)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
+        let writer = storage.clone();
+        let namespace = ns.ns.clone();
+        let append = tokio::spawn(async move {
+            writer
+                .append(
+                    "svc",
+                    "api",
+                    "entity",
+                    namespace,
+                    key,
+                    1,
+                    vec![23],
+                    Some(ShardEpoch(7)),
+                )
+                .await
+        });
+        // Observe the actual row-lock wait before releasing the epoch change.
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let (blocked,): (bool,) = sqlx::query_as(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0)",
+                ).fetch_one(&pool).await.unwrap();
+                if blocked { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }).await.expect("append did not wait for the epoch lock");
+        tx.commit().await.unwrap();
+        let result = append.await.unwrap();
+        if actual == Some(-1) {
+            assert!(
+                matches!(result, Err(IndexedStorageError::Other(ref message)) if message.contains("negative epoch -1"))
+            );
+        } else {
+            assert_fenced(result, 7, actual.map(|epoch| epoch as u64));
+        }
+        assert_eq!(
+            storage
+                .length("svc", "api", ns.ns.clone(), key)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    sqlx::raw_sql(
+        "CREATE FUNCTION reject_append_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'deferred append conflict' USING ERRCODE = '23505'; END $$;
+         CREATE CONSTRAINT TRIGGER reject_append AFTER INSERT ON index_storage DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_append_at_commit();",
+    ).execute(&pool).await.unwrap();
+    storage
+        .set_key_epoch("svc", "api", ns.ns.clone(), "commit-error", ShardEpoch(7))
+        .await
+        .unwrap();
     assert!(matches!(
         storage
-            .append_many("svc", "api", "entity", &ns.ns, "atomic", pairs, None)
+            .append(
+                "svc",
+                "api",
+                "entity",
+                ns.ns.clone(),
+                "commit-error",
+                1,
+                vec![31],
+                Some(ShardEpoch(7))
+            )
             .await,
         Err(IndexedStorageError::Conflict(_))
     ));
     assert_eq!(
         storage
-            .read("svc", "api", "entity", ns.ns.clone(), "atomic", 0, 2000)
+            .length("svc", "api", ns.ns.clone(), "commit-error")
             .await
             .unwrap(),
-        vec![(1025, b"original".to_vec())]
+        0
     );
 }
 

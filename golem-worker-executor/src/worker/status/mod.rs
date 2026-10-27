@@ -44,6 +44,7 @@ pub(crate) use fields::calculate_pending_card_events;
 use fields::calculate_pending_invocations;
 use fields::calculate_received_card_transfers;
 use fields::calculate_revoked_cards;
+use fields::calculate_source_card_transfers;
 use fields::calculate_total_linear_memory_size;
 use fields::calculate_update_fields;
 use fields::collect_resources;
@@ -271,6 +272,8 @@ fn update_status_with_precomputed_regions(
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
     let received_card_transfers =
         calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
+    let source_card_transfers =
+        calculate_source_card_transfers(last_known.source_card_transfers, &new_entries);
     let durable_stream_sessions = calculate_durable_stream_sessions(
         last_known.durable_stream_sessions,
         deleted_regions,
@@ -392,6 +395,7 @@ fn update_status_with_precomputed_regions(
         successful_updates,
         invocation_results,
         received_card_transfers,
+        source_card_transfers,
         durable_stream_sessions,
         export_fork_admissions,
         has_durable_stream_history,

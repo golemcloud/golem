@@ -1558,6 +1558,22 @@ impl TestWorkerExecutor {
         ))
     }
 
+    /// Adds an entry to the loaded worker's oplog and commits it through the worker, so the
+    /// status owner folds it as it folds the entries of production producers.
+    pub async fn add_and_commit_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        entry: OplogEntry,
+    ) -> anyhow::Result<OplogIndex> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        Ok(worker.add_and_commit_oplog(entry).await?)
+    }
+
     pub async fn commit_oplog_entry_bypassing_worker_status(
         &self,
         agent_id: &AgentId,
@@ -1901,6 +1917,25 @@ impl TestWorkerExecutor {
         handle.gate.after_append.store(after_end, Ordering::SeqCst);
         handle.gate.commit_prefix.store(true, Ordering::SeqCst);
         handle
+    }
+
+    /// Holds the next queued source-transfer payload append before it changes storage.
+    pub async fn gate_next_source_transfer_queued_append(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        self.additional_test_deps
+            .gate_next_append(agent_id.clone(), |entry| {
+                matches!(
+                    entry,
+                    OplogEntry::CardEventQueued { event, .. }
+                        if matches!(
+                            event.as_ref(),
+                            golem_common::base_model::oplog::QueuedCardEvent::TransferStarted(_)
+                        )
+                )
+            })
+            .await
     }
 
     /// Holds the real invocation Started append before it changes storage.
@@ -3454,15 +3489,6 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             latest_worker_status,
         )
         .await
-    }
-
-    async fn resume_replay(
-        store: &mut Store<TestWorkerCtx>,
-        instance: &Instance,
-        refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::resume_replay(store, instance, refresh_replay_target)
-            .await
     }
 
     async fn prepare_instance(

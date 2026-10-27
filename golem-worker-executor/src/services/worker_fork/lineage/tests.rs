@@ -47,7 +47,8 @@ impl ServiceFixture {
         let indexed = Arc::new(ReadCountingIndexedStorage::new());
         let blobs = Arc::new(ReadCountingBlobStorage::new());
         let service: Arc<dyn OplogService> = Arc::new(
-            PrimaryOplogService::new(indexed, blobs.clone(), 1, 1, 1, RetryConfig::default()).await,
+            PrimaryOplogService::new(indexed, blobs.clone(), 1, 1, 1, 32, RetryConfig::default())
+                .await,
         );
         let account = AccountId::new();
         let metadata = AgentMetadata {

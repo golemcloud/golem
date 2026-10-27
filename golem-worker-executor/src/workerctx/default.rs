@@ -820,14 +820,6 @@ impl ExternalOperations<Context> for Context {
         .await
     }
 
-    async fn resume_replay(
-        store: &mut wasmtime::Store<Context>,
-        instance: &Instance,
-        refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::resume_replay(store, instance, refresh_replay_target).await
-    }
-
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,

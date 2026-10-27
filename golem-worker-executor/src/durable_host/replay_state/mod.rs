@@ -230,9 +230,62 @@ enum ReplayTransitionPhase {
     Live = 2,
 }
 
-type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
+/// The completion-delivery markers, keyed by the `Start` they refer to, with the positions of the
+/// `CompletionDelivered` markers in oplog order, so a claim can ask whether a delivery boundary
+/// lies in a range without visiting every marker.
+#[derive(Debug, Default)]
+struct CompletionMarkers {
+    by_start: HashMap<OplogIndex, CompletionMarker>,
+    delivered_at: std::collections::BTreeSet<OplogIndex>,
+}
+
+impl CompletionMarkers {
+    fn get(&self, start_index: &OplogIndex) -> Option<&CompletionMarker> {
+        self.by_start.get(start_index)
+    }
+
+    /// Records `marker` for the `Start` at `start_index` and returns the marker it replaced.
+    fn insert(
+        &mut self,
+        start_index: OplogIndex,
+        marker: CompletionMarker,
+    ) -> Option<CompletionMarker> {
+        let previous = self.by_start.insert(start_index, marker);
+        if let Some(CompletionMarker::Delivered(index)) = previous {
+            self.delivered_at.remove(&index);
+        }
+        if let CompletionMarker::Delivered(index) = marker {
+            self.delivered_at.insert(index);
+        }
+        previous
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_start.is_empty()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&OplogIndex, &CompletionMarker)> {
+        self.by_start.iter()
+    }
+
+    /// Drops the markers recorded after `target`.
+    fn truncate_after(&mut self, target: OplogIndex) {
+        self.by_start.retain(|_, marker| marker.index() <= target);
+        self.delivered_at.retain(|index| *index <= target);
+    }
+
+    /// The `CompletionDelivered` positions in `range`, in oplog order.
+    fn delivered_in(
+        &self,
+        range: impl std::ops::RangeBounds<OplogIndex>,
+    ) -> impl Iterator<Item = OplogIndex> + '_ {
+        self.delivered_at.range(range).copied()
+    }
+}
 type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIndex, OplogEntry>>;
-type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
+type StreamObservationPositions = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
+type StartsByInvocationId =
+    HashMap<DurableInvocationId, std::collections::BTreeMap<OplogIndex, claims::RecordedStart>>;
 
 /// The consuming invocation whose earlier retained Starts must be claimed before a native read
 /// is delivered, including host-internal descendants of its imports.
@@ -509,6 +562,11 @@ struct ReplayCursor {
     /// Guest-consumed journal positions, with their durable scope owner. Host projections are
     /// ordinary hints; guest records reserve the cursor until the native read observer fires.
     stream_observations: std::sync::Mutex<StreamObservationPositions>,
+    /// The `Start`s recorded under each durable invocation id, in oplog order, including the ones
+    /// in deleted regions. Built by the recovery metadata scan with the delivery markers, and
+    /// extended by the scan of exactly the newly visible range when the replay target grows. A
+    /// claim of an identified call looks its `Start` up here instead of scanning the oplog.
+    start_invocation_ids: std::sync::Mutex<StartsByInvocationId>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via

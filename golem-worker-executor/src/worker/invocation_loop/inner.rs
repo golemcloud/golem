@@ -200,10 +200,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         }
                     }
                 }
-                WorkerCommand::ResumeReplay => {
-                    self.resume_replay_pending.store(false, Ordering::Release);
-                    self.resume_replay().await
-                }
                 WorkerCommand::UpdateFilesystemLimit { .. } => unreachable!(),
             };
             match outcome {
@@ -513,42 +509,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
-    /// Resumes an interrupted replay process
-    ///
-    /// Returns `CommandOutcome` if this fails and the invocation loop should be stopped.
-    /// Otherwise, it returns the new retry decision to be used by the outer invocation loop.
-    pub(super) async fn resume_replay(&self) -> CommandOutcome {
-        async {
-            if !matches!(
-                monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode()),
-                MonthlyResourceAdmission::Admit
-            ) {
-                return CommandOutcome::Continue;
-            }
-            let mut store = self.store.lock().await;
-
-            let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
-
-            match resume_replay_result {
-                Ok(None) => CommandOutcome::Continue,
-                Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
-                Err(WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
-                }) => {
-                    store.data().set_suspended();
-                    CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-                }
-                Err(err) => {
-                    warn!("Failed to resume replay: {err}");
-                    store.data().set_suspended();
-                    CommandOutcome::BreakOuterLoop(Some(err))
-                }
-            }
-        }
-        .instrument(agent_phase_span!(self, "resume_replay"))
-        .await
-    }
-
     /// Performs a queued invocation on the worker
     ///
     /// The queued invocations internal invocations that we use for

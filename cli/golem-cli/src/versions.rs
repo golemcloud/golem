@@ -13,12 +13,12 @@
 // limitations under the License.
 
 pub mod sdk {
-    pub const RUST: &str = "3.0.0";
-    pub const TS: &str = "2.0.0";
-    pub const EFFECT_GOLEM: &str = "2.0.0";
-    pub const SCALA: &str = "2.0.0";
-    pub const MOONBIT: &str = "0.6.0";
-    pub const GO: &str = "0.1.0";
+    pub const RUST: &str = "3.0.1";
+    pub const TS: &str = "2.0.1";
+    pub const EFFECT_GOLEM: &str = "2.0.1";
+    pub const SCALA: &str = "2.0.1";
+    pub const MOONBIT: &str = "0.6.1";
+    pub const GO: &str = "0.1.1";
     pub const MANIFEST: &str = "1.6.0";
 
     #[macro_export]
@@ -146,6 +146,6 @@ pub mod moonbit_dep {
 }
 
 pub mod ai {
-    pub const VERSION: &str = "v0.5.2";
+    pub const VERSION: &str = "v0.5.5";
     pub const SUFFIX: &str = ".wasm";
 }

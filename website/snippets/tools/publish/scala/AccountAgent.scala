@@ -10,7 +10,9 @@ trait AccountAgent extends BaseAgent:
 @agentImplementation()
 final class AccountAgentImpl(team: String) extends AccountAgent:
   def describe(email: String): Future[String] =
-    // call the CRM's MCP tool through its generated typed client:
+    // a client generated from the MCP server's schemas:
+    // Golem checks, records and replays it like any tool call:
+    // a retry resends the same idempotency key to the server:
     val call = CrmFindCustomerClient.newClient() //@
       .crmFindCustomer(email).orThrow //@
     call.collect().map: collected =>

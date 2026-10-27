@@ -909,9 +909,6 @@ struct RunningWorker {
     unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
     idle_since_millis: Arc<AtomicU64>,
     interrupts: Arc<Interrupts>,
-    /// `ResumeReplay` is signalled directly through the command channel rather
-    /// than the internal queue, so eviction must treat it as pending work.
-    resume_replay_pending: Arc<AtomicBool>,
     start_attempt: Uuid,
     owner_generation_started: bool,
 }
@@ -989,8 +986,8 @@ struct FilesystemGenerationPublication {
 ///    executing. Evicting requires oplog recovery on next start, so it is the
 ///    expensive fallback path.
 ///
-/// Workers with non-durable in-memory work (internal queue, `ResumeReplay`,
-/// interrupt) or that are actively executing are never evictable.
+/// Workers with non-durable in-memory work (internal queue, interrupt) or
+/// that are actively executing are never evictable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvictionClass {
     /// Resident in memory, not executing, no durable pending work.
@@ -1121,7 +1118,6 @@ struct ResolvedAgentProperties {
 enum WorkerCommand {
     WorkAvailable,
     InternalStatusChanged,
-    ResumeReplay,
     UpdateFilesystemLimit {
         allocated_bytes: u64,
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,

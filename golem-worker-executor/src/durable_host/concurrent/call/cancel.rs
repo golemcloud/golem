@@ -103,7 +103,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     ) -> DroppedCall {
         DroppedCall {
             start_idx: self.start_idx,
-            begin_index: self.begin_index(),
             function_type: self.retry.function_type().clone(),
             request_upload: self.request_upload.clone(),
             entity_admission: self.entity_admission,
@@ -161,7 +160,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .append_cancelled_with_oplog(oplog, partial_payload)
                     .await?;
                 DurableCallCoordinator::new(ctx)
-                    .finish(self.retry.function_type(), self.boundary, false, None)
+                    .finish(self.retry.function_type(), false)
                     .await?;
             }
         } else {
@@ -172,7 +171,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             let resolution = ctx.state.replay_state.await_resolution(replay).await?;
             expect_cancelled_resolution(&resolution)?;
             DurableCallCoordinator::new(ctx)
-                .finish(self.retry.function_type(), self.boundary, false, None)
+                .finish(self.retry.function_type(), false)
                 .await?;
         }
         Ok(())
@@ -214,7 +213,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.ensure_accessor_terminal_supported("cancel_access")?;
         self.finished = true;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         if self.is_live {
             if self.persisted {
                 let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
@@ -224,8 +222,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     guard.disarm();
                     return Err(err);
                 }
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 guard.disarm();
             }
         } else {
@@ -237,7 +234,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .expect("cancel_access() in replay called on a live handle");
             let resolution = replay_state.await_resolution(replay).await?;
             expect_cancelled_resolution(&resolution)?;
-            end_durable_function_access(store, get_ctx, function_type, begin_index, false).await?;
+            end_durable_function_access(store, get_ctx, function_type, false).await?;
         }
         Ok(())
     }

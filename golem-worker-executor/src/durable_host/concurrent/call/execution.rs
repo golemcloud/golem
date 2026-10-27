@@ -120,48 +120,19 @@ impl<H: DurabilityHost + Send + Sync> DurabilityHost for ScopedRetryHost<'_, H> 
         &mut self,
         function_type: &DurableFunctionType,
         host_function: &str,
-    ) -> Result<OplogIndex, WorkerExecutorError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.inner
             .begin_durable_function(function_type, host_function)
-            .await
-    }
-
-    async fn begin_durable_function_with_span(
-        &mut self,
-        function_type: &DurableFunctionType,
-        host_function: &str,
-        span_started: golem_common::model::oplog::SpanStarted,
-    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
-        self.inner
-            .begin_durable_function_with_span(function_type, host_function, span_started)
             .await
     }
 
     async fn end_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.inner
-            .end_durable_function(function_type, begin_index, forced_commit)
-            .await
-    }
-
-    async fn end_durable_function_with_span(
-        &mut self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-        forced_commit: bool,
-        span_finished: golem_common::model::oplog::SpanFinished,
-    ) -> Result<(), WorkerExecutorError> {
-        self.inner
-            .end_durable_function_with_span(
-                function_type,
-                begin_index,
-                forced_commit,
-                span_finished,
-            )
+            .end_durable_function(function_type, forced_commit)
             .await
     }
 
@@ -185,7 +156,7 @@ impl<H: DurabilityHost + Send + Sync> DurabilityHost for ScopedRetryHost<'_, H> 
 impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Starts and drives a re-executable value call through live execution, completed replay, or
     /// incomplete replay repair. This is the default entry point for callers that do not need the
-    /// begin index or session-owned retry/authority state while performing the live action.
+    /// `Start` index or session-owned retry/authority state while performing the live action.
     pub(crate) async fn invoke<Ctx, A, E>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
@@ -550,7 +521,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     /// Starts and drives an accessor value call. Low-level session construction stays available
-    /// inside the crate for calls that derive identity from the begin index or own custom retry
+    /// inside the crate for calls that derive identity from the `Start` index or own custom retry
     /// state; ordinary p3 values use this driver. The live action executes without holding a store
     /// window. Incomplete replay repairs the existing `Start` only for re-executable calls;
     /// [`Self::replay_access`] rejects it for non-re-executable calls before returning an outcome.
@@ -568,7 +539,35 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         E: DurableCallTrapError,
         A: AsyncFnOnce() -> Result<Pair::Resp, E>,
     {
-        let call = Self::start_access(store, get_ctx, request, function_type).await?;
+        Self::invoke_access_with_options(
+            store,
+            get_ctx,
+            request,
+            function_type,
+            AccessClaimOptions::default(),
+            live_action,
+        )
+        .await
+    }
+
+    /// [`Self::invoke_access`] with explicit claim options.
+    pub(crate) async fn invoke_access_with_options<T, D, Ctx, A, E>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        options: AccessClaimOptions,
+        live_action: A,
+    ) -> Result<Pair::Resp, E>
+    where
+        T: 'static,
+        D: HasData + ?Sized + 'static,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
+    {
+        let call = Self::start_access_with_options(store, get_ctx, function_type, options, request)
+            .await?;
         if call.is_live() {
             call.run_live_action_access(store, get_ctx, live_action)
                 .await

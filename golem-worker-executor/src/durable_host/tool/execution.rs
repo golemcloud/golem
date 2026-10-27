@@ -262,13 +262,119 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    let responses = await_tool_invoke_plans(accessor, plans).await?;
-    let mut projected = Vec::with_capacity(responses.len());
-    for response in responses {
-        let response = admit_tool_response_secret_holds(accessor, response).await?;
-        projected.push(project_tool_response(accessor, response));
+    observe_tool_invoke_plans(accessor, plans, async |responses| {
+        let mut projected = Vec::with_capacity(responses.len());
+        for response in responses {
+            let response = admit_tool_response_secret_holds(
+                accessor,
+                response,
+                crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+            )
+            .await?;
+            projected.push(project_tool_response(accessor, response));
+        }
+        Ok(projected)
+    })
+    .await
+}
+
+/// Awaits accepted tool results as one guest-facing durable call and finishes them with
+/// `finish` before delivery. The entity `Start` records how a body ended, not when the guest
+/// received that result: a body terminal is selected by host tasks whose timing replay does not
+/// reproduce. This call records the guest's receipt as its own `CompletionDelivered` marker, so
+/// live and replay release the result at the same guest boundary. `finish` may make durable
+/// calls; they complete before the delivery, which stays the tail operation.
+pub(super) async fn observe_tool_invoke_plans<U, Ctx, R>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    plans: Vec<FutureToolInvokeGet>,
+    finish: impl AsyncFnOnce(Vec<ToolInvokeResponse>) -> anyhow::Result<R>,
+) -> anyhow::Result<R>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    use crate::durable_host::concurrent::{
+        AccessClaimOptions, Cancellable, DeferredCallReplayOutcome, DurableCallSession,
+    };
+    use crate::services::oplog::OplogOps;
+    use golem_common::model::oplog::host_functions::GolemToolAwaitInvokeResults;
+    use golem_common::model::oplog::{
+        DurableFunctionType, HostRequest, HostRequestGolemToolAwaitInvokeResults,
+        HostResponseGolemToolAwaitInvokeResults, OplogEntry,
+    };
+
+    let invocations = plans
+        .iter()
+        .filter_map(|plan| match plan {
+            FutureToolInvokeGet::Active(execution) => Some(execution.start),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if invocations.is_empty()
+        || accessor.with(|mut access| access.get().state.durability_is_suppressed())
+    {
+        let responses = await_tool_invoke_plans(accessor, plans).await?;
+        return finish(responses).await;
     }
-    Ok(projected)
+    let request = HostRequestGolemToolAwaitInvokeResults { invocations };
+    let expected: HostRequest = request.clone().into();
+    let mut call =
+        DurableCallSession::<GolemToolAwaitInvokeResults, Cancellable>::start_access_with_options(
+            accessor,
+            accessor.getter(),
+            DurableFunctionType::ReadLocal,
+            AccessClaimOptions::default(),
+            request,
+        )
+        .await?;
+    if !call.is_live() {
+        let start = call.start_index();
+        let oplog = accessor.with(|mut access| access.get().state.oplog.clone());
+        let OplogEntry::Start {
+            request: Some(recorded),
+            ..
+        } = oplog.read(start).await.map_err(WorkerExecutorError::from)?
+        else {
+            return Err(call.trap(anyhow!("tool result await has no recorded request")));
+        };
+        let recorded = oplog
+            .download_payload(recorded)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        if recorded != expected {
+            return Err(call.trap(anyhow!(
+                "tool result await awaits different invocations at {start}"
+            )));
+        }
+    }
+    let output = match await_tool_invoke_plans(accessor, plans).await {
+        Ok(responses) => finish(responses).await,
+        Err(error) => Err(error),
+    };
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => return Err(call.trap(error)),
+    };
+    let delivery = 'delivery: {
+        if !call.is_live() {
+            match call
+                .replay_access_deferred(accessor, accessor.getter())
+                .await?
+            {
+                DeferredCallReplayOutcome::Replayed(_, delivery) => break 'delivery delivery,
+                DeferredCallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
+        call.complete_access_deferred(
+            accessor,
+            accessor.getter(),
+            HostResponseGolemToolAwaitInvokeResults {},
+        )
+        .await?
+        .1
+    };
+    delivery.deliver_at_accessor_terminal(accessor).await?;
+    Ok(output)
 }
 
 pub(super) async fn await_tool_invoke_plans<U, Ctx>(

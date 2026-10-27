@@ -118,7 +118,7 @@ entry is `Cancelled { start_index: 11, partial }` instead — guest-initiated an
 
 Crash before `#20` commits: the caller was never told "accepted"; it retries with the same key.
 Crash after `#20`, before `#21`: reconstruction folds status from the oplog, sees the pending
-invocation, and runs it. Crash between `#21` and `#41`: `resume_replay` replays the recorded prefix
+invocation, and runs it. Crash between `#21` and `#41`: `replay` replays the recorded prefix
 of this invocation, then the guest continues live from the tail. Crash after `#41`: a repeated
 call with key `K` hits `lookup_invocation_result` and returns `R` without touching the guest.
 Test: `tests/api/mod.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart`.
@@ -239,14 +239,14 @@ decides again. Now the head is a selected snapshot-assisted update, so the basel
 `plan_start` gives one `StartPlan`: restore the filesystem snapshot `p-…`, then load the
 application snapshot of `#40` and skip `1..=#40`. `materialize` restores the tree; `prepare_instance`
 then runs `try_load_snapshot` (the load hook runs in snapshotting mode: no oplog append or
-consume) and `resume_replay` replays the tail against the r2 component with r1's metadata. At
+consume) and `replay` replays the tail against the r2 component with r1's metadata. At
 `ReplayFinished`, `update_state_to_new_component_revision(r2)` applies the initial-file rule from
 r1 to r2, and `SuccessfulUpdate` is appended. The fold promotes `S` to `authoritative_snapshot`
 with its name and keeps `component_revision_for_replay = r1`, so a later start from `S` restores
 `p-…`, replays the tail with r1's metadata and applies the rule at the replayed `#90`.
 
 Without a usable record, `#71` is a plain `Automatic` strategy: the baseline is the
-authoritative baseline (or `INITIAL`), and `resume_replay` replays all the remaining old history
+authoritative baseline (or `INITIAL`), and `replay` replays all the remaining old history
 against r2. A failure of an attempt goes through `start_outcome::decide`, which builds the
 `FailedUpdate` (with `UPDATE_SNAPSHOT_INCOMPATIBLE`, `UPDATE_SNAPSHOT_UNAVAILABLE` or
 `UPDATE_REPLAY_FAILED` among others) and returns `RetryDecision::Immediate`, so the outer loop
@@ -280,7 +280,7 @@ preparation. A manual-update snapshot load failure is terminal and retains its c
 In every case the `Store` is discarded. Infrastructure-owned `RecoveryRequired` follows the same
 physical path: it records a Recovery error, retains the accepted invocation, and schedules a new
 incarnation without touching semantic retry state. The next incarnation runs `prepare_instance` →
-`resume_replay` from the snapshot baseline to the tail and publishes Live. The hints annotate
+`replay` from the snapshot baseline to the tail and publishes Live. The hints annotate
 *why* the previous incarnation stopped and drive status/scheduling (`Interrupted` stays
 interrupted until resumed; `Suspend` resumes on demand; `Restart` recovers automatically), but the
 reconstruction mechanism is identical.
@@ -427,23 +427,31 @@ Owner O oplog
 #62 Start { fn: http/send, parent_start_index: 61 }                 body's own host call
 #63 End   { start_index: 62, response }
 #64 CompletionDelivered { start_index: 62 } (h)
-#65 End   { start_index: 61, response: tool result }                body finished → terminal
+#65 Start { fn: tool::internal::await-invoke-results, invocations: [61] } O awaits the result
+#66 End   { start_index: 61, response: tool result }                body finished → terminal
+#67 End   { start_index: 65 }
+#68 CompletionDelivered { start_index: 65 } (h)                     O received the result
 ```
+
+#66 records how the body ended; host tasks select it, so its position says nothing about when
+O saw the result. O's result await (`invoke-and-await`, `future-invoke-result.get`,
+`get-invoke-results`, `underlying-invoke-result.get`) is its own guest-facing call #65, and #68
+is the guest boundary. Replay releases the result at #68, at a blocked wait.
 
 Completed replay (`InvocationExecutionMode::ReplayingCompleted`): `StartClaim::owned_tool_invocation`
 claims #61; a fresh body `Store` is created, sharing O's cursor; `invoke_tool_sidecar` calls the
 sidecar's guest export again (the body **is** re-executed) and its `http/send` at #62 is resolved
 as `Delivered` from #63/#64 — no live HTTP; once the body has reconstructed, `drive_access`
-validates and releases the recorded #65. The observable contract is "no repeated external
+validates and releases the recorded #66. The observable contract is "no repeated external
 effect", not "the sidecar export is skipped". Memory for attachments is charged from the
 historical record, not current pressure.
 
-Incomplete replay (crash between #61 and #65): `ReplayingIncomplete` switches the body to live,
+Incomplete replay (crash between #61 and #66): `ReplayingIncomplete` switches the body to live,
 `activate_live_attachment_memory_accounting` must return `Admitted` (or a rejection is persisted),
 `PendingReplayToLive::finish` with `ReplayToLiveRole::NonPrimary` sets the entity Store's
 `local_live_tail`, and the terminal is appended under the original index 61.
 
-Allowlisted permanent guest instruction trap inside the body: #65 records an `End` with
+Allowlisted permanent guest instruction trap inside the body: #66 records an `End` with
 `body_execution: Trapped` and `RemoteInternalError`. Physical Store destruction retains the
 original `Ctx` for cleanup. Supervisors independent of the caller Store cancel descendants of
 the failed parent, preserving selected outcomes and unrelated siblings. Replay re-executes the

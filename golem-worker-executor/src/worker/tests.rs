@@ -542,13 +542,13 @@ fn rejected_automatic_snapshot_uses_manual_replay_revision() {
 #[test]
 fn active_filesystem_effects_exclude_an_otherwise_idle_worker() {
     assert!(running_worker_can_be_evicted(
-        true, false, false, false, false, false
+        true, false, false, false, false
     ));
     assert!(!running_worker_can_be_evicted(
-        true, false, false, false, true, false
+        true, false, false, true, false
     ));
     assert!(!running_worker_can_be_evicted(
-        true, false, false, false, false, true
+        true, false, false, false, true
     ));
 }
 
