@@ -111,6 +111,17 @@ fn wire_text(value : String, what : String) -> String raise WireError {
 }
 
 ///|
+fn wire_optional_text(
+  value : String?,
+  what : String,
+) -> String? raise WireError {
+  match value {
+    Some(value) => Some(wire_text(value, what))
+    None => None
+  }
+}
+
+///|
 pub fn wire_no_payload(index : Int?) -> Unit raise WireError {
   guard index is None else { raise WireError::Invalid("unexpected payload") }
 }
