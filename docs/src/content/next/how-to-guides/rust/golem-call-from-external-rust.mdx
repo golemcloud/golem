@@ -136,6 +136,28 @@ GolemServer::Custom {
 }
 ```
 
+### Reconnect window of streaming calls
+
+A streaming call reconnects with a growing delay (50 ms up to 3 s) while the server accepts neither
+its start nor a resume; HTTP 429 and 5xx on the upgrade and retryable rejections are retried too.
+`configure` allows 5 minutes without progress; choose another window, or no limit, with
+`configure_with_reconnect`:
+
+```rust
+use std::time::Duration;
+use my_agent_client::ReconnectPolicy;
+
+my_agent_client::configure_with_reconnect(
+    GolemServer::Local,
+    "my-app",
+    "local",
+    ReconnectPolicy::Within(Duration::from_secs(30)), // or ReconnectPolicy::Unlimited
+);
+```
+
+Past the window the call fails with `ClientError::Unreachable { endpoint, window, last_cause }`.
+Dropping the call's future, for example with `tokio::time::timeout`, stops it earlier.
+
 ## Phantom Agents
 
 To create multiple agent instances with the same constructor parameters, use phantom agents:

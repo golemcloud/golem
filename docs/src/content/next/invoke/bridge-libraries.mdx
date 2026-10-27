@@ -391,6 +391,31 @@ session state. Applications do not need to open the socket directly. See the
 transport and recovery details, or [CLI streaming methods](/next/invoke/cli#streaming-methods)
 for command-line usage and persistent checkpoints.
 
+### Reconnect window
+
+While the server accepts neither the start of a streaming call nor a resume, the runtime keeps
+reconnecting with a delay that starts at 50 ms and doubles up to 3 s. HTTP 429 and 5xx answers to
+the WebSocket upgrade and retryable rejections are retried in the same way; other HTTP statuses and
+other rejections fail the call at once. Each connection attempt (TCP connect, TLS handshake and
+upgrade) takes at most 10 seconds.
+
+The reconnect window bounds the time without progress. It starts when the call starts and again
+when a connection whose start or resume the server had accepted is lost. The default window is
+5 minutes; every bridge can set another window or no limit:
+
+| Bridge | Setting | No limit | Error past the window |
+|--------|---------|----------|-----------------------|
+| TypeScript, Effect | `reconnectWindowMs` in `configure({...})` | `'unlimited'` | `StreamingUnreachableError` |
+| Rust | `configure_with_reconnect(server, app, env, ReconnectPolicy::Within(duration))` | `ReconnectPolicy::Unlimited` | `ClientError::Unreachable` |
+| Scala | `configure(server, app, env, reconnectWindow = duration)` | `Duration.Inf` | `BridgeUnreachableException` |
+| MoonBit | `configure(server, app, env, reconnect=@runtime.Within(milliseconds))` | `@runtime.Unlimited` | `@runtime.Unreachable(..)` |
+| Go | `Configuration.ReconnectWindow` | `bridge.NoReconnectLimit` | `*bridge.UnreachableError` |
+
+The error names the endpoint, the window and the last cause: the HTTP status of a refused upgrade,
+a retryable rejection, or a connection error. The caller can still stop a call earlier in the usual
+way of its language: an `AbortSignal`, dropping the Rust future, a Go `context`, the `cancelable`
+form of a Scala streaming method, or cancelling the MoonBit task.
+
 ## Configuration Options
 
 The TypeScript, Effect TypeScript, Rust, Scala, MoonBit and Go bridge libraries require three configuration parameters:
@@ -400,6 +425,8 @@ The TypeScript, Effect TypeScript, Rust, Scala, MoonBit and Go bridge libraries 
 | **Server** | `Local` for the default local Golem server, `Cloud` for Golem Cloud, or a custom deployment URL and bearer token |
 | **Application name** | The `app:` key from your `golem.yaml` |
 | **Environment** | The target environment (e.g., `local`, `staging`, `prod`) |
+
+Streaming calls also take an optional [reconnect window](#reconnect-window).
 
 ## Type Safety
 

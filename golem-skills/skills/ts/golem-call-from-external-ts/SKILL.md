@@ -94,6 +94,21 @@ The `server` field supports three modes:
 { type: 'custom', url: 'https://my-golem.example.com', token: 'your-token' }
 ```
 
+### Reconnect window of streaming calls
+
+A streaming call reconnects with a growing delay (50 ms up to 3 s) while the server accepts neither
+its start nor a resume; HTTP 429 and 5xx on the upgrade and retryable rejections are retried too.
+`reconnectWindowMs` in the configuration bounds the time without progress: the default is
+`DEFAULT_RECONNECT_WINDOW_MS` (5 minutes), and `'unlimited'` keeps trying until the call's
+`AbortSignal` aborts.
+
+```typescript
+configure({ server: { type: 'local' }, application: 'my-app', environment: 'local', reconnectWindowMs: 30_000 });
+```
+
+Past the window the call rejects with `StreamingUnreachableError` (from
+`@golemcloud/golem-ts-bridge`), with `endpoint`, `reconnectWindowMs` and `lastCause`.
+
 ## Phantom Agents
 
 To create multiple agent instances that share the same identity (`id`) field values, use phantom agents:

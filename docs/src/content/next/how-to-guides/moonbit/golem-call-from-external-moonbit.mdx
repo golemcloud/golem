@@ -123,6 +123,14 @@ moon run --target native src/main
 
 `configure(server, appName, envName)` sets the connection shared by every generated client in the module.
 
+### Reconnect window of streaming calls
+
+A streaming call reconnects with a growing delay (50 ms up to 3 s) while the server accepts neither its start nor a resume; HTTP 429 and 5xx on the upgrade and retryable rejections are retried too. The optional `reconnect` argument of `configure` bounds the time without progress: `@runtime.Within(milliseconds)` (the default is `@runtime.default_reconnect_policy`, 5 minutes) or `@runtime.Unlimited`. Past the window the call raises `@runtime.Unreachable(endpoint~, window_ms~, last_cause~)`, a case of `@runtime.BridgeError`. Cancelling the task that runs the call stops it earlier.
+
+```moonbit
+@client.MyAgent::configure(@runtime.Local, "my-app", "local", reconnect=@runtime.Within(30000))
+```
+
 ## Phantom Agents
 
 To create multiple agent instances that share the same constructor parameters, use phantom agents. The phantom id is the last argument, after the constructor parameters:
