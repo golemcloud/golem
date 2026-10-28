@@ -898,7 +898,7 @@ async fn invocation_loop_panic_with_resident_owner_uses_filesystem_drop_cleanup(
 #[timeout("5s")]
 async fn unload_deadline_during_drain_keeps_final_sample_and_deletion_owned() {
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
     let close = control.block("close");
     control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
@@ -1258,7 +1258,7 @@ async fn production_unload_starts_final_observation_after_native_close_drains() 
     let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let scope = metrics.scope();
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
     let close = control.block("close");
@@ -1331,7 +1331,7 @@ async fn startup_disposal_releases_execution_before_failed_deletion_and_repair()
     let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let scope = metrics.scope();
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
     control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
@@ -1402,7 +1402,7 @@ async fn unload_preparation_defers_allocation_to_window_close() {
     use futures::FutureExt;
 
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
     control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
         allocated_bytes: 100,
@@ -1448,7 +1448,7 @@ async fn unload_preparation_defers_allocation_to_window_close() {
 #[timeout("5s")]
 async fn execution_window_closes_before_filesystem_deletion() {
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
     control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
         allocated_bytes: 100,
@@ -1539,8 +1539,19 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
         operations.join_owner_failure_cleanup().await.unwrap();
         assert!(operations.begin_generation().is_err());
 
+        let clock = crate::services::resource_usage_metering::TestClock::new_at(
+            Instant::now(),
+            chrono::Utc::now(),
+        );
         let (filesystem, control, window, _generation_handle, node) =
-            billing_metered_resident_with_open_node_for_unload_test().await;
+            billing_metered_resident_with_open_node_for_unload_test(Some(clock.clone())).await;
+        clock.wait_for_sleep_until(Duration::from_millis(10)).await;
+        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+            allocated_bytes: 50,
+            filesystem_objects: 1,
+        }));
+        clock.set(Duration::from_millis(10)).await;
+        clock.wait_for_sleep_until(Duration::from_millis(100)).await;
         if metering_failed {
             control.push_observe_allocation(Err(FilesystemStorageError::verification(
                 "held-operation metering failure",
@@ -1548,6 +1559,7 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
             )));
             let observation = control.block("observe_allocation");
             let mut health = window.subscribe_enforcement_failure();
+            clock.set(Duration::from_millis(100)).await;
             observation.wait_started().await;
             observation.release();
             crate::services::resource_usage_metering::wait_for_enforcement_failure(&mut health)
@@ -1612,7 +1624,7 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
             }));
             Some(error)
         } else {
-            assert!(futures::poll!(observer.as_mut()).is_pending());
+            assert_eq!(futures::poll!(observer.as_mut()), std::task::Poll::Pending);
             None
         };
         if early_error.is_some() {
@@ -1650,7 +1662,7 @@ async fn active_allocation_failure_remains_failed_after_successful_physical_dele
     let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let scope = metrics.scope();
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_observe_allocation(Err(FilesystemStorageError::verification(
         "active allocation observation failed",

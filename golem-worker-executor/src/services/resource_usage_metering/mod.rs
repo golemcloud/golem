@@ -89,7 +89,7 @@ impl FilesystemUsageSource {
     }
 }
 
-trait MeteringClock: Send + Sync {
+pub(super) trait MeteringClock: Send + Sync {
     fn now(&self) -> Instant;
 
     fn utc_now(&self) -> DateTime<Utc>;
@@ -595,7 +595,7 @@ fn create_configured_meter_with_clock(
     meter
 }
 
-fn create_unbound_meter_with_clock(
+pub(super) fn create_unbound_meter_with_clock(
     config: ResourceUsageMeteringConfig,
     account: ResourceUsageAccount,
     clock: Arc<dyn MeteringClock>,
@@ -1410,3 +1410,6 @@ pub(crate) fn check_filesystem_metering(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::TestClock;
