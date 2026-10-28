@@ -34,6 +34,30 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         .iter()
         .filter_map(|cmd| synthesize_subtree_wrapper(ir, cmd));
     let subtree_macro = synthesize_subtree_client_macro(ir, &tool_name);
+    let (descriptor_field, descriptor_init, descriptor_parts, descriptor_param) =
+        if crate::tool::descriptor::client_needs_descriptor_input(ir) {
+            let descriptor_fn =
+                crate::tool::descriptor::standalone_wire_descriptor_fn_ident(&ir.trait_ident);
+            (
+                quote! {
+                    root_descriptor: ::std::option::Option<golem_rust::agentic::WireToolDescriptorFn>,
+                },
+                quote! {
+                    root_descriptor: ::std::option::Option::Some(
+                        #descriptor_fn as golem_rust::agentic::WireToolDescriptorFn
+                    ),
+                },
+                quote! { root_descriptor, },
+                format_ident!("root_descriptor"),
+            )
+        } else {
+            (
+                quote! {},
+                quote! {},
+                quote! {},
+                format_ident!("_root_descriptor"),
+            )
+        };
 
     quote! {
         #(#subtree_wrappers)*
@@ -41,6 +65,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         pub struct #client_ident {
             rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc,
             root_tool_name: ::std::string::String,
+            #descriptor_field
             command_path: ::std::vec::Vec<::std::string::String>,
             schema_path: ::std::vec::Vec<::std::string::String>,
             inherited_prefix: ::std::vec::Vec<golem_rust::agentic::DirectInputValue>,
@@ -57,6 +82,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
                 Self {
                     rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&lookup_name),
                     root_tool_name: lookup_name,
+                    #descriptor_init
                     command_path: ::std::vec::Vec::new(),
                     schema_path: ::std::vec::Vec::new(),
                     inherited_prefix: ::std::vec::Vec::new(),
@@ -69,6 +95,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         impl golem_rust::agentic::ToolClientWithParts for #client_ident {
             fn __golem_tool_client_with_parts(
                 root_tool_name: ::std::string::String,
+                #descriptor_param: ::std::option::Option<golem_rust::agentic::WireToolDescriptorFn>,
                 command_path: ::std::vec::Vec<::std::string::String>,
                 schema_path: ::std::vec::Vec<::std::string::String>,
                 inherited_prefix: ::std::vec::Vec<golem_rust::agentic::DirectInputValue>,
@@ -76,6 +103,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
                 Self {
                     rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&root_tool_name),
                     root_tool_name,
+                    #descriptor_parts
                     command_path,
                     schema_path,
                     inherited_prefix,
@@ -99,6 +127,7 @@ fn input_build_expr(
     cmd: &CommandIr,
     tool_name: &str,
     param_values: TokenStream,
+    use_descriptor: bool,
 ) -> TokenStream {
     let mut ordered = Vec::new();
     if let Some(root) = ir
@@ -135,11 +164,25 @@ fn input_build_expr(
             ordered.push(name);
         }
     }
+    let encode = if use_descriptor {
+        quote! {
+            golem_rust::agentic::encode_direct_tool_input_with_descriptor(
+                &__values,
+                &[#(#ordered),*],
+                self.root_descriptor,
+                &__command_path,
+            ).await
+        }
+    } else {
+        quote! {
+            golem_rust::agentic::encode_direct_tool_input(&__values, &[#(#ordered),*]).await
+        }
+    };
     quote! {
         {
             let mut __values = self.inherited_prefix.clone();
             __values.extend(#param_values);
-            golem_rust::agentic::encode_direct_tool_input(&__values, &[#(#ordered),*]).await
+            #encode
                 .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err)))?
         }
     }
@@ -183,7 +226,13 @@ fn synthesize_leaf_method(
     let result_ty = client_result_type(&cmd.output, has_output);
     let decode_result = decode_client_result(&cmd.output);
     let invoke = invoke_call(&cmd.output, stdin_expr.clone());
-    let input_expr = input_build_expr(ir, cmd, tool_name, quote! { __golem_param_values });
+    let input_expr = input_build_expr(
+        ir,
+        cmd,
+        tool_name,
+        quote! { __golem_param_values },
+        crate::tool::descriptor::client_needs_descriptor_input(ir),
+    );
 
     if has_output {
         let started_ty = started_result_type(&cmd.output);
@@ -251,6 +300,7 @@ fn synthesize_subtree_method(
             #wrapper_ident::<{ #child_omitted_tag }, #child_omitted_ty> {
                 rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&self.root_tool_name),
                 root_tool_name: self.root_tool_name.clone(),
+                root_descriptor: self.root_descriptor,
                 command_path: __command_path,
                 schema_path: __schema_path,
                 inherited_prefix: __inherited_prefix,
@@ -297,7 +347,7 @@ fn synthesize_leaf_method_dynamic(
     let result_ty = client_result_type(&cmd.output, has_output);
     let decode_result = decode_client_result(&cmd.output);
     let invoke = invoke_call(&cmd.output, stdin_expr.clone());
-    let input_expr = input_build_expr(ir, cmd, tool_name, param_values.clone());
+    let input_expr = input_build_expr(ir, cmd, tool_name, param_values.clone(), true);
 
     if has_output {
         let result_ty = started_result_type(&cmd.output);
@@ -361,6 +411,7 @@ fn synthesize_subtree_method_dynamic(
             #wrapper_ident::<{ #child_omitted_tag }, #child_omitted_ty> {
                 rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&self.root_tool_name),
                 root_tool_name: self.root_tool_name.clone(),
+                root_descriptor: self.root_descriptor,
                 command_path: __command_path,
                 schema_path: __schema_path,
                 inherited_prefix: #inherited_prefix,
@@ -390,6 +441,7 @@ fn synthesize_subtree_wrapper(ir: &ToolDefinitionIr, cmd: &CommandIr) -> Option<
         pub struct #wrapper_ident<const __GOLEM_OMITTED_TAG: u64 = 0, __GOLEM_OMITTED = ()> {
             rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc,
             root_tool_name: ::std::string::String,
+            root_descriptor: ::std::option::Option<golem_rust::agentic::WireToolDescriptorFn>,
             command_path: ::std::vec::Vec<::std::string::String>,
             schema_path: ::std::vec::Vec<::std::string::String>,
             inherited_prefix: ::std::vec::Vec<golem_rust::agentic::DirectInputValue>,
