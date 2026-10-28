@@ -307,6 +307,12 @@ version uses `latest` unless the package already has a higher stable version in
 the registry. In that case, it uses `release-<major>.<minor>` (for example,
 `release-1.6`). Each package selects its channel independently. SDK versions need
 not match the Golem version: the Golem 1.6 line can use an SDK 2.0 patch release.
+An npm release fails if a newer stable version already exists in the same
+`major.minor` line, or if a newer prerelease already exists for `next`.
+Prerelease comparison uses semantic version ordering, including numeric identifiers.
+The TypeScript workflow validates all package channels before it publishes any
+package. This prevents lookup or channel validation errors from causing partial
+publication; registry publication itself is not atomic.
 Registry or GitHub lookup failures stop publication rather than assume that
 `latest` is safe.
 Publication workflows serialize releases across lines so channel selection and

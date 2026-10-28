@@ -123,7 +123,7 @@ fn release_channels_use_published_versions_in_each_workflow() {
 set -eu
 case "$1 $2" in
   'api --paginate')
-    [ "$RELEASE_TEST_LOOKUP_FAILS" = false ] || exit 1
+    [ "$RELEASE_TEST_LOOKUP_FAILS" != all ] || exit 1
     while [ "$1" != --jq ]; do shift; done
     exec jq -r "$2" "$RELEASE_TEST_PAGES" ;;
   'release edit') printf '%s\n' "$@" ;;
@@ -137,7 +137,7 @@ esac
 set -eu
 case "$1" in
   view)
-    [ "$RELEASE_TEST_LOOKUP_FAILS" = false ] || exit 1
+    [ "$RELEASE_TEST_LOOKUP_FAILS" != all ] && [ "$RELEASE_TEST_LOOKUP_FAILS" != "$2" ] || exit 1
     case "$2" in
       @golemcloud/golem-ts-sdk|@golemcloud/golem-ts-bridge|@golemcloud/golem-ts-repl|@golemcloud/effect-golem) ;;
       *) exit 1 ;;
@@ -163,11 +163,27 @@ esac
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
     .unwrap();
-    for (version, newer_stable, expected, lookup_fails) in [
-        ("1.6.11", false, "latest", false),
-        ("1.6.11", true, "release-1.6", false),
-        ("2.0.0-rc2", false, "next", false),
-        ("1.6.11", false, "", true),
+    for (version, newer_stable, expected, lookup_failure, npm_downgrade) in [
+        ("1.6.11", false, "latest", "none", false),
+        ("1.6.11", true, "release-1.6", "none", false),
+        ("2.0.0-rc2", false, "next", "none", false),
+        ("1.6.11", false, "", "all", false),
+        (
+            "1.6.11",
+            false,
+            "latest",
+            "@golemcloud/golem-ts-bridge",
+            false,
+        ),
+        (
+            "1.6.11",
+            false,
+            "latest",
+            "@golemcloud/golem-ts-repl",
+            false,
+        ),
+        ("1.6.9", true, "release-1.6", "none", true),
+        ("2.0.0-rc0", false, "next", "none", true),
     ] {
         let pages = fixture.path().join("pages.json");
         fs::write(
@@ -248,16 +264,19 @@ esac
                 .env("PATH", &path)
                 .env("RELEASE_TEST_PAGES", &pages)
                 .env("RELEASE_TEST_VERSIONS", &versions)
-                .env("RELEASE_TEST_LOOKUP_FAILS", lookup_fails.to_string())
+                .env("RELEASE_TEST_LOOKUP_FAILS", lookup_failure)
                 .env("RELEASE_TAG", &tag)
                 .env("GITHUB_EVENT_NAME", "release")
                 .env("GITHUB_REF_NAME", &tag)
                 .env("GITHUB_ENV", &env_file)
                 .output()
                 .unwrap();
-            assert_eq!(output.status.success(), !lookup_fails, "{file}: {output:?}");
+            let should_fail = lookup_failure == "all"
+                || (directory == "sdks/ts" && lookup_failure.starts_with('@'))
+                || (directory.starts_with("sdks/") && npm_downgrade);
+            assert_eq!(output.status.success(), !should_fail, "{file}: {output:?}");
             let stdout = String::from_utf8(output.stdout).unwrap();
-            if lookup_fails {
+            if should_fail {
                 assert!(stdout.is_empty(), "publication must not start: {stdout}");
                 assert!(fs::read_to_string(&env_file).unwrap().is_empty());
                 continue;

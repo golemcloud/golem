@@ -188,6 +188,11 @@ published versions: prereleases use `next`, older stable versions use
 Golem 1.6 patches remain the default while Golem 2.0 is prerelease-only, but cannot
 replace stable Golem 2.0. SDK versions are independent of Golem versions; npm
 compares each package's own versions. Lookup failures stop publication.
+npm rejects stable patches older than a published stable version in the same
+`major.minor` line, and prereleases older than a published prerelease for `next`.
+Comparison follows semantic version ordering. The TypeScript workflow validates
+all package channels before its first upload. A later registry upload failure
+can still leave a partial publication; uploads are not atomic.
 Publication workflows serialize uploads across release lines. GitHub Actions
 retains only one pending run per concurrency group; let a queued publication
 start before triggering another.
