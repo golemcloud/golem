@@ -10,7 +10,7 @@ export const meta = {
 export const hero = {
   eyebrow: "Use cases",
   heading: "Build agents for work that matters",
-  lead: "Build software. Investigate questions. Help customers. Put agents to work inside your product.",
+  lead: "Put agents to work inside your product—for software development, research, customer support, and more.",
   navigationLabel: "What are you building?",
   exploreLabel: "Explore use case",
 };
@@ -25,19 +25,19 @@ export const featuredCase = {
   runtime:
     "Build, deploy, and operate custom agents, tools, and reliable APIs with Golem. After a fault or interruption, the whole VM resumes mid-function with its memory, call stack, and files. Agent and tool calls run exactly once, under policies your agents cannot bypass.",
   toolChoice:
-    "Write your agents and their tools with any Golem SDK. Choose the models, frameworks, and integrations your application needs.",
+    "Bring an existing agent or write your own. You choose its model calls, context, and tool coordination; Golem provides durable execution.",
   parts: [
     {
       title: "Your agent",
-      body: "Creates an app, diagnoses a bug, or maintains a codebase. Let it investigate, try a fix, and respond to developer feedback. Code review, release automation, and incident repair are other jobs you can build on the same runtime.",
+      body: "Creates an app, diagnoses a bug, or maintains a codebase for your users. Let it investigate, try a fix, and respond to developer feedback. Code review, release automation, and incident repair are other jobs you can build on the same runtime.",
     },
     {
       title: "Your tools",
-      body: "Write repository, editing, and publishing tools with a Golem SDK. Each call runs in an isolated, durable VM. Connect external runners for native builds and tests. Serve interfaces the agent creates from its durable files through HTTP endpoints you declare.",
+      body: "Keep tool functions in your harness, or write Golem tools with an SDK for separate, isolated execution. Use external runners for native builds and tests. Serve generated apps from durable files through declared HTTP endpoints.",
     },
     {
       title: "Your policies",
-      body: "Scope which repositories and services the agent can reach. Require approval before merging or publishing. Golem runs your policy middleware outside the agent's control; the agent cannot skip the check or the approval wait.",
+      body: "Scope which repositories and services the agent can reach. Require approval before merging or publishing. Golem runs your policy middleware outside the agent's control; the agent cannot skip any checks or the wait for approval.",
     },
   ],
   recoveryLabel: "Interrupted inside a tool call?",
