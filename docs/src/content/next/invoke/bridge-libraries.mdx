@@ -399,9 +399,12 @@ the WebSocket upgrade and retryable rejections are retried in the same way; othe
 other rejections fail the call at once. Each connection attempt (TCP connect, TLS handshake and
 upgrade) takes at most 10 seconds.
 
-The reconnect window bounds the time without progress. It starts when the call starts and again
-when a connection whose start or resume the server had accepted is lost. The default window is
-5 minutes; every bridge can set another window or no limit:
+The reconnect window bounds the time without progress. It starts when the call starts. A
+connection is stable when it stays up for 5 seconds after the server accepted its start or resume.
+When a stable connection is lost, the window starts again and the runtime reconnects at once. A
+connection that is lost sooner is no progress: the delay keeps growing and the window keeps
+running, so a server that accepts and then drops each connection at once fails the call after the
+window. The default window is 5 minutes; every bridge can set another window or no limit:
 
 | Bridge | Setting | No limit | Error past the window |
 |--------|---------|----------|-----------------------|

@@ -45,6 +45,7 @@ async fn run_recovery() -> Unit {
 ///|
 async test "streaming recovery rejects or completes" {
   connect_attempt_timeout_ms.val = 200
+  stable_connection_ms.val = __STABLE__
   let expected = "__ERROR__"
   try run_recovery() catch {
     Unreachable(endpoint~, window_ms~, ..) => {

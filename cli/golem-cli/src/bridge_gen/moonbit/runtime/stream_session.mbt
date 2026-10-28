@@ -144,14 +144,21 @@ const MAX_RECONNECT_DELAY_MS : Int = 3000
 let connect_attempt_timeout_ms : Ref[Int] = { val: 10000 }
 
 ///|
+/// How long a connection must stay up after the server accepted its operation
+/// for its loss to count as progress.
+let stable_connection_ms : Ref[Int] = { val: 5000 }
+
+///|
 /// Paces reconnects and ends them once the reconnect window passes without
 /// progress.
 priv struct ReconnectClock {
   policy : ReconnectPolicy
   endpoint : String
-  /// When the call last made progress: its start, or when it left an
-  /// operation the server had accepted.
+  /// When the call last made progress: its start, or when it lost a stable
+  /// connection.
   mut progress_at : Int64
+  /// When the server accepted the operation of the current connection.
+  mut accepted_at : Int64?
   /// The delay before the next attempt; zero makes the next attempt at once.
   mut delay_ms : Int
   mut last_cause : String
@@ -166,16 +173,34 @@ fn ReconnectClock::new(
     policy,
     endpoint,
     progress_at: @async.now(),
+    accepted_at: None,
     delay_ms: 0,
     last_cause: "connection closed",
   }
 }
 
 ///|
-/// Restarts the window, and makes the next attempt at once.
-fn ReconnectClock::progressed(self : ReconnectClock) -> Unit {
-  self.progress_at = @async.now()
-  self.delay_ms = 0
+/// Records that the server accepted the operation of the current connection.
+fn ReconnectClock::accepted(self : ReconnectClock) -> Unit {
+  self.accepted_at = Some(@async.now())
+}
+
+///|
+/// Leaves the current connection, and reports whether it was stable: up for
+/// the stable time after the server accepted its operation. Losing a stable
+/// connection is progress: it restarts the window and makes the next attempt
+/// at once.
+fn ReconnectClock::left_connection(self : ReconnectClock) -> Bool {
+  let stable = match self.accepted_at {
+    Some(at) => (@async.now() - at).to_int() >= stable_connection_ms.val
+    None => false
+  }
+  self.accepted_at = None
+  if stable {
+    self.progress_at = @async.now()
+    self.delay_ms = 0
+  }
+  stable
 }
 
 ///|
@@ -334,7 +359,10 @@ async fn start_invocation(
       Err(cause) => clock.failed(cause)
       Ok((socket, response)) =>
         match expect_string(get_field(response, "type")) {
-          "invocationAccepted" => return (socket, response, attempt_id)
+          "invocationAccepted" => {
+            clock.accepted()
+            return (socket, response, attempt_id)
+          }
           "invocationRejected" => {
             socket.close()
             match field_opt(response, "attemptId") {
@@ -381,12 +409,16 @@ async fn send_session_binary(
 ///|
 /// Resumes a call the server had accepted, after its connection was lost, its
 /// attachment revoked, or its attempt rejected with the retryable `rejection`.
-/// Leaving the accepted operation restarts the reconnect window.
+/// Losing a stable connection restarts the reconnect window; losing it sooner
+/// counts as a failed attempt.
 async fn resume_session(session : LiveStreamSession, rejection? : String) -> Unit {
-  session.clock.progressed()
+  let stable = session.clock.left_connection()
   match rejection {
     Some(cause) => session.clock.failed(cause)
-    None => ()
+    None =>
+      if !stable {
+        session.clock.failed("connection closed")
+      }
   }
   guard session.session_token is Some(token) else {
     raise BridgeError("invalid-attachment-state: accepted session has no token")
@@ -453,6 +485,7 @@ async fn resume_session(session : LiveStreamSession, rejection? : String) -> Uni
   let accepted = accepted.unwrap()
   let socket = socket.unwrap()
   validate_acceptance_identity(accepted, attempt_id, session.idempotency_key)
+  session.clock.accepted()
   session.socket_write.acquire()
   session.socket = socket
   session.socket_write.release()

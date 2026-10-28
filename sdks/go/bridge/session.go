@@ -59,10 +59,13 @@ var (
 const (
 	firstRetryDelay = 50 * time.Millisecond
 	maxRetryDelay   = 3 * time.Second
-	// stableConnection is how long a connection must stay up for the next
-	// reconnect to start without a delay.
-	stableConnection = 5 * time.Second
 )
+
+// stableConnection is how long a connection must stay up after the server
+// accepted its operation to count as progress: its loss restarts the
+// reconnect window and the next reconnect starts without a delay. A
+// connection lost sooner leaves the window and the backoff as they were.
+var stableConnection = 5 * time.Second
 
 // connectTimeout bounds one connection attempt: the TCP connect, the TLS
 // handshake and the WebSocket upgrade together.
@@ -102,8 +105,7 @@ type session struct {
 	// connection that did not stay up.
 	nextDelay time.Duration
 	// progress is when the session last made progress: the open, or when
-	// it left an operation the server had accepted. The reconnect window
-	// runs from it.
+	// it lost a stable connection. The reconnect window runs from it.
 	progress time.Time
 	// lastCause is why the last connection attempt or connection failed.
 	lastCause error
@@ -275,13 +277,15 @@ type outFrame struct {
 // a frame queued for a connection that has since dropped is discarded, since
 // whatever it carried is resent after the session resumes.
 type sessionConn struct {
-	ws     *websocket.Conn
-	opened time.Time
-	mu     sync.Mutex
-	queue  []outFrame
-	wake   chan struct{}
-	closed chan struct{}
-	once   sync.Once
+	ws *websocket.Conn
+	// acceptedAt is when the server accepted the operation sent on this
+	// connection; zero until then. Guarded by the session's mutex.
+	acceptedAt time.Time
+	mu         sync.Mutex
+	queue      []outFrame
+	wake       chan struct{}
+	closed     chan struct{}
+	once       sync.Once
 	// parked is set while the read loop waits for queue space, and parks
 	// counts those waits. A pong is read only by the read loop, so a ping
 	// cannot succeed while it is parked.
@@ -461,7 +465,7 @@ func (s *session) connect(delay time.Duration) {
 			return
 		}
 		ws.SetReadLimit(maxMessageBytes + 64)
-		c := &sessionConn{ws: ws, opened: time.Now(), wake: make(chan struct{}, 1), closed: make(chan struct{})}
+		c := &sessionConn{ws: ws, wake: make(chan struct{}, 1), closed: make(chan struct{})}
 		s.mu.Lock()
 		if s.over {
 			s.mu.Unlock()
@@ -576,7 +580,7 @@ func (s *session) lost(c *sessionConn, cause error) {
 		return
 	}
 	s.lastCause = &Error{Endpoint: "invoke-agent-session", Err: cause}
-	err := s.detach()
+	err := s.detach(c)
 	delay := s.retryDelay(c)
 	s.mu.Unlock()
 	c.shut()
@@ -587,24 +591,30 @@ func (s *session) lost(c *sessionConn, cause error) {
 	go s.connect(delay)
 }
 
+// stable reports whether the server accepted the operation on c and c then
+// stayed up for stableConnection. Called with s.mu held.
+func stable(c *sessionConn) bool {
+	return !c.acceptedAt.IsZero() && time.Since(c.acceptedAt) >= stableConnection
+}
+
 // retryDelay is the delay before reconnecting after c ended: none after a
-// connection that stayed up, otherwise the delay the attempts before it
-// reached, so a server that accepts and then closes at once is not dialed
-// in a tight loop. Called with s.mu held.
+// stable connection, otherwise the delay the attempts before it reached, so
+// a server that accepts and then closes at once is not dialed in a tight
+// loop. Called with s.mu held.
 func (s *session) retryDelay(c *sessionConn) time.Duration {
-	if time.Since(c.opened) >= stableConnection {
+	if stable(c) {
 		return 0
 	}
 	return s.nextDelay
 }
 
-// detach forgets the connection-local channel table and freezes the next
-// operation: the same start again before acceptance, a resume after it.
-// Called with s.mu held.
-func (s *session) detach() error {
-	// Leaving an accepted operation ends a period of progress, so the
-	// reconnect window starts again.
-	if s.accepted {
+// detach leaves c: it forgets the connection-local channel table and freezes
+// the next operation, the same start again before acceptance, a resume after
+// it. Called with s.mu held.
+func (s *session) detach(c *sessionConn) error {
+	// Losing a stable connection ends a period of progress, so the reconnect
+	// window starts again.
+	if stable(c) {
 		s.progress = time.Now()
 	}
 	s.conn = nil
@@ -860,6 +870,7 @@ func (s *session) accept(c *sessionConn, m message) error {
 	}
 	s.sessionToken = token
 	s.accepted = true
+	c.acceptedAt = time.Now()
 	s.everAccepted = true
 	return nil
 }
@@ -902,7 +913,7 @@ func (s *session) rejected(c *sessionConn, m message) error {
 		}
 		s.resumeOp = "takeover"
 		s.lastCause = &SessionError{Code: code, Message: text}
-		if err := s.detach(); err != nil {
+		if err := s.detach(c); err != nil {
 			s.mu.Unlock()
 			return err
 		}
@@ -923,7 +934,7 @@ func (s *session) rejected(c *sessionConn, m message) error {
 	// A retryable rejection means a new attempt may reach the agent: a resume
 	// once the call was accepted, otherwise a fresh start.
 	s.lastCause = &SessionError{Code: code, Message: text}
-	if err := s.detach(); err != nil {
+	if err := s.detach(c); err != nil {
 		s.mu.Unlock()
 		return err
 	}

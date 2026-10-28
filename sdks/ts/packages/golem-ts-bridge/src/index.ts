@@ -39,8 +39,9 @@ export type Configuration = {
   environment: EnvironmentName;
   aroundInvokeHook?: AroundInvokeHook;
   /**
-   * How long a streaming call keeps reconnecting, in milliseconds, while the server accepts
-   * neither its start nor a resume. After the window the call fails with a
+   * How long a streaming call keeps reconnecting, in milliseconds, without progress: a
+   * connection that stays up for 5 seconds after the server accepted its start or a resume.
+   * After the window the call fails with a
    * `StreamingUnreachableError`. Defaults to `DEFAULT_RECONNECT_WINDOW_MS`; `'unlimited'`
    * reconnects until the call's `AbortSignal` aborts.
    */
@@ -1504,6 +1505,17 @@ const FIRST_RECONNECT_DELAY_MS = 50;
 const MAX_RECONNECT_DELAY_MS = 3000;
 /** Bounds one connection attempt: TCP connect, TLS handshake and WebSocket upgrade together. */
 const CONNECT_ATTEMPT_TIMEOUT_MS = 10_000;
+/**
+ * How long a connection must stay up after the server accepted its operation for its loss to count
+ * as progress. Tests shorten it with the configuration member under this key.
+ */
+const STABLE_CONNECTION_MS = 5_000;
+const STABLE_CONNECTION_KEY = Symbol.for('@golemcloud/golem-ts-bridge/stableConnectionMs');
+
+function stableConnectionOf(configuration: Configuration): number {
+  const stable = (configuration as unknown as Record<symbol, unknown>)[STABLE_CONNECTION_KEY];
+  return typeof stable === 'number' ? stable : STABLE_CONNECTION_MS;
+}
 
 function reconnectWindowOf(configuration: Configuration): number | undefined {
   const window = configuration.reconnectWindowMs ?? DEFAULT_RECONNECT_WINDOW_MS;
@@ -3517,8 +3529,10 @@ class StreamingSession {
   private startParameters?: PublicValue;
   private readonly server: GolemServer;
   private reconnectWindowMs?: number;
-  /** When the session last made progress: its start, or when it left an accepted operation. */
+  /** When the session last made progress: its start, or when it lost a stable connection. */
   private progressAt = Date.now();
+  /** When the server accepted the operation of the current connection. */
+  private acceptedAt?: number;
   private reconnectDelayMs = 0;
   private lastFailure?: Error;
 
@@ -3821,10 +3835,21 @@ class StreamingSession {
         : Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
   }
 
-  /** Restarts the reconnect window, and makes the next attempt at once. */
-  private progressed(): void {
-    this.progressAt = Date.now();
-    this.reconnectDelayMs = 0;
+  /**
+   * Leaves the current connection, and reports whether it was stable: up for the stable time after
+   * the server accepted its operation. Losing a stable connection is progress: it restarts the
+   * reconnect window and makes the next attempt at once.
+   */
+  private leftConnection(): boolean {
+    const stable =
+      this.acceptedAt !== undefined &&
+      Date.now() - this.acceptedAt >= stableConnectionOf(this.configuration);
+    this.acceptedAt = undefined;
+    if (stable) {
+      this.progressAt = Date.now();
+      this.reconnectDelayMs = 0;
+    }
+    return stable;
   }
 
   private message(data: RawData, binary: boolean): void {
@@ -3879,6 +3904,7 @@ class StreamingSession {
         this.accepted = true;
         this.everAccepted = true;
         this.pendingResume = false;
+        this.acceptedAt = Date.now();
         break;
       }
       case 'invocationRejected': {
@@ -4672,9 +4698,8 @@ class StreamingSession {
   }
 
   /**
-   * Leaves the current connection for a new one. Leaving an accepted operation restarts the
-   * reconnect window; a `rejection`, or the loss of a connection whose operation the server had
-   * not accepted, counts as a failed attempt.
+   * Leaves the current connection for a new one. Losing a stable connection restarts the reconnect
+   * window; a `rejection`, or the loss of any other connection, counts as a failed attempt.
    */
   private async reconnect(
     forceFreshResume = false,
@@ -4684,9 +4709,9 @@ class StreamingSession {
     if (this.reconnecting || this.signal?.aborted) return;
     this.reconnecting = true;
     try {
-      if (this.accepted) this.progressed();
+      const stable = this.leftConnection();
       if (rejection) this.attemptFailed(rejection);
-      else if (!this.accepted) this.attemptFailed(new Error('connection closed'));
+      else if (!stable) this.attemptFailed(new Error('connection closed'));
       const freshResume = forceFreshResume || this.accepted;
       const previous = this.socket;
       this.socket = undefined;

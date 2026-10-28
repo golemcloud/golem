@@ -57,6 +57,9 @@ const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(3);
 /// Bounds one connection attempt: the TCP connect, the TLS handshake and the WebSocket upgrade
 /// together.
 const CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a connection must stay up after the server accepted its operation for its loss to
+/// count as progress.
+const STABLE_CONNECTION: Duration = Duration::from_secs(5);
 
 /// How long an invocation session keeps reconnecting while the server accepts neither its start
 /// nor a resume.
@@ -65,8 +68,9 @@ pub enum ReconnectPolicy {
     /// Reconnects until the caller drops the session.
     Unlimited,
     /// Fails with [`SessionTransportError::Unreachable`] once the window passes without progress.
-    /// The window starts when the session opens, and again when a connection whose operation the
-    /// server accepted is lost.
+    /// The window starts when the session opens, and again when a connection is lost that stayed
+    /// up for 5 seconds after the server accepted its operation. A connection lost sooner leaves
+    /// the window running.
     Within(Duration),
 }
 
@@ -1518,10 +1522,14 @@ pub struct InvocationSession {
 /// Paces reconnects and ends them once the reconnect window passes without progress.
 struct ReconnectClock {
     policy: ReconnectPolicy,
-    /// When the session last made progress: its open, or the loss of an accepted operation.
+    /// When the session last made progress: its open, or the loss of a stable connection.
     progress: tokio::time::Instant,
     /// The delay before the next attempt; `None` makes the next attempt at once.
     delay: Option<Duration>,
+    /// When the server accepted the operation of the current connection.
+    accepted_at: Option<tokio::time::Instant>,
+    /// How long a connection must stay up after acceptance to be stable.
+    stable_after: Duration,
     endpoint: String,
     last_cause: Option<SessionTransportError>,
 }
@@ -1532,15 +1540,30 @@ impl ReconnectClock {
             policy,
             progress: tokio::time::Instant::now(),
             delay: None,
+            accepted_at: None,
+            stable_after: STABLE_CONNECTION,
             endpoint: String::new(),
             last_cause: None,
         }
     }
 
-    /// Restarts the window, and makes the next attempt at once.
-    fn progressed(&mut self) {
-        self.progress = tokio::time::Instant::now();
-        self.delay = None;
+    /// Records that the server accepted the operation of the current connection.
+    fn accepted(&mut self) {
+        self.accepted_at = Some(tokio::time::Instant::now());
+    }
+
+    /// Leaves the accepted connection, and reports whether it was stable. Losing a stable
+    /// connection is progress: it restarts the window and makes the next attempt at once.
+    fn left_accepted(&mut self) -> bool {
+        let stable = self
+            .accepted_at
+            .take()
+            .is_some_and(|accepted_at| accepted_at.elapsed() >= self.stable_after);
+        if stable {
+            self.progress = tokio::time::Instant::now();
+            self.delay = None;
+        }
+        stable
     }
 
     /// Records a failed attempt; the next one waits longer.
@@ -1875,6 +1898,7 @@ impl InvocationSession {
                     self.install_input_mappings(mappings, true)?;
                     self.deliveries
                         .set_attachment_state(None, Some(session_token.clone()))?;
+                    self.reconnect.accepted();
                     self.attachment_state = AttachmentState::Accepted {
                         attempt_id: *attempt_id,
                         replay_revocation_eligible: exact_retry,
@@ -1934,7 +1958,7 @@ impl InvocationSession {
                             ..
                         } if *attempt_id == Some(accepted_attempt_id) => {
                             if *retryable && *code != PublicErrorCode::InvalidAttachmentState {
-                                self.reconnect.progressed();
+                                self.reconnect.left_accepted();
                                 self.reconnect.failed(SessionTransportError::Rejected {
                                     code: *code,
                                     message: message.clone(),
@@ -2050,8 +2074,9 @@ impl InvocationSession {
         self.deliveries.set_attachment_state(Some(pending), None)
     }
 
-    /// Reconnects after the transport detached with `cause`. Leaving an accepted operation
-    /// restarts the reconnect window; losing a pending one counts as a failed attempt.
+    /// Reconnects after the transport detached with `cause`. Losing a stable connection restarts
+    /// the reconnect window; losing a pending operation, or an accepted one sooner, counts as a
+    /// failed attempt.
     async fn recover(&mut self, cause: SessionTransportError) -> Result<(), SessionTransportError> {
         let exact_retry = match self.attachment_state {
             AttachmentState::Pending { .. } => {
@@ -2059,7 +2084,9 @@ impl InvocationSession {
                 true
             }
             AttachmentState::Accepted { .. } => {
-                self.reconnect.progressed();
+                if !self.reconnect.left_accepted() {
+                    self.reconnect.failed(cause);
+                }
                 self.install_new_resume(PublicResumeOperation::Resume)?;
                 false
             }
@@ -8621,6 +8648,7 @@ mod tests {
         )
         .await
         .unwrap();
+        session.reconnect.stable_after = Duration::from_millis(200);
         session.receive().await.unwrap();
         assert!(matches!(
             session.receive().await.unwrap().frame(),
@@ -8671,5 +8699,121 @@ mod tests {
             ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
         ));
         server.await.unwrap();
+    }
+
+    #[test]
+    async fn an_accepted_connection_dropped_at_once_is_unreachable_after_the_window_with_backoff() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let connected = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server_connected = connected.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let mut socket = accept_session(&listener).await;
+                server_connected
+                    .lock()
+                    .unwrap()
+                    .push(tokio::time::Instant::now());
+                let operation = receive_client_message(&mut socket).await;
+                send_server(
+                    &mut socket,
+                    accepted(operation_attempt_id(&operation).unwrap(), Vec::new()),
+                )
+                .await;
+                drop(socket);
+            }
+        });
+        let started = tokio::time::Instant::now();
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_millis(400)),
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+        session.reconnect.stable_after = Duration::from_millis(200);
+        let error = loop {
+            match session.receive().await {
+                Ok(_) => continue,
+                Err(error) => break error,
+            }
+        };
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(error, SessionTransportError::Unreachable { .. }),
+            "expected an unreachable error, got {error}"
+        );
+        assert!(elapsed >= Duration::from_millis(400), "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+        let connected = connected.lock().unwrap().clone();
+        assert!(
+            (3..=6).contains(&connected.len()),
+            "connected {} times",
+            connected.len()
+        );
+        let last_wait = connected[connected.len() - 1] - connected[connected.len() - 2];
+        assert!(
+            last_wait >= Duration::from_millis(150),
+            "the last reconnect waited only {last_wait:?}"
+        );
+        server.abort();
+    }
+
+    #[test]
+    async fn stable_connections_keep_the_session_alive_past_the_window() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let initial = start_request(uuid::Uuid::new_v4());
+        let server = tokio::spawn(async move {
+            let mut waits = Vec::new();
+            let mut lost = None;
+            for _ in 0..4 {
+                let mut socket = accept_session(&listener).await;
+                if let Some(lost) = lost {
+                    waits.push(tokio::time::Instant::now() - lost);
+                }
+                let operation = receive_client_message(&mut socket).await;
+                send_server(
+                    &mut socket,
+                    accepted(operation_attempt_id(&operation).unwrap(), Vec::new()),
+                )
+                .await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                lost = Some(tokio::time::Instant::now());
+                drop(socket);
+            }
+            let mut socket = accept_session(&listener).await;
+            waits.push(tokio::time::Instant::now() - lost.unwrap());
+            let resume = receive_client_message(&mut socket).await;
+            send_server(
+                &mut socket,
+                accepted(operation_attempt_id(&resume).unwrap(), Vec::new()),
+            )
+            .await;
+            socket.close(None).await.unwrap();
+            waits
+        });
+        let started = tokio::time::Instant::now();
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_millis(400)),
+            initial,
+        )
+        .await
+        .unwrap();
+        session.reconnect.stable_after = Duration::from_millis(100);
+        for _ in 0..5 {
+            assert!(matches!(
+                session.receive().await.unwrap().frame(),
+                ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
+            ));
+        }
+        assert!(started.elapsed() >= Duration::from_secs(1));
+        for wait in server.await.unwrap() {
+            assert!(
+                wait < Duration::from_millis(40),
+                "a reconnect after a stable connection waited {wait:?}"
+            );
+        }
     }
 }

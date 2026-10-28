@@ -3296,31 +3296,36 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         AgentMode::Durable,
     ));
     let window = "Within(10000)";
-    for (mode, expected_error, reconnect) in [
-        ("success", "", window),
-        ("resume-retryable", "", window),
-        ("initial", "terminal rejection", window),
-        ("other", "terminal rejection", window),
+    const STABLE: &str = "5000";
+    for (mode, expected_error, reconnect, stable) in [
+        ("success", "", window, STABLE),
+        ("resume-retryable", "", window, STABLE),
+        ("initial", "terminal rejection", window, STABLE),
+        ("other", "terminal rejection", window, STABLE),
         (
             "mismatch",
             "attempt-conflict: rejection attempt does not match",
             window,
+            STABLE,
         ),
-        ("second", "terminal rejection", window),
-        ("second-retryable", "terminal rejection", window),
+        ("second", "terminal rejection", window, STABLE),
+        ("second-retryable", "terminal rejection", window, STABLE),
         (
             "takeover-mismatch",
             "attempt-conflict: rejection attempt does not match",
             window,
+            STABLE,
         ),
-        ("start-closed", "unreachable", "Within(500)"),
-        ("start-blackhole", "unreachable", "Within(1500)"),
-        ("start-503", "", window),
-        ("start-no-limit", "", "Unlimited"),
-        ("start-retryable", "", window),
-        ("window-reset", "", "Within(1000)"),
-        ("resume-unreachable", "unreachable", "Within(500)"),
-        ("resume-routing-miss", "", window),
+        ("start-closed", "unreachable", "Within(500)", STABLE),
+        ("start-blackhole", "unreachable", "Within(1500)", STABLE),
+        ("start-503", "", window, STABLE),
+        ("start-no-limit", "", "Unlimited", STABLE),
+        ("start-retryable", "", window, STABLE),
+        ("window-reset", "", "Within(1000)", "1000"),
+        ("resume-unreachable", "unreachable", "Within(500)", STABLE),
+        ("resume-routing-miss", "", window, STABLE),
+        ("accept-drop", "unreachable", "Within(800)", "400"),
+        ("stable-reset", "", "Within(1000)", "300"),
     ] {
         let mut server = std::process::Command::new("python3")
             .arg("-u")
@@ -3342,7 +3347,8 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
             include_str!("moonbit_recovery.mbt")
                 .replace("__PORT__", port.trim())
                 .replace("__ERROR__", expected_error)
-                .replace("__RECONNECT__", reconnect),
+                .replace("__RECONNECT__", reconnect)
+                .replace("__STABLE__", stable),
         )
         .unwrap();
         let result = std::panic::catch_unwind(|| pkg.test_native());

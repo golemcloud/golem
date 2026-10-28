@@ -28,6 +28,9 @@ object StreamSession {
   private val MaxReconnectDelayMillis = 3000L
   // Bounds one connection attempt: TCP connect, TLS handshake and WebSocket upgrade together.
   private val ConnectAttemptTimeoutMillis = 10000L
+  // How long a connection must stay up after the server accepted its operation for its loss to
+  // count as progress. Tests shorten it.
+  @volatile private[runtime] var stableConnectionMillis = 5000L
 
   private final class Input(
     val consumer: Future[AgentStream.Consumer[Any]],
@@ -256,8 +259,10 @@ object StreamSession {
       case finite: FiniteDuration => Some(finite)
       case _ => None
     }
-    // When the session last made progress: its start, or when it left an accepted operation.
+    // When the session last made progress: its start, or when it lost a stable connection.
     @volatile var progressAt = System.nanoTime()
+    // When the server accepted the operation of the current connection.
+    @volatile var acceptedAt: Option[Long] = None
     @volatile var reconnectDelayMillis = 0L
     @volatile var lastFailure: Throwable = null
     // Set when the handler that leaves the current connection has already accounted for it in the
@@ -273,10 +278,17 @@ object StreamSession {
       reconnectDelayMillis =
         if (reconnectDelayMillis == 0L) FirstReconnectDelayMillis
         else math.min(reconnectDelayMillis * 2, MaxReconnectDelayMillis)
-    // Restarts the reconnect window and makes the next attempt at once.
-    def progressed(): Unit = {
-      progressAt = System.nanoTime()
-      reconnectDelayMillis = 0L
+    // Leaves the current connection, and reports whether it was stable: up for the stable time after
+    // the server accepted its operation. Losing a stable connection is progress: it restarts the
+    // reconnect window and makes the next attempt at once.
+    def leftConnection(): Boolean = {
+      val stable = acceptedAt.exists(at => (System.nanoTime() - at) / 1000000L >= stableConnectionMillis)
+      acceptedAt = None
+      if (stable) {
+        progressAt = System.nanoTime()
+        reconnectDelayMillis = 0L
+      }
+      stable
     }
 
     // `java.net.http.WebSocket` rejects a text or binary send while another one is still pending, so
@@ -571,6 +583,7 @@ object StreamSession {
             sessionToken = token
             accepted = true
             everAccepted = true
+            acceptedAt = Some(System.nanoTime())
           case "invocationRejected" =>
             val attempt = Json.field(json, "attemptId").map(value => Json.asString(value).fold(e => throw BridgeException(e), identity))
             if (attempt.exists(_ != pendingAttempt) || (everAccepted && attempt.isEmpty))
@@ -583,7 +596,7 @@ object StreamSession {
             val takeover = pendingAttach && pendingAttachOperation == "resume" && code == "invalid-attachment-state"
             val retry = retryable && code != "invalid-attachment-state"
             if (takeover || (everAccepted && retry)) {
-              if (accepted) progressed()
+              leftConnection()
               attemptFailed(error)
               departureRecorded = true
               try prepareResumeDescriptor(if (takeover) "takeover" else if (accepted) "resume" else pendingAttachOperation)
@@ -712,7 +725,7 @@ object StreamSession {
           case "attachmentRevoked" =>
             if (Json.requireField(json, "reason").flatMap(Json.asString).toOption.get != "replaced")
               throw BridgeException("invalid attachment revocation reason")
-            if (accepted) progressed()
+            if (!leftConnection()) attemptFailed(BridgeException("the attachment was replaced"))
             departureRecorded = true
             try prepareResumeDescriptor()
             catch { case error: Throwable => fatal(error); return }
@@ -910,7 +923,7 @@ object StreamSession {
         session.outputs.values().asScala.foreach(_.prepareResume())
         val ready = try {
           if (accepted) {
-            progressed()
+            if (!leftConnection()) attemptFailed(new IOException("connection closed"))
             prepareResumeDescriptor()
           } else if (!departureRecorded) attemptFailed(new IOException("connection closed"))
           departureRecorded = false

@@ -26,9 +26,10 @@ import scala.concurrent.duration._
  * the agents live in, and the [[ExecutionContext]] used to complete the
  * Future-based client calls.
  *
- * `reconnectWindow` is how long a streaming call keeps reconnecting while the
- * server accepts neither its start nor a resume; after it the call fails with
- * a [[BridgeUnreachableException]]. `Duration.Inf` removes the limit.
+ * `reconnectWindow` is how long a streaming call keeps reconnecting without
+ * progress, a connection that stays up for 5 seconds after the server accepted
+ * its start or a resume; after it the call fails with a
+ * [[BridgeUnreachableException]]. `Duration.Inf` removes the limit.
  */
 final case class Configuration(
   server: GolemServer,

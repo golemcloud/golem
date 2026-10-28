@@ -40,9 +40,10 @@ type Configuration struct {
 	// which is fine for a script and wrong for a service that needs its own
 	// timeouts and connection pool.
 	HTTPClient *http.Client
-	// ReconnectWindow is how long a streaming call keeps reconnecting while
-	// the server accepts neither its start nor a resume. After the window the
-	// call fails with an *UnreachableError. Zero means DefaultReconnectWindow;
+	// ReconnectWindow is how long a streaming call keeps reconnecting without
+	// progress: a connection that stays up for 5 seconds after the server
+	// accepted its start or a resume. After the window the call fails with an
+	// *UnreachableError. Zero means DefaultReconnectWindow;
 	// NoReconnectLimit removes the limit.
 	ReconnectWindow time.Duration
 }

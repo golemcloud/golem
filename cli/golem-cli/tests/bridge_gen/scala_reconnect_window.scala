@@ -43,6 +43,8 @@ class StreamRuntimeTest extends munit.FunSuite {
       else Json.parse(new String(decoded, UTF_8)).toOption.get
     }
     def close(): Unit = socket.close()
+    // Ends the connection with a close frame, so the client sees the loss at once.
+    def hangUp(): Unit = { sendFrame(8, Array(3.toByte, 232.toByte)); socket.close() }
   }
 
   private def refuse(server: ServerSocket, status: Int): Unit = {
@@ -75,6 +77,12 @@ class StreamRuntimeTest extends munit.FunSuite {
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:$port", "token"), "app", "env", global, window),
       "StreamerAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
     Bridge.invokeStreamingAgentCancelable(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, None, Nil)
+  }
+  // Runs body with a shorter time an accepted connection must stay up to count as progress.
+  private def stableAfter[A](millis: Long)(body: => A): A = {
+    val before = StreamSession.stableConnectionMillis
+    StreamSession.stableConnectionMillis = millis
+    try body finally StreamSession.stableConnectionMillis = before
   }
   private def closedPort(): Int = { val server = new ServerSocket(0); val port = server.getLocalPort; server.close(); port }
 
@@ -222,8 +230,71 @@ class StreamRuntimeTest extends munit.FunSuite {
         second
       } finally server.close()
     }
-    Await.result(call(server.getLocalPort, 300.millis)._1, 15.seconds)
+    stableAfter(200)(Await.result(call(server.getLocalPort, 300.millis)._1, 15.seconds))
     Await.result(peer, 5.seconds).close()
+  }
+
+  test("an accepted connection dropped at once is unreachable after the window, with backoff") {
+    val server = new ServerSocket(0)
+    val connected = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
+    @volatile var key: Json = null
+    val acceptor = new Thread(() => try while (true) {
+      val p = new Peer(server.accept())
+      connected.add(System.nanoTime())
+      val operation = p.receive()
+      if (key == null) key = field(operation, "idempotencyKey")
+      accepted(p, operation, key)
+      p.hangUp()
+    } catch { case _: Throwable => () })
+    acceptor.setDaemon(true)
+    acceptor.start()
+    try {
+      val started = System.nanoTime()
+      stableAfter(200) {
+        intercept[BridgeUnreachableException](Await.result(call(server.getLocalPort, 400.millis)._1, 10.seconds))
+      }
+      val elapsed = (System.nanoTime() - started).nanos
+      assert(elapsed >= 400.millis && elapsed < 5.seconds, elapsed.toString)
+      val times = connected.toArray(Array.empty[java.lang.Long]).map(_.longValue)
+      assert(times.length >= 3 && times.length <= 6, s"connected ${times.length} times")
+      val lastWait = (times(times.length - 1) - times(times.length - 2)).nanos
+      assert(lastWait >= 150.millis, s"the last reconnect waited only $lastWait")
+    } finally server.close()
+  }
+
+  test("stable connections keep a call alive past the window") {
+    val server = new ServerSocket(0)
+    val peer = Future {
+      try {
+        val first = new Peer(server.accept())
+        val start = first.receive()
+        val key = field(start, "idempotencyKey")
+        accepted(first, start, key)
+        Thread.sleep(250)
+        var lost = System.nanoTime()
+        first.close()
+        val waits = List.newBuilder[FiniteDuration]
+        (1 to 3).foreach { _ =>
+          val p = new Peer(server.accept())
+          waits += (System.nanoTime() - lost).nanos
+          accepted(p, p.receive(), key)
+          Thread.sleep(250)
+          lost = System.nanoTime()
+          p.close()
+        }
+        val last = new Peer(server.accept())
+        waits += (System.nanoTime() - lost).nanos
+        accepted(last, last.receive(), key)
+        finish(last)
+        (last, waits.result())
+      } finally server.close()
+    }
+    val started = System.nanoTime()
+    stableAfter(100)(Await.result(call(server.getLocalPort, 400.millis)._1, 15.seconds))
+    assert((System.nanoTime() - started).nanos >= 1.second)
+    val (last, waits) = Await.result(peer, 5.seconds)
+    last.close()
+    waits.foreach(wait => assert(wait < 100.millis, s"a reconnect after a stable connection waited $wait"))
   }
 
   test("cancelling a start that cannot connect fails it with BridgeCancelledException") {

@@ -1254,7 +1254,7 @@ func TestAReplayedItemBindsWhileTheOldReaderIsPaused(t *testing.T) {
 	}
 
 	s.mu.Lock()
-	if err := s.detach(); err != nil {
+	if err := s.detach(old); err != nil {
 		t.Fatal(err)
 	}
 	s.conn, s.accepted = current, true
@@ -2144,9 +2144,18 @@ func TestRetryableRejectionsPastTheWindowAreUnreachable(t *testing.T) {
 	}
 }
 
-// The window runs from the loss of an accepted connection, not from the
-// start: a call accepted for longer than the window still resumes.
+// stableAfter sets how long an accepted connection must stay up to count as
+// progress for the rest of the test.
+func stableAfter(t *testing.T, d time.Duration) {
+	before := stableConnection
+	stableConnection = d
+	t.Cleanup(func() { stableConnection = before })
+}
+
+// The window runs from the loss of a stable connection, not from the start:
+// a call accepted for longer than the window still resumes.
 func TestTheWindowStartsAgainAfterAcceptance(t *testing.T) {
+	stableAfter(t, 200*time.Millisecond)
 	var key any
 	server := newFakeServer(t,
 		func(c *fakeConn) {
@@ -2212,8 +2221,9 @@ func TestANegativeReconnectWindowIsInvalid(t *testing.T) {
 }
 
 // A retryable rejection of the accepted attempt resumes the call, with a
-// window that starts when the call leaves the accepted attempt.
+// window that starts when the call leaves the stable connection.
 func TestARetryableRejectionAfterAcceptanceResumes(t *testing.T) {
+	stableAfter(t, 200*time.Millisecond)
 	var key any
 	server := newFakeServer(t,
 		func(c *fakeConn) {
@@ -2249,5 +2259,130 @@ func TestARetryableRejectionAfterAcceptanceResumes(t *testing.T) {
 	values, err := out.Collect(ctx)
 	if err != nil || !reflect.DeepEqual(values, []uint32{10, 20}) {
 		t.Fatalf("collected %v, %v", values, err)
+	}
+}
+
+// An accepted connection that drops at once is no progress: the reconnects
+// back off and the window keeps running from the open, so the call ends as
+// unreachable.
+func TestAnAcceptedConnectionDroppedAtOnceIsNoProgress(t *testing.T) {
+	stableAfter(t, 200*time.Millisecond)
+	var mu sync.Mutex
+	var key any
+	var opened []time.Time
+	acceptAndDrop := func(c *fakeConn) {
+		mu.Lock()
+		opened = append(opened, time.Now())
+		mu.Unlock()
+		op := c.read()
+		switch op.kind {
+		case "invocationStart":
+			mu.Lock()
+			key = op.m["idempotencyKey"]
+			mu.Unlock()
+			accept(c, op, "sess")
+		case "resumeAttach":
+			mu.Lock()
+			k := key
+			mu.Unlock()
+			acceptAs(c, op, k, "sess")
+		default:
+			t.Errorf("server got %s", op.kind)
+		}
+		c.drop()
+	}
+	server := newFakeServer(t, slices.Repeat([]func(*fakeConn){acceptAndDrop}, 100)...)
+	started := time.Now()
+	_, err := CallStreaming(ctxT(t), server.agentWithin(t, 600*time.Millisecond), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	elapsed := time.Since(started)
+	var unreachable *UnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("got %v", err)
+	}
+	if elapsed < 600*time.Millisecond || elapsed > 3*time.Second {
+		t.Fatalf("gave up after %v", elapsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// The reconnects wait 50, 100, 200 and 400 ms.
+	if n := len(opened); n < 3 || n > 6 {
+		t.Fatalf("connected %d times", n)
+	}
+	if gap := opened[len(opened)-1].Sub(opened[len(opened)-2]); gap < 150*time.Millisecond {
+		t.Fatalf("the last reconnect waited only %v", gap)
+	}
+}
+
+// Accepted connections that stay up keep a call alive past the window, and
+// each loss reconnects at once.
+func TestStableConnectionsKeepTheCallAlivePastTheWindow(t *testing.T) {
+	stableAfter(t, 100*time.Millisecond)
+	var mu sync.Mutex
+	var key any
+	var lost time.Time
+	var waits []time.Duration
+	reconnected := func() any {
+		mu.Lock()
+		defer mu.Unlock()
+		waits = append(waits, time.Since(lost))
+		return key
+	}
+	dropNow := func(c *fakeConn) {
+		mu.Lock()
+		lost = time.Now()
+		mu.Unlock()
+		c.drop()
+	}
+	holdAndDrop := func(c *fakeConn) {
+		k := reconnected()
+		resume := c.expect("resumeAttach")
+		acceptAs(c, resume, k, "sess", outputMapping(2, "out"))
+		time.Sleep(250 * time.Millisecond)
+		dropNow(c)
+	}
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			mu.Lock()
+			key = start.m["idempotencyKey"]
+			mu.Unlock()
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", u32StreamGraph)
+			outputItem(c, 2, 0, "c0", 10)
+			time.Sleep(250 * time.Millisecond)
+			dropNow(c)
+		},
+		holdAndDrop, holdAndDrop, holdAndDrop,
+		func(c *fakeConn) {
+			k := reconnected()
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, k, "sess", outputMapping(2, "out"))
+			outputItem(c, 2, 1, "c1", 20)
+			outputEnd(c, 2, 2, "c2", map[string]any{"kind": "ok"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	started := time.Now()
+	out, err := CallStreaming(ctx, server.agentWithin(t, 400*time.Millisecond), "produce",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := out.Collect(ctx)
+	if err != nil || !reflect.DeepEqual(values, []uint32{10, 20}) {
+		t.Fatalf("collected %v, %v", values, err)
+	}
+	if elapsed := time.Since(started); elapsed < time.Second {
+		t.Fatalf("the call ended after %v, within the window", elapsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, wait := range waits {
+		if wait > 40*time.Millisecond {
+			t.Fatalf("a reconnect after a stable connection waited %v", wait)
+		}
 	}
 }

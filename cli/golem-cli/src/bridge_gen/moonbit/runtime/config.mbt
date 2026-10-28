@@ -48,8 +48,9 @@ pub fn GolemServer::token(self : GolemServer) -> String {
 }
 
 ///|
-/// How long a streaming call keeps reconnecting while the server accepts
-/// neither its start nor a resume.
+/// How long a streaming call keeps reconnecting without progress: a
+/// connection that stays up for 5 seconds after the server accepted its start
+/// or a resume.
 pub(all) enum ReconnectPolicy {
   /// Reconnects until the caller cancels the call.
   Unlimited

@@ -108,7 +108,7 @@ pub struct Configuration {
     pub app_name: String,
     pub env_name: String,
     pub server: GolemServer,
-    /// How long a streaming call keeps reconnecting while the server accepts neither its start
-    /// nor a resume.
+    /// How long a streaming call keeps reconnecting without progress. Progress is a connection
+    /// that stays up for 5 seconds after the server accepted its start or a resume.
     pub reconnect: ReconnectPolicy,
 }
