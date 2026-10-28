@@ -982,7 +982,11 @@ mod tests {
         assert_eq!(fields[0], golem_rust::SchemaValue::Bool(true));
         assert_eq!(
             fields[1],
-            golem_rust::SchemaValue::String("needle".to_string())
+            golem_rust::SchemaValue::Text(golem_rust::schema::TextValuePayload {
+                text: "needle".to_string(),
+                language: None,
+            }),
+            "the regex-refined `pattern` is published as text"
         );
         assert_eq!(
             fields[2],
@@ -1295,6 +1299,212 @@ mod tests {
         assert_eq!(underlying, presented);
         assert_eq!(underlying.name(), Some("grep"));
         assert_eq!(underlying.version, "1.2.3");
+    }
+
+    #[tool_definition]
+    trait RefinedMiddlewareArgs {
+        #[arg(name = "positional", max_length = 8)]
+        #[arg(tags = "option", max_length = 4)]
+        #[arg(label = "option", max_length = 5)]
+        fn slug(&self, name: String, tags: Vec<String>, label: Option<String>) -> String;
+
+        #[arg(count = "positional", max = 3)]
+        fn limit(&self, count: u32) -> u32;
+
+        #[arg(input = "positional", kind = "file", direction = "input", extensions = ["wasm"])]
+        fn read(&self, input: std::path::PathBuf) -> String;
+    }
+
+    fn refined_middleware_model(command: &str) -> CanonicalInputModel {
+        let tool = __golem_tool_descriptor_for_RefinedMiddlewareArgs(&mut ToolBuildCtx::new())
+            .expect("refined tool descriptor builds");
+        let index = tool
+            .command_index_by_path(&[command.to_string()])
+            .expect("command path resolves");
+        tool.canonical_input_model(index)
+            .expect("canonical input model builds")
+    }
+
+    fn host_input(
+        model: &CanonicalInputModel,
+        name: &str,
+        value: golem_rust::SchemaValue,
+    ) -> golem_rust::agentic::CanonicalInputValue {
+        let field = model
+            .fields
+            .iter()
+            .find(|field| field.name == name)
+            .expect("canonical input field exists");
+        golem_rust::agentic::CanonicalInputValue {
+            name: field.name.clone(),
+            aliases: field.aliases.clone(),
+            short: field.short,
+            schema: field.schema.clone(),
+            value,
+        }
+    }
+
+    fn text(text: &str) -> golem_rust::SchemaValue {
+        golem_rust::SchemaValue::Text(golem_rust::schema::TextValuePayload {
+            text: text.to_string(),
+            language: None,
+        })
+    }
+
+    fn forward<T: golem_rust::agentic::Schema + FromSchema>(
+        source: golem_rust::agentic::CanonicalInputValue,
+    ) -> Result<T, String> {
+        let name = source.name.clone();
+        let expected = T::get_type()
+            .get_schema_graph()
+            .expect("parameter type has a schema graph");
+        let value = golem_rust::agentic::adapt_canonical_input_value(source, &name, &expected)?;
+        T::from_value(&value).map_err(|error| error.to_string())
+    }
+
+    fn validate(input: &golem_rust::TypedSchemaValue) -> Result<(), String> {
+        golem_rust::schema::validation::validate_value(
+            input.graph(),
+            &input.graph().root,
+            input.value(),
+        )
+        .map_err(|error| format!("{error:?}"))
+    }
+
+    #[test]
+    fn middleware_reads_text_refined_input_as_string() {
+        let model = refined_middleware_model("slug");
+        let name = forward::<String>(host_input(&model, "name", text("golem")));
+        let tags = forward::<Vec<String>>(host_input(
+            &model,
+            "tags",
+            golem_rust::SchemaValue::List {
+                elements: vec![text("a"), text("b")],
+            },
+        ));
+        let label = forward::<Option<String>>(host_input(
+            &model,
+            "label",
+            golem_rust::SchemaValue::Option {
+                inner: Some(Box::new(text("tiny"))),
+            },
+        ));
+        let absent_label = forward::<Option<String>>(host_input(
+            &model,
+            "label",
+            golem_rust::SchemaValue::Option { inner: None },
+        ));
+
+        assert_eq!(name, Ok("golem".to_string()));
+        assert_eq!(tags, Ok(vec!["a".to_string(), "b".to_string()]));
+        assert_eq!(label, Ok(Some("tiny".to_string())));
+        assert_eq!(absent_label, Ok(None));
+    }
+
+    #[test]
+    fn middleware_reads_numeric_and_path_refined_input_as_base_type() {
+        let count = forward::<u32>(host_input(
+            &refined_middleware_model("limit"),
+            "count",
+            golem_rust::SchemaValue::U32(2),
+        ));
+        let input = forward::<std::path::PathBuf>(host_input(
+            &refined_middleware_model("read"),
+            "input",
+            std::path::PathBuf::from("module.wasm").to_value(),
+        ));
+
+        assert_eq!(count, Ok(2));
+        assert_eq!(input, Ok(std::path::PathBuf::from("module.wasm")));
+    }
+
+    #[test]
+    fn middleware_rejects_refined_input_for_another_base_type() {
+        let slug = refined_middleware_model("slug");
+        let limit = refined_middleware_model("limit");
+        let incompatible = |result: Result<String, String>| {
+            result.is_err_and(|error| error.contains("has incompatible schema"))
+        };
+
+        assert!(incompatible(
+            forward::<u32>(host_input(&slug, "name", text("golem"))).map(|v| v.to_string())
+        ));
+        assert!(incompatible(
+            forward::<char>(host_input(&slug, "name", text("g"))).map(|v| v.to_string())
+        ));
+        assert!(incompatible(forward::<String>(host_input(
+            &limit,
+            "count",
+            golem_rust::SchemaValue::U32(2)
+        ))));
+        assert!(incompatible(
+            forward::<u64>(host_input(&limit, "count", golem_rust::SchemaValue::U32(2)))
+                .map(|v| v.to_string())
+        ));
+        assert!(incompatible(
+            forward::<i32>(host_input(&limit, "count", golem_rust::SchemaValue::U32(2)))
+                .map(|v| v.to_string())
+        ));
+    }
+
+    #[test]
+    fn middleware_forwards_string_as_text_where_the_underlying_schema_says_text() {
+        let model = refined_middleware_model("slug");
+        let build = |name: &str, label: Option<&str>| {
+            golem_rust::agentic::build_canonical_input(
+                &model,
+                vec![
+                    ("name", name.to_string().to_value()),
+                    ("tags", vec!["a".to_string(), "b".to_string()].to_value()),
+                    ("label", label.map(str::to_string).to_value()),
+                ],
+            )
+            .expect("canonical input builds")
+        };
+
+        let input = build("golem", Some("tiny"));
+        assert_eq!(validate(&input), Ok(()));
+        assert_eq!(
+            input.value(),
+            &golem_rust::SchemaValue::Record {
+                fields: vec![
+                    text("golem"),
+                    golem_rust::SchemaValue::List {
+                        elements: vec![text("a"), text("b")],
+                    },
+                    golem_rust::SchemaValue::Option {
+                        inner: Some(Box::new(text("tiny"))),
+                    },
+                ]
+            }
+        );
+        assert_eq!(validate(&build("golem", None)), Ok(()));
+        assert!(
+            validate(&build("toolongslug", None)).is_err(),
+            "the forwarded input keeps the text refinement"
+        );
+    }
+
+    #[test]
+    fn middleware_forwards_numeric_refined_values_unchanged() {
+        let model = refined_middleware_model("limit");
+        let build = |count: u32| {
+            golem_rust::agentic::build_canonical_input(&model, vec![("count", count.to_value())])
+                .expect("canonical input builds")
+        };
+
+        let input = build(2);
+        assert_eq!(validate(&input), Ok(()));
+        assert_eq!(
+            input.value(),
+            &golem_rust::SchemaValue::Record {
+                fields: vec![golem_rust::SchemaValue::U32(2)]
+            }
+        );
+        assert!(
+            validate(&build(9)).is_err(),
+            "the forwarded input keeps the numeric refinement"
+        );
     }
 
     #[test]

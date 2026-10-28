@@ -46,6 +46,7 @@ mod plugins;
 mod remote_releases;
 mod rust_minimal_exports;
 mod rust_streams;
+mod rust_tool_middleware_refined_args;
 mod scala_gol40_reflection_acceptance;
 mod scala_guest_streams;
 mod scala_http_router;
