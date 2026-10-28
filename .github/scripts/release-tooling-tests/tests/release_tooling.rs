@@ -1,13 +1,18 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
+#![cfg(unix)]
+
 use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
-use test_r::test;
+
+fn workspace_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
+}
 
 #[test]
 fn draft_notes_start_at_the_previous_stable_golem_release() {
