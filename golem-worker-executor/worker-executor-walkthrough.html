@@ -1158,11 +1158,11 @@ grant → same-key durable repair
 <figure>
 <svg class="dg" viewBox="0 0 900 520" role="img" aria-labelledby="loop-title loop-desc">
   <title id="loop-title">The two-level invocation loop</title>
-  <desc id="loop-desc">The outer loop runs once per resident instance: check shard ownership, acquire a permit and pass monthly admission, build the agent filesystem, create a Store and instance, then prepare the instance. Replay resumption and invocation recheck cached monthly capacity. For a durable agent preparation handles a pending update, tries a snapshot baseline and resumes replay from the oplog; for an ephemeral agent it replays only the initialising invocation, switches to live and records a Restart hint. The inner loop then pops the durable queue, appends AgentInvocationStarted, runs the guest export, appends AgentInvocationFinished and waits for more work, a wake-up or a command. When the instance ends because it went idle, was interrupted, trapped, suspended or was unloaded, a RetryDecision is made: Immediate, Delayed, ReacquirePermits or TryStop lead back to the top of the outer loop with a fresh Store; None stops the worker.</desc>
+  <desc id="loop-desc">The outer loop runs once per instance attempt: check shard ownership, acquire a permit and pass monthly admission, build the agent filesystem, create a Store and instance, then prepare the instance. Replay resumption and invocation recheck cached monthly capacity. For a durable agent preparation handles a pending update, tries a snapshot baseline and resumes replay from the oplog; for an ephemeral agent it replays only the initialising invocation, switches to live and records a Restart hint. Only Ok(None) finishes reconstruction and enters the inner loop. A returned retry decision seals the filesystem and skips to ordinary teardown, which drops the Store before filesystem drainage. The inner loop pops the durable queue, appends AgentInvocationStarted, runs the guest export, appends AgentInvocationFinished and waits for more work, a wake-up or a command. When the instance ends because it went idle, was interrupted, trapped, suspended or was unloaded, a RetryDecision is made: Immediate, Delayed, ReacquirePermits or TryStop lead back to the top of the outer loop with a fresh Store; None stops the worker.</desc>
   <defs><marker id="arr-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--fg-muted)"/></marker></defs>
 
   <rect class="box sunken" x="15" y="15" width="870" height="490" style="fill:transparent"/>
-  <text x="30" y="40" class="title">Outer loop — one iteration = one resident instance (one Wasmtime Store)</text>
+  <text x="30" y="40" class="title">Outer loop — one iteration = one instance attempt (one Wasmtime Store)</text>
 
   <rect class="box" x="30" y="60" width="170" height="50"/>
   <text x="115" y="82" text-anchor="middle" class="title">Check shard ownership</text>
@@ -1186,6 +1186,9 @@ grant → same-key durable repair
   <text x="652" y="172" class="lbl">replay initialise only → live, Restart (h)</text>
 
   <path class="arrow strong" style="marker-end:url(#arr-loop)" d="M750 180 V218"/>
+  <text x="760" y="204" class="lbl">Ok(None)</text>
+  <path class="arrow" style="marker-end:url(#arr-loop)" d="M630 150 H610 V190 H40 V370 H450 V388"/>
+  <text x="60" y="185" class="lbl">Some(decision): seal filesystem → ordinary teardown</text>
 
   <rect class="box ok" x="60" y="220" width="780" height="130"/>
   <text x="80" y="245" class="title">Inner loop — one iteration = one invocation on this instance</text>
@@ -1220,7 +1223,7 @@ grant → same-key durable repair
   <text x="770" y="483" text-anchor="middle" class="lbl">None → stop; Worker is dropped</text>
   <path class="arrow" style="marker-end:url(#arr-loop)" d="M650 478 H668"/>
 </svg>
-<figcaption>The invocation loop. Every path back to the top passes monthly admission before creating a fresh Store and replaying. Durable monthly exhaustion suspends; recovery needs capacity and subsequent demand. Ephemeral monthly exhaustion fails without retry. A permit-window monitor can wake a silent TCP receive; epoch checks alone cannot.</figcaption>
+<figcaption>The invocation loop. Aborted preparation skips the inner loop and drops the Store before filesystem drainage. Every path back to the top passes monthly admission before creating a fresh Store and replaying. Durable monthly exhaustion suspends; recovery needs capacity and subsequent demand. Ephemeral monthly exhaustion fails without retry. A permit-window monitor can wake a silent TCP receive; epoch checks alone cannot.</figcaption>
 </figure>
 
 <h3 id="agent-filesystem-start">Each start builds the agent filesystem</h3>
@@ -1231,8 +1234,9 @@ grant → same-key durable repair
   <li><code>prepare_initial_files</code> checks the declarations of the replay revision and loads their content into the <code>.initial-files</code> cache.</li>
   <li><code>materialize_baseline</code> puts the baseline in place and then enables replay access.</li>
   <li><code>prepare_instance</code> replays. The filesystem calls of the guest during replay change the tree as they did live.</li>
-  <li><code>finish_replay</code> ends replay access, and <code>finish_reconstruction</code> checks the usage against the limits and makes the filesystem <code>Resident</code>.</li>
+  <li>Only <code>Ok(None)</code> from preparation continues to <code>finish_replay</code>, which ends replay access. Then <code>finish_reconstruction</code> checks the usage against the limits and makes the filesystem <code>Resident</code>.</li>
 </ol>
+<p id="aborted-filesystem-preparation"><code>Ok(Some(decision))</code> aborts preparation, even when the decision is <code>RetryDecision::None</code>. <code>PreparedAgent::finish</code> seals the reconstructing filesystem without draining it and returns the runtime to the common teardown and retry tail. It does not activate or publish a resident generation. The unload continuation drops the <code>Store</code> before it drains the sealed filesystem, closes the execution window, releases the permit, and deletes the filesystem. This order matters: a P2 output stream can retain a pending <code>FilesystemCall</code> after interruption cancels its borrowed readiness future. Draining replay with that Store alive would wait for a call that only Store destruction can detach. The common tail preserves the original retry decision, later interrupts, ephemeral fail-stop rules, and cleanup failures.</p>
 <p>After the metering bind, a failure releases the filesystem context, worker context or <code>Store</code> that owns open nodes before it awaits filesystem cleanup. Cleanup seals the filesystem (<code>abort_reconstruction</code>) and drains those nodes; retaining an open node across that wait would deadlock. Then the start does one of these:</p>
 <ul>
   <li>It fails.</li>

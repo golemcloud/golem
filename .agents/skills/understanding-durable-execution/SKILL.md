@@ -223,7 +223,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 
 ```diagram
 ┌─────────────────────────────────────────────────────────────────────┐
-│ outer loop (one iteration = one resident instance)                  │
+│ outer loop (one iteration = one instance attempt)                   │
 │  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ replay       │
 │    ephemeral:      constructor-only replay, append Restart          │
@@ -232,6 +232,17 @@ run loop (`worker/invocation_loop.rs::run`) is:
 │  ──▶ RetryDecision: Immediate | Delayed | ReacquirePermits | None | TryStop │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+Only `prepare_instance` returning `Ok(None)` completes filesystem replay and reconstruction,
+activates the resident generation, and enters the inner loop. `Ok(Some(decision))` is an aborted
+preparation, including `Some(RetryDecision::None)`. `PreparedAgent::finish` seals that reconstructing
+filesystem without drainage and retains the runtime for the ordinary teardown and retry tail.
+The unload continuation drops the Store before it drains the sealed filesystem, closes the execution
+window, releases the permit, and deletes the filesystem. A P2 output stream can retain a pending
+`FilesystemCall` after interruption cancels only its borrowed readiness future; draining replay
+with that Store still alive would wait on a call that only Store destruction can detach.
+The original retry decision, later interrupt arbitration, ephemeral fail-stop conversion, and
+cleanup-failure handling remain in the common tail.
 
 `DurableWorkerCtx::replay` (`durable_host/recovery.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
 each recorded invocation in `InvocationMode::Replay`, and when there is no further

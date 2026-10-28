@@ -931,7 +931,22 @@ pub(crate) struct ObservedPrimaryStore<T> {
     )>,
 }
 
-type WorkerRunningAgent<Ctx> = RunningAgent<RunningAgentRuntime<Ctx>>;
+enum PreparedAgent<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
+    Resident(RunningAgent<Runtime, Adapter>),
+    Aborted {
+        runtime: Runtime,
+        filesystem: SealedFilesystem<Adapter>,
+    },
+}
+
+impl<Runtime, Adapter: SandboxFilesystemAdapter> PreparedAgent<Runtime, Adapter> {
+    fn runtime(&self) -> &Runtime {
+        match self {
+            Self::Resident(agent) => &agent.runtime,
+            Self::Aborted { runtime, .. } => runtime,
+        }
+    }
+}
 
 /// The filesystem of a start: the plan of its baseline, made before the agent filesystem exists,
 /// and the restore that [`StartFilesystem::materialize`] applies to the new filesystem.
