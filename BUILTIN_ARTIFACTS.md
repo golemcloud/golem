@@ -78,8 +78,10 @@ with published six-SDK and shared-crate checks before publication. The protected
 `golem-release` job creates or resumes a draft, builds and publishes all eight
 inventory entries, and uploads the verified manifest. It never publishes the
 Golem draft. The existing native matrix attaches signed and notarized binaries
-before human review. A human publishes the draft to start Docker publication,
-which checks successful preparation of that exact tag without repeating full CI.
+before human review. A human publishes the draft with `--latest=false` (or
+unchecks **Set as latest release** in GitHub) to start Docker publication.
+The publication workflow checks successful preparation of that exact tag without
+repeating full CI, then promotes GitHub Latest only for the highest stable version.
 
 Configure the `golem-release` GitHub Environment for release tags only, preferably
 with required reviewers. Its variable `RELEASE_APP_ID` and secret
@@ -105,7 +107,8 @@ Ensure `python3` selects Python 3.14. The Python source packager uses
 system Python 3.10 rejects a valid symlink in the source archive and lacks
 `hashlib.file_digest`. The protected publisher installs Python 3.14 explicitly.
 
-1. Finish release preparation through a PR merged into `main`. When an
+1. Finish release preparation through a PR merged into `main` or the matching
+   `<major>.<minor>.x` maintenance branch. When an
    implementation changes, bump its exported tool version in source, registry
    provisioning, and defaults. Exported
    tool versions are distinct from component artifact versions; the latter use
@@ -114,8 +117,9 @@ system Python 3.10 rejects a valid symlink in the source archive and lacks
    corresponding **draft** Golem GitHub release before starting release compilation.
    Check out that exact tag in a clean checkout with full history. `origin` must
    point to `golemcloud/golem`. The task uses the GitHub API to prove that the tag
-   identifies the exact head of a PR merged into `golemcloud/golem`'s `main` and
-   that its merge commit remains reachable from public `main`. Authenticate `gh`
+   identifies the exact head of a PR merged into `golemcloud/golem`'s `main` or
+   the maintenance branch matching the tag version. Its merge commit must remain
+   reachable from that public target branch. Authenticate `gh`
    with pull requests read access. Tag the preparation-branch head, not its squash
    commit, and confirm the public tag identifies the same commit.
 3. Validate or package without external writes:

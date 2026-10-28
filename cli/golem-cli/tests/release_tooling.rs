@@ -56,6 +56,7 @@ esac
         ]
         [
           {"tag_name":"golem-rust-v3.0.1","draft":false,"prerelease":false},
+          {"tag_name":"v2.0.0","draft":false,"prerelease":false},
           {"tag_name":"v1.6.0","draft":false,"prerelease":false},
           {"tag_name":"v1.6.1","draft":false,"prerelease":false}
         ]"#,
@@ -88,6 +89,7 @@ esac
             assert!(args.is_empty(), "an existing draft must not be changed");
         } else {
             assert!(args.contains(&"--generate-notes"));
+            assert!(args.contains(&"--latest=false"));
             let actual = args
                 .windows(2)
                 .find(|pair| pair[0] == "--notes-start-tag")
@@ -109,6 +111,213 @@ fn git(repo: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn release_channels_use_published_versions_in_each_workflow() {
+    let fixture = TempDir::new().unwrap();
+    for (name, script) in [
+        (
+            "gh",
+            r#"#!/bin/sh
+set -eu
+case "$1 $2" in
+  'api --paginate')
+    [ "$RELEASE_TEST_LOOKUP_FAILS" != all ] || exit 1
+    while [ "$1" != --jq ]; do shift; done
+    exec jq -r "$2" "$RELEASE_TEST_PAGES" ;;
+  'release edit') printf '%s\n' "$@" ;;
+  *) exit 1 ;;
+esac
+"#,
+        ),
+        (
+            "npm",
+            r#"#!/bin/sh
+set -eu
+case "$1" in
+  view)
+    [ "$RELEASE_TEST_LOOKUP_FAILS" != all ] && [ "$RELEASE_TEST_LOOKUP_FAILS" != "$2" ] || exit 1
+    case "$2" in
+      @golemcloud/golem-ts-sdk|@golemcloud/golem-ts-bridge|@golemcloud/golem-ts-repl|@golemcloud/effect-golem) ;;
+      *) exit 1 ;;
+    esac
+    if [ "$2" = @golemcloud/golem-ts-bridge ]; then
+      jq 'map(select(. != "2.0.0"))' "$RELEASE_TEST_VERSIONS"
+    else
+      cat "$RELEASE_TEST_VERSIONS"
+    fi ;;
+  publish) printf '%s\n' "$@" ;;
+  *) exit 1 ;;
+esac
+"#,
+        ),
+        ("pnpm", "#!/bin/sh\nprintf '%s\\n' \"$@\"\n"),
+    ] {
+        let file = fixture.path().join(name);
+        fs::write(&file, script).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = std::env::join_paths(
+        std::iter::once(fixture.path().to_path_buf())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    for (version, newer_stable, expected, lookup_failure, npm_downgrade) in [
+        ("1.6.11", false, "latest", "none", false),
+        ("1.6.11", true, "release-1.6", "none", false),
+        ("2.0.0-rc2", false, "next", "none", false),
+        ("1.6.11", false, "", "all", false),
+        (
+            "1.6.11",
+            false,
+            "latest",
+            "@golemcloud/golem-ts-bridge",
+            false,
+        ),
+        (
+            "1.6.11",
+            false,
+            "latest",
+            "@golemcloud/golem-ts-repl",
+            false,
+        ),
+        ("1.6.9", true, "release-1.6", "none", true),
+        ("2.0.0-rc0", false, "next", "none", true),
+    ] {
+        let pages = fixture.path().join("pages.json");
+        fs::write(
+            &pages,
+            json!([
+                {"tag_name":"v1.6.10", "draft":false, "prerelease":false},
+                {"tag_name":"v2.0.0-rc1", "draft":false, "prerelease":true},
+                {"tag_name":"v3.0.0", "draft":true, "prerelease":false},
+                {"tag_name":"golem-shared-v8.0.0", "draft":false, "prerelease":false},
+                {"tag_name":"v2.0.0", "draft":!newer_stable, "prerelease":false}
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let versions = fixture.path().join("versions.json");
+        fs::write(
+            &versions,
+            if newer_stable {
+                r#"["1.6.10","2.0.0-rc1","2.0.0"]"#
+            } else {
+                r#"["1.6.10","2.0.0-rc1"]"#
+            },
+        )
+        .unwrap();
+        for (file, job, step_name, directory, tag) in [
+            (
+                ".github/actions/docker-publish-setup/action.yml",
+                "",
+                "Determine whether to publish ':latest'",
+                "",
+                format!("v{version}"),
+            ),
+            (
+                ".github/workflows/publish-golem-release.yaml",
+                "preparation",
+                "Set the stable release channel",
+                "",
+                format!("v{version}"),
+            ),
+            (
+                ".github/workflows/publish-golem-ts.yaml",
+                "publish",
+                "Publish all packages",
+                "sdks/ts",
+                format!("golem-ts-v{version}"),
+            ),
+            (
+                ".github/workflows/publish-golem-effect.yaml",
+                "publish",
+                "Publish with provenance",
+                "sdks/effect",
+                format!("golem-effect-v{version}"),
+            ),
+        ] {
+            let yaml: serde_yaml::Value = serde_yaml::from_str(
+                &fs::read_to_string(crate::workspace_path().join(file)).unwrap(),
+            )
+            .unwrap();
+            let steps = if job.is_empty() {
+                &yaml["runs"]["steps"]
+            } else {
+                &yaml["jobs"][job]["steps"]
+            };
+            let script = steps
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .find(|step| step["name"].as_str() == Some(step_name))
+                .unwrap()["run"]
+                .as_str()
+                .unwrap()
+                .replace("${{ steps.get_version.outputs.version }}", version);
+            let env_file = fixture.path().join("env");
+            fs::write(&env_file, "").unwrap();
+            let output = Command::new("bash")
+                .args(["-e", "-o", "pipefail", "-c", &script])
+                .current_dir(crate::workspace_path().join(directory))
+                .env("PATH", &path)
+                .env("RELEASE_TEST_PAGES", &pages)
+                .env("RELEASE_TEST_VERSIONS", &versions)
+                .env("RELEASE_TEST_LOOKUP_FAILS", lookup_failure)
+                .env("RELEASE_TAG", &tag)
+                .env("GITHUB_EVENT_NAME", "release")
+                .env("GITHUB_REF_NAME", &tag)
+                .env("GITHUB_ENV", &env_file)
+                .output()
+                .unwrap();
+            let should_fail = lookup_failure == "all"
+                || (directory == "sdks/ts" && lookup_failure.starts_with('@'))
+                || (directory.starts_with("sdks/") && npm_downgrade);
+            assert_eq!(output.status.success(), !should_fail, "{file}: {output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            if should_fail {
+                assert!(stdout.is_empty(), "publication must not start: {stdout}");
+                assert!(fs::read_to_string(&env_file).unwrap().is_empty());
+                continue;
+            }
+            let latest = expected == "latest";
+            if job.is_empty() {
+                assert_eq!(
+                    fs::read_to_string(&env_file).unwrap(),
+                    format!("PUBLISH_LATEST_TAG={latest}\n")
+                );
+            } else if job == "preparation" {
+                assert!(
+                    stdout
+                        .lines()
+                        .any(|line| line == format!("--latest={latest}")),
+                    "{stdout}"
+                );
+            } else {
+                let args: Vec<_> = stdout.lines().collect();
+                let channels: Vec<_> = args
+                    .windows(2)
+                    .filter(|pair| pair[0] == "--tag")
+                    .map(|pair| pair[1])
+                    .collect();
+                let expected_channels = if directory == "sdks/ts" {
+                    vec![
+                        expected,
+                        if expected == "release-1.6" {
+                            "latest"
+                        } else {
+                            expected
+                        },
+                        expected,
+                    ]
+                } else {
+                    vec![expected]
+                };
+                assert_eq!(channels, expected_channels);
+            }
+        }
+    }
 }
 
 #[test]
@@ -137,6 +346,7 @@ fn release_source_requires_the_exact_merged_pr_head() {
     git(&repo, &["config", "core.hooksPath", "/dev/null"]);
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "baseline"]);
+    let baseline = git(&repo, &["rev-parse", "HEAD"]);
     git(&repo, &["checkout", "-b", "release"]);
     fs::write(repo.join("release.txt"), "release source").unwrap();
     git(&repo, &["add", "."]);
@@ -154,6 +364,15 @@ fn release_source_requires_the_exact_merged_pr_head() {
         &repo,
         &["commit", "--allow-empty", "-m", "later development"],
     );
+    git(&repo, &["checkout", "-b", "9.8.x", &baseline]);
+    git(&repo, &["merge", "--squash", "release"]);
+    git(&repo, &["commit", "-m", "squash maintenance release PR"]);
+    let maintenance_merged = git(&repo, &["rev-parse", "HEAD"]);
+    git(
+        &repo,
+        &["commit", "--allow-empty", "-m", "later maintenance"],
+    );
+    git(&repo, &["branch", "9.7.x"]);
     git(&repo, &["clone", "--bare", ".", remote.to_str().unwrap()]);
     git(&repo, &["checkout", "release"]);
     git(
@@ -244,8 +463,22 @@ exit 1
         validate(json!([rejected]), false);
         validate(json!([rejected, pull]), true);
     }
+    let mut maintenance_pull = pull.clone();
+    maintenance_pull["base"]["ref"] = json!("9.8.x");
+    maintenance_pull["merge_commit_sha"] = json!(maintenance_merged);
+    validate(json!([maintenance_pull]), true);
+    let mut wrong_line = maintenance_pull.clone();
+    wrong_line["base"]["ref"] = json!("9.7.x");
+    validate(json!([wrong_line]), false);
+    let mut wrong_target = maintenance_pull.clone();
+    wrong_target["base"]["ref"] = json!("main");
+    validate(json!([wrong_target]), false);
+    let mut unreachable = maintenance_pull.clone();
+    unreachable["merge_commit_sha"] = json!(merged);
+    validate(json!([unreachable]), false);
     fs::write(repo.join("dirty.txt"), "uncommitted").unwrap();
     validate(json!([pull]), false);
+    validate(json!([maintenance_pull]), false);
     fs::remove_file(repo.join("dirty.txt")).unwrap();
     git(&repo, &["tag", "--force", "v9.8.7-rc1", &merged]);
     validate(json!([pull]), false);
