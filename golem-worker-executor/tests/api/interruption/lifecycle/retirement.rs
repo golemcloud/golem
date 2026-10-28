@@ -364,11 +364,26 @@ async fn stop_order(
         .count();
     if first == FirstStop::Quota {
         assert!(matches!(cause, InterruptKind::Suspend(_)));
-        assert_eq!(interrupts, 0);
         assert_eq!(suspends, usize::from(durable));
         if durable {
+            let lifecycle: Vec<_> = entries
+                .values()
+                .filter(|entry| {
+                    matches!(
+                        entry,
+                        OplogEntry::Suspend { .. } | OplogEntry::Interrupted { .. }
+                    )
+                })
+                .collect();
+            // Deletion can establish its own stop after the quota outcome was claimed.
+            assert!(matches!(
+                lifecycle.as_slice(),
+                [OplogEntry::Suspend { .. }]
+                    | [OplogEntry::Suspend { .. }, OplogEntry::Interrupted { .. }]
+            ));
             assert!(errors.is_empty(), "{errors:?}");
         } else {
+            assert_eq!(interrupts, 0);
             assert!(
                 matches!(errors.as_slice(), [AgentError::EphemeralCannotSuspend(_)]),
                 "{errors:?}"
