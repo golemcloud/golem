@@ -67,6 +67,9 @@ const integerRecordGraph = {
   },
 };
 
+// The bridge counts an accepted connection as progress once it stays up this long.
+const STABLE_CONNECTION_MS = 5_000;
+
 test('option-none uses an explicit native null payload', () => {
   assert.deepEqual(
     encodeOption(undefined, () => assert.fail('none must not encode an item')),
@@ -2616,7 +2619,6 @@ function finishWith(socket, start, value = 1) {
 }
 
 /** Shortens how long an accepted connection must stay up to count as progress. */
-const stableConnectionMs = Symbol.for('@golemcloud/golem-ts-bridge/stableConnectionMs');
 
 function plainMethod(configuration) {
   return createStreamingRemoteMethod(
@@ -2882,7 +2884,7 @@ test('the reconnect window starts again when an accepted connection is lost', as
       if (operations.length === 1) {
         idempotencyKey = operation.idempotencyKey;
         socket.send(JSON.stringify(accepted(operation)));
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, STABLE_CONNECTION_MS + 200));
         socket.terminate();
         return;
       }
@@ -2905,7 +2907,6 @@ test('the reconnect window starts again when an accepted connection is lost', as
       await plainMethod({
         server: local.endpoint,
         reconnectWindowMs: 300,
-        [stableConnectionMs]: 200,
       })(),
       8,
     );
@@ -2932,7 +2933,6 @@ test('an accepted connection dropped at once is unreachable after the window, wi
     const error = await plainMethod({
       server: local.endpoint,
       reconnectWindowMs: 400,
-      [stableConnectionMs]: 200,
     })().then(
       () => assert.fail('a dropped call succeeded'),
       (error) => error,
@@ -2959,7 +2959,7 @@ test('stable connections keep a call alive past the reconnect window', async () 
   const local = await server((socket) => {
     connections += 1;
     if (lost !== undefined) waits.push(Date.now() - lost);
-    const last = connections === 5;
+    const last = connections === 3;
     socket.once('message', async (data) => {
       const operation = JSON.parse(data);
       idempotencyKey ??= operation.idempotencyKey;
@@ -2978,7 +2978,7 @@ test('stable connections keep a call alive past the reconnect window', async () 
         );
         return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, STABLE_CONNECTION_MS + 200));
       lost = Date.now();
       socket.terminate();
     });
@@ -2989,12 +2989,11 @@ test('stable connections keep a call alive past the reconnect window', async () 
       await plainMethod({
         server: local.endpoint,
         reconnectWindowMs: 400,
-        [stableConnectionMs]: 100,
       })(),
       9,
     );
-    assert.ok(Date.now() - started >= 1000);
-    assert.equal(waits.length, 4);
+    assert.ok(Date.now() - started >= 2 * STABLE_CONNECTION_MS);
+    assert.equal(waits.length, 2);
     for (const wait of waits)
       assert.ok(wait < 40, `a reconnect after a stable connection waited ${wait} ms`);
   } finally {

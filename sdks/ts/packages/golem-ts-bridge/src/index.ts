@@ -1507,15 +1507,9 @@ const MAX_RECONNECT_DELAY_MS = 3000;
 const CONNECT_ATTEMPT_TIMEOUT_MS = 10_000;
 /**
  * How long a connection must stay up after the server accepted its operation for its loss to count
- * as progress. Tests shorten it with the configuration member under this key.
+ * as progress.
  */
 const STABLE_CONNECTION_MS = 5_000;
-const STABLE_CONNECTION_KEY = Symbol.for('@golemcloud/golem-ts-bridge/stableConnectionMs');
-
-function stableConnectionOf(configuration: Configuration): number {
-  const stable = (configuration as unknown as Record<symbol, unknown>)[STABLE_CONNECTION_KEY];
-  return typeof stable === 'number' ? stable : STABLE_CONNECTION_MS;
-}
 
 function reconnectWindowOf(configuration: Configuration): number | undefined {
   const window = configuration.reconnectWindowMs ?? DEFAULT_RECONNECT_WINDOW_MS;
@@ -3842,8 +3836,7 @@ class StreamingSession {
    */
   private leftConnection(): boolean {
     const stable =
-      this.acceptedAt !== undefined &&
-      Date.now() - this.acceptedAt >= stableConnectionOf(this.configuration);
+      this.acceptedAt !== undefined && Date.now() - this.acceptedAt >= STABLE_CONNECTION_MS;
     this.acceptedAt = undefined;
     if (stable) {
       this.progressAt = Date.now();
