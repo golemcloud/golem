@@ -823,6 +823,36 @@ where
     Ok(())
 }
 
+/// Records that the guest released a host resource whose only durable content is its span
+/// `span_id`. The release is not a durable call: it reserves no invocation id and claims nothing
+/// in replay, so a guest may release the resource at another point when it replays (a garbage
+/// collector, a heap restored from a snapshot). A live Store appends a `SpanClosed` hint when the
+/// `Start` at `resource_start_index` recorded the span; a replaying or snapshotting Store and a
+/// resource without a recorded opening append nothing. The caller finishes the span in memory.
+pub(crate) async fn record_released_resource_span<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    resource_start_index: Option<OplogIndex>,
+    span_id: &SpanId,
+) -> Result<(), WorkerExecutorError> {
+    if resource_start_index.is_some()
+        && ctx.state.is_live()
+        && !ctx.state.durability_is_suppressed()
+    {
+        let entry = OplogEntry::SpanClosed {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: ctx.entity_parent_start_index(),
+            resource_start_index,
+            span_finished: golem_common::model::oplog::SpanFinished {
+                span_id: span_id.clone(),
+                finished_at: Timestamp::now_utc(),
+                outcome: golem_common::model::oplog::SpanOutcome::Completed,
+            },
+        };
+        ctx.state.oplog.add(entry).await?;
+    }
+    Ok(())
+}
+
 /// Finishes a span in the in-memory invocation context only, without writing or consuming any
 /// oplog entry: pops the current-span pointer if it points at this span, then marks the span
 /// finished. The owning durable operation records the span transition separately.

@@ -17,7 +17,7 @@ use golem_common::model::card::{KvVerb, PermissionTarget};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::{
     P3KeyvalueCacheDelete, P3KeyvalueCacheExists, P3KeyvalueCacheGet, P3KeyvalueCacheGetOrSet,
-    P3KeyvalueCacheSet, P3KeyvalueCacheVacancyDrop, P3KeyvalueCacheVacancyFill,
+    P3KeyvalueCacheSet, P3KeyvalueCacheVacancyFill,
 };
 use golem_common::model::oplog::{
     DeniablePair, DurableFunctionType, HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl,
@@ -563,48 +563,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostVacancyWithStore<U> for HasSelf<Dura
     }
 
     async fn drop(accessor: &Accessor<U, Self>, rep: Resource<Vacancy>) -> anyhow::Result<()> {
-        let (filled, key) = accessor.with(|mut access| {
+        // An unfilled vacancy reserves its key only in memory: deleting the entry releases the
+        // reservation and its permit, so the release records nothing and replays at any point.
+        accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache::vacancy", "drop");
-            let entry = ctx.table().get(&rep)?;
-            Ok::<_, anyhow::Error>((entry.filled, entry.key.clone()))
-        })?;
-        if !filled {
-            let mut handle =
-                DurableCallSession::<P3KeyvalueCacheVacancyDrop, Cancellable>::start_access(
-                    accessor,
-                    accessor.getter(),
-                    HostRequestKVCacheKey { key },
-                    DurableFunctionType::WriteRemote,
-                )
-                .await?;
-
-            accessor.with(|mut access| {
-                access.get().table().delete(rep)?;
-                Ok::<_, anyhow::Error>(())
-            })?;
-
-            if !handle.is_live() {
-                match handle.replay_access(accessor, accessor.getter()).await? {
-                    CallReplayOutcome::Replayed(_) => return Ok(()),
-                    CallReplayOutcome::Incomplete(live) => handle = live,
-                }
-            }
-
-            handle
-                .complete_access(
-                    accessor,
-                    accessor.getter(),
-                    HostResponseKVUnit { result: Ok(()) },
-                )
-                .await?;
-        } else {
-            accessor.with(|mut access| {
-                access.get().table().delete(rep)?;
-                Ok::<_, anyhow::Error>(())
-            })?;
-        }
-        Ok(())
+            ctx.table().delete(rep)?;
+            Ok(())
+        })
     }
 }
 

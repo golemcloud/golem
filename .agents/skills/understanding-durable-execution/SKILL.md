@@ -1456,8 +1456,20 @@ claims the operation by its invocation id, function name and owner, then the own
 restores `SpanStarted` and applies `SpanFinished` or successful attribute updates. Span ids,
 timestamps, parents, and links never select a claim, and the generic cursor performs no
 span-specific terminal-tail consumption. Long-lived resource and guest spans therefore open on
-one operation and close through a later short local operation; a span lifetime never keeps the
-opening durable call open.
+one operation and close later; a span lifetime never keeps the opening durable call open. An
+explicit `span.finish` closes through a short local operation. Releasing a host resource whose
+only durable content is its span (`wasm-rpc` and `span` drops) or an in-memory reservation
+(`cache::vacancy` drop) is not a durable call: a garbage-collected guest, or a heap restored from
+a snapshot, releases handles at points that differ between runs, so such a release must not take
+an invocation id or a replay position. It deletes the table entry and finishes the span in
+memory; a live Store with a recorded opening also appends a `SpanClosed` hint naming the opening
+`Start`. Replay never claims the hint. A drop that terminates a real durable call (an un-awaited
+RPC future, an open transaction) keeps its recorded terminal. A replayed RPC future drop does not
+await that recorded `Cancelled` on the guest thread: the guest may drop the future earlier than
+recorded, before an entry only the guest can consume, or in an earlier invocation. A spawned task
+awaits the resolution parked (it does not hold invocation settlement) and fails the Store if the
+call ended other than `Cancelled`. If the recorded run never cancelled it, the task switches the
+Store to live at the natural end of replay and records the `Cancelled` there.
 
 `AgentInvocationStarted` records the executing context, including the invocation span added by
 the invocation loop, for every invocation kind. The live hook passes that context explicitly to

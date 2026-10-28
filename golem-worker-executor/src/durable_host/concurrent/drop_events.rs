@@ -754,33 +754,54 @@ where
                 "no recorded cancellation during completed entity replay",
             ));
         }
-        loop {
-            replay.await_natural_tail_end(Some(&activity)).await?;
-            let (transition, primary) = store.with(|mut access| {
-                let ctx = get_ctx(access.data_mut());
-                (
-                    ctx.prepare_live_continuation_at_replay_tail(
-                        true,
-                        "durable stream guest-drop cancellation".to_string(),
-                    ),
-                    ctx.runtime == OwnerRuntime::Agent,
-                )
-            });
-            match transition.await? {
-                BeginReplayToLive::ReplayResumed => continue,
-                BeginReplayToLive::Pending(pending) => {
-                    finish_prepared_access_to_live(pending, primary, store, get_ctx)
-                        .await?
-                        .require_live()?;
-                    break;
-                }
-            }
-        }
+        continue_live_at_natural_tail_end_access(
+            store,
+            get_ctx,
+            &replay,
+            &activity,
+            "durable stream guest-drop cancellation",
+        )
+        .await?;
     }
     cancellation
         .cancel()
         .await
         .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
+}
+
+/// Waits for the natural end of replay and switches the Store to live there, so a guest drop
+/// whose cancellation the recorded run never persisted can record it live.
+pub(crate) async fn continue_live_at_natural_tail_end_access<T, D, Ctx>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    replay: &ReplayState,
+    activity: &TailActivity,
+    operation: &str,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    loop {
+        replay.await_natural_tail_end(Some(activity)).await?;
+        let (transition, primary) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.prepare_live_continuation_at_replay_tail(true, operation.to_string()),
+                ctx.runtime == OwnerRuntime::Agent,
+            )
+        });
+        match transition.await? {
+            BeginReplayToLive::ReplayResumed => continue,
+            BeginReplayToLive::Pending(pending) => {
+                finish_prepared_access_to_live(pending, primary, store, get_ctx)
+                    .await?
+                    .require_live()?;
+                return Ok(());
+            }
+        }
+    }
 }
 
 /// Accessor-window variant of [`drain_queued_dropped_call_events`]. It drains the queue from a short

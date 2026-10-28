@@ -38,6 +38,11 @@ from the oplog. Derived and disposable: `Store` memory, in-memory queues, caches
 subscriptions, spawned store tasks, sockets. Never let correctness after a restart depend on
 anything in the second list.
 
+A host resource drop that has no guest-observable result and no remote effect must not open a
+durable call: the guest may release the resource at different points in different runs (garbage
+collection, a heap restored from a snapshot). Delete the resident state and record a hint for
+observability, as `wasm-rpc` and `span` drops do with `SpanClosed`.
+
 ## External effects
 
 Tool isolation is limited to the fixed Wasm instruction-trap allowlist in

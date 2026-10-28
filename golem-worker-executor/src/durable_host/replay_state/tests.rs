@@ -5134,6 +5134,88 @@ async fn replay_delivery_marker_skips_following_hints_after_guest_boundary() {
 }
 
 #[test]
+async fn span_closed_hints_do_not_change_claims_or_delivery_bounding() {
+    fn span_closed(resource_start_index: u64) -> OplogEntry {
+        OplogEntry::SpanClosed {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            resource_start_index: Some(OplogIndex::from_u64(resource_start_index)),
+            span_finished: golem_common::model::oplog::SpanFinished {
+                span_id: golem_common::model::invocation_context::SpanId::generate(),
+                finished_at: Timestamp::now_utc(),
+                outcome: golem_common::model::oplog::SpanOutcome::Completed,
+            },
+        }
+    }
+
+    // [RecoverySucceeded, Start(2), SpanClosed, End(2→4), SpanClosed, Delivered(2→6), SpanClosed,
+    //  Start(8), End(8→9)] — a guest that released resources at other points than the recorded
+    // run claims the same calls and passes the same delivery marker.
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        span_closed(1),
+        end_for(2, 42),
+        span_closed(2),
+        delivered_for(2),
+        span_closed(2),
+        start_now(),
+        end_for(8, 43),
+    ])
+    .await;
+    let first = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.start_idx(), OplogIndex::from_u64(2));
+    match tokio::time::timeout(Duration::from_secs(5), rs.await_resolution(first))
+        .await
+        .expect("a SpanClosed inside the call must not park its resolution")
+        .unwrap()
+    {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(4));
+            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(6)));
+        }
+        other => panic!("expected the first call to complete, got {other:?}"),
+    }
+
+    let barrier = tokio::time::timeout(
+        Duration::from_secs(5),
+        rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6)),
+    )
+    .await
+    .expect("a SpanClosed between the End and the marker must not hold delivery")
+    .unwrap();
+    barrier.acknowledge();
+
+    let second = tokio::time::timeout(
+        Duration::from_secs(5),
+        rs.claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    )
+    .await
+    .expect("a SpanClosed after the marker must not strand the replay cursor")
+    .unwrap();
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(8));
+    match rs.await_resolution(second).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(9)),
+        other => panic!("expected the second call to complete, got {other:?}"),
+    }
+}
+
+#[test]
 async fn optional_reader_waits_at_delivery_marker_before_testing_later_entry() {
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {

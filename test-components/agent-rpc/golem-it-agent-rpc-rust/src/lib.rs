@@ -12,6 +12,7 @@ use golem_rust::{
 use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod gc_timing;
 mod http_router;
 
 fn encode_single_parameter<T: IntoSchema>(

@@ -63,6 +63,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         | OplogEntry::CancelPendingInvocation { .. }
         | OplogEntry::Snapshot { .. }
         | OplogEntry::SnapshotConfirmed { .. }
+        | OplogEntry::SpanClosed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }
@@ -136,6 +137,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::RolledBackRemoteTransaction { .. }
         | OplogEntry::Snapshot { .. }
         | OplogEntry::SnapshotConfirmed { .. }
+        | OplogEntry::SpanClosed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }

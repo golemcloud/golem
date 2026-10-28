@@ -774,3 +774,92 @@ function arrayChunks<T>(array: T[], chunkSize: number): T[][] {
 
   return chunks;
 }
+
+interface GcSnapshotState {
+  name: string;
+  completed: number;
+  checksum: number;
+  restored: boolean;
+}
+
+const gcSnapshotValue = (state: GcSnapshotState) => ({
+  name: state.name,
+  completed: state.completed,
+  checksum: state.checksum,
+});
+
+const collectGarbage = async () => {
+  // `gc` defers the collection to the next event-loop turn.
+  (globalThis as unknown as { gc: () => void }).gc();
+  await sleep(0);
+  await sleep(0);
+};
+
+// Each RPC client is owned by a reference cycle, so only a garbage collection releases it, at a
+// point that depends on the heap. The snapshot does not contain the heap: a restored agent has
+// none of the clients created before the snapshot, so its collections release different clients
+// than the original run's did.
+export const TsGcSnapshotDriver = defineAgent({
+  name: "TsGcSnapshotDriver",
+  id: { name: z.string() },
+  snapshotting: { everyNInvocations: 2 },
+  methods: {
+    run: method({
+      input: { count: z.number(), collectAt: z.number() },
+      returns: z.number(),
+    }),
+    inspect: method({
+      input: {},
+      returns: z.object({
+        completed: z.number(),
+        checksum: z.number(),
+        restored: z.boolean(),
+      }),
+    }),
+  },
+});
+
+export const TsGcSnapshotDriverImpl = TsGcSnapshotDriver.implement({
+  init: ({ id }): GcSnapshotState => ({
+    name: id.name,
+    completed: 0,
+    checksum: 0,
+    restored: false,
+  }),
+  methods: {
+    async run({ count, collectAt }) {
+      const targetId = { name: this.name + "-target" };
+      for (let i = 0; i < count; i++) {
+        if (i === collectAt) {
+          await collectGarbage();
+        }
+        const client = TsCounter.client.get(targetId);
+        const cycle: { client: typeof client; self?: unknown } = { client };
+        cycle.self = cycle;
+        await client.incBy({ value: 1 });
+        const observed = await client.getValue();
+        this.completed++;
+        if (observed !== this.completed) {
+          throw new Error(`provider count ${observed} != ${this.completed}`);
+        }
+        this.checksum += observed;
+      }
+      return this.completed;
+    },
+    inspect() {
+      return {
+        completed: this.completed,
+        checksum: this.checksum,
+        restored: this.restored,
+      };
+    },
+  },
+  snapshot: {
+    save() {
+      return new TextEncoder().encode(JSON.stringify(gcSnapshotValue(this)));
+    },
+    load(bytes: Uint8Array): GcSnapshotState {
+      return { ...JSON.parse(new TextDecoder().decode(bytes)), restored: true };
+    },
+  },
+});

@@ -304,9 +304,6 @@ oplog_payload! {
         GolemRpcCreate {
             remote_agent_id: AgentId
         },
-        GolemRpcResource {
-            creation_index: OplogIndex
-        },
         GolemRpcAsyncInvokeRejection {
             remote_agent_id: AgentId,
             idempotency_key: IdempotencyKey,
@@ -995,11 +992,9 @@ pub mod host_functions {
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemApiRetryNextRetryDelay => "golem::api::retry", "next_retry_delay", GolemRetryNextDelay, GolemRetryNextDelay),
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
-        (GolemRpcWasmRpcDrop => "golem::rpc::wasm-rpc", "drop", GolemRpcResource, GolemRpcUnit),
         (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),
         (GolemContextStartSpan => "golem::api::context", "start-span", NoInput, GolemApiUnit),
         (GolemContextSpanFinish => "golem::api::context::span", "finish", GolemContextSpanResource, GolemApiUnit),
-        (GolemContextSpanDrop => "golem::api::context::span", "drop", GolemContextSpanResource, GolemApiUnit),
         (GolemContextSpanSetAttributes => "golem::api::context::span", "set-attributes", GolemContextSpanAttributes, GolemApiUnit),
         (P3KeyvalueCacheGet => "keyvalue::cache", "get", KVCacheKey, KVGet, denied = denied::keyvalue::kv_get),
         (P3KeyvalueCacheExists => "keyvalue::cache", "exists", KVCacheKey, KVDelete, denied = denied::keyvalue::kv_delete),
@@ -1007,7 +1002,6 @@ pub mod host_functions {
         (P3KeyvalueCacheGetOrSet => "keyvalue::cache", "get-or-set", KVCacheKey, KVGet, denied = denied::keyvalue::kv_get),
         (P3KeyvalueCacheDelete => "keyvalue::cache", "delete", KVCacheKey, KVUnit, denied = denied::keyvalue::kv_unit),
         (P3KeyvalueCacheVacancyFill => "keyvalue::cache::vacancy", "vacancy-fill", KVCacheKeyAndTtl, KVUnit),
-        (P3KeyvalueCacheVacancyDrop => "keyvalue::cache::vacancy", "drop", KVCacheKey, KVUnit),
         (P3KeyvalueTypesIncomingValueConsumeAsync => "keyvalue::types::incoming_value", "incoming_value_consume_async", NoInput, P3KeyvalueIncomingValueStream),
         (P3BlobstoreTypesIncomingValueConsumeAsync => "blobstore::types::incoming_value", "incoming_value_consume_async", NoInput, P3BlobstoreIncomingValueStream),
         (P3SystemClockNow => "clocks::system-clock", "now", NoInput, WallClock),

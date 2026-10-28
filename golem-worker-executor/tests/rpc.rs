@@ -63,6 +63,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
+mod gc_timed_cleanup;
 mod held_response_restart;
 mod hint_before_rpc_start;
 mod replay_barrier_probe;
@@ -1175,6 +1176,7 @@ fn assert_converted_rpc_span_lifecycle(
             .filter_map(|entry| match &entry.entry {
                 PublicOplogEntry::End(end) => end.span_finished.as_ref(),
                 PublicOplogEntry::Cancelled(cancelled) => cancelled.span_finished.as_ref(),
+                PublicOplogEntry::SpanClosed(closed) => Some(&closed.span_finished),
                 _ => None,
             })
             .filter(|finished| &finished.span_id == span_id)

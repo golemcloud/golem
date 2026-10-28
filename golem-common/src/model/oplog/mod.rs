@@ -154,6 +154,10 @@ impl OplogEntry {
             | OplogEntry::ToolAttachmentControl {
                 entity_parent_start_index,
                 ..
+            }
+            | OplogEntry::SpanClosed {
+                entity_parent_start_index,
+                ..
             } => EntityAttribution::of_store(*entity_parent_start_index),
             OplogEntry::Create { .. }
             | OplogEntry::Start { .. }
@@ -285,7 +289,8 @@ impl OplogEntry {
             | OplogEntry::StreamCancel { .. }
             | OplogEntry::StreamSession { .. }
             | OplogEntry::ToolAttachmentControl { .. }
-            | OplogEntry::ToolAttachmentRead { .. } => None,
+            | OplogEntry::ToolAttachmentRead { .. }
+            | OplogEntry::SpanClosed { .. } => None,
         }
     }
 }
@@ -356,7 +361,8 @@ impl OplogScopeProjection {
             | OplogEntry::StreamCancel { .. }
             | OplogEntry::StreamSession { .. }
             | OplogEntry::ToolAttachmentControl { .. }
-            | OplogEntry::ToolAttachmentRead { .. } => entry
+            | OplogEntry::ToolAttachmentRead { .. }
+            | OplogEntry::SpanClosed { .. } => entry
                 .entity_parent_start_index()
                 .is_some_and(|parent| self.starts.contains(&parent)),
             OplogEntry::BeginRemoteTransaction {
