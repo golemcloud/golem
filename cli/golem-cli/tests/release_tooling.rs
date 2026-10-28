@@ -12,6 +12,49 @@ use test_r::test;
 #[test]
 fn draft_notes_start_at_the_previous_stable_golem_release() {
     let fixture = TempDir::new().unwrap();
+    let repo = fixture.path().join("source");
+    fs::create_dir_all(repo.join(".github/scripts")).unwrap();
+    fs::copy(
+        crate::workspace_path().join(".github/scripts/release-notes.mjs"),
+        repo.join(".github/scripts/release-notes.mjs"),
+    )
+    .unwrap();
+    git(&repo, &["init", "--initial-branch=main"]);
+    git(&repo, &["config", "user.name", "release-test"]);
+    git(
+        &repo,
+        &["config", "user.email", "release-test@example.invalid"],
+    );
+    git(&repo, &["config", "commit.gpgsign", "false"]);
+    git(&repo, &["config", "tag.gpgsign", "false"]);
+    git(&repo, &["config", "core.hooksPath", "/dev/null"]);
+    git(&repo, &["commit", "--allow-empty", "-m", "baseline"]);
+    let mut heads = Vec::new();
+    for index in 0..2 {
+        if index == 1 {
+            git(&repo, &["checkout", "-b", "1.6.x"]);
+        }
+        git(&repo, &["checkout", "-b", &format!("prepare-{index}")]);
+        fs::write(repo.join(format!("release-{index}")), "release source").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "prepare release"]);
+        heads.push(git(&repo, &["rev-parse", "HEAD"]));
+        git(
+            &repo,
+            &["checkout", if index == 0 { "main" } else { "1.6.x" }],
+        );
+        git(&repo, &["merge", "--squash", &format!("prepare-{index}")]);
+        git(&repo, &["commit", "-m", "squash preparation PR"]);
+    }
+    assert_eq!(
+        Command::new("git")
+            .current_dir(&repo)
+            .args(["merge-base", "--is-ancestor", &heads[0], &heads[1]])
+            .status()
+            .unwrap()
+            .code(),
+        Some(1)
+    );
     let workflow: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(
             crate::workspace_path().join(".github/workflows/prepare-golem-release.yaml"),
@@ -35,8 +78,22 @@ fn draft_notes_start_at_the_previous_stable_golem_release() {
 set -eu
 case "$1 $2" in
     'release view') exit "$DRAFT_EXISTS" ;;
-    'api --paginate') cat "$RELEASE_TEST_PAGES" ;;
-    'release create') printf '%s\n' "$@" ;;
+    'api --paginate')
+        if [ "$3" = --slurp ]; then
+            [ "$GH_TOKEN" = workflow-token ]
+            [ "$PULL_LOOKUP_FAILS" = false ] || exit 1
+            cat "$RELEASE_TEST_PULLS"
+        else
+            cat "$RELEASE_TEST_PAGES"
+        fi ;;
+    'api repos/golemcloud/golem/releases/generate-notes')
+        [ "$GH_TOKEN" = publication-token ]
+        [ "${6:-}" = "${EXPECTED_PREVIOUS:+previous_tag_name=$EXPECTED_PREVIOUS}" ]
+        cat "$RELEASE_TEST_NOTES" ;;
+    'release create')
+        printf '%s\n' "$@"
+        while [ "$1" != --notes-file ]; do shift; done
+        cat "$2" ;;
     *) exit 2 ;;
 esac
 "#,
@@ -62,39 +119,97 @@ esac
         ]"#,
     )
     .unwrap();
+    let notes = fixture.path().join("notes.json");
+    let pulls = fixture.path().join("pulls.json");
     let path = std::env::join_paths(
         std::iter::once(fixture.path().to_path_buf())
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
     .unwrap();
-    for (tag, previous, exists) in [
-        ("v1.6.1", Some("v1.6.0"), false),
-        ("v1.6.1-rc2", Some("v1.6.0"), false),
-        ("v1.5.11", Some("v1.5.10"), false),
-        ("v1.0.0", None, false),
-        ("v1.6.1", None, true),
+    for (tag, previous, exists, target, includes_current, lookup_fails) in [
+        ("v1.6.1", Some("v1.6.0"), false, "main", false, false),
+        ("v1.6.2", Some("v1.6.1"), false, "1.6.x", false, false),
+        ("v1.6.1-rc2", Some("v1.6.0"), false, "1.6.x", false, false),
+        ("v1.5.11", Some("v1.5.10"), false, "1.5.x", true, false),
+        ("v1.0.0", None, false, "main", false, false),
+        ("v1.6.1", None, true, "main", false, true),
+        ("v1.6.1", Some("v1.6.0"), false, "1.5.x", false, false),
+        ("v1.6.1", Some("v1.6.0"), false, "1.6.x", false, true),
     ] {
+        git(&repo, &["tag", "--force", tag, &heads[1]]);
+        if let Some(previous) = previous {
+            git(&repo, &["tag", "--force", previous, &heads[0]]);
+        }
+        let pull = |number, head: &str, branch: &str| {
+            json!({
+                "number": number, "title": format!("Prepare release {number}"),
+                "user": {"login": "release-author"}, "merged_at": "2026-10-27T15:47:56Z",
+                "head": {"sha": head},
+                "base": {"ref": branch, "repo": {"full_name": "golemcloud/golem"}}
+            })
+        };
+        fs::write(
+            &pulls,
+            json!([
+                [
+                    pull(999, "not-the-tagged-head", "main"),
+                    pull(4313, &heads[0], "main")
+                ],
+                [pull(4332, &heads[1], target)]
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let current_line = "* Prepare release 4332 by @release-author in https://github.com/golemcloud/golem/pull/4332\n";
+        let contributors = "## New Contributors\n* @old made their first contribution in https://github.com/golemcloud/golem/pull/4313\n* @new made their first contribution in https://github.com/golemcloud/golem/pull/4332\n";
+        let body = format!(
+            "## What's Changed\n* Previous preparation in https://github.com/golemcloud/golem/pull/4313\n* Other change in https://github.com/golemcloud/golem/pull/43130\n{}\n{contributors}\n**Full Changelog**: https://github.com/golemcloud/golem/compare/{}...{tag}\n",
+            if includes_current {
+                current_line.repeat(2)
+            } else {
+                String::new()
+            },
+            previous.unwrap_or("initial")
+        );
+        fs::write(&notes, json!({"body": body}).to_string()).unwrap();
         let output = Command::new("bash")
             .args(["-c", script])
+            .current_dir(&repo)
             .env("PATH", &path)
+            .env("GH_TOKEN", "publication-token")
+            .env("GITHUB_TOKEN", "workflow-token")
             .env("GITHUB_REF_NAME", tag)
             .env("RELEASE_TEST_PAGES", &pages)
+            .env("RELEASE_TEST_PULLS", &pulls)
+            .env("RELEASE_TEST_NOTES", &notes)
+            .env("EXPECTED_PREVIOUS", previous.unwrap_or(""))
+            .env("PULL_LOOKUP_FAILS", lookup_fails.to_string())
             .env("DRAFT_EXISTS", if exists { "0" } else { "1" })
             .output()
             .unwrap();
-        assert!(output.status.success(), "{output:?}");
+        let succeeds = exists || (!lookup_fails && !(tag == "v1.6.1" && target == "1.5.x"));
+        assert_eq!(output.status.success(), succeeds, "{output:?}");
         let stdout = String::from_utf8(output.stdout).unwrap();
         let args: Vec<_> = stdout.lines().collect();
-        if exists {
+        if exists || !succeeds {
             assert!(args.is_empty(), "an existing draft must not be changed");
         } else {
-            assert!(args.contains(&"--generate-notes"));
+            assert!(args.contains(&"--notes-file"));
             assert!(args.contains(&"--latest=false"));
-            let actual = args
-                .windows(2)
-                .find(|pair| pair[0] == "--notes-start-tag")
-                .map(|pair| pair[1]);
-            assert_eq!(actual, previous, "{tag}: {stdout}");
+            assert_eq!(stdout.matches(current_line).count(), 1, "{stdout}");
+            assert!(stdout.contains(contributors));
+            assert!(
+                stdout
+                    .contains("* Other change in https://github.com/golemcloud/golem/pull/43130\n")
+            );
+            assert_eq!(
+                stdout.contains("* Previous preparation"),
+                previous.is_none()
+            );
+            assert!(stdout.contains(&format!(
+                "**Full Changelog**: https://github.com/golemcloud/golem/compare/{}...{tag}",
+                previous.unwrap_or("initial")
+            )));
         }
     }
 }
