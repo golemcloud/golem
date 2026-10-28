@@ -1242,6 +1242,18 @@ filesystem generation. Durable storage and cache authority remain fenced until v
 succeeds; old attempt handles retain their original error. Cleanup with no verifiable
 owning-component repair remains a failure: successful filesystem deletion cannot erase an
 unverified metering settlement, including `ObserverLost` during startup rollback.
+
+For a resident owner, retained module-owned unload destroys the primary runtime, drains the
+filesystem, settles final metering and releases the scheduler permit, then waits for the current
+`OwnerToolOperations` registry to become empty before deleting the filesystem and reporting
+successful unload. `wait_owner_settled` observes registry settlement; it does not join every
+supervisor. Entity Store destruction and lane drainage remain separate, necessary barriers.
+`begin_generation` still rejects active operations rather than clearing them. Do not put this wait
+in `EntityFence::drain`: its caller can hold an operation and would wait on itself. The existing
+unload deadline observer may report `CleanupFailed` while retained final cleanup keeps waiting;
+an early metering error can also report before this wait. Neither error permits successful
+reconstruction. Startup cleanup without a resident owner skips the registry barrier.
+
 Before awaiting startup filesystem cleanup, drop any filesystem context, worker context or Store
 that owns open nodes. Cleanup drains those nodes; retaining one across the drain waits on itself.
 
