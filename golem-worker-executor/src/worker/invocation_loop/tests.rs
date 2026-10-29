@@ -12,6 +12,7 @@ use super::{
     spawn_module_owned_unload, successful_agent_invocation_outcome,
     unload_resident_agent_ownership, wait_for_resident_wakeup, with_end,
 };
+use crate::durable_host::tool::operation::OwnerToolOperations;
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::services::active_agents::stop_loaded_idle_if_eligible;
 use crate::services::agent_filesystem::{
@@ -917,7 +918,7 @@ async fn unload_deadline_during_drain_keeps_final_sample_and_deletion_owned() {
         ResidentAgentOwnership {
             runtime: (),
             filesystem,
-            operations: None,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now(),
@@ -988,7 +989,7 @@ async fn pending_filesystem_deletion_does_not_hold_scheduler_capacity() {
         ResidentAgentOwnership {
             runtime: (),
             filesystem,
-            operations: None,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1034,7 +1035,7 @@ async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() 
             },
             filesystem,
         },
-        None,
+        OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
         &mut permit_state,
@@ -1150,7 +1151,7 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
             },
             filesystem,
         },
-        None,
+        OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
         &mut permit_state,
@@ -1224,7 +1225,7 @@ async fn dropped_production_unload_observer_does_not_cancel_owned_cleanup() {
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
-            operations: None,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1285,7 +1286,7 @@ async fn production_unload_starts_final_observation_after_native_close_drains() 
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
-            operations: None,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1468,7 +1469,7 @@ async fn execution_window_closes_before_filesystem_deletion() {
                 dropped: store_dropped.clone(),
             },
             filesystem,
-            operations: None,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1524,7 +1525,6 @@ impl crate::worker::WorkerDeletionHook for OperationSettlementProbe {
 #[test]
 #[timeout("30s")]
 async fn resident_unload_retains_accepted_operations_until_settlement() {
-    use crate::durable_host::tool::operation::OwnerToolOperations;
     use crate::durable_host::tool::operation::tests::{accept_provisional, context};
 
     for (deadline_expired, metering_failed) in [(false, false), (true, false), (false, true)] {
@@ -1587,7 +1587,7 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
                     dropped: dropped.clone(),
                 },
                 filesystem,
-                operations: Some(operations.clone()),
+                operations: operations.clone(),
             },
             UnloadReason::Failure,
             if deadline_expired {
@@ -1700,7 +1700,7 @@ async fn active_allocation_failure_remains_failed_after_successful_physical_dele
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
-            operations: None,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::Failure,
         Instant::now() + Duration::from_secs(1),
@@ -1760,7 +1760,7 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
             },
             filesystem,
         },
-        None,
+        OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_millis(20),
         &mut permit_state,
@@ -1872,7 +1872,7 @@ async fn concrete_failed_unload_retains_retry_owner_and_immutable_results() {
         ResidentAgentOwnership {
             runtime: (),
             filesystem,
-            operations: None,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::Deleting,
         Instant::now() + Duration::from_secs(1),
@@ -2036,7 +2036,7 @@ async fn filesystem_pressure_stop_seam_reaches_concrete_unload_with_exact_deadli
                     },
                     filesystem,
                 },
-                None,
+                OwnerToolOperations::new(),
                 unload_request.reason,
                 unload_request.deadline,
                 &mut permit_state,

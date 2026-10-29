@@ -188,7 +188,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     pub(super) fn unload_running_agent<Runtime, Adapter>(
         agent: RunningAgent<Runtime, Adapter>,
-        operations: Option<Arc<OwnerToolOperations>>,
+        operations: Arc<OwnerToolOperations>,
         reason: UnloadReason,
         deadline: Instant,
         permit_state: &mut ConcurrentAgentPermitState<
@@ -364,7 +364,7 @@ where
         SealedAgentOwnership {
             runtime,
             filesystem: seal(filesystem),
-            operations,
+            operations: Some(operations),
         },
         reason,
         deadline,

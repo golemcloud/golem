@@ -277,7 +277,7 @@ pub(super) fn monthly_resource_exhausted_invocation_error(
 struct ResidentAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
     runtime: Runtime,
     filesystem: ResidentFilesystem<Adapter>,
-    operations: Option<Arc<OwnerToolOperations>>,
+    operations: Arc<OwnerToolOperations>,
 }
 
 struct SealedAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
@@ -937,7 +937,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.end_snapshot_generation();
             let unloading = Self::unload_running_agent(
                 agent,
-                Some(self.parent.owner_execution().tool_operations()),
+                self.parent.owner_execution().tool_operations(),
                 unload_request.reason,
                 deadline,
                 &mut self.permit_state,
