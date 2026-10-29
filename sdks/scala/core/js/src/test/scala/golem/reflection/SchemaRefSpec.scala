@@ -63,6 +63,36 @@ object SchemaRefSpec extends ZIOSpecDefault {
         ref.validateValue(RecordValue(List(StringValue("too-short")))).isLeft
       )
     },
+    test("packing rejects surrogate chars and strings with a lone surrogate") {
+      val char   = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(CharType)))
+      val string = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(StringType)))
+      assertTrue(
+        char.packJson(Json.String("\ud800")).isLeft,
+        char.packJson(Json.String("\ud83d\ude00")) == Right(CharValue(0x1f600)),
+        string.packJson(Json.String("a\udfff")).isLeft,
+        string.packJson(Json.String("a\ud83d\ude00")) == Right(StringValue("a\ud83d\ude00"))
+      )
+    },
+    test("packing rejects every textual leaf with a lone surrogate") {
+      def ref(body: SchemaTypeBody) = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(body)))
+      val bad                       = Json.String("a\udfff")
+      val quantity                  = ref(QuantityType(QuantitySpec("m\udfff", Nil, None, None)))
+      assertTrue(
+        ref(TextType(TextRestrictions.empty)).packJson(Json.Object("text" -> bad)).isLeft,
+        ref(TextType(TextRestrictions.empty))
+          .packJson(Json.Object("text" -> Json.String("ok"), "language" -> bad))
+          .isLeft,
+        ref(PathType(PathSpec(PathDirection.InOut, PathKind.Any))).packJson(bad).isLeft,
+        ref(UrlType(UrlRestrictions.empty)).packJson(Json.String("https://example.com/\udfff")).isLeft,
+        quantity
+          .packJson(Json.Object("mantissa" -> Json.String("1"), "scale" -> Json.Number(BigDecimal(0)), "unit" -> bad))
+          .isLeft,
+        ref(UrlType(UrlRestrictions.empty)).packJson(Json.String("https://example.com/\ud83d\ude00")) ==
+          Right(UrlValue("https://example.com/\ud83d\ude00")),
+        ref(PathType(PathSpec(PathDirection.InOut, PathKind.Any))).packJson(Json.String("a\ud83d\ude00")) ==
+          Right(PathValue("a\ud83d\ude00"))
+      )
+    },
     test("JSON packing issues carry the JSON path of the failing value") {
       val nested = SchemaRef(
         SchemaGraph(

@@ -596,8 +596,10 @@ impl FromSchema for String {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
             SchemaValue::String(s) => Ok(s.clone()),
+            // Text-refined tool arguments retain String as their Rust type.
+            SchemaValue::Text(p) => Ok(p.text.clone()),
             other => Err(FromSchemaError::shape_mismatch(
-                "string",
+                "string or text",
                 value_kind(other),
                 "String",
             )),
@@ -1032,6 +1034,8 @@ impl IntoSchema for std::time::Duration {
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
         SchemaType::duration()
     }
+    // `to_value` cannot fail, so a duration above the i64 nanosecond range
+    // saturates. The wire encoder rejects it.
     fn to_value(&self) -> SchemaValue {
         let nanos = self.as_nanos();
         let clamped: i64 = if nanos > i64::MAX as u128 {
@@ -1137,7 +1141,9 @@ impl IntoSchema for usize {
 impl FromSchema for usize {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
-            SchemaValue::U64(x) => Ok(*x as usize),
+            SchemaValue::U64(x) => usize::try_from(*x).map_err(|_| {
+                FromSchemaError::custom(format!("u64 value {x} does not fit in usize"))
+            }),
             other => Err(FromSchemaError::shape_mismatch(
                 "u64",
                 value_kind(other),

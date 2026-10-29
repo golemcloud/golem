@@ -306,7 +306,7 @@ func TestUniversalMiddlewareUnknownRaisedOutcomeIsInvalidResult(t *testing.T) {
 			return golem.None[golem.TypedValue](), err
 		})
 		e, _ := r.get("vcs")
-		res, sink := runMiddlewareFor(t, r, d, "raised-audit", middlewareRun{path: []string{"commit"}, input: encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "m" }), params: mustTypedValue(t, golem.Unit{}), under: localUnderlying(d, e)})
+		res, sink := runMiddlewareFor(t, r, d, "raised-audit", middlewareRun{path: []string{"commit"}, input: encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "m" }), params: paramsValue(golem.Unit{}), under: localUnderlying(d, e)})
 		if !res.IsErr() || res.Err().Tag() != types.ToolErrorInvalidResult {
 			t.Fatal("unknown raised outcome did not become invalid-result")
 		}

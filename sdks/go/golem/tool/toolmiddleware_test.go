@@ -19,6 +19,7 @@ import (
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,9 +35,15 @@ type AuditParams struct {
 	Deny    bool
 }
 
-func mustTypedValue[T any](t *testing.T, v T) golem.TypedValue {
-	t.Helper()
-	return golem.EncodeTypedValue(v)
+// paramsValue is the parameters of an installation as the host sends them:
+// the record of P's fields.
+func paramsValue[P any](v P) golem.TypedValue {
+	c := defs.CompileParams(reflect.TypeFor[P]())
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(c)
+	graph := g.Build()
+	graph.Root = root
+	return typedValue(types.TypedSchemaValue{Graph: graph, Value: engine.EncodeWith(c, reflect.ValueOf(&v).Elem())})
 }
 
 // localUnderlying is the layer beneath a middleware: the wrapped tool's own
@@ -126,7 +133,7 @@ func TestTransparentMiddlewareInterceptsAHandledCommand(t *testing.T) {
 
 	input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "fix"; a.Paths = []string{"a"} })
 	res, _ := runMiddlewareFor(t, r, d, "policy", middlewareRun{
-		path: []string{"commit"}, input: input, params: mustTypedValue(t, PolicyParams{Block: "nope"}), under: under,
+		path: []string{"commit"}, input: input, params: paramsValue(PolicyParams{Block: "nope"}), under: under,
 	})
 	if out := resultJSON(t, res).(map[string]any); out["summary"] != "vcs commit: fix (audited)" {
 		t.Errorf("result %v", out)
@@ -134,7 +141,7 @@ func TestTransparentMiddlewareInterceptsAHandledCommand(t *testing.T) {
 
 	blocked := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "nope"; a.Paths = []string{"a"} })
 	res, _ = runMiddlewareFor(t, r, d, "policy", middlewareRun{
-		path: []string{"commit"}, input: blocked, params: mustTypedValue(t, PolicyParams{Block: "nope"}), under: under,
+		path: []string{"commit"}, input: blocked, params: paramsValue(PolicyParams{Block: "nope"}), under: under,
 	})
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorConstraintViolation || !strings.Contains(res.Err().ConstraintViolation(), "blocked by policy") {
 		t.Errorf("a blocked call gave %+v", res)
@@ -143,7 +150,7 @@ func TestTransparentMiddlewareInterceptsAHandledCommand(t *testing.T) {
 	// A declared error of the tool beneath passes through unchanged.
 	empty := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "empty" })
 	res, _ = runMiddlewareFor(t, r, d, "policy", middlewareRun{
-		path: []string{"commit"}, input: empty, params: mustTypedValue(t, PolicyParams{}), under: under,
+		path: []string{"commit"}, input: empty, params: paramsValue(PolicyParams{}), under: under,
 	})
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError || res.Err().CustomError().Name != "nothing-to-commit" {
 		t.Errorf("the tool's declared error did not pass through: %+v", res)
@@ -159,7 +166,7 @@ func TestTransparentMiddlewarePassesUnhandledCommandsThrough(t *testing.T) {
 	e, _ := r.get("vcs")
 	input := encodeArgs(t, v.push.ce, func(a *PushArgs) { a.Name = "origin" })
 	res, sink := runMiddlewareFor(t, r, d, "policy", middlewareRun{
-		path: []string{"remote", "push"}, input: input, params: mustTypedValue(t, PolicyParams{}), stdin: "abc", under: localUnderlying(d, e),
+		path: []string{"remote", "push"}, input: input, params: paramsValue(PolicyParams{}), stdin: "abc", under: localUnderlying(d, e),
 	})
 	if out := resultJSON(t, res); fmt.Sprint(out) != "33" {
 		t.Errorf("result %v", out)
@@ -172,7 +179,7 @@ func TestTransparentMiddlewarePassesUnhandledCommandsThrough(t *testing.T) {
 	// ends normally, through the middleware as well.
 	forbidden := encodeArgs(t, v.push.ce, func(a *PushArgs) { a.Name = "forbidden" })
 	res, sink = runMiddlewareFor(t, r, d, "policy", middlewareRun{
-		path: []string{"remote", "push"}, input: forbidden, params: mustTypedValue(t, PolicyParams{}), under: localUnderlying(d, e),
+		path: []string{"remote", "push"}, input: forbidden, params: paramsValue(PolicyParams{}), under: localUnderlying(d, e),
 	})
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError || res.Err().CustomError().Name != "rejected" {
 		t.Errorf("a declared error beneath gave %+v", res)
@@ -209,7 +216,7 @@ func TestOutputMiddlewareForwardsAndRewritesOutput(t *testing.T) {
 	for name, want := range map[string]string{"forward": "HELLO", "prefix": "> HELLO"} {
 		stderr := &fakeSink{}
 		res, sink := runMiddlewareFor(t, r, d, name, middlewareRun{
-			path: []string{"remote", "push"}, input: input, params: mustTypedValue(t, golem.Unit{}), stdin: "hello",
+			path: []string{"remote", "push"}, input: input, params: paramsValue(golem.Unit{}), stdin: "hello",
 			under: localUnderlying(d, e), stderr: stderr,
 		})
 		if res.IsErr() {
@@ -244,7 +251,7 @@ func TestAdapterPresentsOneToolOverAnother(t *testing.T) {
 	e, _ := r.get("vcs")
 	input := encodeArgs(t, save.ce, func(a *SaveArgs) { a.Text = "snapshot" })
 	res, _ := runMiddlewareFor(t, r, d, "vcs2-on-vcs", middlewareRun{
-		path: []string{"save"}, input: input, params: mustTypedValue(t, golem.Unit{}), under: localUnderlying(d, e),
+		path: []string{"save"}, input: input, params: paramsValue(golem.Unit{}), under: localUnderlying(d, e),
 	})
 	if out := resultJSON(t, res); out != "vcs commit: snapshot" {
 		t.Errorf("result %v", out)
@@ -288,7 +295,7 @@ func TestUniversalMiddlewareWrapsAnyTool(t *testing.T) {
 
 	input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "m"; a.Paths = []string{"x"} })
 	res, _ := runMiddlewareFor(t, r, d, "audit", middlewareRun{
-		path: []string{"commit"}, input: input, params: mustTypedValue(t, AuditParams{Channel: "ops"}), under: under,
+		path: []string{"commit"}, input: input, params: paramsValue(AuditParams{Channel: "ops"}), under: under,
 	})
 	if out := resultJSON(t, res).(map[string]any); out["summary"] != "vcs commit: m" {
 		t.Errorf("result %v", out)
@@ -299,14 +306,14 @@ func TestUniversalMiddlewareWrapsAnyTool(t *testing.T) {
 
 	push := encodeArgs(t, v.push.ce, func(a *PushArgs) { a.Name = "origin" })
 	res, sink := runMiddlewareFor(t, r, d, "audit", middlewareRun{
-		path: []string{"remote", "push"}, input: push, params: mustTypedValue(t, AuditParams{}), stdin: "hi", under: under,
+		path: []string{"remote", "push"}, input: push, params: paramsValue(AuditParams{}), stdin: "hi", under: under,
 	})
 	if res.IsErr() || string(sink.written) != "HI" {
 		t.Errorf("stdout through a universal middleware: %q, %+v", sink.written, res)
 	}
 
 	res, _ = runMiddlewareFor(t, r, d, "audit", middlewareRun{
-		path: []string{"commit"}, input: input, params: mustTypedValue(t, AuditParams{Deny: true}), under: under,
+		path: []string{"commit"}, input: input, params: paramsValue(AuditParams{Deny: true}), under: under,
 	})
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorConstraintViolation || !strings.Contains(res.Err().ConstraintViolation(), "denied by audit policy") {
 		t.Errorf("denied call gave %+v", res)
@@ -314,7 +321,7 @@ func TestUniversalMiddlewareWrapsAnyTool(t *testing.T) {
 
 	empty := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "empty" })
 	res, _ = runMiddlewareFor(t, r, d, "audit", middlewareRun{
-		path: []string{"commit"}, input: empty, params: mustTypedValue(t, AuditParams{}), under: under,
+		path: []string{"commit"}, input: empty, params: paramsValue(AuditParams{}), under: under,
 	})
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError {
 		t.Errorf("the tool's own error did not pass through: %+v", res)
@@ -411,7 +418,7 @@ func TestUniversalMiddlewarePassesOutputsThrough(t *testing.T) {
 	run := func(stderr byteStreamSink) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 		return d.runMiddleware(e, &middlewareInvocation{
 			toolName: "vcs", commandPath: []string{"commit"},
-			parameters: mustTypedValue(t, AuditParams{}),
+			parameters: paramsValue(AuditParams{}),
 			stdin:      &byteReader{absent: absentStdin},
 			stdout:     newToolOutput("stdout", nil),
 			stderr:     newToolOutput("stderr", stderr),
@@ -456,7 +463,7 @@ func TestAdapterDropsAnOutputItsCommandDoesNotDeclare(t *testing.T) {
 	e, _ := r.get("vcs")
 	input := encodeArgs(t, send.ce, func(a *SaveArgs) { a.Text = "abc" })
 	res, sink := runMiddlewareFor(t, r, d, "send-on-push", middlewareRun{
-		path: []string{"send"}, input: input, params: mustTypedValue(t, golem.Unit{}), under: localUnderlying(d, e),
+		path: []string{"send"}, input: input, params: paramsValue(golem.Unit{}), under: localUnderlying(d, e),
 	})
 	if res.IsErr() {
 		t.Fatalf("the adapted call failed: %+v", res.Err())
@@ -494,7 +501,7 @@ func TestMiddlewareRejectsAndPassesOnFailures(t *testing.T) {
 		t.Helper()
 		input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = message; a.Paths = []string{"a"} })
 		res, _ := runMiddlewareFor(t, r, d, "guard", middlewareRun{
-			path: []string{"commit"}, input: input, params: mustTypedValue(t, PolicyParams{Block: "nope"}), under: denied,
+			path: []string{"commit"}, input: input, params: paramsValue(PolicyParams{Block: "nope"}), under: denied,
 		})
 		if res.IsOk() {
 			t.Fatalf("%q succeeded", message)
@@ -511,4 +518,77 @@ func TestMiddlewareRejectsAndPassesOnFailures(t *testing.T) {
 	if e := run("fix"); e.Tag() != types.ToolErrorConstraintViolation || e.ConstraintViolation() != "no grant for vcs" {
 		t.Errorf("a denied call beneath gave %+v", e)
 	}
+}
+
+// emptyRecord is the parameters an installation that names a middleware
+// without configuring it sends: the empty record.
+func emptyRecord() golem.TypedValue {
+	return typedValue(types.TypedSchemaValue{
+		Graph: types.SchemaGraph{TypeNodes: []types.SchemaTypeNode{{Body: types.MakeSchemaTypeBodyRecordType(nil)}}},
+		Value: types.SchemaValueTree{ValueNodes: []types.SchemaValueNode{types.MakeSchemaValueNodeRecordValue(nil)}},
+	})
+}
+
+// TestMiddlewareParametersAreTheFieldsOfP — like a method's input, P is a
+// struct whose exported fields are the parameters, so golem.Unit publishes the
+// empty record and decodes from it.
+func TestMiddlewareParametersAreTheFieldsOfP(t *testing.T) {
+	v, r, d := newVcs(t)
+	none := defineUniversalToolMiddlewareInto[golem.Unit](r, d, "none", MiddlewareSpec{})
+	var ran bool
+	_ = none.Handle(func(*UniversalMiddlewareContext[golem.Unit]) (golem.Option[golem.TypedValue], error) {
+		ran = true
+		return golem.None[golem.TypedValue](), nil
+	})
+	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", MiddlewareSpec{})
+	_ = audit.Handle(func(ctx *UniversalMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
+		return ctx.Next(ctx.Input())
+	})
+	quiet := v.tool.Middleware[golem.Unit]("quiet", MiddlewareSpec{})
+	_ = quiet.Handle(v.commit, func(*MiddlewareContext[golem.Unit], CommitArgs) (CommitResult, error) {
+		return CommitResult{}, nil
+	})
+	found, ok := r.discoverMiddlewares(d)
+	if !ok {
+		t.Fatalf("discovery: %s", engine.AllErrors(d.Errs))
+	}
+	fields := map[string][]string{}
+	for _, m := range found {
+		root := m.ParameterSchema.TypeNodes[m.ParameterSchema.Root]
+		if root.Body.Tag() != types.SchemaTypeBodyRecordType {
+			t.Fatalf("%s: parameter schema root tag %d, want a record", m.Name, root.Body.Tag())
+		}
+		names := []string{}
+		for _, f := range root.Body.RecordType() {
+			names = append(names, f.Name)
+		}
+		fields[m.Name] = names
+	}
+	if fmt.Sprint(fields) != "map[audit:[channel deny] none:[] quiet:[]]" {
+		t.Errorf("parameter fields %v", fields)
+	}
+
+	e, _ := r.getMiddleware("none")
+	res := d.runMiddleware(e, &middlewareInvocation{
+		toolName: "vcs", commandPath: []string{"commit"},
+		parameters: emptyRecord(),
+		stdin:      &byteReader{absent: absentStdin},
+		stdout:     newToolOutput("stdout", nil),
+		stderr:     newToolOutput("stderr", nil),
+		principal:  golem.AnonymousPrincipal{},
+		under:      absentUnderlyingLayer,
+	})
+	if res.IsErr() || !ran {
+		t.Fatalf("golem.Unit parameters from the empty record: ran=%v %+v", ran, res)
+	}
+}
+
+func TestMiddlewareParametersMustBeAStruct(t *testing.T) {
+	r, d := newToolRegistry(), newDefinitions()
+	m := defineUniversalToolMiddlewareInto[string](r, d, "scalar", MiddlewareSpec{})
+	_ = m.Handle(func(*UniversalMiddlewareContext[string]) (golem.Option[golem.TypedValue], error) {
+		return golem.None[golem.TypedValue](), nil
+	})
+	r.discoverMiddlewares(d)
+	mustDefErr(t, d, "P must be a struct whose exported fields are the parameters (golem.Unit for none), got string")
 }

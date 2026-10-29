@@ -31,6 +31,15 @@ pub(open) trait IntoSchema {
 /// Decode a `SchemaValue` back into a value. The only fallible direction.
 pub(open) trait FromSchema {
   fn from_value(@model.SchemaValue) -> Self raise FromSchemaError
+  fn from_result_payload(@model.SchemaValue?) -> Self raise FromSchemaError = _
+}
+
+///|
+impl FromSchema with fn from_result_payload(payload) {
+  match payload {
+    Some(value) => Self::from_value(value)
+    None => raise FromSchemaError::custom("missing payload for a result arm")
+  }
 }
 
 // ============================================================

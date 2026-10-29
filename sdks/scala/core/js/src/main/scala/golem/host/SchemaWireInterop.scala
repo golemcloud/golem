@@ -641,11 +641,11 @@ object SchemaWireInterop {
    * `valueNodeToJs` performs the affine `handle.take()` in the same `map` pass
    * that also runs conversions which (here or at the component-model boundary
    * the resulting JS tree crosses next) can still reject a sibling: an invalid
-   * `char` code point, an out-of-range `u8`/`u16`/`u32`, or an invalid
-   * `datetime`. Without this preflight a sibling failure after a handle was
-   * taken would silently destroy the token. Running this borrow-only validation
-   * first keeps the move atomic: a tree the boundary would reject is rejected
-   * before any handle leaves its cell.
+   * `char` code point, a textual leaf with a lone surrogate, an out-of-range
+   * `u8`/`u16`/`u32`, or an invalid `datetime`. Without this preflight a
+   * sibling failure after a handle was taken would silently destroy the token.
+   * Running this borrow-only validation first keeps the move atomic: a tree the
+   * boundary would reject is rejected before any handle leaves its cell.
    *
    * The check is a flat pass over every node, mirroring the `map` below (which
    * converts — and so takes — each array slot exactly once, regardless of how
@@ -666,6 +666,10 @@ object SchemaWireInterop {
     def checkRange(name: String, value: Long, min: Long, max: Long): Unit =
       if (value < min || value > max)
         throw SchemaEncodeError(s"$name value out of range: $value")
+    def checkText(what: String, value: String): Unit = {
+      UnicodeText.encodeText(what, value)
+      ()
+    }
 
     v.valueNodes.foreach {
       case U8Value(value)   => checkRange("u8", value.toLong, 0L, 255L)
@@ -675,9 +679,18 @@ object SchemaWireInterop {
         // A WIT `char` is a Unicode scalar value; reject anything outside
         // `[0, 0x10FFFF]` or a lone surrogate, both of which the boundary
         // rejects (and which `Character.toChars` would otherwise mishandle).
-        if (!Character.isValidCodePoint(value) || (value >= 0xd800 && value <= 0xdfff))
+        if (!UnicodeText.isScalarValue(value))
           throw SchemaEncodeError(s"char value is not a Unicode scalar value: $value")
-      case DatetimeValue(dt) =>
+      case StringValue(value) => checkText("string", value)
+      case TextValue(payload) =>
+        checkText("text", payload.text)
+        payload.language.foreach(checkText("text language", _))
+      case BinaryValue(payload)     => payload.mimeType.foreach(checkText("binary MIME type", _))
+      case PathValue(value)         => checkText("path", value)
+      case UrlValue(value)          => checkText("url", value)
+      case QuantityValueNode(value) => checkText("quantity unit", value.unit)
+      case UnionValue(payload)      => checkText("union tag", payload.tag)
+      case DatetimeValue(dt)        =>
         if (dt.nanoseconds < 0 || dt.nanoseconds >= 1000000000)
           throw SchemaEncodeError(
             s"invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${dt.nanoseconds}"

@@ -229,6 +229,10 @@ impl<T: FromSchema> FromSchema for AgentStream<T> {
 }
 
 impl<T: WireSchema> WireSchema for AgentStream<T> {
+    fn wire_type_id() -> String {
+        format!("golem.AgentStream<{}>", T::wire_type_id())
+    }
+
     fn contains_stream(_: &mut std::collections::HashSet<&'static str>) -> bool {
         true
     }

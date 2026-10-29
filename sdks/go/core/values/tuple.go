@@ -31,6 +31,13 @@ import "reflect"
 // order, so encoding and decoding walk the fields positionally.
 type Tupleish interface{ tupleElems() []reflect.Type }
 
+// Unit is the empty tuple: the value with nothing in it, as Rust's () is. As
+// an arm of a [Result] it is the arm that carries no value, so Result[Unit, E]
+// is result<_, E>.
+type Unit struct{}
+
+func (Unit) tupleElems() []reflect.Type { return nil }
+
 // Tuple1 is a 1-element tuple. It differs from its element on the wire, so a
 // schema tuple<T> keeps it.
 type Tuple1[A any] struct {
