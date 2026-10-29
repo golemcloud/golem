@@ -864,7 +864,7 @@ cargo-test-r run --package integration-tests --test sharding -- --skip coordinat
 '''
 
 [tasks.integration-tests-group7]
-description = "Runs integration tests (group 7/11 - otlp_plugin, plugins)"
+description = "Runs integration tests (group 7/11 - invocation_context, otlp_plugin, plugins)"
 dependencies = ["build-bins-non-ci", "ensure-builtin-artifacts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -2513,13 +2513,16 @@ public_tag = trim ${public_tag.stdout}
 if not equals ${head} ${public_tag}
     trigger_error "The public release tag must equal HEAD"
 end
-exec --fail-on-error git fetch https://github.com/golemcloud/golem.git main
+parts = split ${version} .
+major = array_get ${parts} 0
+minor = array_get ${parts} 1
+maintenance = set "${major}.${minor}.x"
 publication_token = get_env GH_TOKEN
 workflow_token = get_env GITHUB_TOKEN
 if not is_empty ${workflow_token}
     set_env GH_TOKEN ${workflow_token}
 end
-pulls = exec --fail-on-error gh api --paginate "repos/golemcloud/golem/commits/${head}/pulls?per_page=100" --jq ".[] | select(.merged_at != null and .head.sha == \"${head}\" and .base.ref == \"main\" and .base.repo.full_name == \"golemcloud/golem\") | .merge_commit_sha"
+pulls = exec --fail-on-error gh api --paginate "repos/golemcloud/golem/commits/${head}/pulls?per_page=100" --jq ".[] | select(.merged_at != null and .head.sha == \"${head}\" and (.base.ref == \"main\" or .base.ref == \"${maintenance}\") and .base.repo.full_name == \"golemcloud/golem\") | [.base.ref, .merge_commit_sha] | join(\" \")"
 if not is_empty ${workflow_token}
     set_env GH_TOKEN ${publication_token}
 end
@@ -2527,14 +2530,18 @@ commits = split ${pulls.stdout} "\n"
 merged = set false
 for commit in ${commits}
     if not is_empty ${commit}
-        reachable = exec git merge-base --is-ancestor ${commit} FETCH_HEAD
+        fields = split ${commit} " "
+        branch = array_get ${fields} 0
+        merge_commit = array_get ${fields} 1
+        exec --fail-on-error git fetch https://github.com/golemcloud/golem.git "refs/heads/${branch}"
+        reachable = exec git merge-base --is-ancestor ${merge_commit} FETCH_HEAD
         if equals ${reachable.code} 0
             merged = set true
         end
     end
 end
 if not ${merged}
-    trigger_error "The release tag must identify the exact head of a PR merged into public main"
+    trigger_error "The release tag must identify the exact head of a PR merged into public main or ${maintenance}"
 end
 '''
 

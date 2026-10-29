@@ -22,16 +22,15 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
 use golem_common::model::invocation_context::{SpanId, TraceId};
-use golem_common::schema::SchemaValue;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use reqwest::header::HeaderValue;
 use reqwest::Client;
+use reqwest::header::HeaderValue;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -81,7 +80,10 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
 
     user.component(&env.id, "golem_it_agent_invocation_context_release")
         .name("golem-it:agent-invocation-context")
-        .with_env("InvocationContextAgent", vec![("PORT".to_string(), host_http_port.to_string())])
+        .with_env(
+            "InvocationContextAgent",
+            vec![("PORT".to_string(), host_http_port.to_string())],
+        )
         .store()
         .await?;
 
@@ -94,15 +96,15 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
             AgentTypeName("InvocationContextAgent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
-        openapi_endpoint: None,
+        webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
+        openapi_endpoint_prefix: HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
     };
 
     client
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
-    user.deploy_environment(&env.id).await?;
+    user.deploy_environment(env.id).await?;
 
     let trace_id = TraceId::generate();
     let parent_span_id = SpanId::generate();
@@ -152,9 +154,11 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
 
     assert_eq!(tracestates.len(), 3);
     let trace_state_clone = trace_state.clone();
-    assert!(tracestates
-        .iter()
-        .all(move |tp| tp == &Some(HeaderValue::from_str(&trace_state_clone).unwrap())));
+    assert!(
+        tracestates
+            .iter()
+            .all(move |tp| tp == &Some(HeaderValue::from_str(&trace_state_clone).unwrap()))
+    );
 
     assert_eq!(
         dump[0]
@@ -200,11 +204,11 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
             .as_object()
             .unwrap()
             .get("request.uri"),
-        Some(&SchemaValue::String("/vigoo/test-path-1".to_string()))
+        Some(&Value::String("/vigoo/test-path-1".to_string()))
     );
     assert_eq!(
         dump[2].as_object().unwrap().get("trace_id"),
-        Some(&SchemaValue::String(format!("{trace_id}")))
+        Some(&Value::String(format!("{trace_id}")))
     );
 
     Ok(())
