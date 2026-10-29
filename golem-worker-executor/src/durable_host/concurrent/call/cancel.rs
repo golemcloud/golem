@@ -341,6 +341,18 @@ impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx> AccessorTask<T, D>
     for ReplayCancelWaiter<T, Ctx>
 {
     async fn run(self, store: &Accessor<T, D>) -> wasmtime::Result<()> {
+        let context = self.call.trap_context;
+        self.finish(store)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context).into())
+    }
+}
+
+impl<T: 'static, Ctx: WorkerCtx> ReplayCancelWaiter<T, Ctx> {
+    async fn finish<D: HasData + ?Sized>(
+        self,
+        store: &Accessor<T, D>,
+    ) -> Result<(), WorkerExecutorError> {
         let Self {
             replay_state,
             replay,
@@ -348,10 +360,8 @@ impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx> AccessorTask<T, D>
             get_ctx,
             activity,
         } = self;
-        // Parked: only later guest progress, possibly in a later invocation, moves the cursor
-        // to the recorded `Cancelled`.
-        let outcome = activity
-            .park(replay_state.await_resolution_outcome(replay))
+        let outcome = replay_state
+            .await_resolution_outcome_for_drop(replay, Some(&activity))
             .await?;
         match outcome {
             ResolutionOutcome::Resolved(resolution) => {
@@ -369,20 +379,20 @@ impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx> AccessorTask<T, D>
                 if !live {
                     if rejected {
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "Cancelled for a dropped RPC future",
+                            "Cancelled for a dropped future",
                             format!(
                                 "no recorded cancellation for Start {} during completed entity replay",
                                 call.start_idx()
                             ),
-                        )
-                        .into());
+                        ));
                     }
                     continue_live_at_natural_tail_end_access(
                         store,
                         get_ctx,
                         &replay_state,
                         &activity,
-                        "dropped RPC future cancellation",
+                        "dropped future cancellation",
+                        None,
                     )
                     .await?;
                 }

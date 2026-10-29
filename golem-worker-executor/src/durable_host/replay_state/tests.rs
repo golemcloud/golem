@@ -1023,6 +1023,283 @@ async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
     replay_state_and_oplog_over(entries).await.0
 }
 
+async fn disposal_replay_state_over(entries: Vec<OplogEntry>) -> (ReplayState, Arc<InMemoryOplog>) {
+    let indexed = entries
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(offset, entry)| (OplogIndex::from_u64(offset as u64 + 1), entry))
+        .collect();
+    let status = golem_common::model::AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(entries.len() as u64),
+        entity_replay_progress: crate::worker::status::calculate_entity_replay_progress(
+            Default::default(),
+            &DeletedRegions::default(),
+            &DeletedRegions::default(),
+            &indexed,
+        )
+        .unwrap(),
+        ..Default::default()
+    };
+    let (replay, oplog) = replay_state_and_oplog_over(entries).await;
+    replay
+        .install_entity_replay_progress(&status, status.oplog_idx)
+        .await
+        .unwrap();
+    (replay, oplog)
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn entity_replay_routes_retire_only_the_completed_entity_members() {
+    let mut entries = vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_named(HostFunctionName::GolemEntityInvoke),
+    ];
+    for _ in 0..64 {
+        let start = entries.len() as u64 + 1;
+        entries.push(start_with_parent(2));
+        entries.push(end_for(start, 41));
+    }
+    let sibling = OplogIndex::from_u64(entries.len() as u64 + 1);
+    entries.push(start_named(HostFunctionName::GolemEntityInvoke));
+    entries.push(end_for(sibling.as_u64(), 42));
+    entries.push(end_for(2, 43));
+    let target = OplogIndex::from_u64(entries.len() as u64);
+    let rs = replay_state_over(entries).await;
+    while rs.last_replayed_index() < target {
+        let mut tx = rs.cursor.tx().await.unwrap();
+        let (index, entry) = tx.raw_read_next_oplog_entry().await.unwrap();
+        if index == sibling.next() {
+            assert_eq!(
+                tx.st.entity_route_members[&sibling],
+                HashSet::from([sibling])
+            );
+            assert_eq!(
+                tx.st.entity_route_members[&OplogIndex::from_u64(2)].len(),
+                65
+            );
+        }
+        tx.commit_consumed_entry(index, &entry).await.unwrap();
+        if index == sibling.next() {
+            assert!(!tx.st.entity_route_members.contains_key(&sibling));
+            assert!(!tx.st.entity_start_routes.contains_key(&sibling));
+            assert_eq!(
+                tx.st.entity_route_members[&OplogIndex::from_u64(2)].len(),
+                65
+            );
+        }
+        rs.cursor.finish_tx(tx);
+    }
+    let state = rs.cursor.state.lock().await;
+    assert!(state.entity_start_routes.is_empty());
+    assert!(state.entity_route_members.is_empty());
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn disposal_refusal_uses_folded_boundary_without_oplog_reads() {
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentId, ToolAttachmentSlot, ToolAttachmentTerminal,
+    };
+    use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
+    let (rs, oplog) = disposal_replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_named(HostFunctionName::GolemEntityInvoke),
+        start_with_parent(2),
+        end_for(3, 42),
+        start_with_parent(3),
+        end_for(5, 41),
+        end_for(2, 43),
+    ])
+    .await;
+    let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+    let refusal = SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+        attachment: ToolAttachmentId {
+            creation_start: OplogIndex::from_u64(2),
+            slot: ToolAttachmentSlot::Stdout,
+        },
+        terminal: ToolAttachmentTerminal::HostResourceExhausted,
+    };
+    operation.install_recorded_admission_refusal(refusal.clone(), OplogIndex::from_u64(7));
+    let reads = oplog.reads.lock().unwrap().clone();
+    for _ in 0..100 {
+        assert_eq!(
+            rs.disposal_admission_refusal(&operation).await.unwrap(),
+            None
+        );
+    }
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::GolemEntityInvoke,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.drain_awaited_terminals().await.unwrap();
+    {
+        let state = rs.cursor.state.lock().await;
+        assert!(
+            state.entity_start_routes.is_empty(),
+            "closed entities retire routing history"
+        );
+        assert!(state.entity_route_members.is_empty());
+        assert_eq!(
+            state.retained_entity_counts.get(&OplogIndex::from_u64(2)),
+            Some(&2)
+        );
+    }
+    let parent = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(parent).await.unwrap();
+    assert_eq!(
+        rs.cursor
+            .state
+            .lock()
+            .await
+            .retained_entity_counts
+            .get(&OplogIndex::from_u64(2)),
+        Some(&1)
+    );
+    let reads = oplog.reads.lock().unwrap().clone();
+    for _ in 0..100 {
+        assert_eq!(
+            rs.disposal_admission_refusal(&operation).await.unwrap(),
+            None,
+            "retained grandchild remains a blocker after claiming its parent"
+        );
+    }
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+    let child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(3),
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(child).await.unwrap();
+    assert!(
+        rs.cursor
+            .state
+            .lock()
+            .await
+            .retained_entity_counts
+            .is_empty()
+    );
+    let reads = oplog.reads.lock().unwrap().clone();
+    for _ in 0..100 {
+        assert_eq!(
+            rs.disposal_admission_refusal(&operation).await.unwrap(),
+            Some(refusal.clone())
+        );
+    }
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+
+    // An index installed for an older horizon must not authorize a newly exposed terminal.
+    rs.cursor.state.lock().await.entity_replay_horizon = OplogIndex::from_u64(6);
+    assert!(rs.disposal_admission_refusal(&operation).await.is_err());
+    rs.cursor.state.lock().await.entity_replay_horizon = OplogIndex::from_u64(7);
+    rs.set_replay_target(OplogIndex::from_u64(6)).await.unwrap();
+    assert_eq!(
+        rs.disposal_admission_refusal(&operation).await.unwrap(),
+        None
+    );
+    rs.set_replay_target(OplogIndex::from_u64(7)).await.unwrap();
+    rs.cursor.state.lock().await.skipped_regions =
+        DeletedRegions::from_regions([OplogRegion::from_range(7..=7)]);
+    let reads = oplog.reads.lock().unwrap().clone();
+    assert!(rs.disposal_admission_refusal(&operation).await.is_err());
+    rs.cursor.state.lock().await.skipped_regions = DeletedRegions::default();
+    let mismatched = crate::durable_host::tool::operation::tests::replay_operation(2);
+    mismatched.install_recorded_admission_refusal(refusal, OplogIndex::from_u64(6));
+    assert!(rs.disposal_admission_refusal(&mismatched).await.is_err());
+    rs.cursor
+        .state
+        .lock()
+        .await
+        .entity_replay_progress
+        .completed
+        .remove(&OplogIndex::from_u64(2));
+    assert!(rs.disposal_admission_refusal(&operation).await.is_err());
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+    rs.await_resolution(root).await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn disposal_refusal_retained_membership_ignores_observational_owner() {
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentId, ToolAttachmentSlot, ToolAttachmentTerminal,
+    };
+    use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
+    let mut unrelated = start_now();
+    if let OplogEntry::Start {
+        observational_owner,
+        ..
+    } = &mut unrelated
+    {
+        *observational_owner = Some(OplogIndex::from_u64(2));
+    }
+    let (rs, oplog) = disposal_replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_named(HostFunctionName::GolemEntityInvoke),
+        unrelated,
+        end_for(3, 41),
+        end_for(2, 42),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::GolemEntityInvoke,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.drain_awaited_terminals().await.unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+    {
+        let state = rs.cursor.state.lock().await;
+        assert!(state.entity_start_routes.is_empty());
+        assert!(state.retained_entity_counts.is_empty());
+        assert!(
+            state
+                .retained_starts
+                .values()
+                .all(|retained| retained.enclosing_entities.is_empty())
+        );
+    }
+    let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+    let refusal = SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+        attachment: ToolAttachmentId {
+            creation_start: OplogIndex::from_u64(2),
+            slot: ToolAttachmentSlot::Stdout,
+        },
+        terminal: ToolAttachmentTerminal::HostResourceExhausted,
+    };
+    operation.install_recorded_admission_refusal(refusal.clone(), OplogIndex::from_u64(5));
+    let reads = oplog.reads.lock().unwrap().clone();
+    assert_eq!(
+        rs.disposal_admission_refusal(&operation).await.unwrap(),
+        Some(refusal)
+    );
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+    rs.await_resolution(root).await.unwrap();
+}
+
 #[test]
 async fn refused_or_typed_loss_repair_keeps_a_completed_write_sibling() {
     for typed_loss in [false, true] {
@@ -4773,6 +5050,7 @@ async fn custom_subtree_guest_observation_does_not_block_resolution() {
 }
 
 #[test]
+#[test_r::timeout("10s")]
 async fn replay_consumer_observations_reserve_item_and_terminal_guest_boundaries() {
     for terminal in [false, true] {
         let rs = replay_state_over(vec![
@@ -4786,11 +5064,18 @@ async fn replay_consumer_observations_reserve_item_and_terminal_guest_boundaries
         ])
         .await;
         let mut next = Box::pin(rs.get_oplog_entry(None));
-        assert!(futures::poll!(next.as_mut()).is_pending());
-        let b = rs
-            .await_stream_observation(OplogIndex::from_u64(2))
-            .await
-            .unwrap();
+        // Force the reader to yield holding the advance gate, as a cooperative-budget yield
+        // between the two lock acquisitions can do even without contention.
+        let state = rs.cursor.state.lock().await;
+        assert!(futures::poll!(tokio::task::unconstrained(next.as_mut())).is_pending());
+        assert!(rs.cursor.advance_gate.try_lock().is_err());
+        drop(state);
+        // Keep driving the pending reader while the observation acquires its boundary.
+        let b = tokio::select! {
+            biased;
+            result = next.as_mut() => panic!("reader crossed an unacknowledged observation: {result:?}"),
+            boundary = rs.await_stream_observation(OplogIndex::from_u64(2)) => boundary.unwrap(),
+        };
         assert!(
             futures::poll!(next.as_mut()).is_pending(),
             "an unrelated reader cannot acknowledge B"
@@ -4808,6 +5093,32 @@ async fn replay_consumer_observations_reserve_item_and_terminal_guest_boundaries
         );
         a.acknowledge();
         assert_eq!(next.await.unwrap().0, OplogIndex::from_u64(5));
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn failed_stream_observation_preserves_divergence_for_positional_readers() {
+    for terminal in [false, true] {
+        let rs = replay_state_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            consumer_observation(0, true, terminal),
+            remove_retry_policy(),
+        ])
+        .await;
+        let mut next = Box::pin(rs.get_oplog_entry(None));
+        assert!(futures::poll!(next.as_mut()).is_pending());
+        let failure = rs.fail_stream_observation(OplogIndex::from_u64(2));
+        assert!(matches!(
+            failure,
+            WorkerExecutorError::UnexpectedOplogEntry { .. }
+        ));
+        assert_eq!(next.await.unwrap_err(), failure);
+        // New cursor transactions must retain the same typed failure as an already parked read.
+        assert_eq!(rs.get_oplog_entry(None).await.unwrap_err(), failure);
+        assert!(rs.last_replayed_index() < OplogIndex::from_u64(2));
     }
 }
 
@@ -5489,6 +5800,73 @@ async fn await_natural_tail_end_propagates_delivery_failure() {
         err.to_string().contains("test poisoning"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+async fn destructor_resolution_parks_only_after_owned_cursor_work() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    for cancel_wait in [false, true] {
+        let rs = replay_state_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start_now(),
+            remove_retry_policy(),
+            end_for(2, 42),
+        ])
+        .await;
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        let tracker = TailWorkTracker::new();
+        let activity = tracker.activity();
+        let lock = rs.cursor.state.lock().await;
+        let mut waiter = Box::pin(rs.await_resolution_outcome_for_drop(handle, Some(&activity)));
+        assert!(futures::poll!(waiter.as_mut()).is_pending());
+        assert_eq!(tracker.active_count(), 1, "queued cursor work stays active");
+        drop(lock);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+                .await
+                .is_err()
+        );
+        assert_eq!(tracker.active_count(), 0, "sibling-history wait parks");
+
+        let lock = rs.cursor.state.lock().await;
+        rs.cursor.progress.notify_waiters();
+        assert!(futures::poll!(waiter.as_mut()).is_pending());
+        assert_eq!(tracker.active_count(), 1, "cursor re-entry stays active");
+        drop(lock);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+                .await
+                .is_err()
+        );
+        assert_eq!(tracker.active_count(), 0);
+
+        if cancel_wait {
+            drop(waiter);
+        } else {
+            let (_, entry) = rs.get_oplog_entry(None).await.unwrap();
+            assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+            assert!(matches!(
+                waiter.await.unwrap(),
+                ResolutionOutcome::Resolved(Resolution::Completed { .. })
+            ));
+        }
+        assert_eq!(
+            tracker.active_count(),
+            1,
+            "completion and cancellation restore activity"
+        );
+        drop(activity);
+        assert_eq!(tracker.active_count(), 0);
+    }
 }
 
 #[test]
@@ -11977,6 +12355,376 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
         .unwrap()
         .acknowledge();
     rs.await_resolution(root).await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn disposal_refusal_without_collection_preserves_recorded_calls() {
+    use golem_common::model::durable_stream::{
+        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamCancelRole,
+        StreamRecordReference, StreamRegistrationInvocation,
+    };
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentId, ToolAttachmentSlot, ToolAttachmentTerminal,
+    };
+    use golem_common::model::oplog::payload::types::{
+        SerializableToolAdmissionRefusal, SerializableToolPositionalRequest,
+    };
+    for (demand, input) in [
+        "none",
+        "early-collection",
+        "start",
+        "positional",
+        "wrong-function",
+        "dropped-delivery",
+    ]
+    .into_iter()
+    .flat_map(|demand| [false, true].map(|input| (demand, input)))
+    {
+        let mut child = start_with_parent(2);
+        let OplogEntry::Start { invocation_id, .. } = &mut child else {
+            unreachable!()
+        };
+        *invocation_id = Some(test_invocation_id(7));
+        let mut entries = vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start_named(HostFunctionName::GolemEntityInvoke),
+            child,
+            end_for(3, 41),
+        ];
+        if demand != "wrong-function" {
+            entries.push(delivered_for(3));
+            if input {
+                entries.push(guest_consumer_observation_of(0, 2));
+            }
+        }
+        entries.push(end_for(2, 43));
+        let terminal = OplogIndex::from_u64(entries.len() as u64);
+        let (rs, _) = disposal_replay_state_over(entries).await;
+        let root = rs
+            .claim_concurrent_start(
+                &HostFunctionName::GolemEntityInvoke,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+        let refusal = if input {
+            SerializableToolAdmissionRefusal::BeforeDurableInputDisposal {
+                session: StreamRegistrationInvocation::Local(IdempotencyKey::new(
+                    "refused-input".into(),
+                )),
+                binding: Box::new(StreamBindingRecord {
+                    transport_stream_id: 1,
+                    source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
+                    role: SessionStreamRole::Input,
+                }),
+                role: StreamCancelRole::InputConsumer,
+            }
+        } else {
+            SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+                attachment: ToolAttachmentId {
+                    creation_start: OplogIndex::from_u64(2),
+                    slot: ToolAttachmentSlot::Stdout,
+                },
+                terminal: ToolAttachmentTerminal::HostResourceExhausted,
+            }
+        };
+        operation.install_recorded_admission_refusal(refusal.clone(), terminal);
+        let early_collection = operation.reject_missing_replay_admission(&refusal);
+        tokio::pin!(early_collection);
+        if demand == "early-collection" {
+            assert!(futures::poll!(&mut early_collection).is_pending());
+        }
+        assert_eq!(
+            rs.disposal_admission_refusal(&operation).await.unwrap(),
+            None
+        );
+        let claim = StartClaim::owned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .with_invocation_id(Some(test_invocation_id(7)));
+        if demand == "wrong-function" {
+            let wrong = StartClaim::owned(
+                &HostFunctionName::WallClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(2),
+            )
+            .with_invocation_id(Some(test_invocation_id(7)));
+            let error = rs
+                .claim_start_for_store_with_admission(
+                    wrong,
+                    false,
+                    |_, _| {},
+                    Some((operation.clone(), "wrong-clock".into())),
+                )
+                .await
+                .err()
+                .expect("a different real call must diverge before the disposal boundary");
+            assert!(!crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+            assert_eq!(operation.observed_admission_refusal(), None);
+            continue;
+        }
+        let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+            .claim_start_for_store_with_admission(
+                claim.clone(),
+                false,
+                |_, _| {},
+                Some((operation.clone(), "clock".into())),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("recorded call must win")
+        };
+        rs.await_resolution(handle).await.unwrap();
+        assert_eq!(
+            rs.disposal_admission_refusal(&operation).await.unwrap(),
+            None,
+            "the guest delivery must still happen"
+        );
+        let delivery = rs
+            .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+            .await
+            .unwrap();
+        assert_eq!(
+            rs.disposal_admission_refusal(&operation).await.unwrap(),
+            None
+        );
+        let observer = rs.await_disposal_admission_refusal(operation.clone());
+        tokio::pin!(observer);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut observer)
+                .await
+                .is_err()
+        );
+        let next_demand = rs.claim_start_for_store_with_admission(
+            claim.clone(),
+            false,
+            |_, _| {},
+            Some((operation.clone(), "clock".into())),
+        );
+        tokio::pin!(next_demand);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut next_demand)
+                .await
+                .is_err()
+        );
+        assert_eq!(operation.observed_admission_refusal(), None);
+        let delivery = if input {
+            delivery.acknowledge();
+            let stream = rs
+                .await_stream_observation(OplogIndex::from_u64(6))
+                .await
+                .unwrap();
+            assert_eq!(
+                rs.disposal_admission_refusal(&operation).await.unwrap(),
+                None
+            );
+            assert!(
+                tokio::time::timeout(Duration::from_millis(25), &mut observer)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                tokio::time::timeout(Duration::from_millis(25), &mut next_demand)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(operation.observed_admission_refusal(), None);
+            stream
+        } else {
+            delivery
+        };
+        if demand == "dropped-delivery" {
+            drop(delivery);
+            let error = observer.await;
+            assert!(
+                error
+                    .to_string()
+                    .contains("dropped before the recorded guest-delivery boundary"),
+                "{error}"
+            );
+            assert!(!crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+            assert!(next_demand.await.is_err());
+            assert_eq!(operation.observed_admission_refusal(), None);
+            continue;
+        }
+        delivery.acknowledge();
+        assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&observer.await));
+        if demand == "early-collection" {
+            assert!(
+                crate::durable_host::is_tool_attachment_live_admission_rejection(
+                    &early_collection.await.unwrap_err()
+                )
+            );
+        }
+        assert!(next_demand.await.is_err());
+        let error = match demand {
+            "none" | "early-collection" => {
+                rs.await_disposal_admission_refusal(operation.clone()).await
+            }
+            "start" => rs
+                .claim_start_for_store_with_admission(
+                    claim,
+                    false,
+                    |_, _| {},
+                    Some((operation.clone(), "clock".into())),
+                )
+                .await
+                .err()
+                .expect("new demand must observe owner refusal"),
+            "positional" => rs
+                .get_oplog_entry_or_replay_end_with_admission(
+                    Some(OplogIndex::from_u64(2)),
+                    Some((
+                        operation.clone(),
+                        SerializableToolPositionalRequest::RemoveRetryPolicy,
+                    )),
+                )
+                .await
+                .expect_err("new positional demand must observe owner refusal"),
+            _ => unreachable!(),
+        };
+        assert!(
+            crate::durable_host::is_tool_attachment_live_admission_rejection(&error),
+            "{error}"
+        );
+        assert_eq!(
+            operation.observed_admission_refusal(),
+            Some(refusal.clone())
+        );
+        rs.await_resolution(root).await.unwrap();
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn disposal_refusal_without_collection_preserves_nested_calls() {
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentId, ToolAttachmentSlot, ToolAttachmentTerminal,
+    };
+    use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
+    for wrong_function in [false, true] {
+        let mut child = start_with_parent(3);
+        let OplogEntry::Start { invocation_id, .. } = &mut child else {
+            unreachable!()
+        };
+        *invocation_id = Some(test_invocation_id(7));
+        let mut entries = vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start_named(HostFunctionName::GolemEntityInvoke),
+            start_with_parent(2),
+            child,
+            end_for(4, 41),
+            delivered_for(4),
+            end_for(3, 42),
+            delivered_for(3),
+            end_for(2, 43),
+        ];
+        if wrong_function {
+            // A direct-call control can reject the wrong identity immediately. An accessor
+            // claim must first wait for earlier guest deliveries, even when it will diverge.
+            entries.retain(|entry| !matches!(entry, OplogEntry::CompletionDelivered { .. }));
+        }
+        let terminal = OplogIndex::from_u64(entries.len() as u64);
+        let (rs, _) = disposal_replay_state_over(entries).await;
+        let root = rs
+            .claim_concurrent_start(
+                &HostFunctionName::GolemEntityInvoke,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        let parent = rs
+            .claim_owned_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(2),
+            )
+            .await
+            .unwrap();
+        let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+        let refusal = SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+            attachment: ToolAttachmentId {
+                creation_start: OplogIndex::from_u64(2),
+                slot: ToolAttachmentSlot::Stdout,
+            },
+            terminal: ToolAttachmentTerminal::HostResourceExhausted,
+        };
+        operation.install_recorded_admission_refusal(refusal.clone(), terminal);
+        let claim = StartClaim::owned(
+            &if wrong_function {
+                HostFunctionName::WallClockNow
+            } else {
+                HostFunctionName::MonotonicClockNow
+            },
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(3),
+        )
+        .with_invocation_id(Some(test_invocation_id(7)));
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            rs.claim_start_for_store_with_admission(
+                claim.clone(),
+                false,
+                |_, _| {},
+                Some((operation.clone(), "nested-call".into())),
+            ),
+        )
+        .await
+        .expect("the recorded ordinal must resolve or reject the nested claim");
+        if wrong_function {
+            let error = result
+                .err()
+                .expect("an outstanding recorded nested call still requires its exact identity");
+            assert!(!crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+            assert_eq!(operation.observed_admission_refusal(), None);
+            continue;
+        }
+        let ReplayStartClaimOutcome::Claimed { handle, .. } = result.unwrap() else {
+            panic!("recorded nested call must win")
+        };
+        assert_eq!(handle.start_idx(), OplogIndex::from_u64(4));
+        assert_eq!(operation.observed_admission_refusal(), None);
+        rs.await_resolution(handle).await.unwrap();
+        rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6))
+            .await
+            .unwrap()
+            .acknowledge();
+        rs.await_resolution(parent).await.unwrap();
+        rs.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(8))
+            .await
+            .unwrap()
+            .acknowledge();
+        // No collection callback or observer ran. The nested demand itself must restore the
+        // operation's refusal, even though its immediate parent is the completed stream call.
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            rs.claim_start_for_store_with_admission(
+                claim,
+                false,
+                |_, _| {},
+                Some((operation.clone(), "nested-call".into())),
+            ),
+        )
+        .await
+        .expect("a missing nested demand must not depend on a collection observer")
+        .err()
+        .expect("missing nested demand must observe recorded owner refusal");
+        assert!(
+            crate::durable_host::is_tool_attachment_live_admission_rejection(&error),
+            "{error}"
+        );
+        assert_eq!(operation.observed_admission_refusal(), Some(refusal));
+        rs.await_resolution(root).await.unwrap();
+    }
 }
 
 #[test]

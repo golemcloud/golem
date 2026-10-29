@@ -138,9 +138,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetResultWithStore<U>
             Ok::<_, anyhow::Error>(ctx.table().delete(rep)?.handle)
         })?;
         if let Some(handle) = handle {
-            handle
-                .cancel_access(accessor, accessor.getter(), None)
-                .await?;
+            if handle.is_live() {
+                handle
+                    .cancel_access(accessor, accessor.getter(), None)
+                    .await?;
+            } else {
+                handle
+                    .cancel_access_deferred(accessor, accessor.getter())
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -208,9 +214,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureExistsResultWithStore<U>
             Ok::<_, anyhow::Error>(ctx.table().delete(rep)?.handle)
         })?;
         if let Some(handle) = handle {
-            handle
-                .cancel_access(accessor, accessor.getter(), None)
-                .await?;
+            if handle.is_live() {
+                handle
+                    .cancel_access(accessor, accessor.getter(), None)
+                    .await?;
+            } else {
+                handle
+                    .cancel_access_deferred(accessor, accessor.getter())
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -288,14 +300,26 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
 
         match handle {
             Some(Handle::Set(handle)) => {
-                handle
-                    .cancel_access(accessor, accessor.getter(), None)
-                    .await?
+                if handle.is_live() {
+                    handle
+                        .cancel_access(accessor, accessor.getter(), None)
+                        .await?;
+                } else {
+                    handle
+                        .cancel_access_deferred(accessor, accessor.getter())
+                        .await?;
+                }
             }
             Some(Handle::Delete(handle)) => {
-                handle
-                    .cancel_access(accessor, accessor.getter(), None)
-                    .await?
+                if handle.is_live() {
+                    handle
+                        .cancel_access(accessor, accessor.getter(), None)
+                        .await?;
+                } else {
+                    handle
+                        .cancel_access_deferred(accessor, accessor.getter())
+                        .await?;
+                }
             }
             None => {}
         }
@@ -434,9 +458,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore<U>
             Ok::<_, anyhow::Error>(ctx.table().delete(rep)?.handle)
         })?;
         if let Some(handle) = handle {
-            handle
-                .cancel_access(accessor, accessor.getter(), None)
-                .await?;
+            if handle.is_live() {
+                handle
+                    .cancel_access(accessor, accessor.getter(), None)
+                    .await?;
+            } else {
+                handle
+                    .cancel_access_deferred(accessor, accessor.getter())
+                    .await?;
+            }
         }
         Ok(())
     }

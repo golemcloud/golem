@@ -66,6 +66,7 @@ use tracing::Instrument;
 mod gc_timed_cleanup;
 mod held_response_restart;
 mod hint_before_rpc_start;
+mod input_gc;
 mod replay_barrier_probe;
 mod websocket_crash_probe;
 
@@ -7677,9 +7678,10 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
         .await?
         .into_inner();
     let accepted = old_responses.message().await?.unwrap();
-    assert!(
-        matches!(accepted.response, Some(invocation_response::Response::Accepted(ref accepted)) if accepted.epoch == 1)
-    );
+    let Some(invocation_response::Response::Accepted(accepted)) = accepted.response else {
+        anyhow::bail!("expected acceptance: {accepted:?}");
+    };
+    assert_eq!(accepted.epoch, 1);
     // Revert must retain the running invocation, not delete its start: processed invocations
     // are deliberately not put back on the pending queue by ordinary revert.
     let cut = tokio::time::timeout(Duration::from_secs(10), async {
@@ -7699,6 +7701,30 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
         }
     })
     .await??;
+    // Persist a suffix to remove, independently of the guest's incidental host calls.
+    old_frames
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::InputItem(InputStreamItem {
+                transport_stream_id: 1,
+                sequence: 0,
+                durable_stream_id: accepted.stream_mappings[0]
+                    .handle
+                    .as_ref()
+                    .unwrap()
+                    .stream_id,
+                epoch: accepted.epoch,
+                payload: Some(input_stream_item::Payload::Value(
+                    SchemaValue::U32(17)
+                        .try_into()
+                        .map_err(anyhow::Error::msg)?,
+                )),
+            })),
+        })
+        .await?;
+    assert!(matches!(
+        old_responses.message().await?.unwrap().response,
+        Some(invocation_response::Response::InputAck(_))
+    ));
     executor
         .revert(
             &worker_id,

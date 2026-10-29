@@ -247,7 +247,7 @@ fn starts_named<'a>(
 }
 
 /// The settled-history rules every test in this file checks: no `wasm-rpc::drop` call, every
-/// `Start` has a terminal, every `SpanClosed` closes a distinct `wasm-rpc::new` span, and nothing
+/// `Start` has a terminal, every `SpanClosed` refers to a `wasm-rpc::new` span, and nothing
 /// positional follows the last `AgentInvocationFinished`.
 fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
     assert_eq!(
@@ -256,7 +256,6 @@ fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
         "releasing a client must not record a durable call"
     );
     let clients = starts_named(oplog, WASM_RPC_NEW).collect::<HashSet<_>>();
-    let mut closed = HashSet::new();
     for entry in oplog {
         if let PublicOplogEntry::SpanClosed(params) = &entry.entry {
             let start = params
@@ -266,10 +265,6 @@ fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
                 clients.contains(&start),
                 "the SpanClosed at {} names {start}, which is not a wasm-rpc::new Start",
                 entry.oplog_index
-            );
-            assert!(
-                closed.insert(start),
-                "the span opened at {start} is closed more than once"
             );
         }
     }
@@ -360,6 +355,15 @@ async fn crash_while_awaiting(
         )
         .await?;
     let oplog = caller.oplog().await?;
+    let mut closed = HashSet::new();
+    for entry in &oplog {
+        if let PublicOplogEntry::SpanClosed(params) = &entry.entry {
+            assert!(
+                closed.insert(params.resource_start_index),
+                "before reconstruction each resource is released at most once"
+            );
+        }
+    }
     let snapshots = oplog.iter().filter(|entry| is_snapshot(entry)).count();
     assert!(
         snapshots >= 2,
@@ -1008,6 +1012,501 @@ async fn replay_drops_future_an_invocation_earlier_than_recorded(
     Ok(())
 }
 
+#[test]
+#[timeout("5 minutes")]
+async fn cache_futures_replay_with_changed_drop_schedule(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for (name, live, replay) in [
+        ("cache-earlier", AFTER_NEXT_CALL, BEFORE_NEXT_CALL),
+        ("cache-later", BEFORE_NEXT_CALL, AFTER_NEXT_CALL),
+        ("cache-never", BEFORE_NEXT_CALL, NEVER),
+        ("cache-unrecorded", NEVER, BEFORE_NEXT_CALL),
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let caller =
+            Caller::start(deps, &context, fixture, snapshot_every_invocation(), name).await?;
+        caller
+            .invoke("configure_abandon", data_value!(live, replay))
+            .await?;
+        let promise = caller.create_promise().await?;
+        caller
+            .start_and_suspend(
+                &IdempotencyKey::fresh(),
+                "abandon_cache_then_await",
+                data_value!(promise.clone()),
+            )
+            .await?;
+        assert_eq!(
+            cancelled_count(&caller.oplog().await?),
+            if live.drop_at == 2 { 0 } else { 5 }
+        );
+        let caller = caller
+            .restart(deps, &context, snapshot_every_invocation())
+            .await?;
+        caller.executor.complete_promise(&promise, vec![]).await?;
+        assert!(
+            caller
+                .invoke("inspect_cache", data_value!())
+                .await?
+                .into_typed::<bool>()?,
+            "{name}: abandoned set/delete must not change the cache"
+        );
+        assert!(caller.inspect().await?.restored);
+        let history = caller.oplog().await?;
+        assert_eq!(cancelled_count(&history), 5, "{name}");
+        assert_settled_history(&history);
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("3 minutes")]
+async fn cache_futures_replay_drop_in_an_earlier_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let caller = Caller::start(
+        deps,
+        &context,
+        fixture,
+        snapshot_every_nth_invocation(2),
+        "cache-cross-invocation",
+    )
+    .await?;
+    caller
+        .invoke("configure_abandon", data_value!(NEVER, BEFORE_NEXT_CALL))
+        .await?;
+    let completed = caller.create_promise().await?;
+    caller.executor.complete_promise(&completed, vec![]).await?;
+    let promise = caller.create_promise().await?;
+    caller
+        .invoke("abandon_cache_then_await", data_value!(completed))
+        .await?;
+    caller
+        .start_and_suspend(
+            &IdempotencyKey::fresh(),
+            "drop_retained_cache_then_await",
+            data_value!(promise.clone()),
+        )
+        .await?;
+    let history = caller.oplog().await?;
+    assert_eq!(cancelled_count(&history), 5);
+    let starts = history
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    let [.., abandon, dropping] = starts[..] else {
+        panic!("two invocations required")
+    };
+    assert!(
+        history
+            .iter()
+            .rev()
+            .find(|entry| is_snapshot(entry))
+            .unwrap()
+            .oplog_index
+            < abandon
+    );
+    assert!(
+        history
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(_)))
+            .all(|entry| entry.oplog_index > dropping)
+    );
+    let caller = caller
+        .restart(deps, &context, snapshot_every_nth_invocation(2))
+        .await?;
+    caller.executor.complete_promise(&promise, vec![]).await?;
+    assert!(
+        caller
+            .invoke("inspect_cache", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+    assert!(caller.inspect().await?.restored);
+    let history = caller.oplog().await?;
+    assert_eq!(cancelled_count(&history), 5);
+    assert_settled_history(&history);
+    Ok(())
+}
+
+#[test]
+#[timeout("8 minutes")]
+async fn cache_fill_replay_with_changed_drop_schedule(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for (name, live, replay, cross_invocation) in [
+        ("fill-earlier", AFTER_NEXT_CALL, BEFORE_NEXT_CALL, false),
+        ("fill-later", BEFORE_NEXT_CALL, AFTER_NEXT_CALL, false),
+        ("fill-never", BEFORE_NEXT_CALL, NEVER, false),
+        ("fill-unrecorded", NEVER, BEFORE_NEXT_CALL, false),
+        ("fill-cross-invocation", NEVER, BEFORE_NEXT_CALL, true),
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let frequency = if cross_invocation { 2 } else { 1 };
+        let caller = Caller::start(
+            deps,
+            &context,
+            fixture,
+            snapshot_every_nth_invocation(frequency),
+            name,
+        )
+        .await?;
+        caller
+            .invoke("configure_abandon", data_value!(live, replay))
+            .await?;
+        let promise = caller.create_promise().await?;
+        if cross_invocation {
+            let completed = caller.create_promise().await?;
+            caller.executor.complete_promise(&completed, vec![]).await?;
+            caller
+                .invoke("fill_cache_then_await", data_value!(completed))
+                .await?;
+            caller
+                .start_and_suspend(
+                    &IdempotencyKey::fresh(),
+                    "drop_retained_fills_then_await",
+                    data_value!(promise.clone()),
+                )
+                .await?;
+        } else {
+            caller
+                .start_and_suspend(
+                    &IdempotencyKey::fresh(),
+                    "fill_cache_then_await",
+                    data_value!(promise.clone()),
+                )
+                .await?;
+        }
+        let history = caller.oplog().await?;
+        let fill_starts =
+            starts_named(&history, "keyvalue::cache::vacancy::vacancy-fill").collect::<Vec<_>>();
+        assert_eq!(
+            fill_starts.len(),
+            1,
+            "{name}: the fill has one durable Start"
+        );
+        let fill_start = fill_starts[0];
+        let recorded = live.drop_at != 2 || cross_invocation;
+        assert_eq!(history.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == fill_start)).count(), usize::from(recorded));
+        if cross_invocation {
+            let last_started = history
+                .iter()
+                .rev()
+                .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+                .unwrap()
+                .oplog_index;
+            assert!(history.iter().any(|entry| entry.oplog_index > last_started && matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == fill_start)));
+            assert!(
+                history
+                    .iter()
+                    .rev()
+                    .find(|entry| is_snapshot(entry))
+                    .unwrap()
+                    .oplog_index
+                    < fill_start
+            );
+        }
+        let key = format!("{name}-fill");
+        let observed = caller
+            .executor
+            .invoke_and_await_agent(
+                &caller.component,
+                &caller.target,
+                "cache_value",
+                data_value!(key.clone(), Option::<String>::None),
+            )
+            .await?
+            .into_typed::<Option<String>>()?;
+        assert_eq!(observed, recorded.then(|| "filled".to_string()));
+        if recorded {
+            caller
+                .executor
+                .invoke_and_await_agent(
+                    &caller.component,
+                    &caller.target,
+                    "cache_value",
+                    data_value!(key.clone(), Some("sentinel".to_string())),
+                )
+                .await?;
+        }
+        let caller = caller
+            .restart(deps, &context, snapshot_every_nth_invocation(frequency))
+            .await?;
+        caller.executor.complete_promise(&promise, vec![]).await?;
+        assert!(caller.inspect().await?.restored);
+        let observed = caller
+            .executor
+            .invoke_and_await_agent(
+                &caller.component,
+                &caller.target,
+                "cache_value",
+                data_value!(key, Option::<String>::None),
+            )
+            .await?
+            .into_typed::<Option<String>>()?;
+        assert_eq!(
+            observed.as_deref(),
+            Some(if recorded { "sentinel" } else { "filled" }),
+            "{name}: completed replay must not set again; an incomplete fill must set at the tail"
+        );
+        let history = caller.oplog().await?;
+        assert_eq!(history.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == fill_start)).count(), 1);
+        assert!(
+            !history.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::CompletionDelivered(marker) => marker.start_index == fill_start,
+                PublicOplogEntry::CompletionDiscarded(marker) => marker.start_index == fill_start,
+                _ => false,
+            }),
+            "{name}: destructor completion is internal, not a guest delivery"
+        );
+        assert_eq!(cancelled_count(&history), 0);
+        assert_settled_history(&history);
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("5 minutes")]
+async fn completed_invocation_cache_drops_repair_inside_next_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for (name, method, suffix, expected_value, expected_pending) in [
+        (
+            "completed-fill",
+            "fill_cache_then_await",
+            "fill",
+            "filled",
+            1,
+        ),
+        (
+            "completed-futures",
+            "abandon_cache_then_await",
+            "cache",
+            "original",
+            5,
+        ),
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let caller =
+            Caller::start(deps, &context, fixture, snapshot_every_invocation(), name).await?;
+        caller
+            .invoke("configure_abandon", data_value!(NEVER, BEFORE_NEXT_CALL))
+            .await?;
+        let completed = caller.create_promise().await?;
+        caller.executor.complete_promise(&completed, vec![]).await?;
+        caller.invoke(method, data_value!(completed)).await?;
+        let original = caller.oplog().await?;
+        let a_started = original
+            .iter()
+            .rev()
+            .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .unwrap()
+            .oplog_index;
+        let a_finished = original
+            .iter()
+            .rev()
+            .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .unwrap()
+            .oplog_index;
+        let baseline = original
+            .iter()
+            .rev()
+            .find(|entry| is_snapshot(entry))
+            .unwrap()
+            .oplog_index;
+        assert!(baseline < a_started && a_started < a_finished);
+        let pending = original
+            .iter()
+            .filter_map(|entry| {
+                if matches!(&entry.entry, PublicOplogEntry::Start(_))
+                    && !original.iter().any(|terminal| match &terminal.entry {
+                        PublicOplogEntry::End(end) => end.start_index == entry.oplog_index,
+                        PublicOplogEntry::Cancelled(cancelled) => {
+                            cancelled.start_index == entry.oplog_index
+                        }
+                        _ => false,
+                    })
+                {
+                    Some(entry.oplog_index)
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(pending.len(), expected_pending);
+        assert!(
+            pending
+                .iter()
+                .all(|start| a_started < *start && *start < a_finished)
+        );
+        let key = format!("{name}-{suffix}");
+        let before = caller
+            .executor
+            .invoke_and_await_agent(
+                &caller.component,
+                &caller.target,
+                "cache_value",
+                data_value!(key.clone(), Option::<String>::None),
+            )
+            .await?
+            .into_typed::<Option<String>>()?;
+        assert_eq!(
+            before.as_deref(),
+            if suffix == "fill" {
+                None
+            } else {
+                Some("original")
+            }
+        );
+
+        // Keep the original snapshot as the baseline so the second restart also replays A.
+        let caller = caller
+            .restart(deps, &context, snapshot_every_nth_invocation(1_000))
+            .await?;
+        assert!(caller.inspect().await?.restored);
+        let repaired = caller.oplog().await?;
+        let b_started = repaired
+            .iter()
+            .filter(|entry| {
+                entry.oplog_index > a_finished
+                    && matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_))
+            })
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>();
+        let b_finished = repaired
+            .iter()
+            .filter(|entry| {
+                entry.oplog_index > a_finished
+                    && matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            })
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>();
+        assert_eq!(b_started.len(), 1);
+        assert_eq!(b_finished.len(), 1);
+        for start in &pending {
+            let terminals = repaired
+                .iter()
+                .filter(|entry| match &entry.entry {
+                    PublicOplogEntry::End(end) => end.start_index == *start,
+                    PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == *start,
+                    _ => false,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                terminals.len(),
+                1,
+                "{name}: exactly one terminal for original Start {start}"
+            );
+            assert!(
+                b_started[0] < terminals[0].oplog_index && terminals[0].oplog_index < b_finished[0],
+                "{name}: fresh B drives the parked cleanup between its Started and Finished"
+            );
+            assert!(if suffix == "fill" {
+                matches!(&terminals[0].entry, PublicOplogEntry::End(_))
+            } else {
+                matches!(&terminals[0].entry, PublicOplogEntry::Cancelled(_))
+            });
+        }
+        assert_eq!(
+            repaired
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(_)))
+                .count(),
+            original
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(_)))
+                .count(),
+            "inspect opens no calls and repair must retain the original Starts"
+        );
+        assert_settled_history(&repaired);
+        let after = caller
+            .executor
+            .invoke_and_await_agent(
+                &caller.component,
+                &caller.target,
+                "cache_value",
+                data_value!(key.clone(), Option::<String>::None),
+            )
+            .await?
+            .into_typed::<Option<String>>()?;
+        assert_eq!(
+            after.as_deref(),
+            Some(expected_value),
+            "fill must execute; abandoned set/delete must not execute"
+        );
+        caller
+            .executor
+            .invoke_and_await_agent(
+                &caller.component,
+                &caller.target,
+                "cache_value",
+                data_value!(key.clone(), Some("sentinel".to_string())),
+            )
+            .await?;
+        assert_eq!(
+            repaired
+                .iter()
+                .rev()
+                .find(|entry| is_snapshot(entry))
+                .unwrap()
+                .oplog_index,
+            baseline
+        );
+
+        let caller = caller
+            .restart(deps, &context, snapshot_every_nth_invocation(1_000))
+            .await?;
+        assert!(caller.inspect().await?.restored);
+        let second = caller.oplog().await?;
+        for start in &pending {
+            assert_eq!(
+                second
+                    .iter()
+                    .filter(|entry| match &entry.entry {
+                        PublicOplogEntry::End(end) => end.start_index == *start,
+                        PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == *start,
+                        _ => false,
+                    })
+                    .count(),
+                1,
+                "{name}: the second replay must not append another terminal"
+            );
+        }
+        let after_second = caller
+            .executor
+            .invoke_and_await_agent(
+                &caller.component,
+                &caller.target,
+                "cache_value",
+                data_value!(key, Option::<String>::None),
+            )
+            .await?
+            .into_typed::<Option<String>>()?;
+        assert_eq!(
+            after_second.as_deref(),
+            Some("sentinel"),
+            "{name}: the second replay must not repeat any cache write"
+        );
+        assert_settled_history(&second);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, FromSchema)]
 struct TsGcSnapshotReport {
     completed: f64,
@@ -1045,9 +1544,8 @@ async fn ts_snapshot_restore_replays_gc_released_clients(
     };
 
     // Run invocations that leave uncollected clients until a snapshot follows the last one.
-    let mut completed = 0.0;
-    loop {
-        completed = executor
+    let completed = loop {
+        let completed = executor
             .invoke_and_await_agent(&component, &id, "run", data_value!(5_f64, -1_f64))
             .await?
             .into_typed::<f64>()?;
@@ -1059,13 +1557,13 @@ async fn ts_snapshot_restore_replays_gc_released_clients(
             matches!(entry, PublicOplogEntry::AgentInvocationFinished(_))
         });
         if snapshot > finished {
-            break;
+            break completed;
         }
         assert!(
             completed < 20.0,
             "the agent snapshots every second invocation"
         );
-    }
+    };
 
     // The next invocation collects the clients created before the snapshot.
     let expected = completed + 5.0;

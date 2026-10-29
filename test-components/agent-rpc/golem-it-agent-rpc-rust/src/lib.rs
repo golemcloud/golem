@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod gc_timing;
 mod http_router;
+mod input_gc;
 
 fn encode_single_parameter<T: IntoSchema>(
     value: T,

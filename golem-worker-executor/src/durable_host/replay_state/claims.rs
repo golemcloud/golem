@@ -29,6 +29,7 @@ pub(super) fn matching_admission_refusal(
         SerializableToolAdmissionRefusal::AtRecordedOplogEntry { .. }
         | SerializableToolAdmissionRefusal::BeforePositional { .. }
         | SerializableToolAdmissionRefusal::BeforeInputRead { .. }
+        | SerializableToolAdmissionRefusal::BeforeDurableInputDisposal { .. }
         | SerializableToolAdmissionRefusal::BeforeAttachmentDisposal { .. } => false,
     };
     Ok(

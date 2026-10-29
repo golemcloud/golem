@@ -43,6 +43,12 @@ durable call: the guest may release the resource at different points in differen
 collection, a heap restored from a snapshot). Delete the resident state and record a hint for
 observability, as `wasm-rpc` and `span` drops do with `SpanClosed`.
 
+A drop that terminates a real durable effect must preserve the operation's terminal, but must
+never wait for recorded history on the guest thread or in a cleanup drain. Defer replay waits
+under the resident runtime's task ownership. Missing terminals may continue live only at the
+natural replay tail. A changed disposal time does not permit changed guest reads, completed
+effects, call identities, or terminal kinds.
+
 ## External effects
 
 Tool isolation is limited to the fixed Wasm instruction-trap allowlist in

@@ -448,3 +448,253 @@ mod tick {
 }
 
 test_r::tag_suite!(tick, group5);
+
+#[test]
+#[timeout("3m")]
+async fn idle_tcp_reader_collection_does_not_create_a_receive_chunk(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicOplogEntry;
+    use golem_worker_executor::services::golem_config::SnapshotPolicy;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for early in [true, false] {
+        let context = TestContext::new(last_unique_id);
+        let overrides = TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.agent_sockets.enabled = true;
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let agent = agent_id!("TcpGc", format!("idle-reader-{early}"), early);
+        let worker = executor.start_agent(&component.id, agent.clone()).await?;
+        let gate: golem_common::model::PromiseId = executor
+            .invoke_and_await_agent(&component, &agent, "prepare", data_value!())
+            .await?
+            .into_typed()?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                if history
+                    .iter()
+                    .any(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+                {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            socket.write_all(b"x").await?;
+            let mut byte = [0];
+            assert_eq!(socket.read(&mut byte).await?, 0);
+            Ok::<_, anyhow::Error>(())
+        });
+        executor
+            .invoke_agent_with_key(
+                &component,
+                &agent,
+                &IdempotencyKey::fresh(),
+                "run",
+                data_value!(port, gate.clone()),
+            )
+            .await?;
+        let before = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                executor.commit_oplog(&worker).await?;
+                let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                if history.iter().any(|entry| {
+                    matches!(&entry.entry,
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "golem::api::get_promise_result")
+                }) {
+                    return Ok::<_, anyhow::Error>(history);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        let chunks = |entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+            entries
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "sockets::types::tcp-socket::receive-chunk" =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // There was one completed byte read, no EOF read and no pending read to cancel.
+        assert_eq!(chunks(&before).len(), 1, "endpoint disposal is not a read");
+        executor
+            .interrupt_loaded_worker(
+                &worker,
+                golem_service_base::error::worker_executor::InterruptKind::Suspend(
+                    golem_common::model::Timestamp::now_utc(),
+                ),
+            )
+            .await?;
+        executor
+            .wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(30))
+            .await?;
+        tokio::time::timeout(Duration::from_secs(30), peer).await???;
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        executor.complete_promise(&gate, vec![]).await?;
+        let observed: (bool, String) = executor
+            .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(observed, (true, "x".to_string()));
+        let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        assert_eq!(chunks(&after), chunks(&before));
+        // The peer listener is gone: completed connect and read replay cannot reconnect.
+        executor.delete_worker(&worker).await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+async fn partial_tcp_receive_preserves_completed_read_and_reports_session_loss(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicOplogEntry;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides::agent_sockets_enabled();
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("Networking", "partial-tcp-receive-session-loss");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let peer = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await?;
+        socket.write_all(b"x").await?;
+        let mut byte = [0];
+        assert_eq!(socket.read(&mut byte).await?, 0);
+        Ok::<_, anyhow::Error>(())
+    });
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent,
+            &key,
+            "tcp_collect_p3",
+            data_value!(port),
+        )
+        .await?;
+    let chunks = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            executor.commit_oplog(&worker).await?;
+            let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            let chunks = history
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "sockets::types::tcp-socket::receive-chunk" =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if chunks.len() == 2
+                && history.iter().any(|entry| {
+                    matches!(&entry.entry,
+                    PublicOplogEntry::End(end) if end.start_index == chunks[0])
+                })
+                && !history.iter().any(|entry| {
+                    matches!(&entry.entry,
+                    PublicOplogEntry::End(end) if end.start_index == chunks[1])
+                })
+            {
+                return Ok::<_, anyhow::Error>(chunks);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    let prefix = executor.stored_oplog(&worker).await;
+    executor
+        .interrupt_loaded_worker(
+            &worker,
+            golem_service_base::error::worker_executor::InterruptKind::Suspend(
+                golem_common::model::Timestamp::now_utc(),
+            ),
+        )
+        .await?;
+    executor
+        .wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(30))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(30), peer).await???;
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    executor.resume(&worker, false).await?;
+    let result: Result<String, String> = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &key,
+            "tcp_collect_p3",
+            data_value!(port),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
+    let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let recorded = executor.stored_oplog(&worker).await;
+    assert_eq!(&recorded[..prefix.len()], prefix.as_slice());
+    let replayed_chunks = history
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "sockets::types::tcp-socket::receive-chunk" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replayed_chunks, chunks);
+    for chunk in chunks {
+        assert_eq!(
+            history
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::End(end) if end.start_index == chunk))
+                .count(),
+            1
+        );
+        assert!(!history.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == chunk)));
+    }
+    executor.delete_worker(&worker).await?;
+    Ok(())
+}

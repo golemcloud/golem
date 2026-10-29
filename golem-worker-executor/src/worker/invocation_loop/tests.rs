@@ -881,7 +881,8 @@ async fn invocation_loop_panic_with_resident_owner_uses_filesystem_drop_cleanup(
     run_invocation_loop_task(
         async move {
             let _filesystem = filesystem;
-            panic!("injected resident panic");
+            // Exercise owner unwinding independently of the process-wide panic logger.
+            std::panic::resume_unwind(Box::new("injected resident panic"));
         },
         move |_error| async move {
             handled_by_task.store(true, Ordering::Release);

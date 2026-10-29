@@ -6,6 +6,7 @@
 
 use crate::encode_single_parameter;
 use golem_rust::bindings::golem::agent::host::{FutureInvokeResult, WasmRpc};
+use golem_rust::bindings::wasi::keyvalue::{cache, types::OutgoingValue};
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, WireSchema,
     agent_definition, agent_implementation, encode_schema_value, read_only,
@@ -18,6 +19,7 @@ pub trait GcTimingTarget {
     fn new(name: String) -> Self;
     fn increment(&mut self) -> u64;
     fn get(&self) -> u64;
+    async fn cache_value(&self, key: String, replacement: Option<String>) -> Option<String>;
 }
 
 struct GcTimingTargetImpl {
@@ -37,6 +39,21 @@ impl GcTimingTarget for GcTimingTargetImpl {
 
     fn get(&self) -> u64 {
         self.count
+    }
+
+    async fn cache_value(&self, key: String, replacement: Option<String>) -> Option<String> {
+        if let Some(replacement) = replacement {
+            let value = OutgoingValue::new_outgoing_value();
+            value
+                .outgoing_value_write_body_sync(replacement.as_bytes())
+                .unwrap();
+            cache::set(&key, &value, None).get().await.unwrap();
+        }
+        cache::get(&key)
+            .get()
+            .await
+            .unwrap()
+            .map(|value| String::from_utf8(value.incoming_value_consume_sync().unwrap()).unwrap())
     }
 }
 
@@ -133,6 +150,11 @@ pub trait GcTimingCaller {
     ) -> u64;
     /// Drops the futures `abandon_then_await` kept, then awaits `promise_id`.
     fn drop_retained_futures_then_await(&mut self, promise_id: PromiseId) -> u64;
+    async fn abandon_cache_then_await(&mut self, promise_id: PromiseId);
+    fn drop_retained_cache_then_await(&mut self, promise_id: PromiseId);
+    async fn inspect_cache(&self) -> bool;
+    async fn fill_cache_then_await(&mut self, promise_id: PromiseId);
+    fn drop_retained_fills_then_await(&mut self, promise_id: PromiseId);
     fn inspect(&self) -> GcTimingReport;
 }
 
@@ -159,6 +181,14 @@ struct GcTimingCallerImpl {
     abandon_after_restore: AbandonSchedule,
     retained: RefCell<Vec<WasmRpc>>,
     retained_futures: Vec<(WasmRpc, FutureInvokeResult)>,
+    retained_fills: Vec<OutgoingValue>,
+    retained_cache: Vec<(
+        cache::FutureGetResult,
+        cache::FutureExistsResult,
+        cache::FutureGetOrSetResult,
+        cache::FutureResult,
+        cache::FutureResult,
+    )>,
 }
 
 fn no_input() -> golem_rust::schema::wit::wire::SchemaValueTree {
@@ -268,6 +298,8 @@ impl GcTimingCaller for GcTimingCallerImpl {
             abandon_after_restore: before_next,
             retained: RefCell::new(Vec::new()),
             retained_futures: Vec::new(),
+            retained_fills: Vec::new(),
+            retained_cache: Vec::new(),
         }
     }
 
@@ -399,6 +431,72 @@ impl GcTimingCaller for GcTimingCallerImpl {
         }
     }
 
+    async fn abandon_cache_then_await(&mut self, promise_id: PromiseId) {
+        let key = format!("{}-cache", self.name);
+        let value = OutgoingValue::new_outgoing_value();
+        value.outgoing_value_write_body_sync(b"original").unwrap();
+        cache::set(&key, &value, None).get().await.unwrap();
+        let replacement = OutgoingValue::new_outgoing_value();
+        replacement
+            .outgoing_value_write_body_sync(b"replacement")
+            .unwrap();
+        let mut futures = Some((
+            cache::get(&key),
+            cache::exists(&key),
+            cache::get_or_set(&key),
+            cache::set(&key, &replacement, None),
+            cache::delete(&key),
+        ));
+        if self.abandon.drop_at == 0 {
+            drop(futures.take());
+        }
+        golem_rust::retry::remove_retry_policy("gc-cache-unused");
+        match (self.abandon.drop_at, futures) {
+            (2, Some(futures)) => self.retained_cache.push(futures),
+            (_, futures) => drop(futures),
+        }
+        golem_rust::blocking_await_promise(&promise_id);
+    }
+
+    fn drop_retained_cache_then_await(&mut self, promise_id: PromiseId) {
+        self.retained_cache.clear();
+        golem_rust::blocking_await_promise(&promise_id);
+    }
+
+    async fn inspect_cache(&self) -> bool {
+        let key = format!("{}-cache", self.name);
+        let value = cache::get(&key).get().await.unwrap().unwrap();
+        value.incoming_value_consume_sync().unwrap() == b"original"
+    }
+
+    async fn fill_cache_then_await(&mut self, promise_id: PromiseId) {
+        let key = format!("{}-fill", self.name);
+        let cache::GetOrSetEntry::Vacant(vacancy) = cache::get_or_set(&key).get().await.unwrap()
+        else {
+            panic!("fill requires a vacant key")
+        };
+        let mut value = Some(vacancy.vacancy_fill(None));
+        value
+            .as_ref()
+            .unwrap()
+            .outgoing_value_write_body_sync(b"filled")
+            .unwrap();
+        if self.abandon.drop_at == 0 {
+            drop(value.take());
+        }
+        golem_rust::retry::remove_retry_policy("gc-fill-unused");
+        match (self.abandon.drop_at, value) {
+            (2, Some(value)) => self.retained_fills.push(value),
+            (_, value) => drop(value),
+        }
+        golem_rust::blocking_await_promise(&promise_id);
+    }
+
+    fn drop_retained_fills_then_await(&mut self, promise_id: PromiseId) {
+        self.retained_fills.clear();
+        golem_rust::blocking_await_promise(&promise_id);
+    }
+
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
         if self.release.release_in_save {
             self.release_all();
@@ -433,6 +531,8 @@ impl GcTimingCaller for GcTimingCallerImpl {
             abandon_after_restore: snapshot.abandon_after_restore,
             retained: RefCell::new(Vec::new()),
             retained_futures: Vec::new(),
+            retained_fills: Vec::new(),
+            retained_cache: Vec::new(),
         })
     }
 }

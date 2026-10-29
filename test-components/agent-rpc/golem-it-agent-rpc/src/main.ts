@@ -863,3 +863,95 @@ export const TsGcSnapshotDriverImpl = TsGcSnapshotDriver.implement({
     },
   },
 });
+
+interface InputGcState {
+  name: string;
+  restored: boolean;
+  reads: number;
+  retained: unknown[];
+}
+
+async function retainInputCycle(state: InputGcState, reads: number) {
+  const stream = await TsStreamingRpcTarget.client
+    .get({ name: state.name })
+    .produce({ values: [20, 21, 22] });
+  for (let index = 0; index < reads; index++) {
+    const item = await stream.next();
+    if (item.done || item.value !== 20 + index)
+      throw new Error("incorrect stream item");
+    state.reads++;
+  }
+  const cycle: { stream: typeof stream; self?: unknown } = { stream };
+  cycle.self = cycle;
+  if (!state.restored) state.retained.push(cycle);
+}
+
+export const TsInputGc = defineAgent({
+  name: "TsInputGc",
+  id: { name: z.string() },
+  snapshotting: { everyNInvocations: 1 },
+  methods: {
+    promise: method({ input: {}, returns: PromiseIdSchema }),
+    run: method({
+      input: { reads: z.number(), gate: PromiseIdSchema },
+      returns: z.void(),
+    }),
+    inspect: method({
+      input: {},
+      returns: z.object({
+        restored: z.boolean(),
+        reads: z.number(),
+        retained: z.number(),
+      }),
+    }),
+    continuation: method({ input: {}, returns: U32List }),
+  },
+});
+
+export const TsInputGcImpl = TsInputGc.implement({
+  init: ({ id }): InputGcState => ({
+    name: id.name,
+    restored: false,
+    reads: 0,
+    retained: [],
+  }),
+  methods: {
+    promise() {
+      return createPromise();
+    },
+    async run({ reads, gate }) {
+      await retainInputCycle(this, reads);
+      // Both executions make the same timer calls. Only reachability differs.
+      await collectGarbage();
+      await awaitPromise(gate as PromiseId);
+    },
+    inspect() {
+      return {
+        restored: this.restored,
+        reads: this.reads,
+        retained: this.retained.length,
+      };
+    },
+    async continuation() {
+      return collect(
+        await TsStreamingRpcTarget.client
+          .get({ name: this.name })
+          .produce({ values: [30, 31, 32] }),
+      );
+    },
+  },
+  snapshot: {
+    save() {
+      return new TextEncoder().encode(
+        JSON.stringify({ name: this.name, reads: this.reads }),
+      );
+    },
+    load(bytes: Uint8Array): InputGcState {
+      return {
+        ...JSON.parse(new TextDecoder().decode(bytes)),
+        restored: true,
+        retained: [],
+      };
+    },
+  },
+});

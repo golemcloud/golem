@@ -28,15 +28,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut number_of_replayed_functions = 0;
 
         if refresh_replay_target {
-            let new_target = store
-                .as_context()
-                .data()
-                .durable_ctx()
-                .public_state
-                .worker()
-                .oplog()
-                .current_oplog_index()
-                .await;
+            let status = store.as_context().data().durable_ctx().public_state.worker()
+                .get_repaired_status().await?;
+            let new_target = status.oplog_idx;
+            store.as_context().data().durable_ctx().state.replay_state
+                .install_entity_replay_progress(&status, new_target).await?;
 
             store
                 .as_context()

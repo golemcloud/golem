@@ -199,6 +199,10 @@ impl Guest for AgentRuntime {
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
+        // Snapshot loading reads the agent ID through libc's environment cache. Warm it
+        // during durable initialization so full replay and snapshot replay agree.
+        let _ = std::env::vars_os().count();
+
         let agent_type_name = AgentTypeName(agent_type.clone());
         if !agent_registry::has_registered_agent_type(&agent_type_name) {
             let agent_types = agent_registry::get_all_agent_types();
@@ -285,10 +289,6 @@ impl SaveSnapshotGuest for AgentRuntime {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     async fn save() -> crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-        // Loading a snapshot initializes libc's environment cache when reading the agent ID.
-        // Initialize it before saving too, so suffix replay makes the same host calls.
-        let _ = std::env::vars_os().count();
-
         with_agent_instance_async(|resolved_agent| async move {
             let snapshot_data = resolved_agent
                 .agent

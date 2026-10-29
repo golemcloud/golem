@@ -169,7 +169,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         A: AsyncFnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<Pair::Resp, E>,
     {
         Self::start(ctx, request, function_type)
-            .await?
+            .await
+            .map_err(|error| E::from_durable_call_trap(error.into()))?
             .run(ctx, live_action)
             .await
     }
@@ -567,7 +568,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         A: AsyncFnOnce() -> Result<Pair::Resp, E>,
     {
         let call = Self::start_access_with_options(store, get_ctx, function_type, options, request)
-            .await?;
+            .await
+            .map_err(|error| E::from_durable_call_trap(error.into()))?;
         if call.is_live() {
             call.run_live_action_access(store, get_ctx, live_action)
                 .await
@@ -612,7 +614,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             request.clone(),
             targets,
         )
-        .await?;
+        .await
+        .map_err(|error| E::from_durable_call_trap(error.into()))?;
         let denied = decision
             .as_ref()
             .and_then(|decision| decision.as_ref().err())
@@ -698,7 +701,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         };
         let mut call =
             Self::start_access_with_options(store, get_ctx, function_type, options, request)
-                .await?;
+                .await
+                .map_err(|error| E::from_durable_call_trap(error.into()))?;
         if let Some(hook) = &hook {
             hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::AfterDeferredStart)
                 .await;
@@ -710,6 +714,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     get_ctx,
                     AccessResultDestination::Host,
                     completed_parent,
+                    None,
                 )
                 .await?
             {

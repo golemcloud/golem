@@ -25,17 +25,223 @@ impl std::fmt::Debug for DroppedDurableInput {
 }
 
 impl DroppedDurableInput {
+    /// A replayed drop must not wait for guest progress, including when the original guest
+    /// retained the endpoint forever. The context owns this task until replay settles or the
+    /// resident runtime is discarded, just as it owns tool producer disposal.
+    pub(crate) fn defer_if_replaying<Ctx: WorkerCtx>(
+        &self,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> Result<bool, WorkerExecutorError> {
+        if ctx.is_live() {
+            return Ok(false);
+        }
+        let Some(tasks) = &ctx.producer_disposal_tasks else {
+            return Ok(true);
+        };
+        let cancellation = self.clone();
+        let replay = ctx.state.replay_state.clone();
+        let operation = ctx.entity_tool_operation();
+        let boundary = self.disposal_boundary()?;
+        let rejected = ctx.rejects_live_continuation_at_replay_tail();
+        let transition = ctx.live_continuation_at_replay_tail_factory(
+            true,
+            "durable stream guest-drop cancellation".to_string(),
+        );
+        let cleanup = ctx
+            .state
+            .dropped_call_event_sender()
+            .expect("worker cleanup queue");
+        let trap_context = DurableCallTrapContext {
+            retry_from: InFunctionRetryHost::current_retry_point(ctx),
+        };
+        let interrupt = ctx.create_interrupt_signal();
+        tasks.spawner().spawn(async move {
+            let cancel = async {
+                if let Some(index) = cancellation.unreproduced_guest_observation(&replay).await? {
+                    return Err(replay.fail_stream_observation(index));
+                }
+                loop {
+                    if cancellation
+                        .replay_disposal_is_complete(operation.as_ref(), &boundary, rejected)
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                    replay.await_natural_tail_end(None).await?;
+                    if cancellation
+                        .replay_disposal_is_complete(operation.as_ref(), &boundary, rejected)
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                    match transition().await? {
+                        BeginReplayToLive::ReplayResumed => continue,
+                        BeginReplayToLive::Pending(pending) => {
+                            pending
+                                .finish_at(Some(boundary.clone()))
+                                .await?
+                                .require_live()?;
+                            break;
+                        }
+                    }
+                }
+                // The Store applies replay events before forwarding the cancellation. The
+                // native task owns only the passive wait, never Store-local replay state.
+                cleanup
+                    .send(DropEvent::CancelDroppedDurableInput {
+                        cancellation: Box::new(cancellation),
+                    })
+                    .map_err(|_| WorkerExecutorError::runtime("durable input cleanup queue closed"))
+            };
+            let result = tokio::select! {
+                result = cancel => result,
+                kind = interrupt => return Err(WorkerExecutorError::Interrupted { kind }),
+            };
+            if let Err(error) = result {
+                cleanup
+                    .send(DropEvent::DurableInputDisposalFailed {
+                        error,
+                        trap_context,
+                    })
+                    .map_err(|_| {
+                        WorkerExecutorError::runtime("durable input cleanup queue closed")
+                    })?;
+            }
+            Ok(())
+        })?;
+        Ok(true)
+    }
+
+    pub(super) async fn unreproduced_guest_observation(
+        &self,
+        replay: &ReplayState,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        let inspect = async {
+            let binding = self
+                .streams
+                .binding(self.transport_stream_id)
+                .ok_or_else(|| {
+                    format!("unknown durable input binding {}", self.transport_stream_id)
+                })?;
+            let reader = self
+                .streams
+                .current_control_metadata()
+                .await?
+                .reader_id(&binding)?;
+            for index in self.streams.consumer_history_positions(reader).await? {
+                if index > replay.replay_target() || replay.is_in_skipped_region(index).await? {
+                    continue;
+                }
+                let record = self.streams.session_record_at(index).await?;
+                let missing = match record {
+                    StreamSessionRecord::ConsumerItemValue(record) => {
+                        matches!(record.observation, StreamConsumerObservation::Guest { .. })
+                            && record.consumer_read_ordinal + record.logical_item_count() as u64
+                                > self.consumer_read_ordinal
+                    }
+                    StreamSessionRecord::ConsumerTerminal(record) => {
+                        matches!(record.observation, StreamConsumerObservation::Guest { .. })
+                            && record.consumer_read_ordinal >= self.consumer_read_ordinal
+                    }
+                    _ => false,
+                };
+                if missing {
+                    return Ok::<_, SessionError>(Some(index));
+                }
+            }
+            Ok(None)
+        };
+        inspect
+            .await
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
+    }
+
+    pub(super) fn disposal_boundary(
+        &self,
+    ) -> Result<SerializableToolAdmissionRefusal, WorkerExecutorError> {
+        let binding = self
+            .streams
+            .binding(self.transport_stream_id)
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "unknown durable input binding {}",
+                    self.transport_stream_id
+                ))
+            })?;
+        Ok(
+            SerializableToolAdmissionRefusal::BeforeDurableInputDisposal {
+                session: self.streams.session_reference.clone(),
+                binding: Box::new(binding),
+                role: self.role,
+            },
+        )
+    }
+
+    pub(super) async fn replay_disposal_is_complete(
+        &self,
+        operation: Option<&crate::durable_host::tool::operation::OwnerToolOperation>,
+        boundary: &SerializableToolAdmissionRefusal,
+        rejected: bool,
+    ) -> Result<bool, WorkerExecutorError> {
+        let recorded_refusal = operation.is_some_and(|operation| {
+            operation
+                .expected_admission_refusal()
+                .is_some_and(|(expected, _)| expected == *boundary)
+        });
+        // Owner finalization may have supplied a source terminal after this exact disposal
+        // was refused. That terminal does not erase the recorded admission decision.
+        if !recorded_refusal
+            && self
+                .is_recorded()
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+        {
+            return Ok(true);
+        }
+        if let Some(operation) = operation {
+            operation.reject_missing_replay_admission(boundary).await?;
+        }
+        if rejected {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "durable stream guest-drop cancellation",
+                "no recorded cancellation during completed entity replay",
+            ));
+        }
+        Ok(false)
+    }
+
     pub(crate) async fn is_recorded(&self) -> Result<bool, SessionError> {
         let binding = self
             .streams
             .binding(self.transport_stream_id)
             .ok_or_else(|| format!("unknown durable input binding {}", self.transport_stream_id))?;
-        Ok(self
+        let mapping = self
+            .streams
+            .mapping(self.transport_stream_id)
+            .ok_or_else(|| format!("unknown durable input stream {}", self.transport_stream_id))?;
+        self.streams.validate_recovered_mapping(&mapping).await?;
+        if self
             .streams
             .current_control_metadata()
             .await?
             .cancellation_intent(&binding.source)
-            .is_some())
+            .is_some()
+        {
+            return Ok(true);
+        }
+        // Session finalization writes source terminals, not consumer cancellation intents.
+        // Inspect the exact validated source without consuming any guest observation. An
+        // unrelated session's Finished record cannot establish that this source is closed.
+        if self.streams.producer.owns_handle_identity(&mapping.handle) {
+            return self
+                .streams
+                .producer
+                .stream_head(&mapping.handle)
+                .await
+                .map(|head| head.closed)
+                .map_err(SessionError::from);
+        }
+        self.streams.has_journaled_consumer_terminal(&mapping).await
     }
 
     /// Cancels the durable source of a readable stream end the guest dropped without draining.
@@ -126,6 +332,7 @@ impl DurableInputProducer {
     /// Creates a producer for an already materialized session endpoint.
     pub fn new(endpoint: DurableInputEndpoint) -> Self {
         Self {
+            guest_read_ordinal: Arc::new(AtomicU64::new(endpoint.consumer_read_ordinal)),
             input: endpoint,
             pending: None,
             pending_activity: None,
@@ -334,6 +541,7 @@ impl Drop for DurableInputProducer {
             cancellation: Box::new(DroppedDurableInput {
                 streams: self.input.streams.clone(),
                 transport_stream_id: self.input.transport_stream_id,
+                consumer_read_ordinal: self.guest_read_ordinal.load(Ordering::Acquire),
                 role,
             }),
         });
@@ -398,8 +606,24 @@ impl DurableInputProducer {
         })??;
         Poll::Ready(Ok((
             self.pending_guest_value.take().unwrap(),
-            Some(observer),
+            Some(self.track_guest_consumption(observer)),
         )))
+    }
+
+    pub(super) fn track_guest_consumption(
+        &self,
+        observer: StreamReadObserver,
+    ) -> StreamReadObserver {
+        let consumed = self.guest_read_ordinal.clone();
+        let next = self.input.consumer_read_ordinal;
+        Box::new(move |consumption| {
+            let delivered = consumption == wasmtime::component::TerminalConsumption::Delivered;
+            observer(consumption)?;
+            if delivered {
+                consumed.store(next, Ordering::Release);
+            }
+            Ok(())
+        })
     }
 
     fn poll_value<Ctx: WorkerCtx>(
@@ -430,6 +654,7 @@ impl DurableInputProducer {
                     cancellation: DroppedDurableInput {
                         streams: self.input.streams.clone(),
                         transport_stream_id: self.input.transport_stream_id,
+                        consumer_read_ordinal: self.guest_read_ordinal.load(Ordering::Acquire),
                         role,
                     },
                     result,

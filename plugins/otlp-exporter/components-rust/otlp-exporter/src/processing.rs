@@ -14,9 +14,9 @@ use golem_rust::bindings::golem::api::oplog::{
     RawAgentInvocationFinishedParameters, RawAgentInvocationStartedParameters,
     RawCancelledParameters, RawCreateParameters, RawCreateResourceParameters,
     RawDropResourceParameters, RawEndParameters, RawOplogProcessorCheckpointParameters,
-    RawSnapshotParameters, RawSpanClosedParameters, RawStartParameters,
-    RawSuccessfulUpdateParameters, RemoteTransactionParameters, SpanAttributes, SpanData,
-    SpanFinished, SpanKind, SpanOutcome, SpanStarted,
+    RawSnapshotParameters, RawStartParameters, RawSuccessfulUpdateParameters,
+    RemoteTransactionParameters, SpanAttributes, SpanData, SpanFinished, SpanKind, SpanOutcome,
+    SpanStarted,
 };
 use std::collections::HashMap;
 
@@ -671,7 +671,6 @@ fn is_internal_span_operation(function_name: &str) -> bool {
         "golem::api::context::start-span"
             | "golem::api::context::span::finish"
             | "golem::api::context::span::set-attributes"
-            | "http::client::span-cleanup"
     )
 }
 
@@ -1067,9 +1066,9 @@ mod tests {
     use golem_rust::bindings::golem::api::context::{Attribute, AttributeValue};
     use golem_rust::bindings::golem::api::oplog::{
         EnvironmentId, JumpParameters, LocalSpanData, OplogErrorKind, OplogPayload, OplogRegion,
-        RawCreateResourceParameters, RawErrorParameters, RawInvocationWalletPin, ResourceTypeId,
-        RevertParameters, SpanLink, Timestamp, WalletVersionToken, WorkerError,
-        WrappedFunctionType,
+        RawCreateResourceParameters, RawErrorParameters, RawInvocationWalletPin,
+        RawSpanClosedParameters, ResourceTypeId, RevertParameters, SpanLink, Timestamp,
+        WalletVersionToken, WorkerError, WrappedFunctionType,
     };
     use golem_rust::schema::wit::wire::{AccountId, AgentId, ComponentId, Uuid};
     use golem_rust::wasip3::clocks::system_clock::Instant;
@@ -1493,7 +1492,6 @@ mod tests {
             "golem::api::context::start-span",
             "golem::api::context::span::finish",
             "golem::api::context::span::set-attributes",
-            "http::client::span-cleanup",
         ];
         for name in internal {
             assert!(is_internal_span_operation(name));

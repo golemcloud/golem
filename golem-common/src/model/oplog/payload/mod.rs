@@ -339,9 +339,6 @@ oplog_payload! {
         P3HttpClientSend {
             request: SerializableP3HttpClientSend
         },
-        P3HttpSpanCleanup {
-            send_start_index: OplogIndex
-        },
         /// Payload of a `HostStreamFrame` hint oplog entry recording one frame of a
         /// P3 HTTP outgoing request body. Not a host-call request: these frames are
         /// persisted as standalone hint entries under the send's `Start`, never as a
@@ -1024,7 +1021,6 @@ pub mod host_functions {
         (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend, denied = denied::sockets::p3_udp_send),
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
         (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult, denied = denied::http::p3_send),
-        (P3HttpSpanCleanup => "http::client", "span-cleanup", P3HttpSpanCleanup, GolemApiUnit),
         (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
         (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk),
         (P3HttpClientRequestBodyTransmission => "http::types::request", "body-transmission", NoInput, P3HttpClientRequestBodyTransmission),
