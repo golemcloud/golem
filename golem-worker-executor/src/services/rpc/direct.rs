@@ -211,6 +211,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
 
@@ -231,7 +233,21 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
-            let worker = Worker::get_or_create_suspended(
+            if let Some(key) = &idempotency_key {
+                Worker::<Ctx>::validate_invocation_freshness(
+                    self,
+                    owned_agent_id,
+                    key,
+                    freshness_disposition,
+                )
+                .await?;
+            } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                return Err(RpcError::ProtocolError {
+                    details: "KnownFresh requires an idempotency key".to_string(),
+                });
+            }
+
+            let worker = Worker::get_or_create_suspended_with_freshness(
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
@@ -242,6 +258,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Principal::Agent(AgentPrincipal {
                     agent_id: self_agent_id.clone(),
                 }),
+                freshness_disposition,
             )
             .await?;
 
@@ -261,6 +278,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_stack,
                     config,
                     auth_ctx,
+                    idempotency_key,
+                    freshness_disposition,
                 )
                 .await
         }

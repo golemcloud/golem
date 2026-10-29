@@ -95,6 +95,7 @@ export type BeginRemoteTransactionParameters = OplogTypes.BeginRemoteTransaction
 export type RemoteTransactionParameters = OplogTypes.RemoteTransactionParameters;
 export type SnapshotParameters = OplogTypes.SnapshotParameters;
 export type SnapshotConfirmedParameters = OplogTypes.SnapshotConfirmedParameters;
+export type SpanClosedParameters = OplogTypes.SpanClosedParameters;
 export type Timestamp = OplogTypes.Timestamp;
 
 // Re-export raw/internal types
@@ -193,6 +194,7 @@ export type PublicOplogEntry =
   | { tag: 'rolled-back-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'snapshot'; val: SnapshotParameters }
   | { tag: 'snapshot-confirmed'; val: SnapshotConfirmedParameters }
+  | { tag: 'span-closed'; val: SpanClosedParameters }
   | { tag: 'oplog-processor-checkpoint'; val: OplogProcessorCheckpointParameters };
 
 // Wrapping helpers

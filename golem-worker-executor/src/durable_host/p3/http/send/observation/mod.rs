@@ -88,31 +88,18 @@ impl P3SendSpanLifecycle {
                 started: None,
                 abandonment: None,
                 cleanup_submitted: false,
-                replay_tx: None,
             }),
             closure_claimed: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    fn set_replay_sender(
-        &self,
-        replay_tx: oneshot::Sender<Option<crate::durable_host::concurrent::HttpSpanCleanupReplay>>,
-    ) {
-        self.state.lock().unwrap().replay_tx = Some(replay_tx);
     }
 
     pub(super) fn started_span(&self) -> Option<SpanStarted> {
         self.state.lock().unwrap().started.clone()
     }
 
-    pub(super) fn snapshot_started(
-        &self,
-        index: OplogIndex,
-        owner: Option<OplogIndex>,
-        started: SpanStarted,
-    ) {
+    pub(super) fn snapshot_started(&self, index: OplogIndex, started: SpanStarted) {
         let mut state = self.state.lock().unwrap();
-        state.recorder = state.recorder.clone().for_start(index, owner, true);
+        state.recorder = state.recorder.clone().for_start(index);
         state.started = Some(started);
     }
 
@@ -135,21 +122,17 @@ impl P3SendSpanLifecycle {
             return;
         }
         state.cleanup_submitted = true;
-        let replay = state.recorder.clone().record(SpanFinished {
+        state.recorder.clone().record(SpanFinished {
             span_id: started.span_id.clone(),
             finished_at,
             outcome: golem_common::model::oplog::SpanOutcome::Abandoned,
         });
-        if let Some(tx) = state.replay_tx.take() {
-            let _ = tx.send(replay);
-        }
     }
 }
 
 impl CallSpanObserver for P3SendSpanLifecycle {
-    fn started(self: Arc<Self>, index: OplogIndex, entry: &OplogEntry, replay: bool) {
+    fn started(self: Arc<Self>, index: OplogIndex, entry: &OplogEntry, _: bool) {
         let OplogEntry::Start {
-            observational_owner,
             span_started: Some(started),
             ..
         } = entry
@@ -157,10 +140,7 @@ impl CallSpanObserver for P3SendSpanLifecycle {
             return;
         };
         let mut state = self.state.lock().expect("p3 send span lifecycle poisoned");
-        state.recorder = state
-            .recorder
-            .clone()
-            .for_start(index, *observational_owner, !replay);
+        state.recorder = state.recorder.clone().for_start(index);
         state.started = Some((**started).clone());
         self.submit_cleanup(&mut state);
     }
@@ -202,12 +182,6 @@ impl SendTerminalObserver {
             ));
         }
         let observer_state = state.clone();
-        let (replay_tx, replay_rx) = oneshot::channel();
-        lifecycle.set_replay_sender(replay_tx);
-        store.spawn(SpawnHttpCleanupReplay::<Ctx> {
-            replay_rx,
-            _phantom: PhantomData,
-        });
         store
             .register_terminal_observer(move |consumption| {
                 if consumption == TerminalConsumption::NotDelivered {
@@ -265,17 +239,6 @@ pub(super) fn settle_send_terminal(
             drop(delivery);
         }
         TerminalConsumption::Superseded => delivery.suppress(),
-    }
-}
-
-impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, DurableP3<Ctx>>
-    for SpawnHttpCleanupReplay<Ctx>
-{
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        if let Ok(Some(replay)) = self.replay_rx.await {
-            accessor.spawn(replay);
-        }
-        Ok(())
     }
 }
 

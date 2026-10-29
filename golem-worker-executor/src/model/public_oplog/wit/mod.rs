@@ -68,9 +68,10 @@ use golem_common::model::oplog::public_oplog_entry::{
     PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanOutcome,
     PublicSpanStarted, RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams,
     ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SnapshotConfirmedParams, SnapshotParams, StartParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
+    SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams, StreamCancelParams,
+    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, ToolAttachmentControlParams,
+    ToolAttachmentReadParams,
 };
 
 use golem_common::model::oplog::{

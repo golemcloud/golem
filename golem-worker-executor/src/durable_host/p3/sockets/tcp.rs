@@ -25,7 +25,8 @@ use crate::durable_host::concurrent::{
     reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
-    CustomInvocationContext, DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
+    CustomInvocationContext, DurabilityHost, DurableCallTrapContext,
+    find_durable_call_trap_context, mark_durable_call_trap_context,
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
@@ -983,8 +984,8 @@ fn fail_tcp_receive_task(
 ///   is finalized last with a marker carrying the terminal `Result<(), error>`;
 /// * every delivered chunk is persisted as a `P3SocketsTypesTcpSocketReceiveChunk`
 ///   child (`Data`) before its bytes are handed to the guest;
-/// * a final `End` child terminates the recorded stream so replay knows when to
-///   stop reading children.
+/// * a requested EOF is persisted as an `End` child. Dropping an idle reader only
+///   closes the parent; collection does not create a read demand.
 ///
 /// Each child is produced in response to exactly one producer demand, so on
 /// replay the same number of children are read back from the oplog and delivered
@@ -1025,7 +1026,12 @@ where
     {
         Ok(parent) => parent,
         Err(error) => {
-            return fail_tcp_receive_task(result_tx, wasmtime::Error::from(error), None);
+            let trap_context = find_durable_call_trap_context(&error);
+            return fail_tcp_receive_task(
+                result_tx,
+                wasmtime::Error::from_anyhow(error),
+                trap_context,
+            );
         }
     };
 
@@ -1085,6 +1091,9 @@ where
     loop {
         // Safe park: waiting for the guest to demand the next chunk.
         let demand = stream.next_demand(&activity).await;
+        if demand.is_none() {
+            break;
+        }
 
         let item = match stream
             .next(
@@ -1096,7 +1105,8 @@ where
         {
             Ok(item) => item,
             Err(error) => {
-                let trap_context = stream.trap_context();
+                let trap_context =
+                    find_durable_call_trap_context(&error).unwrap_or_else(|| stream.trap_context());
                 if let Some(reply_tx) = demand {
                     let _ = reply_tx.send(TcpReceiveReply::Failed {
                         message: error.to_string(),
@@ -1124,9 +1134,8 @@ where
                 (produced, delivery)
             }
             DurableDemandItem::Live(mut child) => {
-                // When the producer is already gone (guest dropped the stream) we
-                // terminate the recorded stream with an `End` child instead of reading
-                // more of the socket.
+                // An abandoned read still owns its child. Complete that demand without
+                // reading more of the socket when its reply endpoint has disappeared.
                 let producer_gone = demand
                     .as_ref()
                     .map(|reply_tx| reply_tx.is_closed())
@@ -1513,8 +1522,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             },
             HostRequestNoInput {},
         )
-        .await
-        .map_err(wasmtime::Error::from)?;
+        .await?;
         let (result_tx, result_rx) = oneshot::channel();
 
         if call.is_live() {

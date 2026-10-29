@@ -22,6 +22,7 @@ use super::{
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
     from_proto_invocation_context, golem,
 };
+use golem_common::model::agent::InvocationFreshnessDisposition;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -88,6 +89,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
+        let freshness_disposition = if !wait_until_loaded
+            && request.freshness_disposition
+                == golem::worker::InvocationFreshnessDisposition::KnownFresh as i32
+        {
+            InvocationFreshnessDisposition::KnownFresh
+        } else {
+            InvocationFreshnessDisposition::MayExist
+        };
+        if let Some(key) = request.idempotency_key.clone() {
+            Worker::<Ctx>::validate_invocation_freshness(
+                self,
+                &owned_agent_id,
+                &key.into(),
+                freshness_disposition,
+            )
+            .await?;
+        } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+            return Err(WorkerExecutorError::invalid_request(
+                "KnownFresh requires an idempotency key",
+            ));
+        }
+
         let principal = extract_principal(&request.principal);
 
         let env: Vec<(String, String)> = request
@@ -107,7 +130,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
-        if !request.ignore_already_existing {
+        if !request.ignore_already_existing
+            && freshness_disposition == InvocationFreshnessDisposition::MayExist
+        {
             if let Some(existing) = self.active_agents().try_get(&owned_agent_id).await {
                 if !Self::is_same_worker_creation_request(
                     &existing.get_initial_worker_metadata(),
@@ -138,7 +163,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             from_proto_invocation_context(&request.invocation_context),
         );
 
-        let worker = Worker::get_or_create_suspended(
+        let worker = Worker::get_or_create_suspended_with_freshness(
             self,
             &owned_agent_id,
             Some(env),
@@ -147,6 +172,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None,
             &invocation_context,
             principal,
+            freshness_disposition,
         )
         .await?;
 

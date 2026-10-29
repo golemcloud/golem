@@ -419,6 +419,29 @@ async fn durable_call_cuts_use_the_retained_prefix_not_future_completion() {
 }
 
 #[test]
+async fn span_closed_on_either_side_of_the_cut_is_accepted() {
+    let span_closed = OplogEntry::SpanClosed {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        resource_start_index: Some(idx(2)),
+        span_finished: golem_common::model::oplog::SpanFinished {
+            span_id: golem_common::model::invocation_context::SpanId::generate(),
+            finished_at: Timestamp::now_utc(),
+            outcome: golem_common::model::oplog::SpanOutcome::Completed,
+        },
+    };
+    let entries = HashMap::from([
+        (3, OplogEntry::end(idx(2), None, false, None, None)),
+        (5, span_closed),
+    ]);
+    // The hint closes the span of the call at 2; it pairs with nothing, so a cut just before
+    // or just after it (or between the call and the hint) is clean.
+    for cut in [3, 4, 5, 6] {
+        assert_eq!(scan(&entries, cut, 6, &deleted(vec![])).await, None);
+    }
+}
+
+#[test]
 async fn recoverable_call_does_not_hide_a_later_transaction_boundary() {
     let entries = HashMap::from([
         (5, OplogEntry::end(idx(2), None, false, None, None)),

@@ -264,6 +264,7 @@ const KINDS = {
   ActivatePlugin: ['ACTIVATE PLUGIN', 'plugin', 1], DeactivatePlugin: ['DEACTIVATE PLUGIN', 'plugin', 1],
   OplogProcessorCheckpoint: ['OPLOG PROCESSOR CHECKPOINT', 'plugin', 1],
   Snapshot: ['SNAPSHOT', 'snapshot', 1], SnapshotConfirmed: ['SNAPSHOT CONFIRMED', 'snapshot', 1],
+  SpanClosed: ['SPAN CLOSED', 'resource', 1],
   SetRetryPolicy: ['SET RETRY POLICY', 'retry'], RemoveRetryPolicy: ['REMOVE RETRY POLICY', 'retry'],
   CardEventQueued: ['CARD EVENT QUEUED', 'card', 1], CardInstalled: ['CARD INSTALLED', 'card', 1],
   CardInstallFailed: ['CARD INSTALL FAILED', 'card', 1], CardRevoked: ['CARD REVOKED', 'card', 1],
@@ -595,6 +596,7 @@ function summary(e) {
     case 'Snapshot': return [span('val', snapshotText(p.data)), p.filesystemSnapshot ? span('val', ' · fs ' + p.filesystemSnapshot) : null];
     case 'Omitted': return [span('val', `${p.entryType} · ${fmtBytes(p.size || 0)} · omitted from the oplog page`)];
     case 'SnapshotConfirmed': return [span('val', 'fs snapshot ' + p.filesystemSnapshot)];
+    case 'SpanClosed': return [span('val', 'span ' + p.spanFinished.spanId + ' closed' + (p.resourceStartIndex != null ? ' · opened at #' + idxOf(p.resourceStartIndex) : ''))];
     case 'SetRetryPolicy': return [span('fn', p.policy.name), span('val', ` · priority ${p.policy.priority}`)];
     case 'RemoveRetryPolicy': return [span('fn', p.name)];
     case 'StreamRegistered': case 'StreamItems': case 'StreamEnd': case 'StreamCancel': case 'StreamSession': return [span('val', typedText(p.record, 160))];

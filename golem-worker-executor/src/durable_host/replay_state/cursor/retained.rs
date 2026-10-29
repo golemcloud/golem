@@ -157,10 +157,15 @@ impl CursorTx<'_> {
         {
             wallet.register_replayed_entity(idx);
         }
+        let enclosing_entities = start_parent(&entry)
+            .and_then(|parent| self.st.entity_start_routes.get(&parent))
+            .cloned()
+            .unwrap_or_default();
         self.st.retained_starts.insert(
             idx,
             RetainedStart {
                 entry,
+                enclosing_entities,
                 terminal: None,
                 deferred_events: Vec::new(),
             },
@@ -259,7 +264,13 @@ impl CursorTx<'_> {
 }
 
 impl RetainedClaims<'_> {
-    fn publish_retained_count(&self) {
+    fn publish_retained_count(&mut self) {
+        self.st.retained_entity_counts.clear();
+        for retained in self.st.retained_starts.values() {
+            for entity in &retained.enclosing_entities {
+                *self.st.retained_entity_counts.entry(*entity).or_default() += 1;
+            }
+        }
         self.cursor.unclaimed_retained_starts.publish(
             self.st
                 .retained_starts
@@ -411,6 +422,17 @@ impl CursorTx<'_> {
         if let Some(wallet) = &self.cursor.wallet {
             wallet.prune_entity_prefixes(&mut deleted);
         }
+        self.st.entity_start_routes.retain(|start, entities| {
+            entities.retain(|entity| !deleted(*entity));
+            !deleted(*start) && !entities.is_empty()
+        });
+        let mut members: HashMap<OplogIndex, HashSet<OplogIndex>> = HashMap::new();
+        for (start, entities) in &self.st.entity_start_routes {
+            for entity in entities {
+                members.entry(*entity).or_default().insert(*start);
+            }
+        }
+        self.st.entity_route_members = members;
         self.st.retained_starts.retain(|idx, _| {
             if deleted(*idx) {
                 if let Some(wallet) = &self.cursor.wallet {
@@ -422,6 +444,9 @@ impl CursorTx<'_> {
             }
         });
         for retained in self.st.retained_starts.values_mut() {
+            retained
+                .enclosing_entities
+                .retain(|entity| !deleted(*entity));
             if retained
                 .terminal
                 .as_ref()
@@ -696,6 +721,7 @@ impl ReplayState {
                 ));
             }
             let released = std::mem::take(&mut st.retained_starts);
+            st.retained_entity_counts.clear();
             state.cursor.unclaimed_retained_starts.clear();
             if released.is_empty() {
                 return Ok(());
