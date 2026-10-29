@@ -100,7 +100,7 @@ impl Rpc for HoldResponseRpc {
 
 /// `grow_memory_before_rpc_activation` grows memory between creating the durable RPC target and
 /// calling it. The target activation is a durable `WriteRemote` call, so its committed `End`, not
-/// the `GrowMemory` hint, is the oplog tip when the uncommitted invocation `Start` is appended.
+/// the `GrowMemory` hint, is the oplog tip when the invocation `Start` is appended and committed.
 #[test]
 #[timeout("3m")]
 async fn durable_rpc_after_activation_redispatches_with_the_same_key_after_restart(
@@ -146,7 +146,7 @@ async fn durable_rpc_without_hint_redispatches_with_the_same_key_after_restart(
 
 /// `durable_operation_after_rpc_result("async-rpc")` calls `inc_by(1)`, grows memory, then calls
 /// `inc_by(7)` on the same activated target. The uncommitted `GrowMemory` hint is the oplog tip when
-/// the second RPC begins, and the crash loses both that hint and the second `Start`.
+/// the second RPC begins; its Start barrier must preserve both the hint and the call before dispatch.
 #[test]
 #[timeout("3m")]
 async fn durable_rpc_after_uncommitted_hint_redispatches_with_the_same_key_after_restart(
@@ -221,6 +221,18 @@ async fn held_response_restart_case(
     };
     tokio::time::timeout(Duration::from_secs(30), effect_applied.notified()).await?;
     let stored_before_crash = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        executor
+            .stored_oplog(&caller)
+            .await
+            .iter()
+            .filter(|entry| matches!(entry,
+                golem_common::model::oplog::OplogEntry::Start { function_name, .. }
+                    if function_name.to_string() == "golem::rpc::wasm-rpc::invoke_and_await"))
+            .count(),
+        held + 1,
+        "every dispatched RPC must already have a committed Start before its response arrives"
+    );
     invocation.abort();
     let _ = invocation.await;
     drop(executor);

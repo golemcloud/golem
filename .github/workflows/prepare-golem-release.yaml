@@ -112,7 +112,7 @@ jobs:
               notes_args+=(--notes-start-tag "$previous_tag")
             fi
             gh release create "$GITHUB_REF_NAME" --repo golemcloud/golem \
-              --verify-tag --draft --prerelease="$prerelease" --title "$GITHUB_REF_NAME" "${notes_args[@]}"
+              --verify-tag --draft --latest=false --prerelease="$prerelease" --title "$GITHUB_REF_NAME" "${notes_args[@]}"
           fi
       - name: Publish built-ins and attach the verified manifest
         shell: bash

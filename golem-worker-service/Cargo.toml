@@ -31,10 +31,6 @@ name = "blob-storage"
 path = "tests/blob_storage.rs"
 harness = false
 
-# [[bench]]
-# name = "tree"
-# harness = false
-
 [[bench]]
 name = "agent_resolution_cache"
 harness = false
