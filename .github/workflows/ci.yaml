@@ -901,6 +901,62 @@ jobs:
           if-no-files-found: error
           retention-days: 35
 
+  # Each run creates one sticky disk per producer, and the Blacksmith installation allows 500.
+  # Keep the disks of a run that has a failed consumer, so its failed jobs can be rerun; inactive
+  # disks expire after seven days.
+  delete-sticky-disks:
+    if: ${{ always() && !contains(needs.*.result, 'failure') }}
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 10
+    needs:
+      - build-and-store
+      - builtin-artifacts
+      - build-cli-test-bins
+      - build-golem-scala
+      - merge-test-components
+      - build-test-components
+      - config-checks
+      - unit-tests-and-checks
+      - worker-tests
+      - managed-xfs-tests
+      - it
+      - it-cli
+      - it-cli-agents
+      - it-cli-streaming
+      - scala-sdk-integration-tests
+      - release-prerequisites
+    steps:
+      - name: Delete native binary disk
+        if: needs.build-and-store.outputs.native-binaries-disk-key != ''
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+      - name: Delete built-in artifact disk
+        if: needs.builtin-artifacts.outputs.artifacts-disk-key != ''
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+      - name: Delete CLI binary disk
+        if: needs.build-cli-test-bins.outputs.cli-binary-disk-key != ''
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ needs.build-cli-test-bins.outputs.cli-binary-disk-key }}
+      - name: Delete Scala ivy disk
+        if: needs.build-golem-scala.outputs.ivy-disk-key != ''
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ needs.build-golem-scala.outputs.ivy-disk-key }}
+      - name: Delete test component disk
+        if: needs.merge-test-components.outputs.components-disk-key != ''
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ needs.merge-test-components.outputs.components-disk-key }}
+
   scala-sdk-integration-tests:
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
