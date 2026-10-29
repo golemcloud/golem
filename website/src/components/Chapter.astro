@@ -82,6 +82,7 @@ const codeLines = (code: string, hl: Set<number>) => ({
     <header class="head">
       <span class="eyebrow">{eyebrow}</span>
       <h2 class="section-heading" id={id}>{heading}</h2>
+      {"lead" in chapter && <p class="chapter-lead">{chapter.lead}</p>}
     </header>
     <figure class="fig code-block" id={figId} data-code-switcher data-active="overview">
       <div class="code-header">
@@ -349,6 +350,12 @@ const codeLines = (code: string, hl: Set<number>) => ({
   .head .section-heading {
     max-width: none;
     margin-bottom: 0.75rem;
+  }
+  .chapter-lead {
+    max-width: 65ch;
+    margin-bottom: 1.5rem;
+    color: var(--text-secondary);
+    line-height: 1.65;
   }
   .fig {
     margin: 0 0 1.75rem;

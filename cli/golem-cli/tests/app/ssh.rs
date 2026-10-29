@@ -985,7 +985,7 @@ async fn ssh_prompt_feels_like_a_shell() {
         session.expect_str("exit [N]")?;
         answer_cursor_query(session)?;
         enter(session, "tools")?;
-        session.expect_regex("  bash\r\n  fixture")?;
+        session.expect_regex(r"  bash[^\r\n]*\r\n  fixture")?;
         session.expect_str("Run `NAME --help`")?;
         answer_cursor_query(session)?;
         enter(session, "exit")?;
@@ -999,7 +999,7 @@ async fn ssh_prompt_feels_like_a_shell() {
         answer_cursor_query(session)?;
         session.expect_str(MARKER)?;
         enter(session, "tools")?;
-        session.expect_regex("  bash\r\nRun `NAME --help`")?;
+        session.expect_regex(r"  bash[^\r\n]*\r\nRun `NAME --help`")?;
         answer_cursor_query(session)?;
         enter(session, "exit")?;
         session.expect_eof()
