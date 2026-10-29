@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::tool::operation::OwnerFailureWinner;
+use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
 use crate::filesystem_snapshot::AgentSnapshots;
 use crate::model::{LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
@@ -49,7 +49,7 @@ use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation, InvocationFailureDecision,
     PendingLiveInvocationDisposition, PendingWorkerInterrupt, PreparedAgent,
     QueuedWorkerInvocation, RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker,
-    UnloadReason, UnloadRequest, Worker, WorkerCommand, WorkerTrace,
+    UnloadReason, UnloadRequest, Worker, WorkerCommand, WorkerDeletionHook, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
@@ -279,11 +279,13 @@ pub(super) fn monthly_resource_exhausted_invocation_error(
 struct ResidentAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
     runtime: Runtime,
     filesystem: ResidentFilesystem<Adapter>,
+    operations: Arc<OwnerToolOperations>,
 }
 
 struct SealedAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
     runtime: Runtime,
     filesystem: SealedFilesystem<Adapter>,
+    operations: Option<Arc<OwnerToolOperations>>,
 }
 
 enum FilesystemLimitUpdateOutcome {
@@ -734,6 +736,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     SealedAgentOwnership {
                                         runtime: RunningAgentRuntime { instance, store },
                                         filesystem,
+                                        operations: Some(
+                                            self.parent.owner_execution().tool_operations(),
+                                        ),
                                     },
                                     UnloadReason::FilesystemLimit,
                                     resource_usage_close_deadline(),
@@ -917,10 +922,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             let deadline = hook.as_ref().map_or(unload_request.deadline, |hook| {
                 hook.unload_deadline(&self.owned_agent_id, unload_request.deadline)
             });
-            let before_delete = hook.map(|hook| {
-                let owned_agent_id = self.owned_agent_id.clone();
-                async move { hook.before_filesystem_cleanup(&owned_agent_id).await }.boxed()
-            });
+            let unload_hook = hook.map(|hook| (self.owned_agent_id.clone(), hook));
             // An automatic update that restarts the agent in place selects its record when this
             // generation ends; the newest record counts only once its upload confirmed it. The
             // unload deadline moves by the time of the wait, so the wait does not use it up.
@@ -944,11 +946,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.end_snapshot_generation();
             let unloading = unload_prepared_agent(
                 prepared,
+                self.parent.owner_execution().tool_operations(),
                 unload_request.reason,
                 deadline,
                 &mut self.permit_state,
                 &self.filesystem_activity,
-                before_delete,
+                unload_hook,
             );
             // Save final completion before awaiting the bounded result: a timeout below does
             // not stop cleanup, and a later delete must wait for or retry that same cleanup.

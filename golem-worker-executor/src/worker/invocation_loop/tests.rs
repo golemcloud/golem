@@ -12,6 +12,7 @@ use super::{
     spawn_module_owned_unload, successful_agent_invocation_outcome,
     unload_resident_agent_ownership, wait_for_resident_wakeup, with_end,
 };
+use crate::durable_host::tool::operation::OwnerToolOperations;
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::services::active_agents::stop_loaded_idle_if_eligible;
 use crate::services::agent_filesystem::{
@@ -898,7 +899,7 @@ async fn invocation_loop_panic_with_resident_owner_uses_filesystem_drop_cleanup(
 #[timeout("5s")]
 async fn unload_deadline_during_drain_keeps_final_sample_and_deletion_owned() {
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
     let close = control.block("close");
     control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
@@ -917,6 +918,7 @@ async fn unload_deadline_during_drain_keeps_final_sample_and_deletion_owned() {
         ResidentAgentOwnership {
             runtime: (),
             filesystem,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now(),
@@ -987,6 +989,7 @@ async fn pending_filesystem_deletion_does_not_hold_scheduler_capacity() {
         ResidentAgentOwnership {
             runtime: (),
             filesystem,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1032,6 +1035,7 @@ async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() 
             },
             filesystem,
         }),
+        OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
         &mut permit_state,
@@ -1147,6 +1151,7 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
             },
             filesystem,
         }),
+        OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
         &mut permit_state,
@@ -1220,6 +1225,7 @@ async fn dropped_production_unload_observer_does_not_cancel_owned_cleanup() {
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1253,7 +1259,7 @@ async fn production_unload_starts_final_observation_after_native_close_drains() 
     let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let scope = metrics.scope();
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
     let close = control.block("close");
@@ -1280,6 +1286,7 @@ async fn production_unload_starts_final_observation_after_native_close_drains() 
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1375,6 +1382,7 @@ async fn aborted_preparation_unloads_a_retained_pending_write_before_draining() 
         let mut permits = ConcurrentAgentPermitState::new(None, Arc::new(AtomicBool::new(false)));
         let mut unloading = Box::pin(super::unload_prepared_agent(
             prepared,
+            OwnerToolOperations::new(),
             UnloadReason::Restart,
             Instant::now() + Duration::from_secs(2),
             &mut permits,
@@ -1402,7 +1410,7 @@ async fn startup_disposal_releases_execution_before_failed_deletion_and_repair()
     let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let scope = metrics.scope();
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
     control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
@@ -1473,7 +1481,7 @@ async fn unload_preparation_defers_allocation_to_window_close() {
     use futures::FutureExt;
 
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
     control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
         allocated_bytes: 100,
@@ -1519,7 +1527,7 @@ async fn unload_preparation_defers_allocation_to_window_close() {
 #[timeout("5s")]
 async fn execution_window_closes_before_filesystem_deletion() {
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
     control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
         allocated_bytes: 100,
@@ -1539,6 +1547,7 @@ async fn execution_window_closes_before_filesystem_deletion() {
                 dropped: store_dropped.clone(),
             },
             filesystem,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1564,13 +1573,174 @@ async fn execution_window_closes_before_filesystem_deletion() {
     );
 }
 
+struct OperationSettlementProbe {
+    arrived: tokio::sync::Semaphore,
+    released: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl crate::worker::WorkerDeletionHook for OperationSettlementProbe {
+    async fn before_owner_operation_settlement(&self, _: &golem_common::model::OwnedAgentId) {
+        self.arrived.add_permits(1);
+    }
+
+    async fn before_filesystem_cleanup(&self, _: &golem_common::model::OwnedAgentId) {
+        assert!(
+            self.released.load(Ordering::Acquire),
+            "deletion overtook accepted-operation settlement"
+        );
+    }
+
+    async fn before_stage(
+        &self,
+        _: &golem_common::model::OwnedAgentId,
+        _: crate::worker::WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn resident_unload_retains_accepted_operations_until_settlement() {
+    use crate::durable_host::tool::operation::tests::{accept_provisional, context};
+
+    for (deadline_expired, metering_failed) in [(false, false), (true, false), (false, true)] {
+        let operations = OwnerToolOperations::new();
+        let operation = accept_provisional(operations.create(context()), 2);
+        let owner = operation.invocation_id().unwrap().owner_id().clone();
+        operations
+            .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+            .await;
+        operations.drain_owner_failure_lanes().await;
+        // Ordinary lifecycle fencing creates no failure-cleanup task to join.
+        operations.join_owner_failure_cleanup().await.unwrap();
+        assert!(operations.begin_generation().is_err());
+
+        let clock = crate::services::resource_usage_metering::TestClock::new_at(
+            Instant::now(),
+            chrono::Utc::now(),
+        );
+        let (filesystem, control, window, _generation_handle, node) =
+            billing_metered_resident_with_open_node_for_unload_test(Some(clock.clone())).await;
+        clock.wait_for_sleep_until(Duration::from_millis(10)).await;
+        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+            allocated_bytes: 50,
+            filesystem_objects: 1,
+        }));
+        clock.set(Duration::from_millis(10)).await;
+        clock.wait_for_sleep_until(Duration::from_millis(100)).await;
+        if metering_failed {
+            control.push_observe_allocation(Err(FilesystemStorageError::verification(
+                "held-operation metering failure",
+                Path::new("<operation-unload>"),
+            )));
+            let observation = control.block("observe_allocation");
+            let mut health = window.subscribe_enforcement_failure();
+            clock.set(Duration::from_millis(100)).await;
+            observation.wait_started().await;
+            observation.release();
+            crate::services::resource_usage_metering::wait_for_enforcement_failure(&mut health)
+                .await;
+        }
+        control.push_close(Ok(()));
+        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+            allocated_bytes: 100,
+            filesystem_objects: 1,
+        }));
+        control.push_delete_and_verify(Ok(()));
+        let settled = window.settlement_observer();
+        let held = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let probe = Arc::new(OperationSettlementProbe {
+            arrived: tokio::sync::Semaphore::new(0),
+            released: AtomicBool::new(false),
+        });
+        let mut permits = ConcurrentAgentPermitState::new(None, held.clone());
+        permits.install_window(super::ExecutionWindow::unmonitored(window));
+        let observer = unload_resident_agent_ownership(
+            ResidentAgentOwnership {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: dropped.clone(),
+                },
+                filesystem,
+                operations: operations.clone(),
+            },
+            UnloadReason::Failure,
+            if deadline_expired {
+                Instant::now()
+            } else {
+                Instant::now() + Duration::from_secs(20)
+            },
+            &mut permits,
+            &Arc::new(Mutex::new(None)),
+            Some((owner, probe.clone())),
+        );
+        let cleanup = observer.cleanup.clone();
+        probe.arrived.acquire().await.unwrap().forget();
+        assert!(!held.load(Ordering::Acquire));
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(settled());
+        assert!(operations.begin_generation().is_err());
+        let mut final_cleanup = Box::pin(cleanup.wait());
+        assert!(futures::poll!(final_cleanup.as_mut()).is_pending());
+        assert!(
+            !control
+                .calls()
+                .iter()
+                .any(|call| call.starts_with("delete_and_verify("))
+        );
+
+        let mut observer = Box::pin(observer);
+        let early_error = if deadline_expired || metering_failed {
+            let error = observer.as_mut().await.expect("unload must fail closed");
+            assert!(error.to_string().contains(if metering_failed {
+                "held-operation metering failure"
+            } else {
+                "unload deadline"
+            }));
+            Some(error)
+        } else {
+            assert_eq!(futures::poll!(observer.as_mut()), std::task::Poll::Pending);
+            None
+        };
+        if early_error.is_some() {
+            // Dropping the bounded observer must not cancel final cleanup.
+            drop(observer);
+        } else {
+            probe.released.store(true, Ordering::Release);
+            operation.settle().await;
+            assert!(observer.await.is_none());
+            final_cleanup.await.unwrap();
+            operations.begin_generation().unwrap();
+            continue;
+        }
+        probe.released.store(true, Ordering::Release);
+        operation.settle().await;
+        if metering_failed {
+            assert_eq!(final_cleanup.await.unwrap_err(), early_error.unwrap());
+        } else {
+            final_cleanup.await.unwrap();
+        }
+        assert_eq!(
+            control
+                .calls()
+                .iter()
+                .filter(|call| call.starts_with("delete_and_verify("))
+                .count(),
+            1
+        );
+    }
+}
+
 #[test]
 #[timeout("5s")]
 async fn active_allocation_failure_remains_failed_after_successful_physical_deletion() {
     let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let scope = metrics.scope();
     let (filesystem, control, window, _generation_handle, node) =
-        billing_metered_resident_with_open_node_for_unload_test().await;
+        billing_metered_resident_with_open_node_for_unload_test(None).await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_observe_allocation(Err(FilesystemStorageError::verification(
         "active allocation observation failed",
@@ -1608,6 +1778,7 @@ async fn active_allocation_failure_remains_failed_after_successful_physical_dele
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::Failure,
         Instant::now() + Duration::from_secs(1),
@@ -1667,6 +1838,7 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
             },
             filesystem,
         }),
+        OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_millis(20),
         &mut permit_state,
@@ -1778,6 +1950,7 @@ async fn concrete_failed_unload_retains_retry_owner_and_immutable_results() {
         ResidentAgentOwnership {
             runtime: (),
             filesystem,
+            operations: OwnerToolOperations::new(),
         },
         UnloadReason::Deleting,
         Instant::now() + Duration::from_secs(1),
@@ -1941,6 +2114,7 @@ async fn filesystem_pressure_stop_seam_reaches_concrete_unload_with_exact_deadli
                     },
                     filesystem,
                 }),
+                OwnerToolOperations::new(),
                 unload_request.reason,
                 unload_request.deadline,
                 &mut permit_state,

@@ -400,6 +400,17 @@ pub trait WorkerDeletionHook: Send + Sync {
 
     async fn before_filesystem_cleanup(&self, _owned_agent_id: &OwnedAgentId) {}
 
+    async fn before_owner_operation_settlement(&self, _owned_agent_id: &OwnedAgentId) {}
+
+    /// Coordinates the accepted supervisor after failed entity resources have been released,
+    /// but before its original operation leaves the owner registry.
+    async fn before_failed_tool_settlement(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _start: OplogIndex,
+    ) {
+    }
+
     async fn before_stage(
         &self,
         owned_agent_id: &OwnedAgentId,

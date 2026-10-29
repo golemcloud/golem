@@ -218,9 +218,13 @@ impl Rpc for StreamingRemoteRpc {
         stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
+        key: Option<IdempotencyKey>,
+        freshness: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         self.inner
-            .create_demand(agent, method, created_by, caller, env, stack, config, auth)
+            .create_demand(
+                agent, method, created_by, caller, env, stack, config, auth, key, freshness,
+            )
             .await
     }
 
@@ -350,9 +354,13 @@ impl WorkerProxy for LocalResumeProxy {
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
         auth: &AuthCtx,
+        key: Option<IdempotencyKey>,
+        freshness: InvocationFreshnessDisposition,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
-            .prepare(agent, method, caller, env, stack, config, principal, auth)
+            .prepare(
+                agent, method, caller, env, stack, config, principal, auth, key, freshness,
+            )
             .await
     }
 
