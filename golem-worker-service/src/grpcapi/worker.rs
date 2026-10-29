@@ -781,6 +781,10 @@ impl WorkerGrpcApi {
             let method_name = request
                 .method_name
                 .ok_or_else(|| bad_request_error("Missing method name"))?;
+            let freshness_disposition = sanitize_invocation_freshness_disposition(
+                request.freshness_disposition,
+                matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)),
+            );
             self.worker_service
                 .prepare_for_invocation(
                     &agent_id,
@@ -791,6 +795,8 @@ impl WorkerGrpcApi {
                     auth,
                     request.context,
                     request.principal,
+                    request.idempotency_key.map(Into::into),
+                    freshness_disposition,
                 )
                 .await?
         } else if let Some(method_name) = request.method_name {

@@ -1981,7 +1981,9 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    without `End`) re-dispatches with the **same** key (`InvocationFreshnessDisposition::MayExist`,
    the default). RPC is a `WriteRemote` call, so repair completes the existing `Start`.
 6. Only the first live dispatch to an ephemeral target may use `KnownFresh`
-   (`wasm_rpc/mod.rs`), after a `DurableOnly` commit makes the caller's `Start` durable.
+   (`durable_host/rpc/`), after a `DurableOnly` commit makes the caller's `Start` durable.
+   Streaming RPC consumes this hint during target preparation, before it builds stream mappings
+   with the returned fingerprint; the subsequent invocation uses `MayExist`.
    Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
    identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the idempotency key — deterministic,
    never random.

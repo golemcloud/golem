@@ -36,15 +36,28 @@ use std::sync::Arc;
 pub(super) struct OplogFixtureService {
     inner: Arc<dyn OplogService>,
     deps: AdditionalTestDeps,
+    wrap_handles: bool,
 }
 
 impl OplogFixtureService {
-    pub(super) fn new(inner: Arc<dyn OplogService>, deps: AdditionalTestDeps) -> Self {
-        Self { inner, deps }
+    pub(super) fn new(
+        inner: Arc<dyn OplogService>,
+        deps: AdditionalTestDeps,
+        wrap_handles: bool,
+    ) -> Self {
+        Self {
+            inner,
+            deps,
+            wrap_handles,
+        }
     }
 
     fn handle(&self, id: &OwnedAgentId, inner: Arc<dyn Oplog>) -> Arc<dyn Oplog> {
-        Arc::new(TestOplog::new(id.clone(), inner, self.deps.clone()))
+        if self.wrap_handles {
+            Arc::new(TestOplog::new(id.clone(), inner, self.deps.clone()))
+        } else {
+            inner
+        }
     }
 }
 
@@ -122,6 +135,7 @@ impl OplogService for OplogFixtureService {
         execution: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         epoch: Option<ShardEpoch>,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        self.deps.record_oplog_call(id, "create");
         Ok(self.handle(
             id,
             self.inner
@@ -143,6 +157,7 @@ impl OplogService for OplogFixtureService {
         execution: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         epoch: Option<ShardEpoch>,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        self.deps.record_oplog_call(id, "create_fresh");
         Ok(self.handle(
             id,
             self.inner
@@ -240,10 +255,12 @@ impl OplogService for OplogFixtureService {
     }
 
     async fn exists(&self, id: &OwnedAgentId, mode: AgentMode) -> Result<bool, UnreadableOplog> {
+        self.deps.record_oplog_call(id, "exists");
         self.inner.exists(id, mode).await
     }
 
     async fn try_exists(&self, id: &OwnedAgentId, mode: AgentMode) -> Result<bool, String> {
+        self.deps.record_oplog_call(id, "exists");
         self.inner.try_exists(id, mode).await
     }
 

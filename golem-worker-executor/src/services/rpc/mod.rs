@@ -121,6 +121,8 @@ pub trait Rpc: Send + Sync {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
