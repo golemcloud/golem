@@ -715,13 +715,14 @@ async fn bound_bash_executes_scripts_tools_and_recovers() {
     // A small provider output attachment must arrive intact.
     let result = invoke(&ctx, OWNER, "", "fixture emit 16 | cat").await;
     assert_result(&result, "xxxxxxxxxxxxxxxx", "", 0);
-    // Exceed the 16 MiB limit by one byte, first on tool input and then on tool output.
+    // Exceed the 16 MiB limit by one byte, first on tool input and then on tool output. The output
+    // is stopped by the server's limit or by the shell's own; either line names the command.
     for (script, diagnostic) in [
         (
             "{ for i in {1..256}; do printf '%65536s' x; done; printf x; } | fixture transfer '' >/dev/null",
-            Some("16 MiB command input limit"),
+            "16 MiB command input limit",
         ),
-        ("fixture emit 16777217 >/dev/null", None),
+        ("fixture emit 16777217 >/dev/null", "fixture emit: stdout"),
     ] {
         let limited = invoke(&ctx, OWNER, "", script).await;
         assert_ne!(
@@ -729,10 +730,8 @@ async fn bound_bash_executes_scripts_tools_and_recovers() {
             "attachment limit was not enforced: {limited:?}"
         );
         assert_eq!(limited.stdout, "");
-        assert!(!limited.stderr.is_empty(), "{limited:?}");
-        if let Some(diagnostic) = diagnostic {
-            assert!(limited.stderr.contains(diagnostic), "{limited:?}");
-        }
+        assert!(limited.stderr.contains(diagnostic), "{limited:?}");
+        assert!(!limited.stderr.contains("ByteStreamFailure"), "{limited:?}");
         // An attachment failure must not leave stale input or poison the next invocation.
         let result = invoke(&ctx, OWNER, "", "printf fresh | fixture transfer ''").await;
         assert_result(&result, "fresh", "", 0);
@@ -1177,6 +1176,28 @@ async fn bound_bash_executes_scripts_tools_and_recovers() {
     )
     .await;
     assert_result(&result, "x|clean", "", 0);
+
+    // A sibling that crashes after it writes keeps its output. The shell's line about the failed
+    // stream names the command in plain words; the crash text follows once, as the call's error.
+    // This runs after the recovery check, so that no replay of the owner includes the crash.
+    let crashed = invoke(&ctx, OWNER, "", "fixture crash 16").await;
+    assert_eq!(crashed.stdout, "yyyyyyyyyyyyyyyy", "{crashed:?}");
+    assert_eq!(crashed.exit_code, 1, "{crashed:?}");
+    assert!(
+        crashed
+            .stderr
+            .starts_with("fixture crash: stdout: failed\n"),
+        "{crashed:?}"
+    );
+    assert_eq!(
+        crashed.stderr.matches("wasm trap").count(),
+        1,
+        "{crashed:?}"
+    );
+    assert!(!crashed.stderr.contains("ByteStreamFailure"), "{crashed:?}");
+    // The crash must not poison the next invocation.
+    let result = invoke(&ctx, OWNER, "", "printf fresh | fixture transfer ''").await;
+    assert_result(&result, "fresh", "", 0);
 }
 
 // Since #3992, replaying the owner after this crash sometimes fails ("Unexpected oplog entry during

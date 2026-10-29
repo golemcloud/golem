@@ -5,7 +5,7 @@ go 1.27.1
 tool github.com/bytecodealliance/componentize-go
 
 require (
-	github.com/golemcloud/golem/sdks/go/core v0.1.1
+	github.com/golemcloud/golem/sdks/go/core v0.1.2
 	go.bytecodealliance.org/pkg v0.2.3
 )
 

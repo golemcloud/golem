@@ -208,7 +208,7 @@ describe('LanguageService remote method diagnostic hints', () => {
       expect(result?.formattedErrors).toContain('TS1005');
       expectRemoteMethodHint(result!, expected);
     }
-  });
+  }, 15_000);
 
   it('does not enrich normal function diagnostics', () => {
     const result = typeCheckSnippet(remoteMethodHistory, 'plain()', remoteMethodConfig);

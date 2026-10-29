@@ -1,5 +1,38 @@
 use super::*;
 
+#[test]
+fn reflected_bash_commands_describe_their_purpose_and_constraints() {
+    let tool = <BashImpl as Bash>::__tool_descriptor()
+        .try_to_tool()
+        .expect("bash metadata is valid");
+    let root = &tool.commands.nodes[0];
+    assert_eq!(root.name, "bash");
+    assert!(root.doc.summary.contains("Run Bash scripts"));
+    assert!(root.doc.description.contains("fresh shell"));
+    assert!(
+        root.doc
+            .description
+            .contains("Filesystem changes do persist")
+    );
+
+    let run = tool
+        .commands
+        .nodes
+        .iter()
+        .find(|command| command.name == "run")
+        .expect("bash has a run command");
+    assert!(run.doc.summary.contains("stdout, stderr, exit code"));
+    for constraint in [
+        "absolute",
+        "do not persist between calls",
+        "between 1 and 3600 seconds",
+        "exit code 124",
+        "exit code 130",
+    ] {
+        assert!(run.doc.description.contains(constraint), "{constraint}");
+    }
+}
+
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
