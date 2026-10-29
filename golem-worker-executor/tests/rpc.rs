@@ -8698,6 +8698,67 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
+async fn generated_rust_ephemeral_streaming_rpc_uses_fresh_preparation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let caller = agent_id!("StreamingRpcCaller", "fresh-ephemeral-streaming");
+    let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
+
+    for synchronous in [false, true] {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &caller,
+                    "run_ephemeral",
+                    data_value!(synchronous)
+                )
+                .await?
+                .into_typed::<Vec<u32>>()?,
+            vec![20, 70, 130]
+        );
+    }
+    let history = executor.get_oplog(&caller_id, OplogIndex::INITIAL).await?;
+    let targets = history
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
+            {
+                Some(
+                    HostRequestGolemRpcInvoke::from_value(start.request.as_ref().unwrap().value())
+                        .unwrap()
+                        .remote_agent_id,
+                )
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(targets.len(), 2);
+    assert_ne!(targets[0], targets[1]);
+    for target in targets {
+        assert_eq!(
+            executor.oplog_service_call_count(&target, "create_fresh"),
+            1
+        );
+        assert_eq!(executor.oplog_service_call_count(&target, "create"), 0);
+        assert_eq!(executor.oplog_service_call_count(&target, "exists"), 0);
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
 async fn generated_rust_client_streaming_rpc_e2e(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

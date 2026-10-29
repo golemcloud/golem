@@ -312,8 +312,9 @@ where
                 }
             }
             publish_no_body_terminals(stdin, stdout, stderr);
+            let response = decode_tool_terminal(*response)?;
             operation.settle().await;
-            decode_tool_terminal(*response).map_err(Into::into)
+            Ok(response)
         }
         Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
             response,
@@ -333,8 +334,9 @@ where
             )
             .await?;
             publish_no_body_terminals(stdin, stdout, stderr);
+            let response = decode_tool_terminal(*response)?;
             operation.settle().await;
-            decode_tool_terminal(*response).map_err(Into::into)
+            Ok(response)
         }
         Err(error) => {
             operation.resolve_ordinary(terminal, false).await;
@@ -468,13 +470,14 @@ where
         controllers.2.as_ref(),
     );
     drop(endpoints);
-    operation.settle().await;
-    match outcome {
+    let response = match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
-            decode_tool_terminal(*response).map_err(Into::into)
+            decode_tool_terminal(*response)?
         }
-    }
+    };
+    operation.settle().await;
+    Ok(response)
 }
 
 impl DeferredAdmissionCleanup {
@@ -562,13 +565,14 @@ where
     )
     .await?;
     publish_no_body_terminals(stdin, stdout, stderr);
-    operation.settle().await;
-    match outcome {
+    let response = match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
-            decode_tool_terminal(*response).map_err(Into::into)
+            decode_tool_terminal(*response)?
         }
-    }
+    };
+    operation.settle().await;
+    Ok(response)
 }
 
 pub(super) async fn cancel_registered_tool_before_body<Ctx>(
@@ -608,13 +612,14 @@ where
     )
     .await?;
     publish_no_body_terminals(stdin, stdout, stderr);
-    operation.settle().await;
-    match outcome {
+    let response = match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
-            decode_tool_terminal(*response).map_err(Into::into)
+            decode_tool_terminal(*response)?
         }
-    }
+    };
+    operation.settle().await;
+    Ok(response)
 }
 
 pub(super) async fn execute_accepted_tool_call<Ctx>(
@@ -643,6 +648,7 @@ where
         None => (None, None),
     };
     let cleanup_operation = accepted.operation.clone();
+    let cleanup_start = accepted.durability.scope().invocation_id().start_index();
     let primary = accessor.primary.clone();
     let active_agents = primary.active_agents();
     let owner_id = primary.owned_agent_id().clone();
@@ -683,6 +689,8 @@ where
         execution_future.await
     };
     if let Err(error) = &mut result {
+        let settlement_hook =
+            Ctx::worker_deletion_hook(&crate::services::HasExtraDeps::extra_deps(primary.as_ref()));
         rollback_live_attachment_admission_rejection(&cleanup_operation).await;
         let mut failed_resources = failed_resources.lock().unwrap().take();
         if let Some(failed_resources) = failed_resources.as_mut() {
@@ -752,6 +760,10 @@ where
                         Some(resources) => resources.resources.settle_after_parent_end().await,
                         None => Ok(()),
                     };
+                    if let Some(hook) = settlement_hook {
+                        hook.before_failed_tool_settlement(&owner_id, cleanup_start)
+                            .await;
+                    }
                     cleanup_operation.settle().await;
                     settlement
                 },
@@ -773,6 +785,10 @@ where
                 && !preserve_exact_trap
             {
                 *error = settlement_error.into();
+            }
+            if let Some(hook) = settlement_hook {
+                hook.before_failed_tool_settlement(&owner_id, cleanup_start)
+                    .await;
             }
             cleanup_operation.settle().await;
         }
@@ -1569,7 +1585,6 @@ where
             if let Some(resources) = resources {
                 resources.settle_after_parent_end().await?;
             }
-            operation.settle().await;
             if has_input_streams
                 || result_streams
                     .persisted_result()
@@ -1589,9 +1604,11 @@ where
                 stdout_controller.as_ref(),
                 stderr_controller.as_ref(),
             );
-            streams::restore_response(&result_streams, decode_tool_terminal(*response)?)
-                .await
-                .map_err(Into::into)
+            let response =
+                streams::restore_response(&result_streams, decode_tool_terminal(*response)?)
+                    .await?;
+            operation.settle().await;
+            Ok(response)
         }
         Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
             response,
@@ -1655,6 +1672,7 @@ where
                     .await
                     .map_err(SessionError::into_trap)?;
             }
+            let response = decode_tool_terminal(*response)?;
             operation.settle().await;
             if no_body {
                 publish_no_body_terminals(
@@ -1671,7 +1689,7 @@ where
                     stderr_controller.as_ref(),
                 );
             }
-            decode_tool_terminal(*response).map_err(Into::into)
+            Ok(response)
         }
         Err(failure) => {
             let selected_terminal = terminal.lock().unwrap().take();

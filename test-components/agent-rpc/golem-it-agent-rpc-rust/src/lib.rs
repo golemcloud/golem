@@ -908,6 +908,7 @@ pub trait StreamingRpcCaller {
     fn new(name: String) -> Self;
 
     async fn run(&self) -> StreamingRpcReport;
+    async fn run_ephemeral(&self, synchronous: bool) -> Vec<u32>;
     async fn benchmark_producer(
         &self,
         chunk_count: u32,
@@ -958,6 +959,37 @@ struct StreamingRpcCallerImpl {
 impl StreamingRpcCaller for StreamingRpcCallerImpl {
     fn new(name: String) -> Self {
         Self { name }
+    }
+
+    async fn run_ephemeral(&self, synchronous: bool) -> Vec<u32> {
+        let input = agent_stream(vec![2, 7, 13]);
+        let output = if synchronous {
+            let rpc = WasmRpc::new(
+                "EphemeralStreamingRpcTarget",
+                encode_single_parameter(self.name.clone()),
+                None,
+                Vec::new(),
+            );
+            let input = golem_rust::encode_schema_value_async(&SchemaValue::Record {
+                fields: vec![input.to_value()],
+            })
+            .await
+            .unwrap();
+            let result = rpc.invoke_and_await("transform", input, None).unwrap();
+            AgentStream::<u32>::from_value(
+                &golem_rust::decode_schema_value(result.result.unwrap()).unwrap(),
+            )
+            .unwrap()
+        } else {
+            EphemeralStreamingRpcTargetClient::new_phantom(self.name.clone())
+                .transform(input)
+                .await
+                .value
+        };
+        output
+            .collect()
+            .await
+            .expect("failed to collect ephemeral RPC stream")
     }
 
     async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)> {

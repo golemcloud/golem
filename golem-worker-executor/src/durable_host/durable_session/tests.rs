@@ -2866,6 +2866,8 @@ impl Rpc for AttachedProducerRpc {
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
+        _idempotency_key: Option<IdempotencyKey>,
+        _freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         unreachable!("test RPC only serves attached stream segments")
     }

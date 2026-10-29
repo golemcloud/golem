@@ -79,7 +79,7 @@ fn activation(filesystem: FilesystemCapability) -> Arc<EntityActivation> {
     )
 }
 
-fn context() -> OwnerToolOperationContext {
+pub(crate) fn context() -> OwnerToolOperationContext {
     context_with_filesystem(FilesystemCapability::Incapable)
 }
 
@@ -133,7 +133,7 @@ fn context_for(
     }
 }
 
-fn accept_provisional(
+pub(crate) fn accept_provisional(
     provisional: ProvisionalOwnerToolOperation,
     start: u64,
 ) -> OwnerToolOperation {

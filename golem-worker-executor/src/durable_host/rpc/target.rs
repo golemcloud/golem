@@ -44,6 +44,7 @@ use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
@@ -303,6 +304,8 @@ pub(super) async fn activate_rpc_target(
             stack,
             config,
             auth_ctx,
+            None,
+            InvocationFreshnessDisposition::MayExist,
         )
         .await
         .map_err(|err| classified_host_error(classify_rpc_error(&err), err.to_string()))?;

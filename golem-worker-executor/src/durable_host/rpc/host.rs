@@ -517,6 +517,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             };
             let (idempotency_key, remote_agent_id) = call_target.at(handle.start_index())?;
             let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
+            let freshness_disposition =
+                if known_fresh_dispatch_allowed(handle.is_live(), prepared.is_ephemeral()) {
+                    InvocationFreshnessDisposition::KnownFresh
+                } else {
+                    InvocationFreshnessDisposition::MayExist
+                };
             if !handle.is_live() && recorded_rpc_denial(self, &handle).await?.is_some() {
                 let response = replay_rpc_denial(self, handle).await?;
                 return Ok(Err(denied_rpc_failure(response.result)?.into()));
@@ -556,6 +562,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         ),
                     )
                 })?;
+            if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await?;
+            }
             let mut auth_ctx = handle.is_live().then(|| handle.agent_auth_ctx().clone());
             let (target_fingerprint, _demand) = match streaming_target_fingerprint(
                 self,
@@ -563,6 +575,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 &prepared,
                 &remote_agent_id,
                 auth_ctx.as_ref(),
+                idempotency_key.clone(),
+                freshness_disposition,
             )
             .await
             {
@@ -1125,6 +1139,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             };
             let (idempotency_key, remote_agent_id) = call_target.at(handle.start_index())?;
             let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
+            let freshness_disposition = if known_fresh_dispatch_allowed(
+                handle.is_live(),
+                ephemeral_logical_agent_id.is_some(),
+            ) {
+                InvocationFreshnessDisposition::KnownFresh
+            } else {
+                InvocationFreshnessDisposition::MayExist
+            };
             if !handle.is_live() && recorded_rpc_denial(self, &handle).await?.is_some() {
                 return replay_async_rpc_denial(self, handle).await;
             }
@@ -1184,6 +1206,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 streaming: true,
                 remote_agent_type: remote_agent_type.clone(),
             };
+            if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await?;
+            }
             let auth_ctx = handle.is_live().then(|| handle.take_agent_auth_ctx());
             let (target_fingerprint, _demand) = match streaming_target_fingerprint(
                 self,
@@ -1191,6 +1219,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 &prepared,
                 &remote_agent_id,
                 auth_ctx.as_ref(),
+                idempotency_key.clone(),
+                freshness_disposition,
             )
             .await
             {

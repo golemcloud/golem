@@ -969,6 +969,8 @@ impl WorkerProxy for RecordingWorkerProxy {
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
             .prepare(
@@ -980,6 +982,8 @@ impl WorkerProxy for RecordingWorkerProxy {
                 config,
                 principal,
                 auth_ctx,
+                idempotency_key,
+                freshness_disposition,
             )
             .await
     }
@@ -7821,6 +7825,8 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             auth_ctx: Some(caller_auth_ctx),
             principal: None,
             invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
         })
         .await?
         .into_inner();
@@ -7920,6 +7926,8 @@ async fn worker_environment_reflects_component_not_caller(
             auth_ctx: Some(caller_auth_ctx),
             principal: None,
             invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
         })
         .await?
         .into_inner();
@@ -8063,6 +8071,8 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             auth_ctx: Some(caller_auth_ctx),
             principal: None,
             invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
         })
         .await?
         .into_inner();
