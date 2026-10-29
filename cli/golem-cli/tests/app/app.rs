@@ -1625,8 +1625,14 @@ async fn tool_publication_only_plan_qualifies_stage_comparison(_tracing: &Tracin
     let mut ctx = TestContext::new();
     ctx.start_server().await;
 
-    let component_wasm =
-        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm");
+    // Backdate a private input so the output and seeded metadata can be strictly newer.
+    let component_wasm = ctx.cwd_path_join("tools.wasm");
+    fs::copy(
+        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"),
+        &component_wasm,
+    )
+    .unwrap();
+    super::backdate_mtime(&component_wasm);
     let final_wasm = ctx.cwd_path_join("tools-final.wasm");
     let manifest = formatdoc! {r#"
         manifestVersion: {MANIFEST_VERSION}
@@ -1651,6 +1657,7 @@ async fn tool_publication_only_plan_qualifies_stage_comparison(_tracing: &Tracin
 
     let build = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
     assert!(build.success_or_dump());
+    super::backdate_mtime(&final_wasm);
     let metadata = ExtractedComponentMetadata {
         agent_types: Vec::new(),
         tools: vec![echo_tool()],
