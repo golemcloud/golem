@@ -65,6 +65,47 @@ impl CursorTx<'_> {
         // resolver routing / progress signalling below never run — a partial-publish on the error
         // path. None of these effects depend on the cursor position.
         self.apply_commit_effects(read_idx, entry).await?;
+        if let OplogEntry::Start {
+            parent_start_index,
+            function_name,
+            ..
+        } = entry
+        {
+            let mut entities = parent_start_index
+                .and_then(|parent| self.st.entity_start_routes.get(&parent))
+                .cloned()
+                .unwrap_or_default();
+            if matches!(
+                function_name,
+                HostFunctionName::GolemEntityInvoke | HostFunctionName::GolemToolInvocationRejected
+            ) {
+                entities.push(read_idx);
+            }
+            for entity in &entities {
+                self.st
+                    .entity_route_members
+                    .entry(*entity)
+                    .or_default()
+                    .insert(read_idx);
+            }
+            if !entities.is_empty() {
+                self.st.entity_start_routes.insert(read_idx, entities);
+            }
+        } else if let Some(start) = terminal_start_index(entry)
+            && let Some(members) = self.st.entity_route_members.remove(&start)
+        {
+            for member in members {
+                let entities = self
+                    .st
+                    .entity_start_routes
+                    .get_mut(&member)
+                    .expect("reverse entity routes reference an active forward route");
+                entities.retain(|entity| *entity != start);
+                if entities.is_empty() {
+                    self.st.entity_start_routes.remove(&member);
+                }
+            }
+        }
         // Publish the cursor advance now (and only now): committing is the single point where the
         // speculative read of `read_idx` becomes globally observable. This also performs the
         // skipped-region jump for the next read via `get_out_of_skipped_region`, and must precede

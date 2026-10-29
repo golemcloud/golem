@@ -1301,6 +1301,7 @@ where
         .filter(|execution| execution.cancellable)
         .map(|execution| execution.cancel.clone());
     let scope_interest = durability.scope_interest();
+    let replay_for_finalize = accessor.settlement.replay.clone();
     let finalize = move |result: Result<
         EntityBodyOutcome<HostResponseEntityInvocation>,
         WorkerExecutorError,
@@ -1312,6 +1313,18 @@ where
                 Ok(EntityBodyOutcome::Completed(response)) => Ok(response),
                 Ok(EntityBodyOutcome::Cancelled) => return Ok(EntityBodyOutcome::Cancelled),
                 Err(error) => Err(error),
+            };
+            let result = if result.is_ok() {
+                match replay_for_finalize
+                    .disposal_admission_refusal(&operation)
+                    .await
+                {
+                    Ok(Some(refusal)) => Err(operation.reproduce_admission_refusal(refusal).await),
+                    Ok(None) => result,
+                    Err(error) => Err(error),
+                }
+            } else {
+                result
             };
             let (result, admission_rejection_preselected) = match result {
                 Err(error)
@@ -1526,8 +1539,10 @@ where
             let failure = skipped_attachment_failure(&terminal);
             let resources = match resources {
                 Some(mut retained) => {
-                    if let Err(error) = retained.prepare_parent_end().await {
-                        operation.resolve_ordinary(terminal, false).await;
+                    if let Err(error) = operation
+                        .resolve_ordinary_with_cleanup(terminal, retained.prepare_parent_end())
+                        .await
+                    {
                         *failed_resources.lock().unwrap() = Some(FailedRetainedEntityResources {
                             resources: retained,
                             parent_end_attempted: true,
@@ -1536,9 +1551,11 @@ where
                     }
                     Some(retained)
                 }
-                None => None,
+                None => {
+                    operation.resolve_ordinary(terminal, true).await;
+                    None
+                }
             };
-            operation.resolve_ordinary(terminal, true).await;
             if live_admission_rejected || trapped {
                 if let Err(error) = complete_owner_attachment_terminals(
                     accessor,
@@ -1608,7 +1625,10 @@ where
             let _ = operation.begin_cancel();
             let resources = match resources {
                 Some(mut retained) => {
-                    if let Err(error) = retained.prepare_parent_end().await {
+                    if let Err(error) = operation
+                        .resolve_cancel_with_cleanup(retained.prepare_parent_end())
+                        .await
+                    {
                         *failed_resources.lock().unwrap() = Some(FailedRetainedEntityResources {
                             resources: retained,
                             parent_end_attempted: true,
@@ -1617,9 +1637,11 @@ where
                     }
                     Some(retained)
                 }
-                None => None,
+                None => {
+                    operation.resolve_cancel(true).await;
+                    None
+                }
             };
-            operation.resolve_cancel(true).await;
             if let Some(resources) = resources {
                 resources.settle_after_parent_end().await?;
             }

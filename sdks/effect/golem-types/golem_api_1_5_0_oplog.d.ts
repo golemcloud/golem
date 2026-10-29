@@ -688,6 +688,15 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     filesystemSnapshot: string;
   };
+  /**
+   * The agent released a host resource whose only durable content is its span, and the
+   * span closed. `resource-start-index` is the `start` that opened the span.
+   */
+  export type SpanClosedParameters = {
+    timestamp: Datetime;
+    resourceStartIndex?: OplogIndex;
+    spanFinished: SpanFinished;
+  };
   export type OplogProcessorCheckpointParameters = {
     timestamp: Datetime;
     plugin: PluginInstallationDescription;
@@ -867,6 +876,15 @@ declare module 'golem:api/oplog@1.5.0' {
     entityParentStartIndex?: OplogIndex;
     observation: TypedSchemaValue;
     payload?: OplogPayload;
+  };
+  /**
+   * A released host resource whose span closed, attributed to the entity scope it ran in.
+   */
+  export type RawSpanClosedParameters = {
+    timestamp: Datetime;
+    entityParentStartIndex?: OplogIndex;
+    resourceStartIndex?: OplogIndex;
+    spanFinished: SpanFinished;
   };
   /**
    * An effective attachment control transition without a byte payload.
@@ -1309,6 +1327,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'snapshot-confirmed'
     val: SnapshotConfirmedParameters
+  } |
+  /** The agent released a host resource and its span closed; the release is not a durable call */
+  {
+    tag: 'span-closed'
+    val: RawSpanClosedParameters
   };
   export type PublicOplogEntry =
   /** The initial agent oplog entry */
@@ -1584,6 +1607,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'snapshot-confirmed'
     val: SnapshotConfirmedParameters
+  } |
+  /** The agent released a host resource and its span closed; the release is not a durable call */
+  {
+    tag: 'span-closed'
+    val: SpanClosedParameters
   };
   export type OplogReadError =
   {

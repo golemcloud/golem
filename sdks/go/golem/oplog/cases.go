@@ -131,4 +131,7 @@ const (
 	// The store holds the named filesystem snapshot; the snapshot entry with the
 	// same name is usable
 	SnapshotConfirmed = oplogwit.PublicOplogEntrySnapshotConfirmed
+	// The agent released a host resource and its span closed; the release is not a
+	// durable call
+	SpanClosed = oplogwit.PublicOplogEntrySpanClosed
 )

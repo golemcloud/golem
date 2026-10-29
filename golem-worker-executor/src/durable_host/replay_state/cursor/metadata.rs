@@ -28,6 +28,24 @@ pub(in crate::durable_host::replay_state) fn recovery_metadata_floor(
 }
 
 impl ReplayState {
+    /// Installs an actor-FIFO status snapshot obtained without holding a cursor lock.
+    pub(crate) async fn install_entity_replay_progress(
+        &self,
+        status: &golem_common::model::AgentStatusRecord,
+        horizon: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if status.oplog_idx < horizon {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "entity replay metadata covering the committed replay horizon",
+                format!("status {} precedes horizon {horizon}", status.oplog_idx),
+            ));
+        }
+        let mut state = self.cursor.state.lock().await;
+        state.entity_replay_progress = status.entity_replay_progress.clone();
+        state.entity_replay_horizon = status.oplog_idx;
+        Ok(())
+    }
+
     pub(crate) async fn new_for_owner(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -65,6 +83,7 @@ impl ReplayState {
             wallet,
             owner_tool_operations,
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
+            delivery_in_progress: AtomicBool::new(false),
             delivery_failure: std::sync::Mutex::new(None),
             stream_observations: std::sync::Mutex::new(stream_observations),
             start_invocation_ids: std::sync::Mutex::new(start_invocation_ids),
@@ -79,6 +98,11 @@ impl ReplayState {
                 skipped_regions,
                 next_skipped_region,
                 initial_snapshot_skip_end,
+                entity_replay_progress: Default::default(),
+                entity_replay_horizon: OplogIndex::NONE,
+                entity_start_routes: HashMap::new(),
+                entity_route_members: HashMap::new(),
+                retained_entity_counts: HashMap::new(),
                 skip_hints_after_delivery: false,
                 replay_buffer: VecDeque::new(),
                 pending_fork_starts: HashSet::new(),

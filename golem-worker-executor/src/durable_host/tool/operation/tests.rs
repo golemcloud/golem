@@ -434,6 +434,114 @@ async fn missing_input_admission_waits_for_exact_refusal_or_cancellation() {
 
 #[test]
 #[timeout("30s")]
+async fn attachment_disposal_refusal_requires_its_recorded_identity_and_terminal() {
+    use golem_common::model::oplog::attachment::{
+        ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentId, ToolAttachmentSlot,
+        ToolAttachmentTerminal,
+    };
+
+    let attachment = ToolAttachmentId {
+        creation_start: OplogIndex::from_u64(7),
+        slot: ToolAttachmentSlot::Stdout,
+    };
+    let expected = SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+        attachment,
+        terminal: ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+            ByteStreamFailure::Abandoned,
+        )),
+    };
+    let original_owner = OwnerToolOperations::new();
+    let original = accept_provisional(original_owner.create(capable_context()), 2);
+    let (original_stdout, _original_consumer, _) = attachment_pair(
+        8,
+        AttachmentMemory::with_test_reservation(false, |_| async { None }),
+    );
+    original_stdout.write(vec![1, 2, 3]).await.unwrap();
+    assert!(original.attach(None, Some(original_stdout.controller()), None));
+    assert_eq!(
+        original
+            .activate_live_attachment_memory_accounting_at(Some(expected.clone()))
+            .await,
+        ToolLiveAdmissionOutcome::ResourceExhausted
+    );
+    assert_eq!(
+        original.observed_admission_refusal(),
+        Some(expected.clone())
+    );
+
+    let control_owner = OwnerToolOperations::new();
+    let control = accept_provisional(control_owner.create(capable_context()), 2);
+    let (control_stdout, _control_consumer, _) = attachment_pair(
+        8,
+        AttachmentMemory::with_test_reservation(false, |bytes| async move {
+            Some(MemoryGrant::inert(bytes))
+        }),
+    );
+    control_stdout.write(vec![1, 2, 3]).await.unwrap();
+    assert!(control.attach(None, Some(control_stdout.controller()), None));
+    assert_eq!(
+        control.activate_live_attachment_memory_accounting().await,
+        ToolLiveAdmissionOutcome::Admitted
+    );
+    let wrong_terminal = SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+        attachment,
+        terminal: ToolAttachmentTerminal::HostResourceExhausted,
+    };
+    let wrong_attachment = SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+        attachment: ToolAttachmentId {
+            slot: ToolAttachmentSlot::Stderr,
+            ..attachment
+        },
+        terminal: ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+            ByteStreamFailure::Abandoned,
+        )),
+    };
+    for mismatch in [wrong_terminal, wrong_attachment] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(capable_context()), 2);
+        let (stdout, _consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, |bytes| async move {
+                Some(MemoryGrant::inert(bytes))
+            }),
+        );
+        stdout.write(vec![1, 2, 3]).await.unwrap();
+        assert!(operation.attach(None, Some(stdout.controller()), None));
+        operation.install_recorded_admission_refusal(expected.clone(), OplogIndex::from_u64(29));
+        let waiting = operation.reject_missing_replay_admission(&mismatch);
+        tokio::pin!(waiting);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        assert_eq!(operation.observed_admission_refusal(), None);
+        let exact = operation.reject_missing_replay_admission(&expected);
+        tokio::pin!(exact);
+        assert!(futures::poll!(&mut exact).is_pending());
+        assert_eq!(operation.observed_admission_refusal(), None);
+        operation
+            .reproduce_admission_refusal(expected.clone())
+            .await;
+        let exact = exact.await.unwrap_err();
+        assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&exact));
+        assert_eq!(
+            operation.observed_admission_refusal(),
+            Some(expected.clone())
+        );
+        let other = waiting.await.unwrap_err();
+        assert_eq!(other.to_string(), exact.to_string());
+        // Repeated collection cannot substitute a different boundary after the refusal won.
+        let repeated = operation
+            .reject_missing_replay_admission(&mismatch)
+            .await
+            .unwrap_err();
+        assert_eq!(repeated.to_string(), exact.to_string());
+        assert_eq!(
+            operation.observed_admission_refusal(),
+            Some(expected.clone())
+        );
+    }
+}
+
+#[test]
+#[timeout("30s")]
 async fn historical_admission_refusal_does_not_block_child_validation() {
     use golem_common::model::oplog::payload::types::SerializableEntityBodyExecution;
 
@@ -1792,6 +1900,7 @@ async fn cancellation_after_grant_releases_permit_before_the_first_guest_poll() 
 }
 
 #[test]
+#[timeout("10s")]
 async fn capable_terminal_commit_returns_lane_before_completion_publication() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
@@ -1844,8 +1953,22 @@ async fn capable_terminal_commit_returns_lane_before_completion_publication() {
             ),
         ),
     });
+    let sibling = accept_provisional(_operations.create(context()), 3);
+    assert!(sibling.begin_ordinary());
     assert!(operation.begin_ordinary());
-    operation.resolve_ordinary(terminal, true).await;
+    operation
+        .resolve_ordinary_with_cleanup(terminal.clone(), async {
+            assert_eq!(operation.owns_lane_value_if_active(), Some(true));
+            assert_ne!(lane.holder(), Some(parent()));
+            // A committed operation cannot elect a trap, even while a sibling is
+            // selecting. Waiting for that sibling could depend on releasing this lane.
+            assert!(!operation.select_trap(TrapType::Exit).await);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    sibling.resolve_ordinary(terminal, true).await;
+    sibling.settle().await;
     wait.wait().await;
 
     assert!(matches!(
@@ -1866,6 +1989,83 @@ async fn capable_terminal_commit_returns_lane_before_completion_publication() {
         ToolAttachmentModeMetadata::CompletionPublished
     );
     primary.complete();
+}
+
+#[test]
+#[timeout("10s")]
+async fn committed_terminal_cleanup_failure_retains_lane_until_owner_drain() {
+    for cancelled in [false, true] {
+        let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "Agent(owner)".to_string(),
+            },
+        ));
+        let primary = lane
+            .enter_primary(OplogIndex::from_u64(1))
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let (operations, operation, invocation_id) =
+            accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
+        assert!(
+            operation.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready)
+        );
+        assert!(operation.register_body(&lane).unwrap());
+        let wait = lane
+            .await_invocations(
+                &parent(),
+                [OwnerInvocationId::Entity(invocation_id.clone())],
+            )
+            .unwrap();
+        assert!(operation.acquire_registered_body().await.unwrap());
+        let cleanup = async {
+            assert_eq!(operation.owns_lane_value_if_active(), Some(true));
+            assert!(!operation.select_trap(TrapType::Exit).await);
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            })
+        };
+        let result = if cancelled {
+            assert!(operation.begin_cancel());
+            operation.resolve_cancel_with_cleanup(cleanup).await
+        } else {
+            assert!(operation.begin_ordinary());
+            operation.resolve_ordinary_with_cleanup(Arc::new(SerializableToolOperationTerminal {
+                admission_refusal: None,
+                body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
+                result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+            }), cleanup).await
+        };
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost
+            })
+        ));
+        assert_eq!(operation.owns_lane_value_if_active(), Some(true));
+        assert_eq!(
+            lane.holder(),
+            Some(OwnerInvocationId::Entity(invocation_id))
+        );
+        assert!(
+            operation
+                .select_failure(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost))
+                .await
+        );
+        assert!(matches!(
+            operations.selected_owner_failure(),
+            Some(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost))
+        ));
+        assert_eq!(operation.owns_lane_value_if_active(), Some(true));
+        operations.drain_owner_failure_lanes().await;
+        wait.wait().await;
+        assert_eq!(lane.holder(), Some(parent()));
+        operation.settle().await;
+        primary.complete();
+    }
 }
 
 #[test]

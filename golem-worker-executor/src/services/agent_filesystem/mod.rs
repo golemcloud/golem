@@ -53,8 +53,8 @@ pub use setup_error::FilesystemSetupError;
 #[cfg(test)]
 pub(crate) use lifecycle::tests::{
     billing_metered_resident_with_open_node_for_unload_test,
-    metered_resident_with_open_node_for_unload_test, no_initial_files, resident_for_unload_test,
-    scratch_directory,
+    metered_resident_with_open_node_for_unload_test, no_initial_files,
+    reconstructing_with_open_file_for_unload_test, resident_for_unload_test, scratch_directory,
 };
 pub(crate) use lifecycle::*;
 

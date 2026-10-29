@@ -884,7 +884,8 @@ async fn invocation_loop_panic_with_resident_owner_uses_filesystem_drop_cleanup(
     run_invocation_loop_task(
         async move {
             let _filesystem = filesystem;
-            panic!("injected resident panic");
+            // Exercise owner unwinding independently of the process-wide panic logger.
+            std::panic::resume_unwind(Box::new("injected resident panic"));
         },
         move |_error| async move {
             handled_by_task.store(true, Ordering::Release);
@@ -1029,14 +1030,14 @@ async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() 
     let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
     let store_dropped = Arc::new(AtomicBool::new(false));
 
-    let observer = InvocationLoop::<Context>::unload_running_agent(
-        RunningAgent {
+    let observer = super::unload_prepared_agent(
+        crate::worker::PreparedAgent::Resident(RunningAgent {
             runtime: TestStoreOwner {
                 node: Some(node),
                 dropped: Arc::clone(&store_dropped),
             },
             filesystem,
-        },
+        }),
         OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1144,14 +1145,14 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
     ));
     let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
 
-    let observer = InvocationLoop::<Context>::unload_running_agent(
-        RunningAgent {
+    let observer = super::unload_prepared_agent(
+        crate::worker::PreparedAgent::Resident(RunningAgent {
             runtime: TestStoreOwner {
                 node: Some(node),
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
-        },
+        }),
         OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1325,6 +1326,84 @@ async fn production_unload_starts_final_observation_after_native_close_drains() 
         ),
         1.0
     );
+}
+
+#[test]
+#[timeout("5s")]
+async fn aborted_preparation_unloads_a_retained_pending_write_before_draining() {
+    use crate::sandbox_filesystem::SandboxWriteAttempt;
+    use crate::services::agent_filesystem::{
+        WritePlacement, reconstructing_with_open_file_for_unload_test, write,
+    };
+    use crate::worker::PreparedAgent;
+    use bytes::Bytes;
+    use futures::FutureExt;
+
+    for decision in [
+        RetryDecision::Immediate,
+        RetryDecision::None,
+        RetryDecision::TryStop(Timestamp::now_utc()),
+        RetryDecision::Delayed(Duration::from_millis(37)),
+        RetryDecision::ReacquirePermits,
+    ] {
+        let (filesystem, control, generation, file) =
+            reconstructing_with_open_file_for_unload_test().await;
+        control.push_write(Ok(SandboxWriteAttempt::completed(4)));
+        control.push_close(Ok(()));
+        control.push_delete_and_verify(Ok(()));
+        let write_gate = control.block("write");
+        let deletion = control.block("delete_and_verify");
+        let mut pending = Box::pin(
+            write(
+                &generation,
+                &file,
+                WritePlacement::At(3),
+                Bytes::from_static(b"data"),
+            )
+            .unwrap(),
+        );
+        assert!(pending.as_mut().now_or_never().is_none());
+        write_gate.wait_started().await;
+        let dropped = Arc::new(AtomicBool::new(false));
+        let runtime = (
+            pending,
+            TestStoreOwner {
+                node: Some(OpenNode::File(file)),
+                dropped: dropped.clone(),
+            },
+        );
+
+        // The interrupted readiness future has gone, but the runtime still owns the write.
+        // Finishing replay here would wait forever for the runtime's retained call lease.
+        let prepared = PreparedAgent::finish(runtime, filesystem, &Some(decision))
+            .now_or_never()
+            .expect("aborted preparation must not drain filesystem calls")
+            .unwrap_or_else(|_| panic!("aborted preparation must seal its filesystem"));
+        assert!(matches!(prepared, PreparedAgent::Aborted { .. }));
+        assert!(!dropped.load(Ordering::Acquire));
+        let mut permits = ConcurrentAgentPermitState::new(None, Arc::new(AtomicBool::new(false)));
+        let mut unloading = Box::pin(super::unload_prepared_agent(
+            prepared,
+            OwnerToolOperations::new(),
+            UnloadReason::Restart,
+            Instant::now() + Duration::from_secs(2),
+            &mut permits,
+            &Arc::new(Mutex::new(None)),
+            None,
+        ));
+        let cleanup = unloading.cleanup.clone();
+        while !dropped.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+        assert!(unloading.as_mut().now_or_never().is_none());
+        assert!(deletion.wait_started().now_or_never().is_none());
+
+        write_gate.release();
+        deletion.wait_started().await;
+        deletion.release();
+        assert!(unloading.await.is_none());
+        cleanup.wait().await.unwrap();
+    }
 }
 
 #[test]
@@ -1750,14 +1829,14 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
     ));
     let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
 
-    let observer = InvocationLoop::<Context>::unload_running_agent(
-        RunningAgent {
+    let observer = super::unload_prepared_agent(
+        crate::worker::PreparedAgent::Resident(RunningAgent {
             runtime: TestStoreOwner {
                 node: Some(node),
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
-        },
+        }),
         OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_millis(20),
@@ -2023,14 +2102,14 @@ async fn filesystem_pressure_stop_seam_reaches_concrete_unload_with_exact_deadli
             assert_eq!(expected_eligibility, Some(eligibility));
             assert_eq!(unload_request.reason, UnloadReason::FilesystemPressure);
             assert_eq!(unload_request.deadline, deadline);
-            InvocationLoop::<Context>::unload_running_agent(
-                RunningAgent {
+            super::unload_prepared_agent(
+                crate::worker::PreparedAgent::Resident(RunningAgent {
                     runtime: TestStoreOwner {
                         node: Some(node),
                         dropped: Arc::new(AtomicBool::new(false)),
                     },
                     filesystem,
-                },
+                }),
                 OwnerToolOperations::new(),
                 unload_request.reason,
                 unload_request.deadline,

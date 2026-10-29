@@ -506,7 +506,7 @@ impl ReplayState {
             tokio::pin!(progress);
             progress.as_mut().enable();
             if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
-                return Err(WorkerExecutorError::runtime(failure));
+                return Err(failure);
             }
             if let Some(failure) = self.cursor.owner_tool_operations.selected_owner_failure() {
                 return Err(historical_reconstruction_owner_failure(failure));
