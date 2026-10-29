@@ -5,6 +5,9 @@ use bash_shell::commands::CommandDescriptor;
 use bash_shell::commands::{CommandFuture, CommandInvoker, CommandOutput, PreparedCommand};
 #[cfg(target_arch = "wasm32")]
 use bash_shell::session::Session;
+use golem_rust::bindings::golem::tool::streams::{
+    ByteStreamCloseCause, ByteStreamFailure, StreamWriteError,
+};
 use golem_schema::tool::{
     ProcessExitStatus, Tool,
     argv::{self, ParsedToolArguments},
@@ -177,6 +180,71 @@ fn rpc_failure(
         | ToolRpcError::RemoteInternalError(message)
         | ToolRpcError::ResourceExhausted(message) => (1, message),
         other => (1, format!("{other:?}")),
+    }
+}
+
+/// How a bound command is named in its diagnostics: the tool, then its subcommand path.
+fn command_label(name: &str, path: &[String]) -> String {
+    std::iter::once(name)
+        .chain(path.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Why an output channel of a bound command ended before all of its bytes arrived.
+enum OutputFailure {
+    /// The stream ended with a failure item.
+    Stream(ByteStreamFailure),
+    /// The channel passed the 16 MiB limit, and the shell stopped reading it.
+    LimitExceeded,
+}
+
+/// The stderr line for an output channel that did not end cleanly. A crashed tool's streams and
+/// its call error carry the same text, and the call error follows on stderr, so the line leaves
+/// out a text that `call_error` repeats.
+fn output_failure_line(
+    command: &str,
+    channel: &str,
+    failure: &OutputFailure,
+    call_error: Option<&str>,
+) -> String {
+    match failure {
+        OutputFailure::LimitExceeded => format!("{command}: {channel} attachment limit exceeded"),
+        OutputFailure::Stream(failure) => {
+            format!(
+                "{command}: {channel}: {}",
+                stream_failure_text(failure, call_error)
+            )
+        }
+    }
+}
+
+/// The stderr line for a write to a bound command's stdin that failed.
+fn stdin_failure_line(command: &str, error: &StreamWriteError) -> String {
+    let reason = match error {
+        StreamWriteError::Closed(ByteStreamCloseCause::Finished) => "closed".to_string(),
+        StreamWriteError::Closed(ByteStreamCloseCause::ConsumerCancelled) => {
+            "closed by the tool".to_string()
+        }
+        StreamWriteError::Closed(ByteStreamCloseCause::Failed(failure)) => {
+            stream_failure_text(failure, None)
+        }
+        StreamWriteError::ConcurrentOperation => "concurrent write".to_string(),
+    };
+    format!("{command}: stdin: {reason}")
+}
+
+/// A stream failure in plain words, never debug-printed. `repeated` is a text that the caller
+/// writes anyway; a failure text equal to it is left out.
+fn stream_failure_text(failure: &ByteStreamFailure, repeated: Option<&str>) -> String {
+    match failure {
+        ByteStreamFailure::Cancelled => "cancelled".to_string(),
+        ByteStreamFailure::Abandoned => "abandoned".to_string(),
+        ByteStreamFailure::ResourceExhausted => "resource exhausted".to_string(),
+        ByteStreamFailure::Failed(details) if repeated == Some(details.as_str()) => {
+            "failed".to_string()
+        }
+        ByteStreamFailure::Failed(details) => format!("failed: {details}"),
     }
 }
 

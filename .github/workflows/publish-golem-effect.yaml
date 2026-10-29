@@ -11,6 +11,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: publish-golem-effect-${{ github.event_name == 'push' && 'publication' || github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -89,8 +93,5 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           VERSION="${RELEASE_TAG#golem-effect-v}"
-          case "$VERSION" in
-            *-*) DIST_TAG=next ;;
-            *) DIST_TAG=latest ;;
-          esac
+          DIST_TAG=$(node ../../.github/scripts/release-channel.mjs npm "$VERSION" @golemcloud/effect-golem)
           npm publish --access public --provenance --tag "$DIST_TAG"

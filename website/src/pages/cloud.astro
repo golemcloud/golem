@@ -2,6 +2,7 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
+import PageIntro from "../components/PageIntro.astro";
 import {
   meta,
   hero,
@@ -20,11 +21,7 @@ import {
   <main>
     <section class="pricing-intro" aria-labelledby="pricing-title">
       <div class="container">
-        <header class="intro-heading">
-          <span class="eyebrow">{hero.eyebrow}</span>
-          <h1 id="pricing-title">{hero.heading}</h1>
-          <p class="lede">{hero.lead}</p>
-        </header>
+        <PageIntro {...hero} headingId="pricing-title" />
         <div class="offer-grid">
           {
             offers.map((offer) => (
@@ -209,11 +206,7 @@ import {
 
 <style>
   .pricing-intro {
-    padding: 3.5rem 0;
-  }
-  .intro-heading {
-    max-width: 760px;
-    margin-bottom: 2rem;
+    padding: 0 0 3.5rem;
   }
   .eyebrow {
     display: block;
@@ -223,19 +216,6 @@ import {
     letter-spacing: 0.08em;
     text-transform: uppercase;
     margin-bottom: 0.8rem;
-  }
-  h1 {
-    font-size: clamp(2.25rem, 5vw, 3.5rem);
-    font-weight: 600;
-    letter-spacing: -0.035em;
-    line-height: 1.1;
-    margin-bottom: 1rem;
-  }
-  .lede {
-    max-width: 620px;
-    color: var(--text-secondary);
-    font-size: 1.15rem;
-    line-height: 1.65;
   }
   .offer-grid {
     display: grid;
@@ -572,13 +552,7 @@ import {
   }
   @media (max-width: 600px) {
     .pricing-intro {
-      padding: 2.5rem 0;
-    }
-    .intro-heading {
-      margin-bottom: 1.5rem;
-    }
-    .lede {
-      font-size: 1.02rem;
+      padding-bottom: 2.5rem;
     }
     .offer-grid,
     .state-grid,
