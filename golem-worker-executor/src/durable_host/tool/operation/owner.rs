@@ -384,10 +384,6 @@ impl OwnerToolOperations {
         self.failure_continuations.token()
     }
 
-    pub(crate) fn has_owner_failure(&self) -> bool {
-        !self.failure_continuations.is_empty() || self.selected_owner_failure().is_some()
-    }
-
     pub(crate) async fn join_owner_failure_cleanup(&self) -> Result<(), WorkerExecutorError> {
         self.failure_continuations.wait().await;
         let task = self.state.lock().unwrap().cleanup_task.clone();

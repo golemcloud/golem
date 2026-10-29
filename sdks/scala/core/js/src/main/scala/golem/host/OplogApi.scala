@@ -477,6 +477,13 @@ object OplogApi {
     final case class SnapshotConfirmed(ts: ContextApi.DateTime, filesystemSnapshot: String) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
+    final case class SpanClosed(
+      ts: ContextApi.DateTime,
+      resourceStartIndex: Option[OplogIndex],
+      spanFinished: SpanFinished
+    ) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
     final case class OplogProcessorCheckpoint(params: OplogProcessorCheckpointParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -585,6 +592,13 @@ object OplogApi {
         case "snapshot-confirmed" =>
           val sc = v.asInstanceOf[JsSnapshotConfirmedParameters]
           SnapshotConfirmed(ts = parseDateTime(sc.timestamp), filesystemSnapshot = sc.filesystemSnapshot)
+        case "span-closed" =>
+          val sc = v.asInstanceOf[JsSpanClosedParameters]
+          SpanClosed(
+            ts = parseDateTime(sc.timestamp),
+            resourceStartIndex = sc.resourceStartIndex.toOption.map(index => BigInt(index.toString)),
+            spanFinished = parseSpanFinished(sc.spanFinished)
+          )
         case "oplog-processor-checkpoint" =>
           val cp = v.asInstanceOf[JsOplogProcessorCheckpointParameters]
           OplogProcessorCheckpoint(

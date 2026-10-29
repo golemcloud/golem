@@ -652,6 +652,14 @@ interface oplog {
         filesystem-snapshot: string,
     }
 
+    /// The agent released a host resource whose only durable content is its span, and the
+    /// span closed. `resource-start-index` is the `start` that opened the span.
+    record span-closed-parameters {
+        timestamp: datetime,
+        resource-start-index: option<oplog-index>,
+        span-finished: span-finished,
+    }
+
     record oplog-processor-checkpoint-parameters {
         timestamp: datetime,
         plugin: plugin-installation-description,
@@ -791,6 +799,14 @@ interface oplog {
         entity-parent-start-index: option<oplog-index>,
         observation: typed-schema-value,
         payload: option<oplog-payload>,
+    }
+
+    /// A released host resource whose span closed, attributed to the entity scope it ran in.
+    record raw-span-closed-parameters {
+        timestamp: datetime,
+        entity-parent-start-index: option<oplog-index>,
+        resource-start-index: option<oplog-index>,
+        span-finished: span-finished,
     }
 
     /// An effective attachment control transition without a byte payload.
@@ -1061,7 +1077,9 @@ interface oplog {
         /// was delivered to the agent at this point in the recorded execution
         completion-delivered(raw-completion-delivered-parameters),
         /// The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable
-        snapshot-confirmed(snapshot-confirmed-parameters)
+        snapshot-confirmed(snapshot-confirmed-parameters),
+        /// The agent released a host resource and its span closed; the release is not a durable call
+        span-closed(raw-span-closed-parameters)
     }
 
     variant public-oplog-entry {
@@ -1173,7 +1191,9 @@ interface oplog {
         /// was delivered to the agent at this point in the recorded execution
         completion-delivered(completion-delivered-parameters),
         /// The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable
-        snapshot-confirmed(snapshot-confirmed-parameters)
+        snapshot-confirmed(snapshot-confirmed-parameters),
+        /// The agent released a host resource and its span closed; the release is not a durable call
+        span-closed(span-closed-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

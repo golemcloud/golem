@@ -89,7 +89,7 @@ async fn real_rpc_retained_start_reconstruction_probe(
     .await?;
     eprintln!("Both blocking RPCs dispatched; releasing A");
     executor.complete_promise(&gate_a, vec![]).await?;
-    // B remains pending until A's guest delivery and its synchronous client drop are recorded.
+    // B remains pending until A's guest delivery and the release of its client are recorded.
     tokio::time::timeout(Duration::from_secs(30), async {
         let mut last_len = 0;
         loop {
@@ -113,22 +113,13 @@ async fn real_rpc_retained_start_reconstruction_probe(
                 }
                 _ => None,
             });
-            if let Some(delivered_a) = delivered_a {
-                let drop_start = oplog.iter().find_map(|e| match &e.entry {
-                    PublicOplogEntry::Start(s)
-                        if s.function_name == "golem::rpc::wasm-rpc::drop"
-                            && e.oplog_index > delivered_a =>
-                    {
-                        Some(e.oplog_index)
-                    }
-                    _ => None,
-                });
-                if oplog.iter().any(|e| match &e.entry {
-                    PublicOplogEntry::End(end) => Some(end.start_index) == drop_start,
-                    _ => false,
-                }) {
-                    return Ok::<_, anyhow::Error>(());
-                }
+            if let Some(delivered_a) = delivered_a
+                && oplog.iter().any(|e| {
+                    e.oplog_index > delivered_a
+                        && matches!(&e.entry, PublicOplogEntry::SpanClosed(_))
+                })
+            {
+                return Ok::<_, anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -184,23 +175,41 @@ async fn real_rpc_retained_start_reconstruction_probe(
     assert!(end(starts[0]) < delivered_a);
     assert!(delivered_a < end(starts[9]));
     let delivered_b = delivered(starts[9]);
-    let drop_start = oplog
+    // A's client is released after its delivery and before B completes. The release is a
+    // hint, not a durable call: it closes the connection span opened by A's `wasm-rpc::new`.
+    let new_starts: Vec<_> = oplog
         .iter()
-        .find_map(|e| match &e.entry {
-            PublicOplogEntry::Start(s)
-                if s.function_name == "golem::rpc::wasm-rpc::drop"
-                    && e.oplog_index > delivered_a
-                    && e.oplog_index < delivered_b =>
-            {
+        .filter_map(|e| match &e.entry {
+            PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::new" => {
                 Some(e.oplog_index)
             }
             _ => None,
         })
-        .expect("the synchronous client drop must start between A and B deliveries");
-    assert!(delivered_a < drop_start);
-    assert!(drop_start < end(drop_start));
-    assert!(end(drop_start) < end(starts[9]));
+        .collect();
+    let span_closed = oplog
+        .iter()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::SpanClosed(closed)
+                if e.oplog_index > delivered_a && e.oplog_index < delivered_b =>
+            {
+                Some((e.oplog_index, closed.resource_start_index))
+            }
+            _ => None,
+        })
+        .expect("the release of A's client must be recorded between A and B deliveries");
+    assert!(
+        span_closed
+            .1
+            .is_some_and(|start| new_starts.contains(&start) && start < starts[0]),
+        "the closed span belongs to the connection of A"
+    );
+    assert!(span_closed.0 < end(starts[9]));
     assert!(end(starts[9]) < delivered_b);
+    assert!(
+        !oplog.iter().any(|e| matches!(&e.entry,
+            PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::drop")),
+        "releasing a client records no durable call"
+    );
     for start in &starts[1..9] {
         assert!(!oplog.iter().any(|e| match &e.entry {
             PublicOplogEntry::CompletionDelivered(d) => d.start_index == *start,

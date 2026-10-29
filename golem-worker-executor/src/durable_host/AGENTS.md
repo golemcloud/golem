@@ -242,7 +242,10 @@ Failure to load a manual-update snapshot is terminal and retains the underlying 
 ## Spawned store tasks
 
 Tasks spawned on the store (`tail_work.rs`) may park across invocation settlement at guest-driven
-waits or passive markerless-completion replay-tail waits after durable finalization. Cursor
-operations and recorded-marker waits remain active. Any durable `Start`/`End` they can still
-produce must land before `AgentInvocationFinished`. Work that must survive a restart belongs in
-the oplog, not in a task.
+waits, passive markerless-completion replay-tail waits after durable finalization, or a destructor's
+passive wait for sibling history. Cursor operations and recorded-marker waits remain active.
+A destructor whose terminal is missing can repair only after the natural replay-to-live transition;
+if recovery returns before its Store task resumes, the next invocation can drive that repair.
+The task becomes active before performing effects or appending a terminal, and settlement waits
+for it before finishing that invocation. Work that must survive a restart belongs in the oplog,
+not in a task.

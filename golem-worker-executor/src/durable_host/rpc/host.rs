@@ -38,6 +38,7 @@ use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::durable_host::concurrent::finish_span_in_memory;
+use crate::durable_host::concurrent::record_released_resource_span;
 use crate::durable_host::durable_session::durable_stream_mapping_from_proto;
 use crate::durable_host::durable_session::strip_streams;
 use crate::durable_host::durable_stream::SessionError;
@@ -69,13 +70,8 @@ use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostRequestGolemRpcInvoke;
-use golem_common::model::oplog::HostRequestGolemRpcResource;
 use golem_common::model::oplog::HostResponseGolemRpcCreate;
 use golem_common::model::oplog::HostResponseGolemRpcInvokeAndAwait;
-use golem_common::model::oplog::HostResponseGolemRpcUnit;
-use golem_common::model::oplog::SpanFinished;
-use golem_common::model::oplog::SpanOutcome;
-use golem_common::model::oplog::host_functions::GolemRpcWasmRpcDrop;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvoke;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvokeAndAwaitResult;
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
@@ -521,6 +517,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             };
             let (idempotency_key, remote_agent_id) = call_target.at(handle.start_index())?;
             let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
+            let freshness_disposition =
+                if known_fresh_dispatch_allowed(handle.is_live(), prepared.is_ephemeral()) {
+                    InvocationFreshnessDisposition::KnownFresh
+                } else {
+                    InvocationFreshnessDisposition::MayExist
+                };
             if !handle.is_live() && recorded_rpc_denial(self, &handle).await?.is_some() {
                 let response = replay_rpc_denial(self, handle).await?;
                 return Ok(Err(denied_rpc_failure(response.result)?.into()));
@@ -560,6 +562,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         ),
                     )
                 })?;
+            if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await?;
+            }
             let mut auth_ctx = handle.is_live().then(|| handle.agent_auth_ctx().clone());
             let (target_fingerprint, _demand) = match streaming_target_fingerprint(
                 self,
@@ -567,6 +575,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 &prepared,
                 &remote_agent_id,
                 auth_ctx.as_ref(),
+                idempotency_key.clone(),
+                freshness_disposition,
             )
             .await
             {
@@ -1129,6 +1139,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             };
             let (idempotency_key, remote_agent_id) = call_target.at(handle.start_index())?;
             let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
+            let freshness_disposition = if known_fresh_dispatch_allowed(
+                handle.is_live(),
+                ephemeral_logical_agent_id.is_some(),
+            ) {
+                InvocationFreshnessDisposition::KnownFresh
+            } else {
+                InvocationFreshnessDisposition::MayExist
+            };
             if !handle.is_live() && recorded_rpc_denial(self, &handle).await?.is_some() {
                 return replay_async_rpc_denial(self, handle).await;
             }
@@ -1188,6 +1206,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 streaming: true,
                 remote_agent_type: remote_agent_type.clone(),
             };
+            if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await?;
+            }
             let auth_ctx = handle.is_live().then(|| handle.take_agent_auth_ctx());
             let (target_fingerprint, _demand) = match streaming_target_fingerprint(
                 self,
@@ -1195,6 +1219,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 &prepared,
                 &remote_agent_id,
                 auth_ctx.as_ref(),
+                idempotency_key.clone(),
+                freshness_disposition,
             )
             .await
             {
@@ -1538,58 +1564,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
     async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
         let entry = self.table().delete(rep)?;
-        let payload = entry.payload.downcast::<WasmRpcEntryPayload>();
-        if let Ok(payload) = payload {
-            let Some(creation_index) = payload.creation_index else {
-                finish_span_in_memory(self, &payload.span_id)?;
-                return Ok(());
-            };
-            let request = HostRequestGolemRpcResource { creation_index };
-            // This record observes guest resource cleanup, not an application write;
-            // cleanup remains permitted in read-only invocations.
-            let begun = DurableCallSession::<GolemRpcWasmRpcDrop, NotCancellable>::begin(
-                self,
-                DurableFunctionType::ReadLocal,
-            )
-            .await?;
-            let mut handle = match begun.resolve(self).await? {
-                ResolvedCall::Live(begun) => begun.start_live(self, request).await?,
-                ResolvedCall::Replay(handle) => handle,
-            };
-            if handle.is_live() {
-                handle
-                    .complete_with_span(
-                        self,
-                        HostResponseGolemRpcUnit {},
-                        SpanFinished {
-                            span_id: payload.span_id.clone(),
-                            finished_at: golem_common::model::Timestamp::now_utc(),
-                            outcome: SpanOutcome::Completed,
-                        },
-                    )
-                    .await?;
-            } else {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(_) => {}
-                    CallReplayOutcome::Incomplete(live) => {
-                        handle = live;
-                        handle
-                            .complete_with_span(
-                                self,
-                                HostResponseGolemRpcUnit {},
-                                SpanFinished {
-                                    span_id: payload.span_id.clone(),
-                                    finished_at: golem_common::model::Timestamp::now_utc(),
-                                    outcome: SpanOutcome::Completed,
-                                },
-                            )
-                            .await?;
-                    }
-                }
-            }
+        if let Ok(payload) = entry.payload.downcast::<WasmRpcEntryPayload>() {
+            record_released_resource_span(self, payload.creation_index, &payload.span_id).await?;
             finish_span_in_memory(self, &payload.span_id)?;
         }
-
         Ok(())
     }
 }
