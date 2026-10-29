@@ -139,10 +139,15 @@ describe('schema value decode failures', () => {
       'path-value': { valid: () => ({ tag: 'path-value', val: '' }) },
       'url-value': { valid: () => ({ tag: 'url-value', val: '' }) },
       'datetime-value': {
-        valid: () => ({ tag: 'datetime-value', val: { seconds: -(1n << 63n), nanoseconds: 0 } }),
+        valid: () => ({
+          tag: 'datetime-value',
+          val: { seconds: -62_167_219_200n, nanoseconds: 0 },
+        }),
         malformed: () => [
           { tag: 'datetime-value', val: null },
           { tag: 'datetime-value', val: { seconds: 0, nanoseconds: 0 } },
+          { tag: 'datetime-value', val: { seconds: -62_167_219_201n, nanoseconds: 999_999_999 } },
+          { tag: 'datetime-value', val: { seconds: 253_402_300_800n, nanoseconds: 0 } },
           { tag: 'datetime-value', val: { seconds: -(1n << 63n) - 1n, nanoseconds: 0 } },
           { tag: 'datetime-value', val: { seconds: 1n << 63n, nanoseconds: 0 } },
           { tag: 'datetime-value', val: { seconds: 0n, nanoseconds: 0.5 } },

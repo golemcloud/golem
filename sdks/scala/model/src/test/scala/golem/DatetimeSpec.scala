@@ -29,6 +29,12 @@ object DatetimeSpec extends ZIOSpecDefault {
         val dt = Datetime.fromEpochSeconds(1.5)
         assertTrue(dt.epochMillis == 1500.0)
       },
+      test("fromInstant keeps sub-millisecond precision and pre-epoch instants") {
+        assertTrue(
+          Datetime.fromInstant(java.time.Instant.ofEpochSecond(1L, 500000L)).epochMillis == 1000.5,
+          Datetime.fromInstant(java.time.Instant.ofEpochSecond(-2L, 250000000L)).epochMillis == -1750.0
+        )
+      },
       test("afterMillis returns time after now") {
         val start = System.currentTimeMillis().toDouble
         val dt    = Datetime.afterMillis(250.0)

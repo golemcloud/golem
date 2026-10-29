@@ -549,6 +549,20 @@ pub impl FromWire for Int with fn read_wire(tree, index) {
 }
 
 ///|
+pub impl IntoWire for Int16 with fn append_wire(self, encoder) {
+  encoder.push(@types.SchemaValueNode::S16Value(self.to_int()))
+}
+
+///|
+pub impl FromWire for Int16 with fn read_wire(tree, index) {
+  match wire_node(tree, index) {
+    @types.SchemaValueNode::S16Value(value) if value >= -32768 && value <= 32767 =>
+      Int16::from_int(value)
+    _ => raise WireError::Invalid("expected s16 value")
+  }
+}
+
+///|
 pub impl IntoWire for UInt16 with fn append_wire(self, encoder) {
   encoder.push(@types.SchemaValueNode::U16Value(self.to_uint()))
 }
@@ -825,19 +839,6 @@ pub impl FromWire for Uuid with fn read_wire(tree, index) {
   match wire_node(tree, index) {
     @types.SchemaValueNode::UuidValue(value) => Uuid::from_wit(value)
     _ => raise WireError::Invalid("expected uuid value")
-  }
-}
-
-///|
-pub impl IntoWire for @types.Datetime with fn append_wire(self, encoder) {
-  encoder.push(@types.SchemaValueNode::DatetimeValue(self))
-}
-
-///|
-pub impl FromWire for @types.Datetime with fn read_wire(tree, index) {
-  match wire_node(tree, index) {
-    @types.SchemaValueNode::DatetimeValue(value) => value
-    _ => raise WireError::Invalid("expected datetime value")
   }
 }
 

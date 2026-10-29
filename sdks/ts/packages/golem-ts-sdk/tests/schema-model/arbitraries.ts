@@ -270,7 +270,7 @@ export const arbSchemaGraph: Arbitrary<SchemaGraph> = fc
 // ============================================================
 
 const arbDatetime = fc.record({
-  seconds: arbS64,
+  seconds: fc.bigInt({ min: -62_167_219_200n, max: 253_402_300_799n }),
   nanoseconds: fc.integer({ min: 0, max: 999_999_999 }),
 });
 

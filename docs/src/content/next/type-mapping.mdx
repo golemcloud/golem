@@ -125,6 +125,23 @@ const increment = method({
 })
 ```
 
+The SDK and generated TypeScript bridges, external and guest, use these types:
+
+| Schema type | SDK and bridge type                                             | Notes                                 |
+| ----------- | --------------------------------------------------------------- | ------------------------------------- |
+| `datetime`  | `Datetime`, a `{ seconds: bigint, nanoseconds: number }` object | Seconds since the Unix epoch in UTC   |
+| `duration`  | `bigint`                                                        | Signed nanoseconds in the `s64` range |
+| `url`       | `string`                                                        | The URL text as is                    |
+| `path`      | `string`                                                        | A path in the agent's file system     |
+
+The SDK exports `Datetime` from `@golemcloud/golem-ts-sdk`. External bridges get the same type and the same helpers from `@golemcloud/golem-ts-bridge`:
+
+- `Datetime.parse(text)` accepts RFC 3339 with any offset and converts the value to UTC.
+- `Datetime.toISOString(value)` emits UTC RFC 3339 with a `Z` suffix and up to nine fraction digits.
+- `Datetime.fromDate(date)` and `Datetime.toDate(value)` convert from and to a JavaScript `Date`. `toDate` drops the precision below a millisecond.
+
+`parse` and `toISOString` reject a year outside `0000..9999`. An external bridge sends a datetime as text, so a datetime outside that range is an encode error.
+
 </Tabs.Tab>
 <Tabs.Tab>
 
@@ -211,6 +228,23 @@ Derives preserve case names by default. Use derive `rename` / `rename_all` attri
 
 The SDK also supports `std::time::Duration` as duration and `std::path::PathBuf` as path. It exposes `Quantity<U>` for quantities, with `U` implementing `QuantityUnit`. Derive attributes can select rich text, binary, URL, or path schemas and add restrictions to fields.
 
+Generated Rust bridges, external and guest, use these types:
+
+| Schema type | Bridge type                     | Notes                                                                 |
+| ----------- | ------------------------------- | --------------------------------------------------------------------- |
+| `datetime`  | `chrono::DateTime<chrono::Utc>` | A year outside `0000..=9999` is an encode and a decode error          |
+| `duration`  | `chrono::TimeDelta`             | Signed; a value outside the `s64` nanosecond range is an encode error |
+| `url`       | `url::Url`                      | An invalid URL is a decode error                                      |
+| `path`      | `String`                        | Not `PathBuf`; see below                                              |
+| `map`       | `Vec<(K, V)>`                   | Not `HashMap` or `BTreeMap`; see below                                |
+
+With the `serde` feature of an external bridge, a datetime serializes as UTC RFC 3339 with a `Z` suffix and up to nine fraction digits. Deserialization accepts any RFC 3339 offset and converts the value to UTC.
+
+Two bridge types differ from the SDK types on purpose:
+
+- A `path` value is a path in the agent's file system, not in the caller's. A caller-side `PathBuf` invites local file-system calls on the wrong machine, and a `String` cannot fail to encode.
+- A `map` value is a list of key-value pairs. `Vec<(K, V)>` keeps the pairs as they arrive, order included, works for every key type, and lets the caller collect into the map type it wants.
+
 </Tabs.Tab>
 <Tabs.Tab>
 
@@ -239,16 +273,31 @@ Custom Scala types need a `zio.blocks.schema.Schema` instance, for example `deri
 
 Case names are preserved. `Text(text: String)` becomes `{"Text":{"text":"hi"}}`. **Only** a single field specifically named `value` unwraps: `Text(value: String)` becomes `{"Text":"hi"}`.
 
-| Rich Scala type                                                          | Category            |
-| ------------------------------------------------------------------------ | ------------------- |
-| `java.util.UUID`                                                         | UUID                |
-| `java.time.Instant`, `java.time.Duration`                                | Datetime, duration  |
-| `golem.schema.GolemPath`, `golem.schema.Url`, `golem.schema.Quantity[U]` | Path, URL, quantity |
-| `golem.schema.Text`                                                      | Text                |
+| Rich Scala type                                                      | Category            |
+| -------------------------------------------------------------------- | ------------------- |
+| `java.util.UUID`                                                     | UUID                |
+| `java.time.Instant`, `java.time.Duration`                            | Datetime, duration  |
+| `golem.schema.GolemPath`, `java.net.URI`, `golem.schema.Quantity[U]` | Path, URL, quantity |
+| `golem.schema.Text`                                                  | Text                |
+
+A case class with a `java.net.URI` field needs the `Schema[URI]` instance in scope for `Schema.derived`: `import golem.schema.Implicits.golemUriSchema`. Method parameters and return values of type `URI` need no import.
 
 `golem.schema.Text(text, language)` is bare text with an optional language code. Its schema has no restrictions.
 
 The unit marker `U` of a quantity declares its units with `@quantityUnit` from `golem.runtime.annotations`. Every listed unit is allowed and the first is the base unit, so `@quantityUnit("m", "cm", "km") sealed trait Length` accepts `m`, `cm` and `km`. A single unit, such as `@quantityUnit("kg")`, is the base unit with no suffixes. The named `suffixes` argument sets the allowed units exactly: `@quantityUnit("m", suffixes = Seq("cm", "km"))` accepts only `cm` and `km`. A marker without the annotation does not compile.
+
+Generated Scala bridges, external and guest, use these types:
+
+| Schema type | Bridge type              | Notes                                                                 |
+| ----------- | ------------------------ | --------------------------------------------------------------------- |
+| `datetime`  | `java.time.Instant`      | A year outside `0000..9999` is an encode and a decode error           |
+| `duration`  | `java.time.Duration`     | Signed; a value outside the `s64` nanosecond range is an encode error |
+| `url`       | `java.net.URI`           | A URL that `URI` cannot parse is a decode error                       |
+| `path`      | `golem.schema.GolemPath` | A path in the agent's file system                                     |
+
+An external bridge has its own copy of `GolemPath` in `golem.bridge.runtime`. The time argument of `scheduleAt` is a `java.time.Instant` in both modes.
+
+An external bridge sends a datetime as UTC RFC 3339 text with a `Z` suffix and up to nine fraction digits. It accepts any RFC 3339 offset on input and converts the value to UTC. `SchemaValueCodec.formatDatetime` and `SchemaValueCodec.parseDatetime` in `golem.bridge.runtime` apply the same rules.
 
 </Tabs.Tab>
 <Tabs.Tab>
@@ -258,7 +307,7 @@ Custom MoonBit records and enums use `#derive.golem_schema`. Case names are pres
 | MoonBit type                                 | Canonical JSON                                      |
 | -------------------------------------------- | --------------------------------------------------- |
 | `String`, `Bool`, `Char`                     | `"hi"`, `true`, `"λ"`                               |
-| `Byte`, `UInt16`, `UInt`, `Int`              | JSON number in the type's range                     |
+| `Byte`, `Int16`, `UInt16`, `UInt`, `Int`     | JSON number in the type's range                     |
 | `Int64`, `UInt64`                            | Decimal string                                      |
 | `Float`, `Double`                            | Finite JSON number                                  |
 | `Array[T]`, `Array[Byte]`                    | JSON array, byte elements are numbers               |
@@ -276,10 +325,26 @@ Custom MoonBit records and enums use `#derive.golem_schema`. Case names are pres
 
 | Rich MoonBit type                                    | Category            |
 | ---------------------------------------------------- | ------------------- |
-| `@types.Datetime`, `@schema.Uuid`                    | Datetime, UUID      |
+| `@schema.Datetime`, `@schema.Uuid`                   | Datetime, UUID      |
 | `@schema.Duration`, `@schema.Text[S]`                | Duration, text      |
 | `@schema.Url`, `@schema.Path`, `@schema.Quantity[U]` | URL, path, quantity |
 | `Bytes`                                              | Binary              |
+
+`@schema.Datetime` holds seconds since the Unix epoch and nanoseconds, with a UTC year in `0000..9999`. `Datetime::parse` accepts RFC 3339 with any offset and converts the value to UTC. `to_string` prints UTC with a `Z` suffix and up to nine fraction digits.
+
+Generated MoonBit bridges, external and guest, use these types. The external runtime has copies of the SDK types, under `@runtime` instead of `@schema`:
+
+| Schema type     | Bridge type        | Notes                                              |
+| --------------- | ------------------ | -------------------------------------------------- |
+| `datetime`      | `@schema.Datetime` | A UTC year outside `0000..9999` is a decode error  |
+| `duration`      | `@schema.Duration` | Signed nanoseconds                                 |
+| `url`           | `@schema.Url`      |                                                    |
+| `path`          | `@schema.Path`     | A path in the agent's file system                  |
+| `s8`            | `Int`              | A value outside `-128..127` is an encode error     |
+| `s16`, `u16`    | `Int16`, `UInt16`  |                                                    |
+| `fixed-list<T>` | `FixedArray[T]`    | A different length is an encode and a decode error |
+
+Fixed-size lists are supported in generated bridges only. A MoonBit agent uses `Array[T]`, which publishes a `list` schema, because MoonBit types cannot carry the length.
 
 </Tabs.Tab>
 <Tabs.Tab>

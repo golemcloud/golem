@@ -34,6 +34,10 @@ object Datetime {
   def fromEpochMillis(ms: Double): Datetime =
     new Datetime(ms)
 
+  /** The instant, to millisecond precision. */
+  def fromInstant(instant: java.time.Instant): Datetime =
+    fromEpochMillis(instant.getEpochSecond.toDouble * 1000.0 + instant.getNano.toDouble / 1000000.0)
+
   /** Epoch-seconds constructor (convenience). */
   def fromEpochSeconds(seconds: Double): Datetime =
     fromEpochMillis(seconds * 1000.0)

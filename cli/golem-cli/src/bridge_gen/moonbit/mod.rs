@@ -827,21 +827,21 @@ fn[T] codec_mismatch(expected : String, value : @model.SchemaValue) -> T raise {
 
 fn guest_as_bool(v : @model.SchemaValue) -> Bool raise { match v { Bool(x) => x; o => codec_mismatch("bool", o) } }
 fn guest_as_s8(v : @model.SchemaValue) -> Int raise { match v { S8(x) => { if x < -128 || x > 127 { raise CodecError("s8 value out of range: " + x.to_string()) }; x }; o => codec_mismatch("s8", o) } }
-fn guest_as_s16(v : @model.SchemaValue) -> Int raise { match v { S16(x) => { if x < -32768 || x > 32767 { raise CodecError("s16 value out of range: " + x.to_string()) }; x }; o => codec_mismatch("s16", o) } }
+fn guest_as_s16(v : @model.SchemaValue) -> Int16 raise { match v { S16(x) => { if x < -32768 || x > 32767 { raise CodecError("s16 value out of range: " + x.to_string()) }; Int16::from_int(x) }; o => codec_mismatch("s16", o) } }
 fn guest_as_s32(v : @model.SchemaValue) -> Int raise { match v { S32(x) => x; o => codec_mismatch("s32", o) } }
 fn guest_as_s64(v : @model.SchemaValue) -> Int64 raise { match v { S64(x) => x; o => codec_mismatch("s64", o) } }
 fn guest_as_u8(v : @model.SchemaValue) -> Byte raise { match v { U8(x) => x; o => codec_mismatch("u8", o) } }
-fn guest_as_u16(v : @model.SchemaValue) -> Int raise { match v { U16(x) => { if x > 65535 { raise CodecError("u16 value out of range: " + x.to_string()) }; x.reinterpret_as_int() }; o => codec_mismatch("u16", o) } }
+fn guest_as_u16(v : @model.SchemaValue) -> UInt16 raise { match v { U16(x) => { if x > 65535 { raise CodecError("u16 value out of range: " + x.to_string()) }; x.to_uint16() }; o => codec_mismatch("u16", o) } }
 fn guest_as_u32(v : @model.SchemaValue) -> UInt raise { match v { U32(x) => x; o => codec_mismatch("u32", o) } }
 fn guest_as_u64(v : @model.SchemaValue) -> UInt64 raise { match v { U64(x) => x; o => codec_mismatch("u64", o) } }
 fn guest_as_f32(v : @model.SchemaValue) -> Float raise { match v { F32(x) => x; o => codec_mismatch("f32", o) } }
 fn guest_as_f64(v : @model.SchemaValue) -> Double raise { match v { F64(x) => x; o => codec_mismatch("f64", o) } }
 fn guest_as_char(v : @model.SchemaValue) -> Char raise { match v { Char(x) => x; o => codec_mismatch("char", o) } }
 fn guest_as_string(v : @model.SchemaValue) -> String raise { match v { String(x) => x; o => codec_mismatch("string", o) } }
-fn guest_as_path(v : @model.SchemaValue) -> String raise { match v { Path(x) => x; o => codec_mismatch("path", o) } }
-fn guest_as_url(v : @model.SchemaValue) -> String raise { match v { Url(x) => x; o => codec_mismatch("url", o) } }
-fn guest_as_datetime(v : @model.SchemaValue) -> @types.Datetime raise { match v { Datetime(x) => x; o => codec_mismatch("datetime", o) } }
-fn guest_as_duration(v : @model.SchemaValue) -> Int64 raise { match v { Duration(x) => x; o => codec_mismatch("duration", o) } }
+fn guest_as_path(v : @model.SchemaValue) -> @schema.Path raise { match v { Path(x) => @schema.Path::new(x); o => codec_mismatch("path", o) } }
+fn guest_as_url(v : @model.SchemaValue) -> @schema.Url raise { match v { Url(x) => @schema.Url::new(x); o => codec_mismatch("url", o) } }
+fn guest_as_datetime(v : @model.SchemaValue) -> @schema.Datetime raise { match v { Datetime(x) => @schema.Datetime::from_wit(x) catch { @schema.DatetimeError(message) => raise CodecError(message) }; o => codec_mismatch("datetime", o) } }
+fn guest_as_duration(v : @model.SchemaValue) -> @schema.Duration raise { match v { Duration(x) => @schema.Duration::new(x); o => codec_mismatch("duration", o) } }
 fn guest_as_record(v : @model.SchemaValue) -> Array[@model.SchemaValue] raise { match v { Record(x) => x; o => codec_mismatch("record", o) } }
 fn guest_as_variant(v : @model.SchemaValue) -> (UInt, @model.SchemaValue?) raise { match v { Variant(i, x) => (i, x); o => codec_mismatch("variant", o) } }
 fn guest_as_enum(v : @model.SchemaValue) -> UInt raise { match v { Enum(x) => x; o => codec_mismatch("enum", o) } }
@@ -2660,18 +2660,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let next = depth + 1;
         let rendered = match resolved {
             SchemaType::Bool { .. } => format!("@runtime.BoolValue({val})"),
+            // External encoders do not raise: the public value codec checks the
+            // s8 range and the fixed-list length when it encodes the value.
             SchemaType::S8 { .. } => match self.mode {
                 MoonBitBridgeMode::ExternalRest => format!("@runtime.S8Value({val})"),
-                MoonBitBridgeMode::GuestWasmRpc => format!(
-                    "{{ if {val} < -128 || {val} > 127 {{ raise @runtime.BridgeError(\"s8 value out of range\") }}; @runtime.S8Value({val}) }}"
-                ),
+                MoonBitBridgeMode::GuestWasmRpc => {
+                    let s8 = format!("s8_{depth}");
+                    format!(
+                        "{{ let {s8} = {val}; if {s8} < -128 || {s8} > 127 {{ raise @runtime.BridgeError(\"s8 value out of range: \\{{{s8}}}\") }}; @runtime.S8Value({s8}) }}"
+                    )
+                }
             },
-            SchemaType::S16 { .. } => match self.mode {
-                MoonBitBridgeMode::ExternalRest => format!("@runtime.S16Value({val})"),
-                MoonBitBridgeMode::GuestWasmRpc => format!(
-                    "{{ if {val} < -32768 || {val} > 32767 {{ raise @runtime.BridgeError(\"s16 value out of range\") }}; @runtime.S16Value({val}) }}"
-                ),
-            },
+            SchemaType::S16 { .. } => format!("@runtime.S16Value(({val}).to_int())"),
             SchemaType::S32 { .. } => format!("@runtime.S32Value({val})"),
             SchemaType::S64 { .. } => format!("@runtime.S64Value({val})"),
             SchemaType::U8 { .. } => match self.mode {
@@ -2679,10 +2679,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 MoonBitBridgeMode::GuestWasmRpc => format!("@runtime.U8Value({val})"),
             },
             SchemaType::U16 { .. } => match self.mode {
-                MoonBitBridgeMode::ExternalRest => format!("@runtime.U16Value({val})"),
-                MoonBitBridgeMode::GuestWasmRpc => format!(
-                    "{{ if {val} < 0 || {val} > 65535 {{ raise @runtime.BridgeError(\"u16 value out of range\") }}; @runtime.U16Value({val}.reinterpret_as_uint()) }}"
-                ),
+                MoonBitBridgeMode::ExternalRest => format!("@runtime.U16Value(({val}).to_int())"),
+                MoonBitBridgeMode::GuestWasmRpc => format!("@runtime.U16Value(({val}).to_uint())"),
             },
             SchemaType::U32 { .. } => format!("@runtime.U32Value({val})"),
             SchemaType::U64 { .. } => format!("@runtime.U64Value({val})"),
@@ -2705,14 +2703,17 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 element, length, ..
             } => {
                 let inner_enc = self.encode_expr_mode(&e, element, next, cleanup, preflight)?;
-                match self.mode {
-                    MoonBitBridgeMode::ExternalRest => {
-                        format!("@runtime.FixedListValue({val}.map(({e}) => {inner_enc}))")
-                    }
+                let items = format!("items{depth}");
+                let encoded = format!("encoded{depth}");
+                let check = match self.mode {
+                    MoonBitBridgeMode::ExternalRest => String::new(),
                     MoonBitBridgeMode::GuestWasmRpc => format!(
-                        "{{\n  if {val}.length() != {length} {{ raise @runtime.BridgeError(\"Expected fixed-list of length {length}, got \\{{{val}.length()}}\") }}\n  @runtime.FixedListValue({val}.map(({e}) => {inner_enc}))\n}}"
+                        "  if {items}.length() != {length} {{ raise @runtime.BridgeError(\"Expected fixed-list of length {length}, got \\{{{items}.length()}}\") }}\n"
                     ),
-                }
+                };
+                format!(
+                    "{{\n  let {items} = {val}\n{check}  let {encoded} : Array[@runtime.SchemaValue] = []\n  for {e} in {items} {{ {encoded}.push({inner_enc}) }}\n  @runtime.FixedListValue({encoded})\n}}"
+                )
             }
             SchemaType::Map { key, value, .. } => {
                 let entries = format!("entries{depth}");
@@ -2775,16 +2776,25 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 };
                 format!("match {val} {{\n  {ok_arm}\n  {err_arm}\n}}")
             }
-            SchemaType::Path { .. } => format!("@runtime.PathValue({val})"),
-            SchemaType::Url { .. } => format!("@runtime.UrlValue({val})"),
+            SchemaType::Path { .. } => format!("@runtime.PathValue(({val}).value)"),
+            SchemaType::Url { .. } => format!("@runtime.UrlValue(({val}).value)"),
             SchemaType::Uuid { .. } => match self.mode {
                 MoonBitBridgeMode::ExternalRest => format!("@runtime.UuidValue({val})"),
                 MoonBitBridgeMode::GuestWasmRpc => {
                     format!("@model.SchemaValue::Uuid(({val}).to_wit())")
                 }
             },
-            SchemaType::Datetime { .. } => format!("@runtime.DatetimeValue({val})"),
-            SchemaType::Duration { .. } => format!("@runtime.DurationValue({val})"),
+            SchemaType::Datetime { .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => {
+                    format!("@runtime.DatetimeValue(({val}).to_string())")
+                }
+                MoonBitBridgeMode::GuestWasmRpc => {
+                    format!("@runtime.DatetimeValue(({val}).to_wit())")
+                }
+            },
+            SchemaType::Duration { .. } => {
+                format!("@runtime.DurationValue(({val}).nanoseconds)")
+            }
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
             | SchemaType::Enum { .. }
@@ -2943,8 +2953,10 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 let inner_dec = self.decode_expr(&e, element, next)?;
                 let len = *length;
                 let elems = format!("elems{depth}");
+                let decoded = format!("decoded{depth}");
+                let elem_ty = self.type_reference(element)?;
                 format!(
-                    "{{\n  let {elems} = @runtime.as_fixed_list({val})\n  if {elems}.length() != {len} {{ raise @runtime.BridgeError(\"Expected fixed-list of length {len}, got \\{{{elems}.length()}}\") }}\n  {elems}.map(({e}) => {inner_dec})\n}}"
+                    "{{\n  let {elems} = @runtime.as_fixed_list({val})\n  if {elems}.length() != {len} {{ raise @runtime.BridgeError(\"Expected fixed-list of length {len}, got \\{{{elems}.length()}}\") }}\n  let {decoded} : Array[{elem_ty}] = []\n  for {e} in {elems} {{ {decoded}.push({inner_dec}) }}\n  FixedArray::from_array({decoded})\n}}"
                 )
             }
             SchemaType::Map { key, value, .. } => {
@@ -3166,6 +3178,14 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
 
     // --- Type references ----------------------------------------------------
 
+    /// The SDK's type for a rich kind; the external runtime has a copy of it.
+    fn rich_type_reference(&self, name: &str) -> String {
+        match self.mode {
+            MoonBitBridgeMode::ExternalRest => format!("@runtime.{name}"),
+            MoonBitBridgeMode::GuestWasmRpc => format!("@schema.{name}"),
+        }
+    }
+
     fn type_reference(&self, typ: &SchemaType) -> anyhow::Result<String> {
         if self.mode == MoonBitBridgeMode::GuestWasmRpc {
             if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
@@ -3205,12 +3225,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let resolved = self.resolve_ref(typ);
         match resolved {
             SchemaType::Bool { .. } => Ok("Bool".to_string()),
-            SchemaType::S8 { .. } | SchemaType::S16 { .. } | SchemaType::S32 { .. } => {
-                Ok("Int".to_string())
-            }
+            SchemaType::S8 { .. } | SchemaType::S32 { .. } => Ok("Int".to_string()),
+            SchemaType::S16 { .. } => Ok("Int16".to_string()),
             SchemaType::S64 { .. } => Ok("Int64".to_string()),
             SchemaType::U8 { .. } => Ok("Byte".to_string()),
-            SchemaType::U16 { .. } => Ok("Int".to_string()),
+            SchemaType::U16 { .. } => Ok("UInt16".to_string()),
             SchemaType::U32 { .. } => Ok("UInt".to_string()),
             SchemaType::U64 { .. } => Ok("UInt64".to_string()),
             SchemaType::F32 { .. } => Ok("Float".to_string()),
@@ -3218,8 +3237,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Char { .. } => Ok("Char".to_string()),
             SchemaType::String { .. } => Ok("String".to_string()),
             SchemaType::Option { inner, .. } => Ok(format!("{}?", self.type_reference(inner)?)),
-            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            SchemaType::List { element, .. } => {
                 Ok(format!("Array[{}]", self.type_reference(element)?))
+            }
+            SchemaType::FixedList { element, .. } => {
+                Ok(format!("FixedArray[{}]", self.type_reference(element)?))
             }
             SchemaType::Map { key, value, .. } => Ok(format!(
                 "Map[{}, {}]",
@@ -3238,18 +3260,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 };
                 Ok(format!("Result[{ok_type}, {err_type}]"))
             }
-            SchemaType::Path { .. } | SchemaType::Url { .. } => Ok("String".to_string()),
-            SchemaType::Uuid { .. } => Ok(match self.mode {
-                MoonBitBridgeMode::ExternalRest => "@runtime.Uuid",
-                MoonBitBridgeMode::GuestWasmRpc => "@schema.Uuid",
-            }
-            .to_string()),
-            SchemaType::Datetime { .. } => Ok(match self.mode {
-                MoonBitBridgeMode::ExternalRest => "String",
-                MoonBitBridgeMode::GuestWasmRpc => "@types.Datetime",
-            }
-            .to_string()),
-            SchemaType::Duration { .. } => Ok("Int64".to_string()),
+            SchemaType::Path { .. } => Ok(self.rich_type_reference("Path")),
+            SchemaType::Url { .. } => Ok(self.rich_type_reference("Url")),
+            SchemaType::Uuid { .. } => Ok(self.rich_type_reference("Uuid")),
+            SchemaType::Datetime { .. } => Ok(self.rich_type_reference("Datetime")),
+            SchemaType::Duration { .. } => Ok(self.rich_type_reference("Duration")),
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
             | SchemaType::Enum { .. }

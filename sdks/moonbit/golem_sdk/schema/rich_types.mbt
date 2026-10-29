@@ -1,7 +1,7 @@
 ///|
 pub(all) struct Path {
   value : String
-} derive(Debug, Eq)
+} derive(Debug, Eq, Hash)
 
 ///|
 pub fn Path::new(value : String) -> Path {
@@ -11,7 +11,7 @@ pub fn Path::new(value : String) -> Path {
 ///|
 pub(all) struct Url {
   value : String
-} derive(Debug, Eq)
+} derive(Debug, Eq, Hash)
 
 ///|
 pub fn Url::new(value : String) -> Url {
@@ -52,7 +52,7 @@ pub fn[S] Text::language(self : Text[S]) -> String? {
 ///|
 pub(all) struct Duration {
   nanoseconds : Int64
-} derive(Debug, Eq)
+} derive(Debug, Eq, Hash)
 
 ///|
 pub fn Duration::new(nanoseconds : Int64) -> Duration {
@@ -350,34 +350,6 @@ pub impl FromSchema for Uuid with fn from_value(v) {
     Uuid(value) => Uuid::from_wit(value)
     other =>
       raise FromSchemaError::shape_mismatch("uuid", value_kind(other), "Uuid")
-  }
-}
-
-///|
-pub impl IntoSchema for @types.Datetime with fn type_id() {
-  "golem.core.Datetime"
-}
-
-///|
-pub impl IntoSchema for @types.Datetime with fn register_in(_b) {
-  @model.schema_type(Datetime)
-}
-
-///|
-pub impl IntoSchema for @types.Datetime with fn to_value(self) {
-  Datetime(self)
-}
-
-///|
-pub impl FromSchema for @types.Datetime with fn from_value(v) {
-  match v {
-    Datetime(value) => value
-    other =>
-      raise FromSchemaError::shape_mismatch(
-        "datetime",
-        value_kind(other),
-        "Datetime",
-      )
   }
 }
 
