@@ -667,8 +667,8 @@ async fn release_in_read_only_invocation_records_only_hints(
                 _ => None,
             })
             .collect::<Vec<_>>(),
-        ["cli::environment::get-environment"],
-        "only the SDK invocation identity lookup records a call; client release does not"
+        Vec::<&str>::new(),
+        "client release does not record a durable call"
     );
     assert_eq!(caller.released_spans().await?, 3);
     assert_settled_history(&oplog);
@@ -1510,8 +1510,8 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
                     _ => None,
                 })
                 .collect::<Vec<_>>(),
-            ["cli::environment::get-environment"],
-            "only inspect's SDK identity lookup opens a call; repair retains the original Starts"
+            Vec::<&str>::new(),
+            "repair retains the original Starts without opening another call"
         );
         assert_settled_history(&repaired);
         let after = caller

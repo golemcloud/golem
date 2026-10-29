@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::{
-    agent_registry, get_agent_id, get_principal, get_resolved_agent, register_initialized_agent,
+    agent_registry, get_principal, get_resolved_agent, register_initialized_agent,
 };
 use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
@@ -199,6 +199,10 @@ impl Guest for AgentRuntime {
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
+        // Snapshot load reads the agent ID through libc's environment cache. Populate
+        // it during recorded initialization too, before any snapshot can be saved.
+        let _ = std::env::vars_os().count();
+
         let agent_type_name = AgentTypeName(agent_type.clone());
         if !agent_registry::has_registered_agent_type(&agent_type_name) {
             let agent_types = agent_registry::get_all_agent_types();
@@ -231,7 +235,8 @@ impl Guest for AgentRuntime {
         principal: Principal,
     ) -> Result<Option<crate::schema::wit::wire::SchemaValueTree>, AgentError> {
         {
-            let agent_id = get_agent_id().agent_id;
+            let agent_id = std::env::var("GOLEM_AGENT_ID")
+                .expect("GOLEM_AGENT_ID environment variable must be set");
             parse_agent_id(&agent_id).map_err(|e| AgentError::InvalidInput(e.to_string()))?;
         }
 
@@ -273,7 +278,8 @@ impl LoadSnapshotGuest for AgentRuntime {
             return Err("Agent is already initialized".to_string());
         }
 
-        let id = get_agent_id().agent_id;
+        let id = std::env::var("GOLEM_AGENT_ID")
+            .expect("GOLEM_AGENT_ID environment variable must be set");
 
         load_agent_snapshot(snapshot, &id, parse_restore_identity).await
     }

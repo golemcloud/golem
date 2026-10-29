@@ -4127,10 +4127,34 @@ async fn component_env_variables_update(
 
     let env = get_env_result_from_value(env);
 
-    assert_eq!(env.get("FOO"), None); // Only applied at runtime, not an ovveride
-    assert_eq!(env.get("BAR"), Some(&"baz".to_string()));
+    // Rust initializes libc's environment cache during agent initialization. Replaying
+    // that initialization restores its recorded values, even after a component update.
+    assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
+    assert_eq!(env.get("BAR"), None);
     let worker_name = agent_id.to_string();
     assert_eq!(env.get("GOLEM_AGENT_ID"), Some(&worker_name));
+
+    let fresh_agent = agent_id!("Environment", "component-env-variables-2");
+    executor
+        .start_agent(&updated_component.id, fresh_agent.clone())
+        .await?;
+    let fresh_env = executor
+        .invoke_and_await_agent(
+            &updated_component,
+            &fresh_agent,
+            "get_environment",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let fresh_env = get_env_result_from_value(fresh_env);
+    assert_eq!(fresh_env.get("FOO"), None);
+    assert_eq!(fresh_env.get("BAR"), Some(&"baz".to_string()));
+    assert_eq!(
+        fresh_env.get("GOLEM_AGENT_ID"),
+        Some(&fresh_agent.to_string())
+    );
 
     Ok(())
 }
