@@ -16,7 +16,6 @@
 
 package golem.runtime.rpc
 
-import golem.Uuid
 import golem.runtime.autowire.SchemaPayload
 import golem.schema.{FromSchema, IntoSchema}
 import zio.test._
@@ -100,11 +99,6 @@ object ValueMappingFuzzSpec extends ZIOSpecDefault {
     ),
     roundTripTests[TinyProduct]("product", 150)(genTinyProduct()),
     roundTripTests[TinySum]("sum", 150)(genTinySum()),
-    roundTripTests[Uuid]("uuid", 100)(
-      Uuid(
-        BigInt(java.lang.Long.toUnsignedString(rng.nextLong())),
-        BigInt(java.lang.Long.toUnsignedString(rng.nextLong()))
-      )
-    )
+    roundTripTests[java.util.UUID]("uuid", 100)(new java.util.UUID(rng.nextLong(), rng.nextLong()))
   )
 }

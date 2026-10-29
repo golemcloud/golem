@@ -73,7 +73,7 @@ private[wire] object ConcreteCodecMacro {
         case '[golem.UShort]       => '{ ConcreteCodec.ushort }
         case '[golem.UInt]         => '{ ConcreteCodec.uint }
         case '[golem.ULong]        => '{ ConcreteCodec.ulong }
-        case '[golem.Uuid]         => '{ ConcreteCodec.uuid }
+        case '[java.util.UUID]     => '{ ConcreteCodec.uuid }
         case '[java.time.Instant]  => '{ ConcreteCodec.instant }
         case '[java.time.Duration] => '{ ConcreteCodec.duration }
         case '[Option[t]]          => '{ ConcreteCodec.option(${ build[t](registry, next) }) }

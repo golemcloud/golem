@@ -45,10 +45,6 @@ fn strip_disambiguation_suffix(id: &str) -> &str {
 type TypeLocationsBySchema = Vec<(SchemaType, Vec<TypeLocation>)>;
 
 pub trait TypeName: Debug + Display + Clone + PartialEq + Eq + Hash {
-    // This is intended to be used for custom or special mappings. If this method returns some
-    // result for a type, then no further type naming will be attempted.
-    fn from_schema_type(typ: &SchemaType) -> Option<Self>;
-
     /// Creates a type name from an optional owner and a name.
     /// When `same_language` is true, the metadata names are already in the target language's
     /// native casing, so no heck transformations should be applied.
@@ -206,12 +202,7 @@ impl<TN: TypeName> TypeNaming<TN> {
     ) -> anyhow::Result<()> {
         let fields = user_supplied_fields(input);
 
-        // A custom-mapped type (e.g. the Scala `uuid.Uuid` remap) is never the
-        // structural multimodal form, and resolving it here would defeat the
-        // short-circuit in `collect_schema_type` (and require its body to be
-        // present in the graph). Skip the multimodal pre-check for it.
         if let [field] = fields.as_slice()
-            && TN::from_schema_type(&field.schema).is_none()
             && let Some(cases) = multimodal_variant_cases(&self.graph, &field.schema)?
         {
             let cases = cases.to_vec();
@@ -243,11 +234,7 @@ impl<TN: TypeName> TypeNaming<TN> {
             return Ok(());
         };
 
-        // See `collect_input_schema`: a custom-mapped type bypasses the
-        // multimodal pre-check.
-        if TN::from_schema_type(ty).is_none()
-            && let Some(cases) = multimodal_variant_cases(&self.graph, ty)?
-        {
+        if let Some(cases) = multimodal_variant_cases(&self.graph, ty)? {
             let cases = cases.to_vec();
             for case in cases {
                 builder.set_root_item_name(&case.name);
@@ -267,23 +254,6 @@ impl<TN: TypeName> TypeNaming<TN> {
         builder: &mut Builder,
         typ: &SchemaType,
     ) -> anyhow::Result<()> {
-        // A custom/remapped mapping (e.g. the Scala generator remapping the
-        // `uuid.Uuid` builtin record onto its runtime `Uuid` type) takes over
-        // naming completely: the type is registered under the fixed custom name
-        // and its body is neither resolved nor walked, so no structural
-        // definition is generated for it. This must happen before the ref is
-        // resolved or descended into, otherwise the walker would discover and
-        // register the underlying body and defeat the remap. The default
-        // implementation (Rust / TypeScript) returns `None`, leaving their
-        // behaviour unchanged.
-        if let Some(custom) = TN::from_schema_type(typ) {
-            if !self.types.iter().any(|(t, _)| t == typ) {
-                self.type_names.insert(custom.clone());
-                self.types.push((typ.clone(), custom));
-            }
-            return Ok(());
-        }
-
         // Resolve refs so we walk the underlying body, but remember the
         // ref's display name/owner for path annotations. The body is
         // cloned here so the recursive walk does not hold a borrow on

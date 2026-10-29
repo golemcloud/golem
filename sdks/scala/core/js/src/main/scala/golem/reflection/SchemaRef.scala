@@ -646,7 +646,7 @@ private[reflection] object CanonicalJson {
       case PathType(_) => PathValue(string(json))
       case UrlType(_)  => UrlValue(string(json))
       case UuidType    =>
-        UuidValue(golem.Uuid.fromStandardString(string(json)).fold(fail, identity))
+        UuidValue(golem.CanonicalUuid.parse(string(json)).fold(fail, identity))
       case DatetimeType =>
         val instant = java.time.Instant.parse(string(json))
         DatetimeValue(Datetime(instant.getEpochSecond, instant.getNano))
@@ -755,7 +755,7 @@ private[reflection] object CanonicalJson {
         )
       case (PathType(_), PathValue(x))      => Json.String(x)
       case (UrlType(_), UrlValue(x))        => Json.String(x)
-      case (UuidType, UuidValue(x))         => Json.String(golem.Uuid.toStandardString(x))
+      case (UuidType, UuidValue(x))         => Json.String(x.toString)
       case (DatetimeType, DatetimeValue(x)) =>
         Json.String(java.time.Instant.ofEpochSecond(x.seconds, x.nanoseconds.toLong).toString)
       case (DurationType, DurationValue(x)) =>

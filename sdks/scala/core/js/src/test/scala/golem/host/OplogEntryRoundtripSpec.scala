@@ -258,7 +258,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.walletPin.walletToken.walletIdHash.toSeq == Seq[Byte](1, 2, -1),
         parsed.walletPin.walletToken.generation == BigInt(7),
-        parsed.walletPin.scopeCardId.contains(golem.Uuid(BigInt(10), BigInt(20)))
+        parsed.walletPin.scopeCardId.contains(new java.util.UUID(10L, 20L))
       )
     },
     test("SetRetryPolicy from dynamic") {

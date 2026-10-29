@@ -38,7 +38,7 @@ mod schema_graph;
 pub mod tool;
 pub mod type_name;
 
-pub use type_name::{RemappedType, ScalaTypeName};
+pub use type_name::ScalaTypeName;
 
 use crate::bridge_gen::scala::scala::{
     escape_scala_ident, is_scala_keyword, to_scala_term_ident, to_scala_type_ident, unique_idents,
@@ -97,7 +97,7 @@ const CLIENT_PKG_BASE: &str = "golem.bridge.client";
 const SV: &str = "_root_.golem.bridge.runtime.SchemaValue";
 
 /// Fully-qualified runtime `SchemaValueCodec` object, holding the typed
-/// accessors and the UUID builtin codec the generated codecs lean on.
+/// accessors the generated codecs lean on.
 const CODEC: &str = "_root_.golem.bridge.runtime.SchemaValueCodec";
 
 /// Fully-qualified runtime `SchemaResult` companion.
@@ -148,8 +148,9 @@ const GOLEM_SERVER: &str = "_root_.golem.bridge.runtime.GolemServer";
 /// Fully-qualified runtime `Datetime` type (scheduling instant).
 const DATETIME: &str = "_root_.golem.bridge.runtime.Datetime";
 
-/// Fully-qualified runtime `Uuid` type (phantom ids).
-const UUID: &str = "_root_.golem.bridge.runtime.Uuid";
+/// Fully-qualified UUID type, used for native `uuid` values and phantom ids in
+/// both bridge modes.
+const UUID: &str = "_root_.java.util.UUID";
 
 const GUEST_SV: &str = "_root_.golem.schema.SchemaValue";
 const GUEST_CODEC: &str = "_root_.golem.runtime.rpc.SchemaRpcCodec";
@@ -164,7 +165,6 @@ const GUEST_RESOLVED_AGENT: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_AGENT_ID: &str = "_root_.scala.Predef.String";
 const GUEST_GOLEM_SERVER: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_DATETIME: &str = "_root_.golem.Datetime";
-const GUEST_UUID: &str = "_root_.golem.Uuid";
 const GUEST_PERMISSION_CARD: &str = "_root_.golem.host.PermissionsApi.PermissionCard";
 const GUEST_POLYMORPHIC_PERMISSION_CARD: &str =
     "_root_.golem.host.PermissionsApi.PolymorphicPermissionCard";
@@ -298,7 +298,6 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "GolemServer",
     "Configuration",
     "AgentId",
-    "Uuid",
     "Datetime",
     "UByte",
     "UShort",
@@ -321,7 +320,6 @@ const RESERVED_GUEST_RUNTIME_TYPE_NAMES: &[&str] = &[
     "SchemaMapEntry",
     "SchemaResult",
     "Datetime",
-    "Uuid",
     "ClientError",
     "CancellationToken",
     "ConfigOverride",
@@ -411,7 +409,7 @@ impl ScalaRuntimeConfig {
                 agent_id: GUEST_AGENT_ID,
                 golem_server: GUEST_GOLEM_SERVER,
                 datetime: GUEST_DATETIME,
-                uuid: GUEST_UUID,
+                uuid: UUID,
             },
         }
     }
@@ -527,19 +525,17 @@ impl ScalaBridgeGenerator {
         let reserved = runtime_config
             .reserved_type_names()
             .iter()
-            .map(|name| ScalaTypeName::Derived((*name).to_string()))
-            .chain(std::iter::once(ScalaTypeName::Derived(client_object_name(
+            .map(|name| ScalaTypeName((*name).to_string()))
+            .chain(std::iter::once(ScalaTypeName(client_object_name(
                 &agent_type,
             ))))
-            .chain(std::iter::once(ScalaTypeName::Derived(remote_trait_name(
+            .chain(std::iter::once(ScalaTypeName(remote_trait_name(
                 &agent_type,
             ))))
             // The generated codecs object lives in the client package alongside
             // the generated types, so its name must not be taken by one of them.
-            .chain(std::iter::once(ScalaTypeName::Derived(
-                CODECS_OBJECT.to_string(),
-            )))
-            .chain(std::iter::once(ScalaTypeName::Derived(
+            .chain(std::iter::once(ScalaTypeName(CODECS_OBJECT.to_string())))
+            .chain(std::iter::once(ScalaTypeName(
                 schema_graph::REGISTRY_OBJECT.to_string(),
             )))
             // The generated multimodal sealed traits live in the client package
@@ -547,9 +543,9 @@ impl ScalaBridgeGenerator {
             .chain(
                 multimodals
                     .iter()
-                    .map(|(_, name)| ScalaTypeName::Derived(name.clone())),
+                    .map(|(_, name)| ScalaTypeName(name.clone())),
             )
-            .chain(extra_reserved_names.into_iter().map(ScalaTypeName::Derived));
+            .chain(extra_reserved_names.into_iter().map(ScalaTypeName));
         let type_naming =
             TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved)?;
 
@@ -1363,9 +1359,9 @@ impl ScalaBridgeGenerator {
 
         if self.agent_type.mode == AgentMode::Durable {
             let phantom_decls = if param_decls.is_empty() {
-                format!("phantom: {GUEST_UUID}")
+                format!("phantom: {UUID}")
             } else {
-                format!("{param_decls}, phantom: {GUEST_UUID}")
+                format!("{param_decls}, phantom: {UUID}")
             };
             writer.line(format!(
                 "def getPhantom({phantom_decls}): {remote_name} = {{"
@@ -1428,7 +1424,7 @@ impl ScalaBridgeGenerator {
                 writer.blank();
                 writer.line(format!(
                     "def getPhantomWithConfig({}): {remote_name} = {{",
-                    with_config_decls(&format!("phantom: {GUEST_UUID}"))
+                    with_config_decls(&format!("phantom: {UUID}"))
                 ));
                 writer.indent();
                 self.write_guest_config_list(writer, &config_param_names, &local_configs)?;
@@ -1589,10 +1585,6 @@ impl ScalaBridgeGenerator {
             .is_ok_and(|value| value.is_some())
             || unstructured_binary_restrictions(self.type_naming.graph(), ty)
                 .is_ok_and(|value| value.is_some())
-            || matches!(
-                self.type_naming.type_name_for_type(ty),
-                Some(ScalaTypeName::Remapped(_))
-            )
         {
             return false;
         }
@@ -1994,7 +1986,7 @@ impl ScalaBridgeGenerator {
             writer.blank();
         }
 
-        let phantom_some = format!("_root_.scala.Some({UUID}.toStandardString(phantom))");
+        let phantom_some = "_root_.scala.Some(phantom.toString)".to_string();
         if self.agent_type.mode == AgentMode::Durable {
             // `getPhantom`: resolve with an explicit phantom UUID.
             let phantom_decls = if param_decls.is_empty() {
@@ -2013,9 +2005,9 @@ impl ScalaBridgeGenerator {
 
             // `newPhantom`: like `getPhantom` but with a fresh random phantom id.
             let new_phantom_args = if invoke_args.is_empty() {
-                format!("{UUID}.random()")
+                format!("{UUID}.randomUUID()")
             } else {
-                format!("{invoke_args}, {UUID}.random()")
+                format!("{invoke_args}, {UUID}.randomUUID()")
             };
             writer.line(format!(
             "def newPhantom({param_decls}): {FUTURE}[{remote_name}] = getPhantom({new_phantom_args})"
@@ -2103,7 +2095,7 @@ impl ScalaBridgeGenerator {
                 self.write_create_agent_body(
                     writer,
                     &invoke_args,
-                    &format!("_root_.scala.Some({UUID}.toStandardString({UUID}.random()))"),
+                    &format!("_root_.scala.Some({UUID}.randomUUID().toString)"),
                     "agentConfig",
                 );
                 writer.dedent();
@@ -2606,11 +2598,7 @@ impl ScalaBridgeGenerator {
             .collect();
 
         for (typ, name) in &types {
-            let ScalaTypeName::Derived(name_str) = name else {
-                // Remapped names (e.g. the `uuid.Uuid` builtin) reference an
-                // existing runtime type and emit no definition.
-                continue;
-            };
+            let ScalaTypeName(name_str) = name;
             let resolved = self.resolve_ref(typ);
             if !is_named_composite(resolved) {
                 // Non-composite named defs (aliases to scalars / lists / …) are
@@ -2741,9 +2729,8 @@ impl ScalaBridgeGenerator {
     /// Encode functions map the generated Scala type to a runtime
     /// [`SchemaValue`](golem.bridge.runtime.SchemaValue); decode functions do
     /// the reverse, throwing [`BridgeException`](golem.bridge.runtime.BridgeException)
-    /// on a wire-shape mismatch. Remapped types (the `uuid.Uuid` builtin) and
-    /// non-composite aliases are encoded inline by `encode_expr` / `decode_expr`
-    /// and have no entry here.
+    /// on a wire-shape mismatch. Non-composite aliases are encoded inline by
+    /// `encode_expr` / `decode_expr` and have no entry here.
     fn write_codecs(&self, writer: &mut ScalaWriter) -> anyhow::Result<()> {
         let types: Vec<(SchemaType, ScalaTypeName)> = self
             .type_naming
@@ -2755,9 +2742,7 @@ impl ScalaBridgeGenerator {
         writer.indent();
 
         for (typ, name) in &types {
-            let ScalaTypeName::Derived(name_str) = name else {
-                continue;
-            };
+            let ScalaTypeName(name_str) = name;
             let resolved = self.resolve_ref(typ);
             if !is_named_composite(resolved) {
                 continue;
@@ -2994,8 +2979,7 @@ impl ScalaBridgeGenerator {
 
     /// A `SchemaValue` expression encoding `val_expr` (a value of the Scala type
     /// for `typ`). Named composites delegate to their `Codecs.encode<Name>`;
-    /// the `uuid.Uuid` remap delegates to the runtime UUID codec; everything
-    /// else is encoded structurally inline. Mirrors `type_reference`'s dispatch
+    /// everything else is encoded structurally inline. Mirrors `type_reference`'s dispatch
     /// so the encoded value always matches the rendered type.
     fn encode_expr(
         &self,
@@ -3003,20 +2987,13 @@ impl ScalaBridgeGenerator {
         typ: &SchemaType,
         depth: usize,
     ) -> anyhow::Result<String> {
-        if let Some(name) = self.type_naming.type_name_for_type(typ) {
-            match name {
-                ScalaTypeName::Remapped(RemappedType::Uuid) => {
-                    return Ok(format!("{CODEC}.encodeUuid({val_expr})"));
-                }
-                ScalaTypeName::Derived(name_str) => {
-                    if is_named_composite(self.resolve_ref(typ)) {
-                        return Ok(format!(
-                            "{}.{CODECS_OBJECT}.encode{name_str}({val_expr})",
-                            self.client_pkg()
-                        ));
-                    }
-                }
-            }
+        if let Some(ScalaTypeName(name_str)) = self.type_naming.type_name_for_type(typ)
+            && is_named_composite(self.resolve_ref(typ))
+        {
+            return Ok(format!(
+                "{}.{CODECS_OBJECT}.encode{name_str}({val_expr})",
+                self.client_pkg()
+            ));
         }
         self.encode_structural(val_expr, typ, depth)
     }
@@ -3029,20 +3006,13 @@ impl ScalaBridgeGenerator {
         typ: &SchemaType,
         depth: usize,
     ) -> anyhow::Result<String> {
-        if let Some(name) = self.type_naming.type_name_for_type(typ) {
-            match name {
-                ScalaTypeName::Remapped(RemappedType::Uuid) => {
-                    return Ok(format!("{CODEC}.decodeUuidOrThrow({val_expr})"));
-                }
-                ScalaTypeName::Derived(name_str) => {
-                    if is_named_composite(self.resolve_ref(typ)) {
-                        return Ok(format!(
-                            "{}.{CODECS_OBJECT}.decode{name_str}({val_expr})",
-                            self.client_pkg()
-                        ));
-                    }
-                }
-            }
+        if let Some(ScalaTypeName(name_str)) = self.type_naming.type_name_for_type(typ)
+            && is_named_composite(self.resolve_ref(typ))
+        {
+            return Ok(format!(
+                "{}.{CODECS_OBJECT}.decode{name_str}({val_expr})",
+                self.client_pkg()
+            ));
         }
         self.decode_structural(val_expr, typ, depth)
     }
@@ -3503,19 +3473,11 @@ impl ScalaBridgeGenerator {
     /// Scala SDK's codegen style.
     fn type_reference(&self, typ: &SchemaType) -> anyhow::Result<String> {
         // A registered composite name (record / variant / enum / flags / union)
-        // or a remapped runtime type (the `uuid.Uuid` builtin) is referenced by
-        // its name. Non-composite named defs are inlined below.
-        if let Some(name) = self.type_naming.type_name_for_type(typ) {
-            match name {
-                ScalaTypeName::Remapped(remapped) => {
-                    return Ok(format!("{RUNTIME_PKG}.{}", remapped.rendered()));
-                }
-                ScalaTypeName::Derived(name_str) => {
-                    if is_named_composite(self.resolve_ref(typ)) {
-                        return Ok(format!("{}.{name_str}", self.client_pkg()));
-                    }
-                }
-            }
+        // is referenced by its name. Non-composite named defs are inlined below.
+        if let Some(ScalaTypeName(name_str)) = self.type_naming.type_name_for_type(typ)
+            && is_named_composite(self.resolve_ref(typ))
+        {
+            return Ok(format!("{}.{name_str}", self.client_pkg()));
         }
 
         // Role-marked unstructured-text/binary variant → ergonomic runtime
@@ -3587,10 +3549,7 @@ impl ScalaBridgeGenerator {
             SchemaType::Path { .. } | SchemaType::Url { .. } => {
                 Ok("_root_.scala.Predef.String".to_string())
             }
-            SchemaType::Uuid { .. } => Ok(match self.mode {
-                ScalaBridgeMode::ExternalRest => UUID.to_string(),
-                ScalaBridgeMode::GuestWasmRpc => GUEST_UUID.to_string(),
-            }),
+            SchemaType::Uuid { .. } => Ok(UUID.to_string()),
             SchemaType::Datetime { .. } => Ok("_root_.java.time.Instant".to_string()),
             SchemaType::Duration { .. } => Ok("_root_.scala.Long".to_string()),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
@@ -3719,7 +3678,6 @@ fn rewrite_guest_runtime_refs_outside_string_literals(source: &str) -> String {
         (SCHEMA_VALUE_TYPE, GUEST_SCHEMA_VALUE_TYPE),
         (SV, GUEST_SV),
         (AGENT_CONFIG_ENTRY, GUEST_AGENT_CONFIG_ENTRY),
-        (UUID, GUEST_UUID),
         ("_root_.golem.bridge.runtime.UByte", "_root_.golem.UByte"),
         ("_root_.golem.bridge.runtime.UShort", "_root_.golem.UShort"),
         ("_root_.golem.bridge.runtime.UInt", "_root_.golem.UInt"),
@@ -3961,7 +3919,7 @@ mod tests {
             "_root_.golem.schema.SchemaMapEntry"
         );
         assert_eq!(runtime_config.datetime, "_root_.golem.Datetime");
-        assert_eq!(runtime_config.uuid, "_root_.golem.Uuid");
+        assert_eq!(runtime_config.uuid, "_root_.java.util.UUID");
         assert!(
             runtime_config
                 .reserved_type_names()

@@ -16,7 +16,6 @@
 
 package golem.schema
 
-import golem.Uuid
 import golem.{UByte, UInt, ULong, UShort}
 import zio.blocks.chunk.Chunk
 import zio.blocks.schema.{DynamicValue => DV, Modifier, PrimitiveType, PrimitiveValue, Reflect, Schema}
@@ -55,7 +54,6 @@ private[golem] object Derivation {
   private val ushortTypeId: TypeId[UShort]         = TypeId.of[UShort]
   private val uintTypeId: TypeId[UInt]             = TypeId.of[UInt]
   private val ulongTypeId: TypeId[ULong]           = TypeId.of[ULong]
-  private val uuidTypeId: TypeId[Uuid]             = TypeId.of[Uuid]
   private val instantTypeId: TypeId[Instant]       = TypeId.of[Instant]
   private val durationTypeId: TypeId[JDuration]    = TypeId.of[JDuration]
 
@@ -180,9 +178,6 @@ private[golem] object Derivation {
         "golem.config.Secret is not supported by structural schema derivation; " +
           "do not derive a schema for it directly."
       )
-
-  private def isUuid(reflect: Reflect.Bound[?]): Boolean =
-    TypeId.structurallyEqual(reflect.typeId, uuidTypeId)
 
   private def isByteArray(reflect: Reflect.Bound[?]): Boolean =
     TypeId.structurallyEqual(reflect.typeId, byteArrayTypeId)
@@ -342,9 +337,8 @@ private[golem] object Derivation {
 
   private def reflectToSchemaNonUnstructured[A](reflect: Reflect.Bound[A], ctx: Ctx): SchemaType =
     richBody(reflect) match {
-      case Some(body)              => SchemaType(body)
-      case None if isUuid(reflect) => SchemaType(SchemaTypeBody.UuidType)
-      case None                    =>
+      case Some(body) => SchemaType(body)
+      case None       =>
         unsignedBody(reflect) match {
           case Some(body) => SchemaType(body)
           case None       =>
@@ -440,6 +434,7 @@ private[golem] object Derivation {
       case _: PrimitiveType.Char       => t.char
       case _: PrimitiveType.BigDecimal => t.string
       case _: PrimitiveType.BigInt     => t.string
+      case _: PrimitiveType.UUID       => t.uuid
       case other                       =>
         throw SchemaEncodeError(s"unsupported primitive: ${other.getClass.getName}")
     }
@@ -460,9 +455,8 @@ private[golem] object Derivation {
 
   private def dynamicToSchemaValueNonUnstructured[A](reflect: Reflect.Bound[A], d: DV): SchemaValue =
     richBody(reflect) match {
-      case Some(_)                 => richToSchemaValue(reflect, d)
-      case None if isUuid(reflect) => uuidToSchemaValue(d)
-      case None                    =>
+      case Some(_) => richToSchemaValue(reflect, d)
+      case None    =>
         unsignedFromDynamic(reflect, d).getOrElse {
           reflect.asWrapperUnknown match {
             case Some(unknown) =>
@@ -588,24 +582,6 @@ private[golem] object Derivation {
           case other => throw SchemaEncodeError(s"expected primitive 'value' field for $typeName, got $other")
         }
       case other => throw SchemaEncodeError(s"expected record for $typeName, got $other")
-    }
-
-  private def uuidToSchemaValue(d: DV): SchemaValue =
-    d match {
-      case DV.Record(fields) =>
-        def field(name: String): BigInt = {
-          val raw = fields.find(_._1 == name).map(_._2) match {
-            case Some(DV.Primitive(PrimitiveValue.BigInt(v)))     => v
-            case Some(DV.Primitive(PrimitiveValue.BigDecimal(v))) =>
-              v.toBigIntExact.getOrElse(
-                throw SchemaEncodeError(s"Uuid field '$name' expected integral BigDecimal, got $v")
-              )
-            case other => throw SchemaEncodeError(s"Uuid field '$name' expected BigInt, got $other")
-          }
-          checkUnsignedBig(raw, MaxU64, s"Uuid.$name", SchemaEncodeError(_))
-        }
-        SchemaValue.UuidValue(Uuid(field("highBits"), field("lowBits")))
-      case other => throw SchemaEncodeError(s"Uuid expected record dynamic value, got $other")
     }
 
   private def optionToSchemaValue(valueRef: Reflect.Bound[Any], usesRecordWrapper: Boolean, d: DV): SchemaValue =
@@ -751,6 +727,7 @@ private[golem] object Derivation {
       case PrimitiveValue.Char(v)       => SchemaValue.CharValue(v.toInt)
       case PrimitiveValue.BigDecimal(v) => SchemaValue.StringValue(v.toString)
       case PrimitiveValue.BigInt(v)     => SchemaValue.StringValue(v.toString)
+      case PrimitiveValue.UUID(v)       => SchemaValue.UuidValue(v)
       case other                        =>
         throw SchemaEncodeError(s"unsupported primitive value: ${other.getClass.getName}")
     }
@@ -775,9 +752,8 @@ private[golem] object Derivation {
 
   private def schemaValueToDynamicNonUnstructured[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
     richBody(reflect) match {
-      case Some(_)                 => richToDynamic(reflect, value)
-      case None if isUuid(reflect) => uuidToDynamic(reflect, value)
-      case None                    =>
+      case Some(_) => richToDynamic(reflect, value)
+      case None    =>
         unsignedToDynamic(reflect, value).getOrElse {
           reflect.asWrapperUnknown match {
             case Some(unknown) =>
@@ -867,21 +843,6 @@ private[golem] object Derivation {
       }
     else None
   }
-
-  private def uuidToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
-    value match {
-      case SchemaValue.UuidValue(uuid) =>
-        val names = reflect.asRecord.map(_.fields.toList.map(_.name)).getOrElse(List("highBits", "lowBits"))
-        val high  = checkUnsignedBig(uuid.highBits, MaxU64, "Uuid.highBits", FromSchemaError(_))
-        val low   = checkUnsignedBig(uuid.lowBits, MaxU64, "Uuid.lowBits", FromSchemaError(_))
-        DV.Record(
-          Chunk(
-            names.head -> DV.Primitive(PrimitiveValue.BigInt(high)),
-            names(1)   -> DV.Primitive(PrimitiveValue.BigInt(low))
-          )
-        )
-      case other => throw FromSchemaError(s"expected uuid value, got $other")
-    }
 
   private def optionToDynamic(innerRef: Reflect.Bound[Any], usesRecordWrapper: Boolean, value: SchemaValue): DV =
     value match {
@@ -1033,13 +994,18 @@ private[golem] object Derivation {
         if (v < Char.MinValue.toInt || v > Char.MaxValue.toInt)
           throw FromSchemaError(s"char value out of Scala Char range: $v")
         DV.Primitive(PrimitiveValue.Char(v.toChar))
-      case SchemaValue.S8Value(v)  => DV.Primitive(PrimitiveValue.Byte(v))
-      case SchemaValue.S16Value(v) => DV.Primitive(PrimitiveValue.Short(v))
-      case SchemaValue.S32Value(v) => DV.Primitive(PrimitiveValue.Int(v))
-      case SchemaValue.S64Value(v) => DV.Primitive(PrimitiveValue.Long(v))
-      case SchemaValue.F32Value(v) => DV.Primitive(PrimitiveValue.Float(v))
-      case SchemaValue.F64Value(v) => DV.Primitive(PrimitiveValue.Double(v))
-      case other                   => throw FromSchemaError(s"unsupported primitive schema value: $other")
+      case SchemaValue.S8Value(v)   => DV.Primitive(PrimitiveValue.Byte(v))
+      case SchemaValue.S16Value(v)  => DV.Primitive(PrimitiveValue.Short(v))
+      case SchemaValue.S32Value(v)  => DV.Primitive(PrimitiveValue.Int(v))
+      case SchemaValue.S64Value(v)  => DV.Primitive(PrimitiveValue.Long(v))
+      case SchemaValue.F32Value(v)  => DV.Primitive(PrimitiveValue.Float(v))
+      case SchemaValue.F64Value(v)  => DV.Primitive(PrimitiveValue.Double(v))
+      case SchemaValue.UuidValue(v) =>
+        pt match {
+          case _: PrimitiveType.UUID => DV.Primitive(PrimitiveValue.UUID(v))
+          case other                 => throw FromSchemaError(s"uuid value is only valid for UUID, found: ${other.getClass.getName}")
+        }
+      case other => throw FromSchemaError(s"unsupported primitive schema value: $other")
     }
 }
 

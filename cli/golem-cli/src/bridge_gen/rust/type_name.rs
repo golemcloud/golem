@@ -18,62 +18,29 @@ use heck::ToUpperCamelCase;
 use itertools::Itertools;
 use std::fmt::{Display, Formatter};
 
-/// Canonical id of the cross-SDK UUID builtin record (two `u64` halves), shared
-/// by all language SDKs. The Rust bridge remaps it onto the native uuid type
-/// instead of generating a structural record.
-pub const UUID_TYPE_ID: &str = "uuid.Uuid";
-
-/// A Rust type a generated name maps onto directly, instead of a generated
-/// definition.
+/// The Rust name of a generated definition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RustRemappedType {
-    /// The `uuid.Uuid` builtin record → `uuid::Uuid` (`golem_rust::Uuid` in guest bridges).
-    Uuid,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RustTypeName {
-    /// A name derived from the schema. The generator emits a definition and
-    /// codecs for it.
-    Derived(String),
-    /// A name that maps onto an existing Rust type. No definition is emitted
-    /// and the schema body is not walked.
-    Remapped(RustRemappedType),
-}
+pub struct RustTypeName(pub String);
 
 impl From<String> for RustTypeName {
     fn from(value: String) -> Self {
-        Self::Derived(value)
+        Self(value)
     }
 }
 
 impl From<&str> for RustTypeName {
     fn from(value: &str) -> Self {
-        Self::Derived(value.to_string())
+        Self(value.to_string())
     }
 }
 
 impl Display for RustTypeName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RustTypeName::Derived(string) => {
-                write!(f, "{}", string)
-            }
-            RustTypeName::Remapped(RustRemappedType::Uuid) => write!(f, "uuid::Uuid"),
-        }
+        write!(f, "{}", self.0)
     }
 }
 
 impl TypeName for RustTypeName {
-    fn from_schema_type(typ: &SchemaType) -> Option<Self> {
-        match typ {
-            SchemaType::Ref { id, .. } if id.0 == UUID_TYPE_ID => {
-                Some(RustTypeName::Remapped(RustRemappedType::Uuid))
-            }
-            _ => None,
-        }
-    }
-
     fn from_owner_and_name(
         owner: Option<impl AsRef<str>>,
         name: impl AsRef<str>,
@@ -81,7 +48,7 @@ impl TypeName for RustTypeName {
     ) -> Self {
         // WIT type names are always kebab-case regardless of source language,
         // so we always need to convert to UpperCamelCase for Rust.
-        Self::Derived(match owner {
+        Self(match owner {
             Some(owner) => format!(
                 "{}{}",
                 owner.as_ref().to_upper_camel_case(),

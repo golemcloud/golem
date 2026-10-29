@@ -34,7 +34,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
   private val walletPin   = PublicInvocationWalletPin(
     PermissionsApi.WalletVersionToken(Vector[Byte](1, 2, 3), BigInt(7)),
-    Some(golem.Uuid(BigInt(10), BigInt(20)))
+    Some(new java.util.UUID(10L, 20L))
   )
 
   private val localSpan                 = LocalSpanData("span1", ts, Some("parent"), Some(BigInt(1)), List(attr), inherited = false)
