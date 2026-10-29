@@ -297,6 +297,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 }
 
 #[test]
+#[timeout("4m")]
 #[tracing::instrument]
 #[allow(clippy::needless_range_loop)]
 async fn initial_large_memory_allocation(

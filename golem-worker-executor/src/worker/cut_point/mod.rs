@@ -188,6 +188,7 @@ where
             | OplogEntry::CancelPendingInvocation { .. }
             | OplogEntry::Snapshot { .. }
             | OplogEntry::SnapshotConfirmed { .. }
+            | OplogEntry::SpanClosed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }

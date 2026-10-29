@@ -100,6 +100,10 @@ includes Golem binaries such as `golem` and `golem-cli`, as well as tools and co
   must not spawn additional processes directly.
 - CLI integration tests may spawn the external processes required by the behavior they exercise.
 
+Release-workflow fixtures are a separate exception. Keep them in the standalone workspace at
+`.github/scripts/release-tooling-tests/`, not in the CLI integration suite. They may execute release
+helpers and their tools against local fixtures. CI runs them in the **Test release tooling** step.
+
 The unit-test CI job runs prebuilt test binaries and is intentionally kept fast; subprocess
 execution in unit tests bypasses that design and can make the job time out.
 

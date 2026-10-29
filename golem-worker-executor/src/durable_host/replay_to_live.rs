@@ -38,13 +38,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .await
     }
 
-    pub(in crate::durable_host) async fn finish_switch_to_live(
-        &mut self,
-        pending: PendingReplayToLive,
-    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
-        self.finish_switch_to_live_at(pending, None).await
-    }
-
     async fn finish_switch_to_live_at(
         &mut self,
         pending: PendingReplayToLive,
@@ -188,7 +181,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_oplog_entry_or_continue_live(
         &mut self,
         request: SerializableToolPositionalRequest,
-    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+    ) -> anyhow::Result<Option<(OplogIndex, OplogEntry)>> {
+        concurrent::drain_queued_dropped_call_events(self).await?;
         let expected = request.expected_description();
         loop {
             if self.is_live() {

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::ResolvedCall;
+use crate::durable_host::concurrent::record_released_resource_span;
 use crate::durable_host::{
     CallReplayOutcome, DurabilityHost, DurableCallSession, DurableFunctionType, DurableWorkerCtx,
     NotCancellable,
@@ -25,13 +26,12 @@ use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::oplog::host_functions::{
-    GolemContextSpanDrop, GolemContextSpanFinish, GolemContextSpanSetAttributes,
-    GolemContextStartSpan,
+    GolemContextSpanFinish, GolemContextSpanSetAttributes, GolemContextStartSpan,
 };
 use golem_common::model::oplog::{
-    AttributeMap, HostPayloadPair, HostRequestGolemContextSpanAttributes,
-    HostRequestGolemContextSpanResource, HostRequestNoInput, HostResponseGolemApiUnit,
-    SpanAttributes, SpanFinished, SpanKind, SpanOutcome, SpanStarted,
+    AttributeMap, HostRequestGolemContextSpanAttributes, HostRequestGolemContextSpanResource,
+    HostRequestNoInput, HostResponseGolemApiUnit, SpanAttributes, SpanFinished, SpanKind,
+    SpanOutcome, SpanStarted,
 };
 use golem_common::model::{OplogIndex, Timestamp};
 use golem_service_base::headers::TraceContextHeaders;
@@ -94,7 +94,7 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
         }
         let span_id = entry.span_id.clone();
         let creation_index = entry.creation_index;
-        finish_guest_span::<Ctx, GolemContextSpanFinish>(self, creation_index, &span_id).await?;
+        finish_guest_span(self, creation_index, &span_id).await?;
         self.table().get_mut(&self_)?.finished = true;
         Ok(())
     }
@@ -103,12 +103,8 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
         let entry = self.table().delete(rep)?;
 
         if !entry.finished {
-            finish_guest_span::<Ctx, GolemContextSpanDrop>(
-                self,
-                entry.creation_index,
-                &entry.span_id,
-            )
-            .await?;
+            record_released_resource_span(self, entry.creation_index, &entry.span_id).await?;
+            InvocationContextManagement::remove_span(self, &entry.span_id)?;
         }
 
         Ok(())
@@ -400,20 +396,17 @@ fn install_guest_span<Ctx: WorkerCtx>(
     Ok(span)
 }
 
-async fn finish_guest_span<Ctx, Pair>(
+async fn finish_guest_span<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     creation_index: Option<OplogIndex>,
     span_id: &golem_common::model::invocation_context::SpanId,
-) -> anyhow::Result<()>
-where
-    Ctx: WorkerCtx,
-    Pair:
-        HostPayloadPair<Req = HostRequestGolemContextSpanResource, Resp = HostResponseGolemApiUnit>,
-{
+) -> anyhow::Result<()> {
     let request = HostRequestGolemContextSpanResource { creation_index };
-    let begun =
-        DurableCallSession::<Pair, NotCancellable>::begin(ctx, DurableFunctionType::ReadLocal)
-            .await?;
+    let begun = DurableCallSession::<GolemContextSpanFinish, NotCancellable>::begin(
+        ctx,
+        DurableFunctionType::ReadLocal,
+    )
+    .await?;
     let mut handle = match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => begun.start_live(ctx, request).await?,
         ResolvedCall::Replay(handle) => handle,

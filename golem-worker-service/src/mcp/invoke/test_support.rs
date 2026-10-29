@@ -404,6 +404,8 @@ impl WorkerClient for RecordingWorkerClient {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        _idempotency_key: Option<IdempotencyKey>,
+        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let _ = (
             environment_variables,

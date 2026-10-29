@@ -25,9 +25,12 @@ rewinding a cursor.
   storage. Ephemeral agents use `CommitLevel::Deferred`: the ordered writer handoff and receipt
   precede notification, without waiting for storage or the queued status fold (bounded writer
   backpressure may still wait). Do not weaken `Always` elsewhere; `DurableOnly` remains a no-op
-  for ephemeral agents. No positional durable-call `Start`/`End` may be appended for an invocation
-  after its `Finished` entry (`tail_work.rs` enforces this); hint entries such as streaming-session
-  completion legitimately follow it.
+  for ephemeral agents. Active durable-call work must settle before that invocation's `Finished`
+  entry (`tail_work.rs` enforces this). A retained resource can span invocations; its deferred
+  destructor may wait passively across historical finishes, then repair under its original Start
+  when a later invocation drives the Store after replay becomes live. That repair stays active
+  until its terminal is recorded. Hint entries such as streaming-session completion can follow
+  `Finished` without another invocation.
 - Reads that require the completion's fresh status must use the state actor's FIFO status read; it
   waits behind the queued fold. The separately persisted status cache remains asynchronous.
 - Status (`status.rs`) is folded from the oplog; caches and checkpoints are baselines, never a
