@@ -84,13 +84,16 @@ code that must not read those fields. Do not log full metadata to diagnose a den
 ## Optional schema validation
 
 Simple guests do not include regex automata or URL/IDNA/ICU tables. Enable the
-`regex` feature for regex-constrained text and regex union discriminators, and
-`url` for URL value validation and `url::Url` conversions. `rich-validation`
-enables both. The regex dialect and WHATWG URL/IDNA behavior are unchanged;
-validation that needs a disabled feature returns an explicit error, including
-when registering a tool with regex constraints or validating URL defaults.
-Schema representation, fixed MIME/unit/identifier grammars, and non-regex union
-discriminators remain available without these features.
+`regex` feature to check regex-constrained text and regex union discriminators
+in the guest, and `url` for URL value validation and `url::Url` conversions.
+`rich-validation` enables both. The regex dialect and WHATWG URL/IDNA behavior
+are unchanged. Without `regex`, a text regex restriction is opaque: the guest
+does not compile the pattern and does not check values against it, and the
+Golem host, which always checks regexes, stays the authority. Other validation
+that needs a disabled feature returns an explicit error, including regex union
+discriminators and URL defaults. Schema representation, fixed
+MIME/unit/identifier grammars, and non-regex union discriminators remain
+available without these features.
 
 ## Retrying user code with semantic policies
 

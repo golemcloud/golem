@@ -1279,13 +1279,7 @@ fn check_text(
             found: char_len,
         });
     }
-    #[cfg(not(feature = "regex"))]
-    if restrictions.regex.is_some() {
-        errors.push(ValueError::UnsupportedFeature {
-            path: path.snapshot(),
-            feature: "regex",
-        });
-    }
+    // Without the `regex` feature a text regex restriction is not checked.
     #[cfg(feature = "regex")]
     if let Some(regex) = &restrictions.regex
         && let Some(Some(compiled)) = _context.regexes.get(regex.as_str())

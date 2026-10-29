@@ -420,19 +420,6 @@ impl Tool {
         self.canonical_input_record_schema_for_fields(&fields)
     }
 
-    /// The record schema of [`Self::canonical_input_record_schema`] without
-    /// the well-formedness check of its types. A guest built without the
-    /// `regex` feature cannot check a regex restriction, but it can still
-    /// encode a value against the record schema that the host checks.
-    pub fn canonical_input_record_schema_unchecked(
-        &self,
-        command_index: usize,
-    ) -> Result<SchemaGraph, ToolValidationError> {
-        self.check_canonical_input_command_index(command_index)?;
-        let fields = self.canonical_input_fields(command_index);
-        self.canonical_input_record_projection(&fields)
-    }
-
     /// Decodes a canonical input record value against the command's canonical
     /// input model.
     pub fn decode_canonical_input_record(
@@ -456,15 +443,6 @@ impl Tool {
             .first()
             .map(|node| node.name.clone())
             .unwrap_or_default();
-        let graph = self.canonical_input_record_projection(fields)?;
-        check_graph_closed(&graph, command, "canonical input record")?;
-        Ok(graph)
-    }
-
-    fn canonical_input_record_projection(
-        &self,
-        fields: &[CanonicalInputField],
-    ) -> Result<SchemaGraph, ToolValidationError> {
         let root = SchemaType::record(
             fields
                 .iter()
@@ -494,7 +472,9 @@ impl Tool {
                 });
             }
         }
-        Ok(SchemaGraph { defs, root })
+        let graph = SchemaGraph { defs, root };
+        check_graph_closed(&graph, command, "canonical input record")?;
+        Ok(graph)
     }
 
     fn check_canonical_input_command_index(
@@ -1050,32 +1030,6 @@ mod tests {
         assert_eq!(fields[1].type_, SchemaType::option(SchemaType::string()));
         tool.canonical_input_model(0)
             .expect("canonical input remains well formed");
-    }
-
-    #[test]
-    fn unchecked_canonical_input_record_schema_skips_only_the_well_formedness_check() {
-        let mut root = node("unchecked");
-        root.body = Some(CommandBody {
-            positionals: Positionals {
-                fixed: vec![positional("label", SchemaType::string())],
-                tail: None,
-            },
-            ..body()
-        });
-        let tool = Tool {
-            version: "1.0.0".to_string(),
-            requires_filesystem: false,
-            commands: CommandTree { nodes: vec![root] },
-            schema: SchemaGraph::empty(),
-        };
-        assert_eq!(
-            tool.canonical_input_record_schema_unchecked(0).unwrap(),
-            tool.canonical_input_record_schema(0).unwrap()
-        );
-        assert!(matches!(
-            tool.canonical_input_record_schema_unchecked(1),
-            Err(ToolValidationError::CommandIndexOutOfBounds { .. })
-        ));
     }
 
     #[test]
