@@ -44,6 +44,7 @@ use std::sync::Arc;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
 
+mod drop;
 pub mod ignite;
 pub mod mysql;
 pub mod postgres;
@@ -57,6 +58,10 @@ pub(crate) async fn cleanup_trapped_transactions<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> anyhow::Result<()> {
     use crate::services::rdbms::{ignite::IgniteType, mysql::MysqlType, postgres::PostgresType};
+
+    drop::cleanup_pending::<Ctx, MysqlType>(ctx).await?;
+    drop::cleanup_pending::<Ctx, PostgresType>(ctx).await?;
+    drop::cleanup_pending::<Ctx, IgniteType>(ctx).await?;
 
     enum Transaction {
         Mysql(Resource<RdbmsTransactionEntry<MysqlType>>),
@@ -337,7 +342,13 @@ where
                     .get_mut::<RdbmsConnection<T>>(entry)?
                     .initialized = true;
             }
-            let entry = RdbmsTransactionEntry::new(pool_key, transaction_state, begin_oplog_idx);
+            let mut entry = RdbmsTransactionEntry::new(
+                pool_key,
+                transaction_state,
+                begin_oplog_idx,
+                !ctx.state.durability_is_suppressed(),
+            );
+            drop::detach_recorded_drop(ctx, &mut entry).await?;
             let resource = ctx.as_wasi_view().table().push(entry)?;
             ctx.table().get_mut(&resource)?.resource_rep = Some(resource.rep());
             Ok(Ok(resource))
@@ -1354,6 +1365,10 @@ where
     if matches!(tx.state, RdbmsTransactionState::Closed(_)) {
         return Ok(Ok(()));
     }
+    anyhow::ensure!(
+        tx.replay_drop.is_none(),
+        "Transaction terminal does not match recorded Drop outcome"
+    );
     let begin = tx.begin_index;
     // Resolve protocol markers by the scope owner, independent of interleaved transactions.
     let pre = ctx
@@ -1695,6 +1710,9 @@ pub struct RdbmsTransactionEntry<T: RdbmsType + 'static> {
     pool_key: RdbmsPoolKey,
     state: RdbmsTransactionState<T>,
     begin_index: OplogIndex,
+    persisted: bool,
+    replay_drop:
+        Option<Arc<std::sync::Mutex<Option<crate::durable_host::concurrent::ReplayCallHandle>>>>,
     // ResourceTable iteration exposes values without handles. Retain the handle so
     // host cleanup can invoke the typed Drop path without allocating another slot.
     resource_rep: Option<u32>,
@@ -1705,11 +1723,14 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
         pool_key: RdbmsPoolKey,
         state: RdbmsTransactionState<T>,
         begin_index: OplogIndex,
+        persisted: bool,
     ) -> Self {
         Self {
             pool_key,
             state,
             begin_index,
+            persisted,
+            replay_drop: None,
             resource_rep: None,
         }
     }

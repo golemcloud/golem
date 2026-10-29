@@ -403,6 +403,11 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         timestamp: timestamp.into(),
         filesystem_snapshot: filesystem_snapshot,
     } }
+    SpanClosed { record SpanClosedParams => SpanClosedParameters {
+        timestamp: timestamp.into(),
+        resource_start_index: resource_start_index.map(Into::into),
+        span_finished: public_span_finished_to_wit(span_finished),
+    } }
 });
 
 impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {

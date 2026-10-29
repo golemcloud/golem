@@ -336,6 +336,8 @@ impl Rpc for FingerprintMismatchRpc {
         _self_stack: InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
+        _idempotency_key: Option<IdempotencyKey>,
+        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         Ok(Box::new(FixedDemand {
             fingerprint: self.live_fingerprint,
@@ -391,6 +393,8 @@ impl Rpc for ActivationFailureRpc {
         _self_stack: InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
+        _idempotency_key: Option<IdempotencyKey>,
+        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         Err(ServiceRpcError::Denied {
             details: "activation denied".to_string(),
@@ -446,6 +450,8 @@ impl Rpc for RecordingEnvRpc {
         _self_stack: InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
+        _idempotency_key: Option<IdempotencyKey>,
+        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         *self.activation_env.lock().unwrap() = Some(self_env.to_vec());
         Ok(Box::new(FixedDemand {

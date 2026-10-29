@@ -465,6 +465,8 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
 
     async fn create(
@@ -978,13 +980,18 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let agent_id_clone = agent_id.clone();
+        let first_dispatch = Arc::new(AtomicBool::new(true));
         let fingerprint = self
             .call_worker_executor(
                 agent_id.clone(),
                 "prepare_worker",
                 move |client| {
+                    let freshness_disposition =
+                        freshness_disposition_for_dispatch(freshness_disposition, &first_dispatch);
                     Box::pin(client.prepare_worker(CreateWorkerRequest {
                         agent_id: Some(agent_id_clone.clone().into()),
                         env: environment_variables.clone(),
@@ -995,6 +1002,11 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         auth_ctx: Some(auth_ctx.clone().into()),
                         principal: principal.clone(),
                         invocation_context: invocation_context.clone(),
+                        idempotency_key: idempotency_key.clone().map(Into::into),
+                        freshness_disposition: match freshness_disposition {
+                            InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
+                            InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+                        },
                     }))
                 },
                 |response| match response.into_inner() {
@@ -1054,6 +1066,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             auth_ctx: Some(auth_ctx.clone().into()),
                             principal: principal.clone(),
                             invocation_context: invocation_context.clone(),
+                            idempotency_key: None,
+                            freshness_disposition: 0,
                         }),
                     )
                 },

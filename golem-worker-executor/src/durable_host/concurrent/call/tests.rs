@@ -279,13 +279,13 @@ async fn tool_trap_disposal_preserves_a_selected_pending_terminal() {
 #[test_r::timeout("10s")]
 async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
     use super::super::tests::InMemoryOplog;
-    use golem_common::model::oplog::HostRequestGolemRpcResource;
-    use golem_common::model::oplog::host_functions::GolemRpcWasmRpcDrop;
+    use golem_common::model::oplog::HostRequestGolemContextSpanResource;
+    use golem_common::model::oplog::host_functions::GolemContextSpanFinish;
 
     let recorded_invocation_id = DurableInvocationId::new(OplogIndex::from_u64(1), 7);
     for parent_start_index in [None, Some(OplogIndex::from_u64(19))] {
-        let request = HostRequestGolemRpcResource {
-            creation_index: OplogIndex::from_u64(7),
+        let request = HostRequestGolemContextSpanResource {
+            creation_index: Some(OplogIndex::from_u64(7)),
         };
         let oplog = Arc::new(InMemoryOplog::new());
         oplog
@@ -298,7 +298,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
             .add(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index,
-                function_name: GolemRpcWasmRpcDrop::HOST_FUNCTION_NAME,
+                function_name: GolemContextSpanFinish::HOST_FUNCTION_NAME,
                 invocation_id: Some(recorded_invocation_id),
                 observational_owner: None,
                 request: Some(OplogPayload::Inline(Box::new(request.clone().into()))),
@@ -337,7 +337,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
         .await
         .unwrap();
         let claim = |invocation_id| {
-            DurableCallSession::<GolemRpcWasmRpcDrop, NotCancellable>::replay_start_claim(
+            DurableCallSession::<GolemContextSpanFinish, NotCancellable>::replay_start_claim(
                 &AccessClaimOptions::default(),
                 &BegunCallExecutionScope {
                     entity_parent_start_index: parent_start_index,
@@ -353,7 +353,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
                         snapshotting_mode: false,
                         max_in_function_retry_delay: std::time::Duration::ZERO,
                     },
-                    GolemRpcWasmRpcDrop::FQFN,
+                    GolemContextSpanFinish::FQFN,
                 ),
             )
             .unwrap()

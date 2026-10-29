@@ -192,6 +192,9 @@ pub(crate) fn process_entries_from(
             OplogEntry::Cancelled(params) => {
                 handle_cancelled(state, params, &mut completed_spans);
             }
+            OplogEntry::SpanClosed(params) => {
+                handle_span_finished(state, params.span_finished, &mut completed_spans);
+            }
             OplogEntry::PendingAgentInvocation(params) => {
                 let time_ns = datetime_to_nanos(&params.timestamp).to_string();
                 metrics.push(counter_metric(
@@ -667,10 +670,7 @@ fn is_internal_span_operation(function_name: &str) -> bool {
         function_name,
         "golem::api::context::start-span"
             | "golem::api::context::span::finish"
-            | "golem::api::context::span::drop"
             | "golem::api::context::span::set-attributes"
-            | "golem::rpc::wasm-rpc::drop"
-            | "http::client::span-cleanup"
     )
 }
 
@@ -1066,9 +1066,9 @@ mod tests {
     use golem_rust::bindings::golem::api::context::{Attribute, AttributeValue};
     use golem_rust::bindings::golem::api::oplog::{
         EnvironmentId, JumpParameters, LocalSpanData, OplogErrorKind, OplogPayload, OplogRegion,
-        RawCreateResourceParameters, RawErrorParameters, RawInvocationWalletPin, ResourceTypeId,
-        RevertParameters, SpanLink, Timestamp, WalletVersionToken, WorkerError,
-        WrappedFunctionType,
+        RawCreateResourceParameters, RawErrorParameters, RawInvocationWalletPin,
+        RawSpanClosedParameters, ResourceTypeId, RevertParameters, SpanLink, Timestamp,
+        WalletVersionToken, WorkerError, WrappedFunctionType,
     };
     use golem_rust::schema::wit::wire::{AccountId, AgentId, ComponentId, Uuid};
     use golem_rust::wasip3::clocks::system_clock::Instant;
@@ -1491,10 +1491,7 @@ mod tests {
         let internal = [
             "golem::api::context::start-span",
             "golem::api::context::span::finish",
-            "golem::api::context::span::drop",
             "golem::api::context::span::set-attributes",
-            "golem::rpc::wasm-rpc::drop",
-            "http::client::span-cleanup",
         ];
         for name in internal {
             assert!(is_internal_span_operation(name));
@@ -1576,6 +1573,41 @@ mod tests {
             output.spans[0].status.as_ref().unwrap().message.as_deref(),
             Some("cancelled")
         );
+    }
+
+    #[test]
+    fn span_closed_closes_the_resource_span_at_its_recorded_time() {
+        let mut state = state();
+        process_entries_from(
+            &mut state,
+            90,
+            vec![start(
+                "golem::rpc::wasm-rpc::new",
+                Some(opening("rpc-connection")),
+            )],
+        );
+        let closed_at = instant(45, 0);
+        let output = process_entries_from(
+            &mut state,
+            95,
+            vec![OplogEntry::SpanClosed(RawSpanClosedParameters {
+                timestamp: instant(46, 0),
+                entity_parent_start_index: None,
+                resource_start_index: Some(90),
+                span_finished: SpanFinished {
+                    span_id: "rpc-connection".to_string(),
+                    finished_at: closed_at,
+                    outcome: SpanOutcome::Completed,
+                },
+            })],
+        );
+        assert_eq!(output.spans.len(), 1);
+        assert!(output.spans[0].status.is_none());
+        assert_eq!(
+            output.spans[0].end_time_unix_nano,
+            datetime_to_nanos(&closed_at).to_string()
+        );
+        assert!(!state.pending_spans.contains_key("rpc-connection"));
     }
 
     #[test]

@@ -18,7 +18,9 @@ use super::{
     ScopeReplayRecovery,
 };
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::durability::{DurableCallTrapContext, TerminalCallError};
+use crate::durable_host::durability::{
+    DurableCallTrapContext, TerminalCallError, find_durable_call_trap_context,
+};
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
@@ -96,7 +98,7 @@ where
         claim_options: AccessClaimOptions,
         delivery_mode: DemandDeliveryMode,
         request: Parent::Req,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
@@ -168,7 +170,13 @@ where
     }
 
     pub(crate) fn trap(&mut self, error: impl Into<anyhow::Error>) -> anyhow::Error {
-        self.parent.trap(error)
+        let error = error.into();
+        if find_durable_call_trap_context(&error).is_some() {
+            self.parent.abandon_for_trap();
+            error
+        } else {
+            self.parent.trap(error)
+        }
     }
 
     pub(crate) async fn next<T, D, Ctx>(
@@ -176,7 +184,7 @@ where
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         request: Child::Req,
-    ) -> Result<DurableDemandItem<Child>, WorkerExecutorError>
+    ) -> anyhow::Result<DurableDemandItem<Child>>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -235,7 +243,7 @@ where
             if let DurableDemandItem::Live(mut child) = item {
                 child.abandon_for_trap();
             }
-            return Err(error);
+            return Err(error.into());
         }
         Ok(item)
     }
@@ -387,7 +395,51 @@ pub(crate) fn closed_demand<R>() -> oneshot::Sender<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable_host::concurrent::tests::live_unfinished_handle;
+    use crate::model::TrapType;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::oplog::host_functions::MonotonicClockNow;
     use test_r::test;
+
+    #[test]
+    fn demand_stream_trap_preserves_cleanup_retry_point_and_abandons_parent() {
+        for cleanup_retry_point in [None, Some(OplogIndex::from_u64(4))] {
+            let parent_index = OplogIndex::from_u64(20);
+            let (sink, mut drops) = mpsc::unbounded_channel();
+            let (_demands, receiver) = demand_channel::<()>();
+            let mut stream = DurableDemandStream::<MonotonicClockNow, MonotonicClockNow, ()> {
+                parent: live_unfinished_handle(parent_index, sink),
+                demands: receiver,
+                observational_owner: None,
+                delivery_mode: DemandDeliveryMode::Markerless,
+                children_repair_incomplete: false,
+                _child: std::marker::PhantomData,
+            };
+            let failure = WorkerExecutorError::runtime("queued input disposal failed");
+            let failure = match cleanup_retry_point {
+                Some(retry_from) => {
+                    TerminalCallError::new(failure, DurableCallTrapContext { retry_from }).into()
+                }
+                None => anyhow::Error::from(failure),
+            };
+            let failure = stream.trap(failure);
+            match TrapType::from_error::<crate::workerctx::default::Context>(
+                &failure,
+                OplogIndex::from_u64(99),
+                AgentMode::Durable,
+            ) {
+                TrapType::Error { retry_from, .. } => {
+                    assert_eq!(retry_from, cleanup_retry_point.unwrap_or(parent_index));
+                }
+                other => panic!("expected a call-owned failure, got {other:?}"),
+            }
+            drop(stream);
+            assert!(matches!(
+                drops.try_recv(),
+                Err(mpsc::error::TryRecvError::Disconnected)
+            ));
+        }
+    }
 
     #[test]
     async fn demand_channel_preserves_order_and_allows_only_one_queued_demand() {

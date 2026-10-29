@@ -555,10 +555,12 @@ struct ReplayCursor {
     /// no later oplog entry can be consumed until the actual guest-delivery boundary acknowledges
     /// and releases it.
     advance_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Distinguishes an unacknowledged guest delivery from an ordinary cursor transaction.
+    delivery_in_progress: AtomicBool,
     /// Set when replay cannot reproduce a recorded successful delivery (for example, the guest
     /// cancels the completion after its delivery marker was consumed). Every subsequent cursor
     /// transaction fails with this same deterministic replay error.
-    delivery_failure: std::sync::Mutex<Option<String>>,
+    delivery_failure: std::sync::Mutex<Option<WorkerExecutorError>>,
     /// Guest-consumed journal positions, with their durable scope owner. Host projections are
     /// ordinary hints; guest records reserve the cursor until the native read observer fires.
     stream_observations: std::sync::Mutex<StreamObservationPositions>,
@@ -673,6 +675,10 @@ impl ReplayDeliveryBarrier {
         marker_index: OplogIndex,
         gate: tokio::sync::OwnedMutexGuard<()>,
     ) -> Self {
+        replay_state
+            .cursor
+            .delivery_in_progress
+            .store(true, Ordering::Release);
         Self {
             replay_state,
             boundary: format!(
@@ -687,6 +693,10 @@ impl ReplayDeliveryBarrier {
         index: OplogIndex,
         gate: tokio::sync::OwnedMutexGuard<()>,
     ) -> Self {
+        replay_state
+            .cursor
+            .delivery_in_progress
+            .store(true, Ordering::Release);
         Self {
             replay_state,
             boundary: format!("consumer stream observation at {index}"),
@@ -695,16 +705,25 @@ impl ReplayDeliveryBarrier {
     }
 
     pub(in crate::durable_host) fn acknowledge(mut self) {
+        self.replay_state
+            .cursor
+            .delivery_in_progress
+            .store(false, Ordering::Release);
         self.gate.take();
         self.replay_state.cursor.progress.notify_waiters();
     }
 
     pub(in crate::durable_host) fn fail(mut self, reason: impl Into<String>) {
-        self.replay_state.record_delivery_failure(format!(
-            "replay could not reproduce {}: {}",
-            self.boundary,
-            reason.into()
-        ));
+        self.replay_state
+            .record_delivery_failure(WorkerExecutorError::runtime(format!(
+                "replay could not reproduce {}: {}",
+                self.boundary,
+                reason.into()
+            )));
+        self.replay_state
+            .cursor
+            .delivery_in_progress
+            .store(false, Ordering::Release);
         self.gate.take();
         self.replay_state.cursor.progress.notify_waiters();
     }
@@ -713,10 +732,14 @@ impl ReplayDeliveryBarrier {
 impl Drop for ReplayDeliveryBarrier {
     fn drop(&mut self) {
         if self.gate.is_some() {
-            self.replay_state.record_delivery_failure(format!(
+            self.replay_state.record_delivery_failure(WorkerExecutorError::runtime(format!(
                 "replay delivery barrier for {} was dropped before the recorded guest-delivery boundary",
                 self.boundary
-            ));
+            )));
+            self.replay_state
+                .cursor
+                .delivery_in_progress
+                .store(false, Ordering::Release);
             self.gate.take();
             self.replay_state.cursor.progress.notify_waiters();
         }
@@ -763,6 +786,14 @@ struct CursorState {
     skipped_regions: DeletedRegions,
     next_skipped_region: Option<OplogRegion>,
     initial_snapshot_skip_end: Option<OplogIndex>,
+    entity_replay_progress: golem_common::model::EntityReplayProgress,
+    entity_replay_horizon: OplogIndex,
+    /// Enclosing, still-open entities of processed Starts. Protocol-parent routes survive their
+    /// own terminal, but disappear once their last enclosing entity reaches its terminal.
+    entity_start_routes: HashMap<OplogIndex, Vec<OplogIndex>>,
+    /// Reverse routes let an entity terminal retire only that entity's subtree membership.
+    entity_route_members: HashMap<OplogIndex, HashSet<OplogIndex>>,
+    retained_entity_counts: HashMap<OplogIndex, usize>,
     /// Set after consuming a `CompletionDelivered` marker. Its following hints cannot be skipped
     /// until the delivery barrier is acknowledged, because doing so would advance replay beyond
     /// the recorded guest callback boundary.
@@ -815,6 +846,8 @@ struct CursorState {
 #[derive(Debug)]
 struct RetainedStart {
     entry: OplogEntry,
+    /// Entity membership at this Start's position, independent of later route retirement.
+    enclosing_entities: Vec<OplogIndex>,
     /// The committed `End`/`Cancelled` closing this `Start`, once the cursor has reached it.
     terminal: Option<(OplogIndex, OplogEntry)>,
     /// Replay events of the entries the cursor committed past on this `Start`'s behalf: the

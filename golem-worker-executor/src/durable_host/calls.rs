@@ -14,6 +14,42 @@
 
 use super::*;
 
+pub(super) async fn persist_transaction_terminal<Ctx: WorkerCtx>(
+    oplog: &dyn Oplog,
+    worker: &Worker<Ctx>,
+    begin_index: OplogIndex,
+    outcome: golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal,
+    marker: Option<OplogEntry>,
+) -> anyhow::Result<()> {
+    let response = golem_common::model::oplog::HostResponse::GolemRdbmsTransactionTerminal(
+        golem_common::model::oplog::HostResponseGolemRdbmsTransactionTerminal { outcome },
+    );
+    let bytes = golem_common::serialization::serialize(&response).map_err(anyhow::Error::msg)?;
+    let response = oplog
+        .upload_raw_payload(bytes)
+        .await
+        .map_err(anyhow::Error::msg)?
+        .into_payload()
+        .map_err(anyhow::Error::msg)?;
+    if let Some(marker) = marker {
+        oplog.add(marker).await?;
+    }
+    oplog
+        .add(OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: begin_index,
+            response: Some(response),
+            forced_commit: true,
+            span_finished: None,
+            span_attributes: None,
+        })
+        .await?;
+    worker
+        .commit_oplog_and_update_state(CommitLevel::Always)
+        .await?;
+    Ok(())
+}
+
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn begin_function(
         &mut self,
@@ -319,37 +355,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if !self.is_live() {
             self.publish_direct_replay_tail(begin_index).await?;
         }
-        let response = golem_common::model::oplog::HostResponse::GolemRdbmsTransactionTerminal(
-            golem_common::model::oplog::HostResponseGolemRdbmsTransactionTerminal { outcome },
-        );
-        let bytes =
-            golem_common::serialization::serialize(&response).map_err(anyhow::Error::msg)?;
-        let response = self
-            .state
-            .oplog
-            .upload_raw_payload(bytes)
-            .await
-            .map_err(anyhow::Error::msg)?
-            .into_payload()
-            .map_err(anyhow::Error::msg)?;
-        if let Some(marker) = marker {
-            self.state.oplog.add(marker).await?;
-        }
-        self.state
-            .oplog
-            .add(OplogEntry::End {
-                timestamp: Timestamp::now_utc(),
-                start_index: begin_index,
-                response: Some(response),
-                forced_commit: true,
-                span_finished: None,
-                span_attributes: None,
-            })
-            .await?;
-        self.public_state
-            .worker()
-            .commit_oplog_and_update_state(CommitLevel::Always)
-            .await?;
+        persist_transaction_terminal(
+            self.state.oplog.as_ref(),
+            self.public_state.worker().as_ref(),
+            begin_index,
+            outcome,
+            marker,
+        )
+        .await?;
         self.state.close_transaction_protocol(begin_index)?;
         self.maybe_mid_invocation_checkpoint().await;
         Ok(())
