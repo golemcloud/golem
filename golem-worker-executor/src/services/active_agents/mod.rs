@@ -165,6 +165,7 @@ pub struct InvocationLoops {
     tracker: TaskTracker,
     owner_oplogs: Arc<Mutex<Vec<RegisteredOwnerOplog>>>,
     construction_admission: Arc<Mutex<bool>>,
+    exit_stage: Arc<Mutex<String>>,
     _watcher_lifetime: Arc<InvocationLoopWatcherLifetime>,
 }
 
@@ -173,6 +174,7 @@ struct InvocationLoopWatcherLifetime(CancellationToken);
 #[derive(Clone)]
 struct RegisteredOwnerOplog {
     oplog: Weak<dyn crate::services::oplog::Oplog>,
+    label: String,
     tasks: Option<crate::worker::tasks::WorkerTasks>,
     shutdown: crate::services::oplog::OplogShutdownHandle,
 }
