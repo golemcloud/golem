@@ -57,8 +57,9 @@ use crate::model::oplog::public_oplog_entry::{
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
     RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, StartParams, StreamCancelParams, StreamEndParams, StreamItemsParams,
-    StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
+    SnapshotParams, SpanClosedParams, StartParams, StreamCancelParams, StreamEndParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use crate::model::oplog::raw_types::{CreateParameters, DurableStreamEventSummary};
 use crate::model::oplog::{
@@ -521,6 +522,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     filesystem_snapshot: value.filesystem_snapshot,
                 }),
             ),
+            oplog_entry::Entry::SpanClosed(value) => {
+                Ok(PublicOplogEntry::SpanClosed(SpanClosedParams {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    resource_start_index: value
+                        .resource_start_index
+                        .map(crate::base_model::OplogIndex::from_u64),
+                    span_finished: public_span_finished_from_proto(
+                        value.span_finished.ok_or("Missing span_finished field")?,
+                    )?,
+                }))
+            }
             oplog_entry::Entry::OplogProcessorCheckpoint(value) => Ok(
                 PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1229,6 +1241,21 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::SnapshotConfirmedParameters {
                             timestamp: Some(params.timestamp.into()),
                             filesystem_snapshot: params.filesystem_snapshot,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::SpanClosed(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::SpanClosed(
+                        golem_api_grpc::proto::golem::worker::SpanClosedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            resource_start_index: params
+                                .resource_start_index
+                                .map(|index| index.as_u64()),
+                            span_finished: Some(public_span_finished_to_proto(
+                                params.span_finished,
+                            )),
                         },
                     )),
                 }
@@ -2155,6 +2182,12 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::SnapshotConfirmed(p) => Ok(OplogEntry::SnapshotConfirmed {
                 timestamp: p.timestamp,
                 filesystem_snapshot: p.filesystem_snapshot.parse()?,
+            }),
+            PublicOplogEntry::SpanClosed(p) => Ok(OplogEntry::SpanClosed {
+                timestamp: p.timestamp,
+                entity_parent_start_index: None,
+                resource_start_index: p.resource_start_index,
+                span_finished: public_span_finished_to_raw(p.span_finished),
             }),
             PublicOplogEntry::OplogProcessorCheckpoint(p) => {
                 Ok(OplogEntry::OplogProcessorCheckpoint {

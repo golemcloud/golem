@@ -112,6 +112,7 @@ mod moonbit_exports;
 mod moonbit_sdk_rows_acceptance;
 mod path_policy_acceptance;
 mod python_sidecar;
+mod rdbms_drop;
 mod rust_sdk_gol40_conformance;
 mod snapshot_attachments;
 mod tool_result_delivery;

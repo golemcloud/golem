@@ -8,7 +8,7 @@ inputs:
     description: 'Exact sticky disk key exported by the producer attempt'
     required: true
   path:
-    description: 'Sticky disk mount path'
+    description: 'Directory that exposes the validated publication'
     required: true
   file:
     description: 'Published binary or archive filename'
@@ -16,11 +16,36 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    # The producer's snapshot is committed when its VM shuts down, which is shortly after the
+    # producer job completes. A consumer that mounts before then gets an empty disk, so an empty
+    # first mount is retried once on a second mount point after the commit window has passed.
     - name: Mount binary publication
       uses: useblacksmith/stickydisk@v1
       with:
         key: ${{ inputs.disk-key }}
-        path: ${{ inputs.path }}
+        path: ${{ inputs.path }}.mount
+        commit: 'false'
+    - name: Check binary publication snapshot
+      id: first-mount
+      shell: bash
+      env:
+        MOUNT_PATH: ${{ inputs.path }}.mount
+        DISK_KEY: ${{ inputs.disk-key }}
+      run: |
+        set -euo pipefail
+        if [[ -e "$MOUNT_PATH/PUBLICATION" ]]; then
+          echo 'retry=false' >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::Sticky disk $DISK_KEY has no publication yet; mounting it again after the producer snapshot commit window"
+          echo 'retry=true' >> "$GITHUB_OUTPUT"
+          sleep 60
+        fi
+    - name: Mount binary publication again
+      if: steps.first-mount.outputs.retry == 'true'
+      uses: useblacksmith/stickydisk@v1
+      with:
+        key: ${{ inputs.disk-key }}
+        path: ${{ inputs.path }}.retry
         commit: 'false'
     - name: Validate binary publication
       shell: bash
@@ -29,10 +54,12 @@ runs:
         PUBLICATION_RUN_ID: ${{ inputs.run-id }}
         SOURCE_SHA: ${{ github.sha }}
         PUBLICATION_PATH: ${{ inputs.path }}
+        MOUNT_PATH: ${{ steps.first-mount.outputs.retry == 'true' && format('{0}.retry', inputs.path) || format('{0}.mount', inputs.path) }}
         PUBLICATION_FILE: ${{ inputs.file }}
       run: |
         set -euo pipefail
-        mountpoint -q "$PUBLICATION_PATH" || { echo 'Binary publication sticky disk is not mounted' >&2; exit 1; }
+        mountpoint -q "$MOUNT_PATH" || { echo 'Binary publication sticky disk is not mounted' >&2; exit 1; }
+        ln -sT "$(basename "$MOUNT_PATH")" "$PUBLICATION_PATH"
         cd "$PUBLICATION_PATH"
         [[ -n "$DISK_KEY" && "$PUBLICATION_RUN_ID" == "$GITHUB_RUN_ID" ]] || { echo 'Invalid binary producer inputs' >&2; exit 1; }
         for file in PUBLICATION SHA256SUMS "$PUBLICATION_FILE"; do

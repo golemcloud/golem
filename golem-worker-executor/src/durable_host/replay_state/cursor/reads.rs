@@ -433,18 +433,70 @@ impl CursorTx<'_> {
 }
 
 impl CursorState {
+    pub(super) async fn disposal_admission_refusal(
+        &self,
+        cursor: &ReplayCursor,
+        operation: &OwnerToolOperation,
+    ) -> Result<Option<SerializableToolAdmissionRefusal>, WorkerExecutorError> {
+        let Some((refusal, terminal)) = operation.expected_disposal_refusal() else {
+            return Ok(None);
+        };
+        if cursor.delivery_in_progress.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        if let Some(failure) = cursor.delivery_failure.lock().unwrap().clone() {
+            return Err(failure);
+        }
+        let Some(owner) = operation.invocation_id().map(|id| id.start_index()) else {
+            return Ok(None);
+        };
+        if terminal > cursor.replay_target() {
+            return Ok(None);
+        }
+        // Collection is not a guest demand. Its recorded refusal terminates this owner only
+        // after every earlier real call and guest observation has been reconstructed.
+        let boundary = self.entity_replay_progress.completed.get(&owner)
+            .filter(|boundary| boundary.terminal_index == terminal
+                && terminal > owner
+                && self.entity_replay_horizon >= cursor.replay_target()
+                && !self.skipped_regions.is_in_deleted_region(owner)
+                && !self.skipped_regions.is_in_deleted_region(terminal)
+                && boundary.last_required.is_none_or(|index| index > owner && index < terminal
+                    && !self.skipped_regions.is_in_deleted_region(index)))
+            .ok_or_else(|| WorkerExecutorError::unexpected_oplog_entry(
+                "folded entity replay boundary matching the disposal terminal and replay horizon",
+                format!("entity {owner}, terminal {terminal}, horizon {}", cursor.replay_target()),
+            ))?;
+        if boundary
+            .last_required
+            .is_some_and(|index| index > cursor.last_replayed_index())
+        {
+            return Ok(None);
+        }
+        if self.retained_entity_counts.contains_key(&owner) {
+            return Ok(None);
+        }
+        if let Some(failure) = cursor.delivery_failure.lock().unwrap().clone() {
+            return Err(failure);
+        }
+        Ok(Some(refusal))
+    }
+
     async fn positional_admission_refusal(
         &self,
         cursor: &ReplayCursor,
         scope: Option<OplogIndex>,
         admission: Option<&PositionalAdmission>,
-    ) -> Result<Option<SerializableToolAdmissionRefusal>, UnreadableOplog> {
+    ) -> Result<Option<SerializableToolAdmissionRefusal>, WorkerExecutorError> {
         let Some((operation, request)) = admission else {
             return Ok(None);
         };
         let Some(owner) = scope else {
             return Ok(None);
         };
+        if let Some(refusal) = self.disposal_admission_refusal(cursor, operation).await? {
+            return Ok(Some(refusal));
+        }
         let Some((expected, terminal_index)) = operation.expected_admission_refusal() else {
             return Ok(None);
         };
@@ -477,6 +529,49 @@ impl CursorState {
 }
 
 impl ReplayState {
+    pub(crate) async fn disposal_admission_refusal(
+        &self,
+        operation: &OwnerToolOperation,
+    ) -> Result<Option<SerializableToolAdmissionRefusal>, WorkerExecutorError> {
+        if operation.expected_disposal_refusal().is_none() {
+            return Ok(None);
+        }
+        let operation = operation.clone();
+        self.run_owned_cursor_op(move |replay| async move {
+            let state = replay.cursor.state.lock().await;
+            state
+                .disposal_admission_refusal(&replay.cursor, &operation)
+                .await
+        })
+        .await
+    }
+
+    /// A recorded collection refusal is an owner terminal, not a demand to collect again.
+    /// This observer never consumes records: real calls and reads must advance replay first.
+    pub(crate) async fn await_disposal_admission_refusal(
+        &self,
+        operation: OwnerToolOperation,
+    ) -> WorkerExecutorError {
+        if operation.expected_disposal_refusal().is_none() {
+            return std::future::pending().await;
+        }
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let ready = self.disposal_admission_refusal(&operation).await;
+            match ready {
+                Ok(Some(refusal)) => {
+                    let error = operation.reproduce_admission_refusal(refusal).await;
+                    self.cursor.progress.notify_waiters();
+                    return error;
+                }
+                Err(error) => return error,
+                Ok(None) => progress.await,
+            }
+        }
+    }
+
     /// The error returned when a positional oplog reader expects a next entry but the cursor is
     /// at end-of-replay.
     fn end_of_replay_error(&self) -> WorkerExecutorError {
@@ -889,7 +984,7 @@ impl ReplayState {
                 changed.as_mut().enable();
                 let st = self.cursor.state.lock().await;
                 if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
-                    return Err(WorkerExecutorError::runtime(failure));
+                    return Err(failure);
                 }
                 let refusal = st
                     .positional_admission_refusal(&self.cursor, scope, admission.as_ref())

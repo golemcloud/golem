@@ -27,7 +27,7 @@ impl ReplayCursor {
         advance_gate: tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<CursorTx<'_>, WorkerExecutorError> {
         if let Some(failure) = self.delivery_failure.lock().unwrap().clone() {
-            return Err(WorkerExecutorError::runtime(failure));
+            return Err(failure);
         }
         Ok(CursorTx {
             cursor: self,
@@ -276,7 +276,17 @@ impl ReplayState {
             }
             let mut st = self.cursor.state.lock().await;
             if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
-                return Err(WorkerExecutorError::runtime(failure));
+                return Err(failure);
+            }
+            if let Some((operation, _)) = admission
+                && let Some(refusal) = st
+                    .disposal_admission_refusal(&self.cursor, operation)
+                    .await?
+            {
+                drop(st);
+                let error = operation.reproduce_admission_refusal(refusal).await;
+                self.cursor.progress.notify_waiters();
+                return Err(error);
             }
             if let Some((refusal, terminal_index)) = matching_admission_refusal(admission, claim)?
                 && !st
@@ -322,6 +332,17 @@ impl ReplayState {
             }
         };
         let mut tx = self.cursor.tx_with_gate(gate).await?;
+        if let Some((operation, _)) = admission
+            && let Some(refusal) = tx
+                .st
+                .disposal_admission_refusal(&self.cursor, operation)
+                .await?
+        {
+            self.cursor.finish_tx(tx);
+            let error = operation.reproduce_admission_refusal(refusal).await;
+            self.cursor.progress.notify_waiters();
+            return Err(error);
+        }
         if let Some((refusal, terminal_index)) = matching_admission_refusal(admission, claim)?
             && !tx
                 .st

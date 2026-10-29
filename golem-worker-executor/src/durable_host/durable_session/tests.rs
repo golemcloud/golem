@@ -1,3 +1,14 @@
+//! Session and producer tests exercise cancellation records, exact-source terminal inspection,
+//! and teardown primitives. Calling `replay_disposal_is_complete` directly does not prove the
+//! production `DroppedDurableInput::defer_if_replaying` integration: spawning under resident
+//! task ownership, aborting on teardown, and publishing live through `finish_at` before cleanup
+//! forwarding are integration contracts. The related worker-executor suite is
+//! `tests/tool_streaming/snapshot_attachments.rs`, including
+//! `cancelled_stdin_disposal_replay_consumes_historical_finish`,
+//! `producer_disposal_receipt_blocks_invocation_success`, and
+//! `producer_disposal_receipt_blocks_closed_notification`. Those scenarios do not by themselves
+//! establish coverage of every `defer_if_replaying` spawn/abort/admission branch.
+
 use super::input::discards_input_after_terminal;
 use super::*;
 use crate::durable_host::durable_stream::AttachedStreamSegmentSource;
@@ -2855,6 +2866,8 @@ impl Rpc for AttachedProducerRpc {
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
+        _idempotency_key: Option<IdempotencyKey>,
+        _freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         unreachable!("test RPC only serves attached stream segments")
     }
@@ -6609,6 +6622,489 @@ async fn dropping_unfinished_input_producer_cancels_the_durable_source_after_cle
 #[test]
 async fn dropping_unread_input_resource_cancels_the_durable_source_after_cleanup_drain() {
     check_dropped_input_cancellation(true).await;
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_intents() {
+    use golem_schema::schema::{FromSchema, IntoTypedSchemaValue};
+
+    for terminal in ["session-finished", "source-ended", "open"] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamStore::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(
+                None,
+                registration(
+                    &identity,
+                    StreamRegistrationCoordinate::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodInput,
+                        recursive_value_path: Vec::new(),
+                    },
+                    StreamSourceKind::AgentHostedInput,
+                ),
+            )
+            .await
+            .unwrap()
+            .value;
+        let key = StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone());
+        let mapping = StreamSessionMappingRecord {
+            transport_stream_id: 1,
+            handle: handle.clone(),
+            role: SessionStreamRole::Input,
+        };
+        let binding = persist_local_mapping(&producer, key.clone(), &mapping).await;
+        let streams = StreamSession::open(producer.clone(), oplog.clone(), key, [binding.clone()])
+            .await
+            .unwrap()
+            .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+        match terminal {
+            "session-finished" => streams.complete().await.unwrap(),
+            "source-ended" => {
+                producer
+                    .end_open(None, handle.stream_id, StreamEndResult::Ok)
+                    .await
+                    .unwrap();
+            }
+            "open" => {
+                let mut unrelated = identity.invocation.clone();
+                unrelated.idempotency_key =
+                    IdempotencyKey::new("unrelated-finished-session".into());
+                producer
+                    .finish_session(None, unrelated, None, Ok(()), StreamCancelReason::GuestDrop)
+                    .await
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            streams
+                .current_control_metadata()
+                .await
+                .unwrap()
+                .cancellation_intent(&binding.source)
+                .is_none()
+        );
+        let before = oplog.current_oplog_index().await;
+        let cancellation = DroppedDurableInput {
+            streams,
+            transport_stream_id: 1,
+            consumer_read_ordinal: 0,
+            role: StreamCancelRole::InputConsumer,
+        };
+        let boundary = cancellation.disposal_boundary().unwrap();
+        assert_eq!(
+            boundary,
+            SerializableToolAdmissionRefusal::BeforeDurableInputDisposal {
+                session: StreamRegistrationInvocation::Local(
+                    identity.invocation.idempotency_key.clone()
+                ),
+                binding: Box::new(binding.clone()),
+                role: StreamCancelRole::InputConsumer,
+            }
+        );
+        let encoded = desert_rust::serialize(&boundary, Vec::new()).unwrap();
+        assert_eq!(
+            desert_rust::deserialize::<SerializableToolAdmissionRefusal>(&encoded).unwrap(),
+            boundary
+        );
+        let typed = boundary.clone().into_typed_schema_value().unwrap();
+        assert_eq!(
+            SerializableToolAdmissionRefusal::from_value(typed.value()).unwrap(),
+            boundary
+        );
+        assert_eq!(
+            cancellation.is_recorded().await.unwrap(),
+            terminal != "open"
+        );
+        assert_eq!(oplog.current_oplog_index().await, before);
+        assert_eq!(
+            producer.stream_head(&handle).await.unwrap().closed,
+            terminal != "open"
+        );
+        if terminal != "open" {
+            assert!(
+                cancellation
+                    .replay_disposal_is_complete(None, &boundary, true)
+                    .await
+                    .unwrap()
+            );
+            let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+            operation
+                .install_recorded_admission_refusal(boundary.clone(), OplogIndex::from_u64(29));
+            let waiting =
+                cancellation.replay_disposal_is_complete(Some(&operation), &boundary, true);
+            tokio::pin!(waiting);
+            assert!(futures::poll!(&mut waiting).is_pending());
+            assert_eq!(operation.observed_admission_refusal(), None);
+            operation
+                .reproduce_admission_refusal(boundary.clone())
+                .await;
+            let error = waiting.await.unwrap_err();
+            assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+            assert_eq!(
+                operation.observed_admission_refusal(),
+                Some(boundary.clone())
+            );
+        } else {
+            assert!(
+                cancellation
+                    .replay_disposal_is_complete(None, &boundary, true)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                !cancellation
+                    .replay_disposal_is_complete(None, &boundary, false)
+                    .await
+                    .unwrap()
+            );
+            for mismatch in ["source", "session", "role"] {
+                let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+                let mut expected = boundary.clone();
+                let SerializableToolAdmissionRefusal::BeforeDurableInputDisposal {
+                    session,
+                    binding,
+                    role,
+                } = &mut expected
+                else {
+                    unreachable!()
+                };
+                match mismatch {
+                    "source" => {
+                        binding.source =
+                            StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(99)))
+                    }
+                    "session" => {
+                        *session = StreamRegistrationInvocation::Local(IdempotencyKey::new(
+                            "different-session".into(),
+                        ))
+                    }
+                    "role" => *role = StreamCancelRole::OutputConsumer,
+                    _ => unreachable!(),
+                }
+                operation
+                    .install_recorded_admission_refusal(expected.clone(), OplogIndex::from_u64(29));
+                let waiting =
+                    cancellation.replay_disposal_is_complete(Some(&operation), &boundary, false);
+                tokio::pin!(waiting);
+                assert!(futures::poll!(&mut waiting).is_pending());
+                assert_eq!(operation.observed_admission_refusal(), None);
+                let exact = operation.reject_missing_replay_admission(&expected);
+                tokio::pin!(exact);
+                assert!(futures::poll!(&mut exact).is_pending());
+                assert_eq!(operation.observed_admission_refusal(), None);
+                operation
+                    .reproduce_admission_refusal(expected.clone())
+                    .await;
+                let error = exact.await.unwrap_err();
+                assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+                assert!(
+                    crate::durable_host::is_tool_attachment_live_admission_rejection(
+                        &waiting.await.unwrap_err()
+                    )
+                );
+            }
+
+            let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+            let (stdout, _consumer, _) = crate::durable_host::tool::attachment::attachment_pair(
+                8,
+                crate::durable_host::tool::attachment::AttachmentMemory::with_test_reservation(
+                    false,
+                    |_| async { None },
+                ),
+            );
+            stdout.write(vec![1, 2, 3]).await.unwrap();
+            assert!(operation.attach(None, Some(stdout.controller()), None));
+            assert_eq!(
+                operation
+                    .activate_live_attachment_memory_accounting_at(Some(boundary.clone()))
+                    .await,
+                crate::durable_host::tool::operation::ToolLiveAdmissionOutcome::ResourceExhausted,
+            );
+            assert_eq!(
+                operation.observed_admission_refusal(),
+                Some(boundary.clone())
+            );
+
+            // The same check runs again after the natural-tail wait: a terminal selected
+            // while that wait was pending prevents an unnecessary live admission.
+            producer
+                .end_open(None, handle.stream_id, StreamEndResult::Ok)
+                .await
+                .unwrap();
+            assert!(
+                cancellation
+                    .replay_disposal_is_complete(None, &boundary, false)
+                    .await
+                    .unwrap()
+            );
+        }
+    }
+
+    // A foreign producer need not be reachable when its exact consumer terminal is
+    // journaled. A terminal for another source must not suppress cleanup of this one.
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut source = identity.invocation.clone();
+    source.callee.agent_id = "offline-disposal-source".into();
+    source.callee_fingerprint = AgentFingerprint(Uuid::from_u128(701));
+    let session = StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone());
+    let mut bindings = Vec::new();
+    let mut readers = Vec::new();
+    for transport_stream_id in [7, 8] {
+        let mapping = StreamSessionMappingRecord {
+            transport_stream_id,
+            handle: DurableStreamHandle {
+                format_version: 1,
+                stream_id: StreamId(Uuid::from_u128(700 + u128::from(transport_stream_id))),
+                producer_environment_id: source.callee_environment_id,
+                producer: source.callee.clone(),
+                expected_producer_fingerprint: source.callee_fingerprint,
+                producer_generation: OplogIndex::NONE,
+                source_invocation: source.clone(),
+                component_revision: ComponentRevision::INITIAL,
+                element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
+            },
+            role: SessionStreamRole::Input,
+        };
+        let binding = StreamBindingRecord::foreign(&mapping);
+        producer
+            .append_session_record(
+                None,
+                StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: session.clone(),
+                    mapping: binding.clone(),
+                }),
+            )
+            .await
+            .unwrap();
+        readers.push(LocalStreamReaderId {
+            introducing_oplog_index: oplog.current_oplog_index().await,
+            binding_slot: 0,
+        });
+        bindings.push(binding);
+    }
+    producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
+                format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                observation: StreamConsumerObservation::Guest {
+                    parent_start_index: None,
+                },
+                reobserves: None,
+                session_key: session.clone(),
+                reader_id: readers[0],
+                source_offset: StreamOffset::new(OplogIndex::from_u64(36), 0),
+                consumer_read_ordinal: 0,
+                value: vec![1, 2],
+                packed_u8: true,
+                recursive_mappings: vec![],
+            }),
+        )
+        .await
+        .unwrap();
+    let item_index = oplog.current_oplog_index().await;
+    producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
+                format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                observation: StreamConsumerObservation::Guest {
+                    parent_start_index: None,
+                },
+                reobserves: None,
+                session_key: session.clone(),
+                reader_id: readers[0],
+                source_offset: StreamOffset::new(OplogIndex::from_u64(37), 0),
+                consumer_read_ordinal: 2,
+                terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+            }),
+        )
+        .await
+        .unwrap();
+    let streams = StreamSession::open(producer, oplog.clone(), session, bindings.clone())
+        .await
+        .unwrap()
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+    let metadata = streams.current_control_metadata().await.unwrap();
+    assert!(metadata.cancellation_intent(&bindings[0].source).is_none());
+    assert!(metadata.has_consumer_terminal(&bindings[0]).unwrap());
+    assert!(!metadata.has_consumer_terminal(&bindings[1]).unwrap());
+    drop(metadata);
+    let before = oplog.current_oplog_index().await;
+    let replay_at = |horizon, skipped| {
+        ReplayState::new_for_owner(
+            OwnedAgentId {
+                environment_id: identity.environment_id,
+                agent_id: identity.agent_id.clone(),
+            },
+            oplog.clone(),
+            skipped,
+            None,
+            crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            horizon,
+            None,
+        )
+    };
+    let replay = replay_at(before, Default::default()).await.unwrap();
+    let prefix = replay_at(item_index, Default::default()).await.unwrap();
+    let deleted = replay_at(
+        before,
+        golem_common::model::regions::DeletedRegions::from_regions([
+            golem_common::model::regions::OplogRegion::from_range(
+                item_index.as_u64()..=before.as_u64(),
+            ),
+        ]),
+    )
+    .await
+    .unwrap();
+    let mut cancellation = DroppedDurableInput {
+        streams: streams.clone(),
+        transport_stream_id: 7,
+        consumer_read_ordinal: 3,
+        role: StreamCancelRole::InputConsumer,
+    };
+    assert_eq!(
+        cancellation
+            .unreproduced_guest_observation(&replay)
+            .await
+            .unwrap(),
+        None
+    );
+    cancellation.consumer_read_ordinal = 0;
+    assert_eq!(
+        cancellation
+            .unreproduced_guest_observation(&deleted)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        cancellation
+            .unreproduced_guest_observation(&replay)
+            .await
+            .unwrap(),
+        Some(item_index)
+    );
+    cancellation.consumer_read_ordinal = 1;
+    assert_eq!(
+        cancellation
+            .unreproduced_guest_observation(&replay)
+            .await
+            .unwrap(),
+        Some(item_index)
+    );
+    cancellation.consumer_read_ordinal = 2;
+    assert_eq!(
+        cancellation
+            .unreproduced_guest_observation(&replay)
+            .await
+            .unwrap(),
+        Some(before)
+    );
+    assert_eq!(
+        cancellation
+            .unreproduced_guest_observation(&prefix)
+            .await
+            .unwrap(),
+        None
+    );
+    cancellation.consumer_read_ordinal = 3;
+    let boundary = cancellation.disposal_boundary().unwrap();
+    assert!(
+        cancellation
+            .replay_disposal_is_complete(None, &boundary, true)
+            .await
+            .unwrap()
+    );
+    let unrelated = DroppedDurableInput {
+        streams: streams.clone(),
+        transport_stream_id: 8,
+        consumer_read_ordinal: 0,
+        role: StreamCancelRole::InputConsumer,
+    };
+    assert_eq!(
+        unrelated
+            .unreproduced_guest_observation(&replay)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        unrelated
+            .replay_disposal_is_complete(None, &unrelated.disposal_boundary().unwrap(), true)
+            .await
+            .is_err()
+    );
+    assert_eq!(oplog.current_oplog_index().await, before);
+    assert_eq!(
+        streams
+            .current_control_metadata()
+            .await
+            .unwrap()
+            .consumer_record_count(readers[0]),
+        2
+    );
+    for delivered in [false, true] {
+        let endpoint = streams
+            .endpoint(
+                streams.mapping(7).unwrap().handle,
+                0,
+                SessionStreamRole::Input,
+            )
+            .await
+            .unwrap();
+        let (sink, mut drops) = mpsc::unbounded_channel();
+        let mut input =
+            DurableInputProducer::new(endpoint).with_drop_cleanup(sink, Arc::new(|| false));
+        input.input.consumer_read_ordinal = 3;
+        let observer = input.track_guest_consumption(Box::new(|_| Ok(())));
+        assert_eq!(input.guest_read_ordinal.load(Ordering::Acquire), 0);
+        observer(if delivered {
+            TerminalConsumption::Delivered
+        } else {
+            TerminalConsumption::NotDelivered
+        })
+        .unwrap();
+        drop(input);
+        let DropEvent::CancelDroppedDurableInput { cancellation } = drops.recv().await.unwrap()
+        else {
+            panic!("expected disposal")
+        };
+        assert_eq!(
+            cancellation.consumer_read_ordinal,
+            if delivered { 3 } else { 0 }
+        );
+        assert_eq!(
+            cancellation
+                .unreproduced_guest_observation(&replay)
+                .await
+                .unwrap(),
+            if delivered { None } else { Some(item_index) }
+        );
+    }
 }
 
 async fn check_dropped_input_cancellation(unread_resource: bool) {

@@ -277,6 +277,12 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
 
 #[test]
 async fn committed_cancellation_probe_preserves_exact_authority_after_takeover() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        check_committed_cancellation_authority(mode).await;
+    }
+}
+
+async fn check_committed_cancellation_authority(mode: AgentMode) {
     use crate::durable_host::durable_stream::{
         ConsumerAttachmentStatus, DbDirectStreamAttachmentConsumerProbe,
         StreamAttachmentConsumerProbe,
@@ -290,17 +296,13 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
     let key = session_key(&owner, &IdempotencyKey::new("session".into()));
     let mut metadata = agent_metadata(&owner);
     metadata.fingerprint = key.callee_fingerprint;
+    metadata.agent_mode = mode;
     let oplog = oplog_service
         .create_fresh(
             &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
             &owner,
-            AgentMode::Durable,
-            create_entry(
-                &owner,
-                AgentMode::Durable,
-                metadata.created_by,
-                key.callee_fingerprint,
-            ),
+            mode,
+            create_entry(&owner, mode, metadata.created_by, key.callee_fingerprint),
             metadata,
             stale_status(),
             suspended_status(),
@@ -426,14 +428,15 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
     let consumer_invocation = session_key(&foreign, &IdempotencyKey::new("consumer".into()));
     let mut foreign_metadata = agent_metadata(&foreign);
     foreign_metadata.fingerprint = consumer_invocation.callee_fingerprint;
+    foreign_metadata.agent_mode = mode;
     let foreign_oplog = oplog_service
         .create_fresh(
             &mut oplog_service.lock_lifecycle(&foreign.agent_id).await,
             &foreign,
-            AgentMode::Durable,
+            mode,
             create_entry(
                 &foreign,
-                AgentMode::Durable,
+                mode,
                 foreign_metadata.created_by,
                 consumer_invocation.callee_fingerprint,
             ),

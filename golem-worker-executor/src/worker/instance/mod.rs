@@ -312,6 +312,7 @@ impl OwnerExecution {
         self.tool_operations.join_owner_failure_cleanup().await?;
         self.tool_operations.begin_generation()?;
         self.deferred_tool_admission.begin_generation()?;
+        let status = self.commit.repaired_status().await?;
         let mut generation = self.generation.write().await;
         wallet.activate_interest().await;
         if let Some(old) = generation.as_ref() {
@@ -328,6 +329,10 @@ impl OwnerExecution {
         )
         .await
         .inspect_err(|_| wallet.retire())?;
+        replay
+            .install_entity_replay_progress(&status, horizon)
+            .await
+            .inspect_err(|_| wallet.retire())?;
         *generation = Some(OwnerReplayGeneration { replay, wallet });
         *self.append_tasks.lock().unwrap() = append_tasks;
         // Observation state follows the existing replay generation. Old Store callbacks retain
@@ -1156,19 +1161,35 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         &mut self,
         parent: crate::worker::owner_lane::OwnerInvocationId,
     ) -> Result<(), WorkerExecutorError> {
-        crate::durable_host::tool::prepare_tool_parent_end(&mut self.store.as_context_mut(), parent)
-            .await
+        let errors = crate::durable_host::tool::prepare_tool_parent_end(
+            &mut self.store.as_context_mut(),
+            parent,
+        )
+        .await;
+        self.classify_finalization_errors(errors).await
+    }
+
+    async fn classify_finalization_errors(
+        &mut self,
+        errors: Vec<anyhow::Error>,
+    ) -> Result<(), WorkerExecutorError> {
+        crate::durable_host::tool::durability::native_finalization_failures(
+            self.store.data().durable_ctx(),
+            errors,
+        )
+        .await
     }
 
     pub(crate) async fn settle_tool_children(
         mut self,
         parent: crate::worker::owner_lane::OwnerInvocationId,
     ) -> Result<(), WorkerExecutorError> {
-        let result = crate::durable_host::tool::settle_tool_children(
+        let errors = crate::durable_host::tool::settle_tool_children(
             &mut self.store.as_context_mut(),
             parent,
         )
         .await;
+        let result = self.classify_finalization_errors(errors).await;
         // A trapped Store is disposed of, not driven to normal guest EXIT.
         drop(self);
         result
