@@ -257,6 +257,8 @@ struct TestOplogState {
     refused_adds: Option<crate::services::oplog::OplogFence>,
     /// The fence a primary oplog latches when the storage refuses one of its commits.
     fence: Option<crate::services::oplog::OplogFence>,
+    /// Entries another writer adds just after the next `current_oplog_index` samples the horizon.
+    added_after_next_horizon: Vec<OplogEntry>,
 }
 
 #[derive(Default)]
@@ -309,6 +311,12 @@ impl TestOplog {
 
     pub(crate) fn latch_fence(&self, fence: crate::services::oplog::OplogFence) {
         self.state.lock().unwrap().fence = Some(fence);
+    }
+
+    /// Adds `entries` just after the next `current_oplog_index` call samples the horizon, as a
+    /// concurrent writer that commits between a reader's horizon sample and its next read.
+    pub(crate) fn add_after_next_horizon(&self, entries: Vec<OplogEntry>) {
+        self.state.lock().unwrap().added_after_next_horizon = entries;
     }
 }
 
@@ -371,12 +379,17 @@ impl Oplog for TestOplog {
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
-        self.state
-            .lock()
-            .unwrap()
+        let mut state = self.state.lock().unwrap();
+        let horizon = state
             .entries
             .last_key_value()
-            .map_or(OplogIndex::NONE, |(index, _)| *index)
+            .map_or(OplogIndex::NONE, |(index, _)| *index);
+        let mut next = horizon;
+        for entry in std::mem::take(&mut state.added_after_next_horizon) {
+            next = next.next();
+            state.entries.insert(next, entry);
+        }
+        horizon
     }
 
     async fn raw_durable_stream_session_status(

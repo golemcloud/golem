@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::durable_stream::tests::TestOplog;
 use crate::services::oplog::{OplogReadError, UnreadableOplog};
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentId;
@@ -68,14 +69,14 @@ async fn a_protocol_failure_for_an_unreadable_oplog_finishes_as_the_agent_failur
     assert_eq!(failure.worker_error, Some(expected.into()));
 }
 
-async fn local_session() -> StreamSession {
+async fn local_session(oplog: Arc<TestOplog>) -> StreamSession {
     use crate::durable_host::durable_stream::DurableStreamStore;
-    use crate::durable_host::durable_stream::tests::{TestOplog, identity};
+    use crate::durable_host::durable_stream::tests::identity;
     use crate::services::oplog::Oplog;
     use golem_common::base_model::durable_stream::StreamRegistrationInvocation;
 
     let identity = identity();
-    let oplog: Arc<dyn Oplog> = Arc::new(TestOplog::default());
+    let oplog: Arc<dyn Oplog> = oplog;
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
@@ -98,7 +99,7 @@ async fn local_session() -> StreamSession {
 async fn end_attachment(
     error: SessionError,
 ) -> (Vec<InvocationResponse>, bool, Option<Result<(), Vec<u8>>>) {
-    let streams = local_session().await;
+    let streams = local_session(Arc::default()).await;
     let (responses, mut received) = mpsc::channel(8);
     let drained = std::sync::atomic::AtomicBool::new(false);
     end_attachment_on_failure(&streams, &responses, &HashMap::new(), error, async {
@@ -177,4 +178,62 @@ async fn only_a_protocol_violation_records_a_failed_session_terminal() {
     assert_eq!(failure.message, violation);
     assert!(drained);
     assert_eq!(terminal, Some(Err(violation.as_bytes().to_vec())));
+}
+
+#[test]
+async fn a_result_and_terminal_committed_between_the_reads_are_both_read() {
+    use golem_common::base_model::durable_stream::{
+        StreamSessionFinishedRecord, StreamSessionInvocationResultRecord, StreamSessionRecord,
+    };
+    use golem_common::model::Timestamp;
+    use golem_common::model::oplog::OplogEntry;
+    use golem_common::model::oplog::payload::OplogPayload;
+    use golem_schema::proto::golem::schema::{SchemaValue as ProtoSchemaValue, schema_value};
+
+    let value = ProtoSchemaValue {
+        value: Some(schema_value::Value::U64Value(7)),
+    };
+    let oplog = Arc::new(TestOplog::default());
+    let streams = local_session(oplog.clone()).await;
+    let record = |record| OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        record: OplogPayload::Inline(Box::new(record)),
+        summary: None,
+    };
+    oplog.add_after_next_horizon(vec![
+        record(StreamSessionRecord::InvocationResult(
+            StreamSessionInvocationResultRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: streams.session_reference.clone(),
+                result: value.encode_to_vec(),
+                stream_mappings: vec![],
+            },
+        )),
+        record(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: streams.session_reference.clone(),
+            result: Ok(()),
+        })),
+    ]);
+
+    let (result, finished) = persisted_result_and_finished(&streams, false)
+        .await
+        .unwrap();
+
+    assert!(
+        result.is_some() || finished.is_none(),
+        "a successful terminal must not be read without its result, got {finished:?}"
+    );
+    let (result, finished) = persisted_result_and_finished(&streams, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        result,
+        Some((
+            invocation_session_result::Result::MethodResult(value),
+            vec![]
+        ))
+    );
+    assert_eq!(finished, Some(Ok(())));
 }
