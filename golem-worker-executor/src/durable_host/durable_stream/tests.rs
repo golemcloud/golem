@@ -8337,7 +8337,9 @@ async fn remote_cancellation_releases_durable_activity_but_retains_owned_admissi
             );
         }
         tokio::time::timeout(Duration::from_secs(5), async {
-            while live.lifecycle_operations.available_permits() != 16 {
+            while live.lifecycle_operations.available_permits() != 16
+                || live.lifecycle_operation_bytes.available_permits() != 256 * 1024 * 1024
+            {
                 tokio::task::yield_now().await;
             }
         })
