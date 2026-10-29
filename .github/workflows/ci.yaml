@@ -1016,6 +1016,10 @@ jobs:
         run: cargo build --target wasm32-wasip2 -p golem-schema --no-default-features --features guest
       - name: Test owned typed values in guest mode
         run: cargo test -p golem-schema --no-default-features --features guest --test owned_typed_wit -- --nocapture --report-time
+      - name: Test feature-gated validation in guest mode
+        run: cargo test -p golem-schema --no-default-features --features guest --test feature_matrix -- --nocapture --report-time
+      - name: Test feature-gated validation with default features
+        run: cargo test -p golem-schema --test feature_matrix -- --nocapture --report-time
 
   golem-client:
     runs-on: blacksmith
