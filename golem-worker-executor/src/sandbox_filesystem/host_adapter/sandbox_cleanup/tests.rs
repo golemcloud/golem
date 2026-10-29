@@ -15,6 +15,7 @@
 use super::super::QuotaAuthority;
 use super::super::SandboxFilesystem;
 use super::*;
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::SandboxAccessMode;
 use crate::sandbox_filesystem::SandboxFilesystemAdapter;
 use crate::sandbox_filesystem::SandboxFilesystemName;
@@ -223,7 +224,7 @@ async fn open_sandbox_directory(
 }
 
 fn scripted_storage_error(operation: &'static str) -> FilesystemStorageError {
-    FilesystemStorageError::verification(operation, None)
+    FilesystemStorageError::from(OperationContext::verification(operation, None))
 }
 
 fn directory_sandbox_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {

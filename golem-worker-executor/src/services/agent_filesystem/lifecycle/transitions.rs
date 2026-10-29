@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::operation_failure::OperationContext;
 
 impl<Adapter: SandboxFilesystemAdapter> FilesystemGenerationHandle<Adapter> {
     /// Gives one body its own admission and drainage boundary without sealing its siblings.
@@ -664,9 +665,11 @@ fn spawn_cleanup<Adapter: SandboxFilesystemAdapter>(
                         .get_or_init(Default::default)
                         .fail(crate::metrics::resource_release::Failure::ExclusiveOwnership);
                     *sandbox = Some(adapter);
-                    Err(FilesystemStorageError::verification(
-                        "take exclusive ownership for agent filesystem deletion",
-                        None,
+                    Err(FilesystemStorageError::from(
+                        OperationContext::verification(
+                            "take exclusive ownership for agent filesystem deletion",
+                            None,
+                        ),
                     ))
                 }
             },

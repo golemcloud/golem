@@ -19,7 +19,7 @@ use std::time::Duration;
 use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::debug;
+use tracing::{debug, warn};
 
 const SHUTDOWN_GRACE_MILLIS: u64 = 10_000;
 const DEREGISTER_DEADLINE_MILLIS: u64 = 8_000;
@@ -89,6 +89,20 @@ impl Shutdown {
 
     pub fn cancel(&self) {
         self.inner.token.cancel();
+    }
+
+    /// Signals this executor, waits within `grace`, and warns if tracked work remains.
+    /// This does not abort tasks or prove release when it returns `false`.
+    pub async fn cancel_and_wait_for_tracked(&self, grace: Duration) -> bool {
+        self.cancel();
+        let completed = self.wait_for_tracked(grace).await;
+        if !completed {
+            warn!(
+                ?grace,
+                "Background tasks did not finish within the shutdown grace period; executor resources may still be held"
+            );
+        }
+        completed
     }
 
     /// Spawns a task whose completion [`Self::wait_for_tracked`] waits for.
@@ -172,9 +186,10 @@ mod tests {
             flag.store(true, Ordering::Release);
         });
 
-        shutdown.cancel();
         assert!(
-            shutdown.wait_for_tracked(Duration::from_secs(2)).await,
+            shutdown
+                .cancel_and_wait_for_tracked(Duration::from_secs(2))
+                .await,
             "tracked work should finish inside the grace"
         );
         assert!(

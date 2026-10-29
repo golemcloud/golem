@@ -14,6 +14,7 @@
 
 use crate::host_directories::HostDirectory;
 use crate::host_directories::HostPath;
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::InstalledLimits;
 use crate::sandbox_filesystem::SandboxAccessMode;
 use crate::sandbox_filesystem::SandboxAttributes;
@@ -91,7 +92,7 @@ fn sandbox_name() -> SandboxFilesystemName {
 }
 
 fn scripted_storage_error(operation: &'static str) -> FilesystemStorageError {
-    FilesystemStorageError::verification(operation, None)
+    FilesystemStorageError::from(OperationContext::verification(operation, None))
 }
 
 fn make_seed_entry(

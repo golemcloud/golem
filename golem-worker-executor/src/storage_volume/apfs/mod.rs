@@ -15,6 +15,7 @@
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
 use super::space_from_values;
 use super::{FilesystemVolume, StorageVolumeError};
+use crate::operation_failure::OperationContext;
 use crate::storage_volume::FilesystemSpace;
 use rustix::fs::{CloneFlags, StatVfs, StatVfsMountFlags, fclonefileat, fstatvfs};
 use std::fs::File;
@@ -36,10 +37,19 @@ pub(crate) fn bind_with_probe(
     close: impl FnOnce(tempfile::TempDir) -> std::io::Result<()>,
 ) -> Result<FilesystemVolume, StorageVolumeError> {
     std::fs::create_dir_all(root).map_err(|error| {
-        StorageVolumeError::io("create APFS development root", Some(root), error)
+        StorageVolumeError::from(OperationContext::io(
+            "create APFS development root",
+            Some(root),
+            error,
+        ))
     })?;
-    let directory = File::open(root)
-        .map_err(|error| StorageVolumeError::io("open APFS development root", Some(root), error))?;
+    let directory = File::open(root).map_err(|error| {
+        StorageVolumeError::from(OperationContext::io(
+            "open APFS development root",
+            Some(root),
+            error,
+        ))
+    })?;
     probe_clone(root, clone, close)?;
     tracing::info!(root = %root.display(), "APFS storage is for local development and tests only");
     let mut volume = FilesystemVolume::copy_on_write(Arc::new(directory));
@@ -55,12 +65,27 @@ pub(crate) fn probe_clone(
     let probe = tempfile::Builder::new()
         .prefix(".golem-apfs-clone-probe-")
         .tempdir_in(root)
-        .map_err(|error| StorageVolumeError::io("create APFS clone probe", Some(root), error))?;
+        .map_err(|error| {
+            StorageVolumeError::from(OperationContext::io(
+                "create APFS clone probe",
+                Some(root),
+                error,
+            ))
+        })?;
     let result = probe_contents(probe.path(), clone).map_err(|error| {
-        StorageVolumeError::io("probe APFS clone for local development", Some(root), error)
+        StorageVolumeError::from(OperationContext::io(
+            "probe APFS clone for local development",
+            Some(root),
+            error,
+        ))
     });
-    let cleanup = close(probe)
-        .map_err(|error| StorageVolumeError::io("remove APFS clone probe", Some(root), error));
+    let cleanup = close(probe).map_err(|error| {
+        StorageVolumeError::from(OperationContext::io(
+            "remove APFS clone probe",
+            Some(root),
+            error,
+        ))
+    });
     StorageVolumeError::after_cleanup(result, cleanup)
 }
 

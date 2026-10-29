@@ -15,6 +15,7 @@
 use super::SandboxFilesystem;
 #[cfg(target_os = "linux")]
 use super::sandbox_provisioning::managed;
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::FilesystemStorageError;
 use golem_common::model::RetryConfig;
 use golem_common::retries::RetryState;
@@ -220,9 +221,8 @@ pub(in crate::sandbox_filesystem) async fn verify_fresh_directory(
         FilesystemStorageError::io("verify runtime directory", Some(path), error)
     })?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(FilesystemStorageError::verification(
-            "verify fresh runtime directory",
-            Some(path),
+        return Err(FilesystemStorageError::from(
+            OperationContext::verification("verify fresh runtime directory", Some(path)),
         ));
     }
     verify_empty_directory(path).await
@@ -236,9 +236,8 @@ pub(in crate::sandbox_filesystem) async fn verify_fresh_open_directory(
         FilesystemStorageError::io("verify runtime directory", Some(path), error)
     })?;
     if !metadata.is_dir() {
-        return Err(FilesystemStorageError::verification(
-            "verify fresh runtime directory",
-            Some(path),
+        return Err(FilesystemStorageError::from(
+            OperationContext::verification("verify fresh runtime directory", Some(path)),
         ));
     }
     verify_empty_directory(path).await
@@ -258,9 +257,8 @@ pub(in crate::sandbox_filesystem) async fn verify_empty_directory(
         })?
         .is_some()
     {
-        return Err(FilesystemStorageError::verification(
-            "verify empty runtime directory",
-            Some(path),
+        return Err(FilesystemStorageError::from(
+            OperationContext::verification("verify empty runtime directory", Some(path)),
         ));
     }
     Ok(())

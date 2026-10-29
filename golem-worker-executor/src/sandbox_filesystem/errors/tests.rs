@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::blocking::BlockingTask;
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::errors::FilesystemStorageError;
 use crate::storage_volume::StorageVolumeError;
 use std::path::Path;
@@ -21,7 +22,10 @@ use test_r::test;
 
 #[test]
 fn operation_errors_have_no_fabricated_path_and_keep_both_cleanup_diagnostics() {
-    let error = FilesystemStorageError::verification("create executor storage", None);
+    let error = FilesystemStorageError::from(OperationContext::verification(
+        "create executor storage",
+        None,
+    ));
     assert_eq!(error.to_string(), "failed to create executor storage");
     assert!(format!("{error:?}").contains("path: None"));
     let cleanup = FilesystemStorageError::cleanup_io(
@@ -69,8 +73,11 @@ fn shared_storage_failures_do_not_become_sandbox_escape_refusals() {
         std::io::ErrorKind::PermissionDenied,
         "a path led outside of the filesystem",
     );
-    let error =
-        FilesystemStorageError::from(StorageVolumeError::io("open volume root", None, source));
+    let error = FilesystemStorageError::from(StorageVolumeError::from(OperationContext::io(
+        "open volume root",
+        None,
+        source,
+    )));
     assert!(!error.is_sandbox_escape());
     assert!(error.is_terminal_failure());
 }
@@ -81,8 +88,11 @@ async fn volume_task_failure_remains_terminal_after_conversion() {
         .run(|| panic!("volume task"))
         .await
         .unwrap_err();
-    let error =
-        StorageVolumeError::task_failure("observe volume", Some(Path::new("/volume")), failure);
+    let error = StorageVolumeError::from(OperationContext::task_failure(
+        "observe volume",
+        Some(Path::new("/volume")),
+        failure,
+    ));
     let error = FilesystemStorageError::from(error);
     assert!(error.is_terminal_failure());
     assert!(matches!(
@@ -112,30 +122,12 @@ fn unix_storage_errors_are_terminal_only_when_the_storage_is_unavailable() {
 }
 
 #[test]
-fn an_error_about_another_path_keeps_its_operation_and_cause() {
-    let error = FilesystemStorageError::io(
-        "remove XFS reflink probe",
-        Some(Path::new("/proc/self/fd/7/.golem-xfs-reflink-probe")),
-        std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-    )
-    .about(Path::new("/var/lib/golem/agents/.golem-xfs-reflink-probe"));
-
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "failed to remove XFS reflink probe at \
-             /var/lib/golem/agents/.golem-xfs-reflink-probe: {}",
-            std::io::Error::from(std::io::ErrorKind::PermissionDenied)
-        )
-    );
-    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
-}
-
-#[test]
 fn unsupported_allocation_classification_is_typed() {
     let unsupported = FilesystemStorageError::allocation_unsupported(None);
-    let same_message =
-        FilesystemStorageError::verification("observe allocation without quota authority", None);
+    let same_message = FilesystemStorageError::from(OperationContext::verification(
+        "observe allocation without quota authority",
+        None,
+    ));
 
     assert!(unsupported.allocation_is_unsupported());
     assert!(!same_message.allocation_is_unsupported());
@@ -151,11 +143,11 @@ fn native_task_panic_is_caught_and_classified_as_terminal() {
     let execution_error = runtime
         .block_on(BlockingTask::InPlace.run(|| -> () { panic!("scripted native panic") }))
         .unwrap_err();
-    let error = FilesystemStorageError::task_failure(
+    let error = FilesystemStorageError::from(OperationContext::task_failure(
         "run panicking native operation",
         None,
         execution_error,
-    );
+    ));
 
     assert!(error.is_terminal_failure());
     assert!(error.io_kind().is_none());
@@ -180,10 +172,16 @@ fn storage_error_debug_output_names_each_fact() {
         Some(Path::new("/root/a")),
     );
 
-    assert_eq!(
-        format!("{error:?}"),
-        "FilesystemStorageError { operation: \"remove directory\", path: Some(\"/root/a\"), failure: Verification, cleanup_failed: true, kind: General }"
-    );
+    let debug = format!("{error:?}");
+    for fact in [
+        "remove directory",
+        "/root/a",
+        "Verification",
+        "cleanup_failed: true",
+        "kind: General",
+    ] {
+        assert!(debug.contains(fact), "{debug}");
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -14,6 +14,7 @@
 
 use crate::filesystem_pressure::FilesystemWriteRecovery;
 use crate::host_directories::HostDirectory;
+use crate::operation_failure::OperationContext;
 pub use crate::sandbox_filesystem::FilesystemStorageError;
 use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
 use crate::services::active_agents::InvocationLoops;
@@ -74,9 +75,11 @@ fn resolve_storage_limits(
         _ if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE => {
             Ok(ResolvedStorageLimits::Unlimited)
         }
-        AgentAccounting::Unaccounted => Err(FilesystemStorageError::verification(
-            "enforce finite storage limit on a quota-capable backend",
-            None,
+        AgentAccounting::Unaccounted => Err(FilesystemStorageError::from(
+            OperationContext::verification(
+                "enforce finite storage limit on a quota-capable backend",
+                None,
+            ),
         )),
         AgentAccounting::ProjectQuotas | AgentAccounting::Development => policy
             .resolve(allocated_bytes)
@@ -117,16 +120,21 @@ fn observe_space_at_binding(
 impl FilesystemObjectLimitPolicyConfig {
     fn resolve(&self, allocated_bytes: u64) -> Result<FilesystemLimits, FilesystemStorageError> {
         if allocated_bytes == 0 {
-            return Err(FilesystemStorageError::verification(
-                "resolve nonzero agent filesystem storage limit",
-                None,
+            return Err(FilesystemStorageError::from(
+                OperationContext::verification(
+                    "resolve nonzero agent filesystem storage limit",
+                    None,
+                ),
             ));
         }
 
         let proportional = (u128::from(allocated_bytes) * u128::from(self.objects_per_gib()))
             .div_ceil(BYTES_PER_GIB);
         let proportional = u64::try_from(proportional).map_err(|_| {
-            FilesystemStorageError::verification("derive agent filesystem object limit", None)
+            FilesystemStorageError::from(OperationContext::verification(
+                "derive agent filesystem object limit",
+                None,
+            ))
         })?;
 
         Ok(FilesystemLimits {
@@ -302,10 +310,10 @@ impl AgentFilesystems {
         pressure_recovery: FilesystemWriteRecovery,
     ) -> Result<CreatedFilesystem, CreateFailure> {
         let _work = self.admission.enter().ok_or_else(|| CreateFailure {
-            source: FilesystemStorageError::verification(
+            source: FilesystemStorageError::from(OperationContext::verification(
                 "create sandbox after executor filesystem shutdown",
                 None,
-            ),
+            )),
         })?;
         lifecycle::create_fresh_with_pressure_recovery(
             self.provisioning.clone(),

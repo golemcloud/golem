@@ -14,6 +14,7 @@
 
 use crate::blocking::BlockingTask;
 use crate::host_directories::{HostDirectory, TemporaryRoot};
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::{FilesystemStorageError, SandboxFilesystemProvisioning};
 
 use crate::services::golem_config::FilesystemStorageMode;
@@ -49,11 +50,11 @@ async fn make_executor_directories(
         .run(executor_directories_task(volume))
         .await
         .map_err(|error| {
-            FilesystemStorageError::task_failure(
+            FilesystemStorageError::from(OperationContext::task_failure(
                 "create executor directories",
                 root.as_deref(),
                 error,
-            )
+            ))
         })?
 }
 

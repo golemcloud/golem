@@ -34,6 +34,7 @@ use super::{
 };
 use crate::blocking::BlockingTask;
 use crate::host_directories::HostPath;
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::FilesystemStorageError;
 use crate::storage_volume::{AgentAccounting, FilesystemAllocation, FilesystemLimits};
 use crate::storage_volume::{FilesystemVolume, NativeStorageProfile};
@@ -154,11 +155,11 @@ impl NativeRoot {
             .run(move || Self::new(path, directory, tree_copy::native_seed_sync_platform()))
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "initialize fresh runtime directory",
                     Some(&error_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -258,11 +259,11 @@ impl SandboxFilesystem {
                 .run(move || project_allocation(&volume, _project_id))
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "observe managed XFS project allocation",
                         Some(&root),
                         error,
-                    )
+                    ))
                 })?
                 .map(Some)
                 .map_err(|error| {
@@ -286,9 +287,11 @@ impl SandboxFilesystem {
             filesystem_block_bytes: _filesystem_block_bytes,
         } = self.quota_authority
         else {
-            return Err(FilesystemStorageError::verification(
-                "install limits without quota authority",
-                Some(self.root()),
+            return Err(FilesystemStorageError::from(
+                OperationContext::verification(
+                    "install limits without quota authority",
+                    Some(self.root()),
+                ),
             ));
         };
         #[cfg(target_os = "linux")]
@@ -302,11 +305,11 @@ impl SandboxFilesystem {
                 })
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "install managed XFS project limits",
                         Some(&root),
                         error,
-                    )
+                    ))
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io(
@@ -677,11 +680,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "open sandbox filesystem path",
                     Some(&operation_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -720,11 +723,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "resolve sandbox filesystem namespace target",
                     Some(&operation_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -767,11 +770,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "read sandbox filesystem file",
                     Some(&operation_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -807,11 +810,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 })
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "read sandbox filesystem directory",
                         Some(&path),
                         error,
-                    )
+                    ))
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io(
@@ -837,11 +840,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "read sandbox filesystem symlink",
                     Some(&operation_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -887,11 +890,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 })
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "write sandbox filesystem file",
                         Some(&path),
                         error,
-                    )
+                    ))
                 })?;
             Ok(match attempt {
                 Ok(written) => SandboxWriteAttempt::completed(written),
@@ -917,11 +920,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             task.run(move || node.metadata().and_then(attributes))
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "read sandbox filesystem attributes",
                         Some(&path),
                         error,
-                    )
+                    ))
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io(
@@ -948,11 +951,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "read sandbox filesystem attributes",
                     Some(&path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io("read sandbox filesystem attributes", Some(&path), error)
@@ -981,11 +984,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "compare sandbox filesystem objects",
                     None,
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io("compare sandbox filesystem objects", None, error)
@@ -1006,11 +1009,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             task.run(move || file.set_len(size))
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "resize sandbox filesystem file",
                         Some(&path),
                         error,
-                    )
+                    ))
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io("resize sandbox filesystem file", Some(&path), error)
@@ -1033,11 +1036,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             task.run(move || node.set_times(times))
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "set sandbox filesystem times",
                         Some(&path),
                         error,
-                    )
+                    ))
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io("set sandbox filesystem times", Some(&path), error)
@@ -1061,11 +1064,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "set sandbox filesystem times",
                     Some(&path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io("set sandbox filesystem times", Some(&path), error)
@@ -1087,11 +1090,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "create sandbox filesystem directory",
                     Some(&operation_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -1118,11 +1121,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "create sandbox filesystem symlink",
                     Some(&operation_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -1150,11 +1153,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "hard-link sandbox filesystem path",
                     Some(&destination_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -1182,11 +1185,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "rename sandbox filesystem path",
                     Some(&destination_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -1212,11 +1215,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "remove sandbox filesystem directory",
                     Some(&operation_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -1242,11 +1245,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::from(OperationContext::task_failure(
                     "unlink sandbox filesystem file",
                     Some(&operation_path),
                     error,
-                )
+                ))
             })?
             .map_err(|error| {
                 FilesystemStorageError::io(
@@ -1273,11 +1276,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 .run(move || host_handle(&node)?.flush(level))
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "flush sandbox filesystem node",
                         Some(&path),
                         error,
-                    )
+                    ))
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io("flush sandbox filesystem node", Some(&path), error)
@@ -1365,11 +1368,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 })
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "seed sandbox filesystem",
                         Some(&error_path),
                         error,
-                    )
+                    ))
                 })?
         }
     }
@@ -1419,11 +1422,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 })
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "copy sandbox filesystem contents",
                         Some(&operation_path),
                         error,
-                    )
+                    ))
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io(

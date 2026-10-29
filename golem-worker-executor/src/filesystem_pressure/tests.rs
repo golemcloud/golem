@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::operation_failure::OperationContext;
 #[cfg(target_os = "linux")]
 use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
 #[cfg(target_os = "linux")]
@@ -123,7 +124,7 @@ impl CapacityRecoverySource for ScriptedRecovery {
         match self.observations.lock().unwrap().pop_front().unwrap() {
             Ok(observation) => Ok(observation),
             Err(message) => Err(FilesystemPressureError::Observation(
-                StorageVolumeError::verification(message, None),
+                StorageVolumeError::from(OperationContext::verification(message, None)),
             )),
         }
     }

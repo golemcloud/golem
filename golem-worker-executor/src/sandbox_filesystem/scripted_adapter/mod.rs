@@ -32,6 +32,7 @@ use super::{
     SandboxWriteAttempt, SandboxWritePlacement, SeedEntry,
 };
 use crate::host_directories::HostPath;
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::FilesystemStorageError;
 use crate::storage_volume::{AgentAccounting, FilesystemAllocation, FilesystemLimits};
 use bytes::Bytes;
@@ -47,7 +48,7 @@ use std::sync::{Arc, Mutex};
 pub(in crate::sandbox_filesystem) fn scripted_handle_error(
     operation: &'static str,
 ) -> FilesystemStorageError {
-    FilesystemStorageError::verification(operation, None)
+    FilesystemStorageError::from(OperationContext::verification(operation, None))
 }
 
 #[derive(Clone)]
@@ -830,9 +831,11 @@ pub(in crate::sandbox_filesystem) async fn scripted_outcome<T: Send + 'static>(
         state.calls.push(call);
         let gate = state.gates.remove(&operation);
         let outcome = outcomes(&mut state).pop_front().unwrap_or_else(|| {
-            Err(FilesystemStorageError::verification(
-                "consume programmed scripted sandbox filesystem outcome",
-                None,
+            Err(FilesystemStorageError::from(
+                OperationContext::verification(
+                    "consume programmed scripted sandbox filesystem outcome",
+                    None,
+                ),
             ))
         });
         (gate, outcome)
@@ -979,9 +982,11 @@ pub(in crate::sandbox_filesystem) fn take_outcome(
     outcome: &mut Option<Result<(), FilesystemStorageError>>,
     operation: &'static str,
 ) -> Result<(), FilesystemStorageError> {
-    outcome
-        .take()
-        .unwrap_or_else(|| Err(FilesystemStorageError::verification(operation, None)))
+    outcome.take().unwrap_or_else(|| {
+        Err(FilesystemStorageError::from(
+            OperationContext::verification(operation, None),
+        ))
+    })
 }
 
 impl SandboxFile {

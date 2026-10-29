@@ -47,7 +47,7 @@ fn assert_bind_keeps_clone_and_cleanup_failures(errno: i32) {
             Err(std::io::Error::from_raw_os_error(libc::EIO))
         },
     );
-    let Err(mut error) = result else {
+    let Err(error) = result else {
         panic!("bind must not return a volume after the clone probe fails");
     };
     assert_eq!(clone_attempts.get(), 1);
@@ -55,7 +55,7 @@ fn assert_bind_keeps_clone_and_cleanup_failures(errno: i32) {
     assert!(root.is_dir());
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
     assert_eq!(
-        error.context().io_error().unwrap().raw_os_error(),
+        error.as_ref().context().io_error().unwrap().raw_os_error(),
         Some(libc::EIO)
     );
     let original = std::io::Error::from_raw_os_error(errno);
@@ -68,15 +68,9 @@ fn assert_bind_keeps_clone_and_cleanup_failures(errno: i32) {
             root.display()
         )
     );
-    assert_eq!(error.context().io_kind(), Some(cleanup.kind()));
-    assert!(error.cleanup_failed());
-    assert!(error.context().task_error().is_none());
-    let primary = error.take_original_error().unwrap();
-    assert_eq!(
-        primary.context().io_error().unwrap().raw_os_error(),
-        Some(errno)
-    );
-    assert!(!primary.cleanup_failed());
+    assert_eq!(error.as_ref().context().io_kind(), Some(cleanup.kind()));
+    assert!(error.as_ref().cleanup_failed());
+    assert!(error.as_ref().context().task_error().is_none());
 }
 
 #[test]
@@ -101,7 +95,7 @@ fn apfs_constructor_refuses_a_root_on_a_non_cloning_filesystem() {
     );
     assert!(error.to_string().contains(root.path().to_str().unwrap()));
     assert_eq!(
-        error.context().io_error().unwrap().raw_os_error(),
+        error.as_ref().context().io_error().unwrap().raw_os_error(),
         Some(libc::ENOTSUP),
     );
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
@@ -124,11 +118,11 @@ fn apfs_failed_clone_probe_reports_the_root_and_removes_its_files() {
     );
     assert!(error.to_string().contains(root.path().to_str().unwrap()));
     assert_eq!(
-        error.context().io_kind(),
+        error.as_ref().context().io_kind(),
         Some(std::io::Error::from_raw_os_error(libc::ENOTSUP).kind())
     );
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
-    assert!(!error.cleanup_failed());
+    assert!(!error.as_ref().cleanup_failed());
 }
 
 #[test]
@@ -148,7 +142,7 @@ fn apfs_bind_exdev_clone_and_cleanup_failures_keep_both_causes() {
 fn apfs_successful_probe_with_failed_removal_reports_the_cleanup_cause() {
     use std::os::unix::fs::FileExt as _;
     let root = tempfile::tempdir().unwrap();
-    let mut error = probe_clone(
+    let error = probe_clone(
         root.path(),
         |source, directory, name| {
             let parent = cap_std::fs::Dir::from_std_file(directory.try_clone().unwrap());
@@ -164,13 +158,17 @@ fn apfs_successful_probe_with_failed_removal_reports_the_cleanup_cause() {
         },
     )
     .unwrap_err();
-    assert!(error.cleanup_failed());
-    assert_eq!(error.context().operation(), "remove APFS clone probe");
+    assert!(error.as_ref().cleanup_failed());
+    assert!(
+        error
+            .to_string()
+            .starts_with("failed to remove APFS clone probe")
+    );
     assert_eq!(
-        error.context().io_kind(),
+        error.as_ref().context().io_kind(),
         Some(std::io::ErrorKind::PermissionDenied)
     );
-    assert!(error.take_original_error().is_none());
+    assert!(!error.to_string().contains("cleanup also failed"));
 }
 
 #[test]

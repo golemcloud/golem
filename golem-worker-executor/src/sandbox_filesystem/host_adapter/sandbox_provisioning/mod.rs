@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::{NativeNameModeSource, SandboxFilesystem, directory_provisioning};
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::FilesystemStorageError;
 #[cfg(test)]
 use crate::services::golem_config::FilesystemStorageMode;
@@ -120,9 +121,8 @@ impl SandboxFilesystemName {
         }) {
             Ok(Self { components })
         } else {
-            Err(FilesystemStorageError::verification(
-                "validate sandbox filesystem name",
-                None,
+            Err(FilesystemStorageError::from(
+                OperationContext::verification("validate sandbox filesystem name", None),
             ))
         }
     }

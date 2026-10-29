@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::operation_failure::OperationContext;
 
 impl NamespaceCoordinator {
     pub(super) fn new() -> Self {
@@ -692,10 +693,10 @@ async fn symlink_postcondition<Adapter: SandboxFilesystemAdapter>(
     }
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or_else(|| {
-        FilesystemStorageError::verification(
+        FilesystemStorageError::from(OperationContext::verification(
             "inspect deleted filesystem symlink postcondition",
             None,
-        )
+        ))
     })?;
     let desired = sandbox
         .read_link(target)
@@ -793,10 +794,10 @@ async fn namespace_path_state<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<NamespacePathState, FilesystemStorageError> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or_else(|| {
-        FilesystemStorageError::verification(
+        FilesystemStorageError::from(OperationContext::verification(
             "inspect deleted filesystem namespace postcondition",
             None,
-        )
+        ))
     })?;
     match sandbox.get_path_attributes(target, SandboxFollow::No).await {
         Ok(attributes) => Ok(NamespacePathState::Present(attributes)),

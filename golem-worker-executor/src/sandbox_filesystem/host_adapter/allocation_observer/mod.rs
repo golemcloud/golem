@@ -14,6 +14,7 @@
 
 use super::{QuotaAuthority, SandboxFilesystem};
 use crate::blocking::BlockingTask;
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::FilesystemStorageError;
 use crate::storage_volume::FilesystemAllocation;
 
@@ -57,11 +58,11 @@ impl SandboxFilesystemAllocationObserver {
                 .run(move || project_allocation(&volume, _project_id))
                 .await
                 .map_err(|error| {
-                    FilesystemStorageError::task_failure(
+                    FilesystemStorageError::from(OperationContext::task_failure(
                         "observe managed XFS project allocation",
                         Some(&root),
                         error,
-                    )
+                    ))
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io(

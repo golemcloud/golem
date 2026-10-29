@@ -19,6 +19,8 @@ use super::initial_files::{
 };
 use super::*;
 use crate::host_directories::HostPath;
+#[cfg(test)]
+use crate::operation_failure::OperationContext;
 use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -1488,9 +1490,8 @@ mod tests {
             Some(Path::new("")),
             std::io::ErrorKind::PermissionDenied.into(),
         )));
-        control.push_close(Err(FilesystemStorageError::verification(
-            "close stored names",
-            Some(Path::new("")),
+        control.push_close(Err(FilesystemStorageError::from(
+            OperationContext::verification("close stored names", Some(Path::new(""))),
         )));
         let sandbox = ScriptedSandboxFilesystem::create_fresh(
             provisioning,

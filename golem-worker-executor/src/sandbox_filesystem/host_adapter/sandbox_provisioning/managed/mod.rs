@@ -21,6 +21,7 @@ use super::super::{NativeNameModeSource, NativeRoot, QuotaAuthority, SandboxFile
 use super::SandboxFilesystemName;
 use crate::blocking::BlockingTask;
 use crate::metrics::agent_filesystem::{self, ProjectCleanup as ProjectCleanupMetric};
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::FilesystemStorageError;
 use crate::storage_volume::{FilesystemVolume, ProjectQuotas, assign_project, stale_project};
 use golem_common::model::RetryConfig;
@@ -110,11 +111,11 @@ impl ManagedSandboxProvisioning {
                     .run(move || provisioning.projects.project_id(&existing_entry))
                     .await
                     .map_err(|error| {
-                        FilesystemStorageError::task_failure(
+                        FilesystemStorageError::from(OperationContext::task_failure(
                             "inspect stale managed XFS project",
                             Some(&cleanup_path),
                             error,
-                        )
+                        ))
                     })?
                     .map_err(|error| {
                         FilesystemStorageError::io(
@@ -420,11 +421,11 @@ impl ProjectCleanup {
                 .run(move || provisioning.finish_project_cleanup(project_id))
                 .await
                 .map_err(|error| {
-                    let failure = FilesystemStorageError::task_failure(
+                    let failure = FilesystemStorageError::from(OperationContext::task_failure(
                         "verify and clear managed XFS project",
                         Some(&self.path),
                         error,
-                    );
+                    ));
                     failure.during_cleanup()
                 })?;
             match attempt {

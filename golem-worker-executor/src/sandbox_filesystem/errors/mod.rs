@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::blocking::BlockingTaskError;
+use crate::cleanup_failure::CleanupFailure;
 use crate::host_directories::HostDirectoryError;
 use crate::operation_failure::OperationContext;
 use crate::storage_volume::StorageVolumeError;
@@ -31,20 +32,16 @@ pub struct FilesystemStorageError {
 }
 
 struct FilesystemStorageErrorInner {
-    context: OperationContext,
-    cleanup_failed: bool,
+    failure: CleanupFailure<FilesystemStorageError>,
     kind: FilesystemStorageErrorKind,
-    original_error: Option<Box<FilesystemStorageError>>,
 }
 
 impl FilesystemStorageError {
-    fn from_context(context: OperationContext) -> Self {
+    fn from_failure(failure: CleanupFailure<Self>) -> Self {
         Self {
             inner: Box::new(FilesystemStorageErrorInner {
-                context,
-                cleanup_failed: false,
+                failure,
                 kind: FilesystemStorageErrorKind::General,
-                original_error: None,
             }),
         }
     }
@@ -58,17 +55,16 @@ impl FilesystemStorageError {
         {
             kind = FilesystemStorageErrorKind::SandboxEscape;
         }
-        let mut error = Self::from_context(OperationContext::io(operation, path, source));
+        let mut error = Self::from(OperationContext::io(operation, path, source));
         error.inner.kind = kind;
         error
     }
 
-    pub(crate) fn verification(operation: &'static str, path: Option<&Path>) -> Self {
-        Self::from_context(OperationContext::verification(operation, path))
-    }
-
     pub(crate) fn allocation_unsupported(path: Option<&Path>) -> Self {
-        let mut error = Self::verification("observe allocation without quota authority", path);
+        let mut error = Self::from(OperationContext::verification(
+            "observe allocation without quota authority",
+            path,
+        ));
         error.inner.kind = FilesystemStorageErrorKind::AllocationUnsupported;
         error
     }
@@ -79,44 +75,30 @@ impl FilesystemStorageError {
         source: std::io::Error,
     ) -> Self {
         // A cleanup error keeps its storage classification rather than becoming an escape refusal.
-        Self::from_context(OperationContext::io(operation, path, source)).during_cleanup()
+        Self::from(OperationContext::io(operation, path, source)).during_cleanup()
     }
 
     pub(in crate::sandbox_filesystem) fn cleanup_verification(
         operation: &'static str,
         path: Option<&Path>,
     ) -> Self {
-        Self::verification(operation, path).during_cleanup()
-    }
-
-    pub(crate) fn task_failure(
-        operation: &'static str,
-        path: Option<&Path>,
-        source: BlockingTaskError,
-    ) -> Self {
-        Self::from_context(OperationContext::task_failure(operation, path, source))
-    }
-
-    #[cfg(test)]
-    pub(in crate::sandbox_filesystem) fn about(mut self, path: &Path) -> Self {
-        self.inner.context = self.inner.context.about(path);
-        self
+        Self::from(OperationContext::verification(operation, path)).during_cleanup()
     }
 
     pub(crate) fn cleanup_failed(&self) -> bool {
-        self.inner.cleanup_failed
+        self.inner.failure.cleanup_failed()
     }
 
     pub(crate) fn during_cleanup(mut self) -> Self {
-        self.inner.cleanup_failed = true;
+        self.inner.failure = self.inner.failure.during_cleanup();
         self
     }
 
     /// Keeps the cleanup failure's classification and both diagnostics.
     /// A failed rollback is cleanup failure even if its lower-level error was unflagged.
     pub(crate) fn with_cleanup_failure(self, mut cleanup: Self) -> Self {
-        cleanup.inner.original_error = Some(Box::new(self));
-        cleanup.during_cleanup()
+        cleanup.inner.failure = cleanup.inner.failure.with_original(self).during_cleanup();
+        cleanup
     }
 
     pub(crate) fn is_storage_exhaustion(&self) -> bool {
@@ -145,14 +127,14 @@ impl FilesystemStorageError {
         self.inner.kind == FilesystemStorageErrorKind::SandboxEscape
     }
     pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
-        self.inner.context.io_kind()
+        self.inner.failure.context().io_kind()
     }
     pub(crate) fn io_error(&self) -> Option<&std::io::Error> {
-        self.inner.context.io_error()
+        self.inner.failure.context().io_error()
     }
 
     pub(crate) fn task_error(&self) -> Option<&BlockingTaskError> {
-        self.inner.context.task_error()
+        self.inner.failure.context().task_error()
     }
     pub(crate) fn allocation_is_unsupported(&self) -> bool {
         self.inner.kind == FilesystemStorageErrorKind::AllocationUnsupported
@@ -173,51 +155,40 @@ impl Debug for FilesystemStorageError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         let mut debug = formatter.debug_struct("FilesystemStorageError");
         debug
-            .field("operation", &self.inner.context.operation())
-            .field("path", &self.inner.context.path())
-            .field("failure", self.inner.context.failure())
-            .field("cleanup_failed", &self.cleanup_failed())
+            .field("failure", &self.inner.failure)
             .field("kind", &self.inner.kind);
-        if let Some(original) = &self.inner.original_error {
-            debug.field("original_error", original);
-        }
         debug.finish()
     }
 }
 
 impl Display for FilesystemStorageError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Some(original) = &self.inner.original_error {
-            write!(formatter, "{original}; cleanup also failed: ")?;
-        }
-        Display::fmt(&self.inner.context, formatter)
+        Display::fmt(&self.inner.failure, formatter)
     }
 }
 
 impl std::error::Error for FilesystemStorageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.inner.context.source()
+        self.inner.failure.source()
+    }
+}
+
+impl From<OperationContext> for FilesystemStorageError {
+    fn from(context: OperationContext) -> Self {
+        Self::from_failure(CleanupFailure::new(context))
     }
 }
 
 impl From<HostDirectoryError> for FilesystemStorageError {
     fn from(error: HostDirectoryError) -> Self {
-        Self::from_context(error.into_context())
+        Self::from(error.into_context())
     }
 }
 
 impl From<StorageVolumeError> for FilesystemStorageError {
-    fn from(mut error: StorageVolumeError) -> Self {
-        let cleanup_failed = error.cleanup_failed();
-        let original = error
-            .take_original_error()
-            .map(|original| Self::from(*original));
-        let error = Self::from_context(error.into_context());
-        match original {
-            Some(original) => original.with_cleanup_failure(error),
-            None if cleanup_failed => error.during_cleanup(),
-            None => error,
-        }
+    fn from(error: StorageVolumeError) -> Self {
+        let failure: CleanupFailure<StorageVolumeError> = error.into();
+        Self::from_failure(failure.map_original(Self::from))
     }
 }
 

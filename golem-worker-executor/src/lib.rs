@@ -14,6 +14,7 @@
 
 pub(crate) mod blocking;
 pub mod bootstrap;
+pub(crate) mod cleanup_failure;
 pub mod config;
 pub mod durable_host;
 mod epoch_ticker;
@@ -154,7 +155,6 @@ use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
 use std::sync::Arc;
-use std::time::Duration;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -1265,17 +1265,6 @@ async fn build_scheduler_storage(
     }
 }
 
-/// Signals only this executor's shutdown. The caller still owns every task in its join set.
-async fn finish_failed_bootstrap(shutdown: &services::shutdown::Shutdown, grace: Duration) {
-    shutdown.cancel();
-    if !shutdown.wait_for_tracked(grace).await {
-        tracing::warn!(
-            ?grace,
-            "Failed-bootstrap cleanup exceeded the shutdown grace; executor resources may still be held"
-        );
-    }
-}
-
 /// Runs the worker executor
 pub async fn bootstrap_and_run_worker_executor<
     Ctx: WorkerCtx,
@@ -1323,7 +1312,7 @@ pub async fn bootstrap_and_run_worker_executor<
     let (worker_executor_impl, epoch, registry_service) = match created {
         Ok(created) => created,
         Err(error) => {
-            finish_failed_bootstrap(&shutdown, SHUTDOWN_GRACE).await;
+            shutdown.cancel_and_wait_for_tracked(SHUTDOWN_GRACE).await;
             return Err(error);
         }
     };
@@ -1392,7 +1381,10 @@ pub async fn bootstrap_and_run_worker_executor<
     }
     .await;
     if let Err(error) = started {
-        finish_failed_bootstrap(&run_details.shutdown, SHUTDOWN_GRACE).await;
+        run_details
+            .shutdown
+            .cancel_and_wait_for_tracked(SHUTDOWN_GRACE)
+            .await;
         return Err(error);
     }
 
@@ -1534,6 +1526,7 @@ mod tests {
     };
     use crate::services::golem_config::FilesystemStorageMode;
     use crate::workerctx::default::Context;
+    use std::time::Duration;
     use test_r::test;
 
     #[test]
@@ -1556,12 +1549,13 @@ mod tests {
             token.cancelled().await;
             released_cleanup.await.unwrap();
         });
-        tokio::time::timeout(
+        let completed = tokio::time::timeout(
             Duration::from_secs(1),
-            finish_failed_bootstrap(&shutdown, Duration::from_millis(10)),
+            shutdown.cancel_and_wait_for_tracked(Duration::from_millis(10)),
         )
         .await
         .expect("failed-bootstrap cleanup must return after its grace");
+        assert!(!completed);
         assert!(shutdown.token().is_cancelled());
         assert!(
             !cleanup.is_finished(),

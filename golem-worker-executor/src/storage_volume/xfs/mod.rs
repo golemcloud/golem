@@ -14,6 +14,7 @@
 
 use super::StorageVolumeError;
 use super::{FilesystemIdentity, FilesystemVolume, space_from_values};
+use crate::operation_failure::OperationContext;
 
 use crate::metrics::agent_filesystem;
 use crate::path_removal;
@@ -146,49 +147,65 @@ impl XfsRoot {
     /// process must hold the lock of the root. The function takes the exclusive lock of the root.
     /// It changes nothing on the volume, and none of its calls needs a privilege.
     pub(crate) fn open(root: &Path) -> Result<Self, StorageVolumeError> {
-        let root_fd = File::open(root)
-            .map_err(|error| StorageVolumeError::io("open XFS root", Some(root), error))?;
-        let filesystem = fstatfs(&root_fd).map_err(|error| {
-            StorageVolumeError::io("inspect XFS root", Some(root), errno_to_io(error))
+        let root_fd = File::open(root).map_err(|error| {
+            StorageVolumeError::from(OperationContext::io("open XFS root", Some(root), error))
         })?;
-        let identity = filesystem_identity(&root_fd)
-            .map_err(|error| StorageVolumeError::io("identify XFS root", Some(root), error))?;
+        let filesystem = fstatfs(&root_fd).map_err(|error| {
+            StorageVolumeError::from(OperationContext::io(
+                "inspect XFS root",
+                Some(root),
+                errno_to_io(error),
+            ))
+        })?;
+        let identity = filesystem_identity(&root_fd).map_err(|error| {
+            StorageVolumeError::from(OperationContext::io("identify XFS root", Some(root), error))
+        })?;
         let name_mode =
             validated_xfs_name_mode(filesystem.f_type as u64, identity).ok_or_else(|| {
-                StorageVolumeError::verification("validate XFS root filesystem type", Some(root))
+                StorageVolumeError::from(OperationContext::verification(
+                    "validate XFS root filesystem type",
+                    Some(root),
+                ))
             })?;
         let flags = geometry_flags(&root_fd).map_err(|error| {
-            StorageVolumeError::io("inspect XFS root geometry", Some(root), error)
+            StorageVolumeError::from(OperationContext::io(
+                "inspect XFS root geometry",
+                Some(root),
+                error,
+            ))
         })?;
         if !names_are_case_sensitive(flags) {
-            return Err(StorageVolumeError::verification(
+            return Err(StorageVolumeError::from(OperationContext::verification(
                 "validate XFS names are case-sensitive",
                 Some(root),
-            ));
+            )));
         }
         let mount_options = validate_xfs_root_location(&root_fd, root)?;
         flock(&root_fd, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
-            StorageVolumeError::io(
+            StorageVolumeError::from(OperationContext::io(
                 "acquire exclusive ownership of XFS root",
                 Some(root),
                 errno_to_io(error),
-            )
+            ))
         })?;
         let filesystem_block_bytes = u64::try_from(filesystem.f_bsize)
             .ok()
             .filter(|bytes| *bytes != 0 && bytes.is_multiple_of(XFS_BASIC_BLOCK_BYTES))
             .and_then(NonZeroU64::new)
             .ok_or_else(|| {
-                StorageVolumeError::verification("validate XFS filesystem block size", Some(root))
+                StorageVolumeError::from(OperationContext::verification(
+                    "validate XFS filesystem block size",
+                    Some(root),
+                ))
             })?;
         let stable_root: Box<Path> =
             PathBuf::from(format!("/proc/self/fd/{}", root_fd.as_raw_fd())).into_boxed_path();
         std::fs::metadata(&stable_root).map_err(|error| {
-            StorageVolumeError::io(
+            StorageVolumeError::from(OperationContext::io(
                 "open XFS root through its stable descriptor",
                 Some(root),
                 error,
-            )
+            ))
         })?;
         Ok(Self {
             root: Box::from(root),
@@ -232,23 +249,23 @@ pub(crate) fn bind_reflink(
 /// id and no project-inherit flag. Then no agent directory and no host directory gets a project.
 pub(crate) fn verify_no_project_quotas(root: &XfsRoot) -> Result<(), StorageVolumeError> {
     if project_quota_accounting(&root.mount_options) == ProjectQuotaAccounting::On {
-        return Err(StorageVolumeError::verification(
+        return Err(StorageVolumeError::from(OperationContext::verification(
             "verify XFS volume has no project quota accounting",
             Some(&root.root),
-        ));
+        )));
     }
     let attributes = get_fsxattr(&root.root_fd).map_err(|error| {
-        StorageVolumeError::io(
+        StorageVolumeError::from(OperationContext::io(
             "inspect XFS root project attributes",
             Some(&root.root),
             error,
-        )
+        ))
     })?;
     if has_project_identity(&attributes) {
-        return Err(StorageVolumeError::verification(
+        return Err(StorageVolumeError::from(OperationContext::verification(
             "verify XFS root has no project identity",
             Some(&root.root),
-        ));
+        )));
     }
     Ok(())
 }
@@ -266,14 +283,18 @@ pub(crate) fn probe_reflink(root: &XfsRoot) -> Result<(), StorageVolumeError> {
     let configured_probe = root.root.join(REFLINK_PROBE);
     remove_probe(&probe, &configured_probe, "remove stale XFS reflink probe")?;
     std::fs::create_dir(&probe).map_err(|error| {
-        StorageVolumeError::io("create XFS reflink probe", Some(&configured_probe), error)
+        StorageVolumeError::from(OperationContext::io(
+            "create XFS reflink probe",
+            Some(&configured_probe),
+            error,
+        ))
     })?;
     let probed = reflink_probe_contents(&probe).map_err(|error| {
-        StorageVolumeError::io(
+        StorageVolumeError::from(OperationContext::io(
             "validate XFS reflink support",
             Some(&configured_probe),
             error,
-        )
+        ))
     });
     let removed = remove_probe(&probe, &configured_probe, "remove XFS reflink probe");
     StorageVolumeError::after_cleanup(probed, removed)
@@ -284,8 +305,13 @@ fn remove_probe(
     configured: &Path,
     operation: &'static str,
 ) -> Result<(), StorageVolumeError> {
-    path_removal::remove_and_verify(path)
-        .map_err(|failure| StorageVolumeError::from_removal(operation, configured, failure))
+    path_removal::remove_and_verify(path).map_err(|failure| {
+        StorageVolumeError::from(OperationContext::new(
+            operation,
+            Some(configured),
+            failure.into(),
+        ))
+    })
 }
 
 /// Writes a file in the empty directory `probe`, reflinks it into a new file, and checks that the
@@ -330,7 +356,11 @@ impl ProjectQuotas {
         let quotas = XfsQuotadClient::connect(xfs_quotad_socket, name_mode.identity.device)
             .map(Arc::new)
             .map_err(|error| {
-                StorageVolumeError::io("connect to xfs-quotad", Some(&configured_root), error)
+                StorageVolumeError::from(OperationContext::io(
+                    "connect to xfs-quotad",
+                    Some(&configured_root),
+                    error,
+                ))
             })?;
         clear_root_project_assignment(&root_fd, &configured_root)?;
         agent_filesystem::record_agent_filesystem_volume_opened(true);
@@ -498,21 +528,21 @@ impl ProjectQuotas {
 
     fn validate_project_quota_state(&self) -> Result<(), StorageVolumeError> {
         self.observe_project_quota_state().map_err(|error| {
-            StorageVolumeError::io(
+            StorageVolumeError::from(OperationContext::io(
                 "validate managed XFS project quota accounting and enforcement",
                 Some(&self.root),
                 error,
-            )
+            ))
         })?;
 
         // Querying project zero proves that the executor has quota-query
         // privileges without assigning a reusable project identity.
         self.project_usage(0).map_err(|error| {
-            StorageVolumeError::io(
+            StorageVolumeError::from(OperationContext::io(
                 "validate managed XFS project quota query permissions",
                 Some(&self.root),
                 error,
-            )
+            ))
         })?;
         Ok(())
     }
@@ -535,48 +565,56 @@ impl ProjectQuotas {
         let probe = self.root.join(".golem-xfs-project-probe");
         if probe.exists() {
             std::fs::remove_dir_all(&probe).map_err(|error| {
-                StorageVolumeError::io(
+                StorageVolumeError::from(OperationContext::io(
                     "remove stale managed XFS startup probe",
                     Some(&probe),
                     error,
-                )
+                ))
             })?;
         }
 
         let usage = self.project_usage(project_id.get()).map_err(|error| {
-            StorageVolumeError::io(
+            StorageVolumeError::from(OperationContext::io(
                 "validate 32-bit XFS project quota query",
                 Some(&self.root),
                 error,
-            )
+            ))
         })?;
         if !project_is_empty(usage) {
-            return Err(StorageVolumeError::verification(
+            return Err(StorageVolumeError::from(OperationContext::verification(
                 "reserve unused 32-bit XFS startup probe project",
                 Some(&self.root),
-            ));
+            )));
         }
         self.clear_project_limits(project_id).map_err(|error| {
-            StorageVolumeError::io(
+            StorageVolumeError::from(OperationContext::io(
                 "validate XFS project quota update permissions",
                 Some(&self.root),
                 error,
-            )
+            ))
         })?;
         std::fs::create_dir(&probe).map_err(|error| {
-            StorageVolumeError::io("create managed XFS startup probe", Some(&probe), error)
+            StorageVolumeError::from(OperationContext::io(
+                "create managed XFS startup probe",
+                Some(&probe),
+                error,
+            ))
         })?;
         let probed = self
             .probe_project_inheritance(&probe, project_id)
             .map_err(|error| {
-                StorageVolumeError::io(
+                StorageVolumeError::from(OperationContext::io(
                     "validate managed XFS project assignment and inheritance",
                     Some(&probe),
                     error,
-                )
+                ))
             });
         let removed = std::fs::remove_dir_all(&probe).map_err(|error| {
-            StorageVolumeError::io("remove managed XFS startup probe", Some(&probe), error)
+            StorageVolumeError::from(OperationContext::io(
+                "remove managed XFS startup probe",
+                Some(&probe),
+                error,
+            ))
         });
         StorageVolumeError::after_cleanup(probed, removed)?;
         self.finish_project_cleanup_with_retry(project_id, cleanup_retry)
@@ -843,11 +881,11 @@ pub(crate) fn clear_root_project_assignment(
     root: &Path,
 ) -> Result<(), StorageVolumeError> {
     let mut attributes = get_fsxattr(root_fd).map_err(|error| {
-        StorageVolumeError::io(
+        StorageVolumeError::from(OperationContext::io(
             "inspect managed XFS root project attributes",
             Some(root),
             error,
-        )
+        ))
     })?;
     // Linux lets only the owner of the root change its attributes, and the root of a new volume
     // belongs to root. A root without a project needs no change, so the executor needs no
@@ -859,24 +897,24 @@ pub(crate) fn clear_root_project_assignment(
     attributes.fsx_xflags &= !linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
     attributes.fsx_pad = [0; 8];
     set_fsxattr(root_fd, attributes).map_err(|error| {
-        StorageVolumeError::io(
+        StorageVolumeError::from(OperationContext::io(
             "clear managed XFS root project inheritance",
             Some(root),
             error,
-        )
+        ))
     })?;
     let assigned = get_fsxattr(root_fd).map_err(|error| {
-        StorageVolumeError::io(
+        StorageVolumeError::from(OperationContext::io(
             "verify managed XFS root project attributes",
             Some(root),
             error,
-        )
+        ))
     })?;
     if has_project_identity(&assigned) {
-        return Err(StorageVolumeError::verification(
+        return Err(StorageVolumeError::from(OperationContext::verification(
             "verify managed XFS root has neutral project identity",
             Some(root),
-        ));
+        )));
     }
     Ok(())
 }
@@ -908,20 +946,25 @@ pub(crate) fn has_project_identity(attributes: &linux_raw_sys::general::fsxattr)
 
 /// Checks that a host directory has no project id and gives no project id to what is made in it.
 pub(crate) fn verify_host_directory_has_no_project(path: &Path) -> Result<(), StorageVolumeError> {
-    let directory = File::open(path)
-        .map_err(|error| StorageVolumeError::io("open XFS host directory", Some(path), error))?;
+    let directory = File::open(path).map_err(|error| {
+        StorageVolumeError::from(OperationContext::io(
+            "open XFS host directory",
+            Some(path),
+            error,
+        ))
+    })?;
     let attributes = get_fsxattr(&directory).map_err(|error| {
-        StorageVolumeError::io(
+        StorageVolumeError::from(OperationContext::io(
             "inspect XFS host directory project attributes",
             Some(path),
             error,
-        )
+        ))
     })?;
     if has_project_identity(&attributes) {
-        return Err(StorageVolumeError::verification(
+        return Err(StorageVolumeError::from(OperationContext::verification(
             "verify XFS host directory has no project identity",
             Some(path),
-        ));
+        )));
     }
     Ok(())
 }
@@ -939,14 +982,18 @@ pub(crate) fn validate_xfs_root_location(
         StatxFlags::MNT_ID,
     )
     .map_err(|error| {
-        StorageVolumeError::io(
+        StorageVolumeError::from(OperationContext::io(
             "inspect XFS root mount location",
             Some(root),
             errno_to_io(error),
-        )
+        ))
     })?;
     let mount_table = std::fs::read_to_string(MOUNT_TABLE).map_err(|error| {
-        StorageVolumeError::io("read the mount table", Some(Path::new(MOUNT_TABLE)), error)
+        StorageVolumeError::from(OperationContext::io(
+            "read the mount table",
+            Some(Path::new(MOUNT_TABLE)),
+            error,
+        ))
     })?;
     let mount_id =
         (location.stx_mask & StatxFlags::MNT_ID.bits() != 0).then_some(location.stx_mnt_id);
@@ -960,10 +1007,10 @@ pub(crate) fn validate_xfs_root_location(
         {
             Ok(Box::from(line.super_options))
         }
-        _ => Err(StorageVolumeError::verification(
+        _ => Err(StorageVolumeError::from(OperationContext::verification(
             "validate XFS root is the filesystem mount root",
             Some(root),
-        )),
+        ))),
     }
 }
 

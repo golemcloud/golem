@@ -1,6 +1,7 @@
 use super::*;
 use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
 use crate::host_directories::HostDirectory;
+use crate::operation_failure::OperationContext;
 use crate::sandbox_filesystem::{
     ScriptedSandboxFilesystemControl, ScriptedSandboxFilesystemProvisioning, ScriptedSandboxPath,
     ScriptedSandboxPathBase, ScriptedSandboxPathCall,
@@ -2978,9 +2979,8 @@ async fn hard_link_collision_preserves_non_directory_and_nonterminal_proof_resul
         (None, Err(missing("source proof"))),
         (
             None,
-            Err(FilesystemStorageError::verification(
-                "source proof",
-                Some(Path::new("source")),
+            Err(FilesystemStorageError::from(
+                OperationContext::verification("source proof", Some(Path::new("source"))),
             )),
         ),
         (

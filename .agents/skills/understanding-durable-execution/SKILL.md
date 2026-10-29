@@ -2252,6 +2252,8 @@ which can also contain other services. A timeout logs that resources may still b
 the original error. Neither that error nor cancellation of the bootstrap future is a completed
 cleanup receipt. The cancellation guard exists for abandoned futures; normal error paths must
 signal before awaiting their bounded cleanup.
+Both failed bootstrap and process termination use `Shutdown::cancel_and_wait_for_tracked` for
+the cancel, bounded wait and warning. The caller still owns termination of its server join set.
 
 `storage_volume` owns shared storage roots, capacity observations, native cloning and XFS project
 allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
@@ -2272,6 +2274,13 @@ rollback retain both diagnostics when the operation and its cleanup fail, with t
 failure's classification. A failed rollback deletion always sets `cleanup_failed`, even if the
 lower-level error was unflagged. Worker startup then retains its cleanup obligation instead of
 treating the result only as a creation error. Task failures have no I/O kind and remain terminal.
+
+Plain construction uses `OperationContext` and `From` rather than domain constructor forwarders.
+The sandbox I/O factory remains because it classifies capability escapes. `cleanup_failure::CleanupFailure<E>`
+shares the flag, original-error chain and formatting without choosing when a domain marks cleanup.
+Its type parameter preserves original error types. Conversions consume the chain and map its
+original errors; they do not detach them through a mutator. Debug output uses the stored context
+and chain directly.
 
 Native cloning uses source-first arguments. APFS `clone_file_at` creates a directory entry;
 XFS `clone_file_contents` fills an already-open target. The XFS project-aware operation keeps

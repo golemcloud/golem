@@ -28,10 +28,14 @@ fn stale_probe_removal_is_a_primary_failure_and_reports_the_configured_path() {
         "remove stale XFS reflink probe",
     )
     .unwrap_err();
-    assert!(!error.cleanup_failed());
-    assert_eq!(error.context().path(), Some(configured));
+    assert!(!error.as_ref().cleanup_failed());
+    assert!(
+        error
+            .to_string()
+            .contains(&configured.display().to_string())
+    );
     assert_eq!(
-        error.context().io_kind(),
+        error.as_ref().context().io_kind(),
         Some(std::io::ErrorKind::NotADirectory)
     );
     assert_eq!(std::fs::read(file).unwrap(), b"sentinel");

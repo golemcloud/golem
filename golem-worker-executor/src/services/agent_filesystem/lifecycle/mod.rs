@@ -16,6 +16,7 @@ use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecover
 use crate::host_directories::HostDirectory;
 use crate::host_directories::HostDirectoryError;
 use crate::metrics::agent_filesystem::{self, StorageRefusal};
+use crate::operation_failure::OperationContext;
 #[cfg(test)]
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::{
@@ -466,7 +467,9 @@ impl Debug for DeleteFailure {
 impl DeleteFailure {
     fn unverified(operation: &'static str) -> Self {
         Self {
-            source: Arc::new(FilesystemStorageError::verification(operation, None)),
+            source: Arc::new(FilesystemStorageError::from(
+                OperationContext::verification(operation, None),
+            )),
             retry: None,
         }
     }
@@ -583,7 +586,10 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
         let _lease = self.registry.lease_internal_call();
         let sandbox = self.sandbox.read().await;
         let sandbox = sandbox.as_ref().ok_or_else(|| {
-            FilesystemStorageError::verification("observe deleted agent filesystem", None)
+            FilesystemStorageError::from(OperationContext::verification(
+                "observe deleted agent filesystem",
+                None,
+            ))
         })?;
         match sandbox.observe_allocation().await {
             Ok(allocation) => Ok(FilesystemUsage::Authoritative {

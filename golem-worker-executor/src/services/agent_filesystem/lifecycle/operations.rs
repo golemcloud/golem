@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::operation_failure::OperationContext;
 
 /// Opens the target according to the expected kind, access mode, symlink policy, and disposition.
 ///
@@ -392,7 +393,10 @@ async fn open_postcondition<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<bool, FilesystemStorageError> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or_else(|| {
-        FilesystemStorageError::verification("inspect deleted filesystem open postcondition", None)
+        FilesystemStorageError::from(OperationContext::verification(
+            "inspect deleted filesystem open postcondition",
+            None,
+        ))
     })?;
     let attributes = sandbox
         .get_path_attributes(

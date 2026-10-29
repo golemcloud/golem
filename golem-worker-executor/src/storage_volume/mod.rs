@@ -16,6 +16,7 @@
 //! storage, but own their confined trees and their creation and deletion separately.
 
 mod errors;
+use crate::operation_failure::OperationContext;
 
 use crate::blocking::BlockingTask;
 use crate::services::golem_config::FilesystemStorageMode;
@@ -167,10 +168,10 @@ impl FilesystemVolume {
         _socket: &Path,
         _retry: &RetryConfig,
     ) -> Result<Self, StorageVolumeError> {
-        Err(StorageVolumeError::verification(
+        Err(StorageVolumeError::from(OperationContext::verification(
             "initialize XFS storage on a non-Linux platform",
             Some(root),
-        ))
+        )))
     }
 
     #[cfg(target_os = "linux")]
@@ -184,10 +185,10 @@ impl FilesystemVolume {
 
     #[cfg(not(target_os = "linux"))]
     fn open_reflink(root: &Path) -> Result<Self, StorageVolumeError> {
-        Err(StorageVolumeError::verification(
+        Err(StorageVolumeError::from(OperationContext::verification(
             "initialize XFS storage on a non-Linux platform",
             Some(root),
-        ))
+        )))
     }
 
     #[cfg(target_os = "macos")]
@@ -197,10 +198,10 @@ impl FilesystemVolume {
 
     #[cfg(not(target_os = "macos"))]
     fn open_apfs(root: &Path) -> Result<Self, StorageVolumeError> {
-        Err(StorageVolumeError::verification(
+        Err(StorageVolumeError::from(OperationContext::verification(
             "initialize APFS storage on a non-macOS platform",
             Some(root),
-        ))
+        )))
     }
 
     pub(crate) fn unmanaged_development() -> Self {
@@ -413,11 +414,11 @@ pub(crate) async fn observe_space(
         .run(move || observe_space_blocking(&volume))
         .await
         .map_err(|error| {
-            StorageVolumeError::task_failure(
+            StorageVolumeError::from(OperationContext::task_failure(
                 "observe filesystem volume space",
                 path.as_deref(),
                 error,
-            )
+            ))
         })?
 }
 
@@ -448,11 +449,11 @@ pub(crate) fn observe_space_blocking(
         }
     };
     observed.map_err(|error| {
-        StorageVolumeError::io(
+        StorageVolumeError::from(OperationContext::io(
             "observe filesystem volume space",
             volume.state.root.as_deref(),
             error,
-        )
+        ))
     })
 }
 

@@ -87,15 +87,6 @@ impl OperationContext {
         Self::new(operation, path, OperationFailure::Task(source))
     }
 
-    pub(crate) fn operation(&self) -> &'static str {
-        self.operation
-    }
-    pub(crate) fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
-    }
-    pub(crate) fn failure(&self) -> &OperationFailure {
-        &self.failure
-    }
     pub(crate) fn io_error(&self) -> Option<&std::io::Error> {
         self.failure.io_error()
     }
@@ -104,12 +95,6 @@ impl OperationContext {
     }
     pub(crate) fn task_error(&self) -> Option<&BlockingTaskError> {
         self.failure.task_error()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn about(mut self, path: &Path) -> Self {
-        self.path = Some(path.to_path_buf());
-        self
     }
 }
 

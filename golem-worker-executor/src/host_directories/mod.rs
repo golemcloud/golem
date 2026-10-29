@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod errors;
+use crate::operation_failure::OperationContext;
 
 use crate::blocking::BlockingTask;
 use crate::path_removal;
@@ -72,11 +73,11 @@ impl HostPath {
         if !matches!(components.next(), Some(Component::Normal(component)) if component == name)
             || components.next().is_some()
         {
-            return Err(HostDirectoryError::io(
+            return Err(HostDirectoryError::from(OperationContext::io(
                 "validate host path name",
-                self.as_path(),
+                Some(self.as_path()),
                 std::io::ErrorKind::InvalidInput.into(),
-            ));
+            )));
         }
         Ok(Self(Arc::from(self.as_path().join(name))))
     }
@@ -104,7 +105,11 @@ impl HostDirectory {
             .run(move || Self::create_fresh_blocking(path, root, temporary_root))
             .await
             .map_err(|error| {
-                HostDirectoryError::task_failure("create host directory", &error_path, error)
+                HostDirectoryError::from(OperationContext::task_failure(
+                    "create host directory",
+                    Some(&error_path),
+                    error,
+                ))
             })?
     }
 
@@ -118,12 +123,21 @@ impl HostDirectory {
     ) -> Result<Self, HostDirectoryError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
-                HostDirectoryError::io("create host directory parent", parent, error)
+                HostDirectoryError::from(OperationContext::io(
+                    "create host directory parent",
+                    Some(parent),
+                    error,
+                ))
             })?;
         }
         remove_and_verify(&path, "remove stale host directory")?;
-        std::fs::create_dir(&path)
-            .map_err(|error| HostDirectoryError::io("create host directory", &path, error))?;
+        std::fs::create_dir(&path).map_err(|error| {
+            HostDirectoryError::from(OperationContext::io(
+                "create host directory",
+                Some(&path),
+                error,
+            ))
+        })?;
         Ok(Self::owned(path, root, temporary_root))
     }
 
@@ -137,17 +151,21 @@ impl HostDirectory {
         BlockingTask::Spawn
             .run(move || {
                 std::fs::create_dir(path.as_path()).map_err(|error| {
-                    HostDirectoryError::io("create host directory", path.as_path(), error)
+                    HostDirectoryError::from(OperationContext::io(
+                        "create host directory",
+                        Some(path.as_path()),
+                        error,
+                    ))
                 })?;
                 Ok(Self::owned(path.as_path().into(), None, None))
             })
             .await
             .map_err(|error| {
-                HostDirectoryError::task_failure(
+                HostDirectoryError::from(OperationContext::task_failure(
                     "create host directory",
-                    error_path.as_path(),
+                    Some(error_path.as_path()),
                     error,
-                )
+                ))
             })?
     }
 
@@ -184,11 +202,11 @@ impl HostDirectory {
             .run(self.discard_task())
             .await
             .map_err(|error| {
-                HostDirectoryError::task_failure(
+                HostDirectoryError::from(OperationContext::task_failure(
                     "discard host directory",
-                    self.path.as_path(),
+                    Some(self.path.as_path()),
                     error,
-                )
+                ))
             })?
     }
 
@@ -230,8 +248,9 @@ impl Drop for HostDirectory {
 }
 
 fn remove_and_verify(path: &Path, operation: &'static str) -> Result<(), HostDirectoryError> {
-    path_removal::remove_and_verify(path)
-        .map_err(|failure| HostDirectoryError::new(operation, path, failure.into()))
+    path_removal::remove_and_verify(path).map_err(|failure| {
+        HostDirectoryError::from(OperationContext::new(operation, Some(path), failure.into()))
+    })
 }
 
 #[cfg(test)]

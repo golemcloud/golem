@@ -12,39 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::blocking::BlockingTaskError;
-use crate::operation_failure::{OperationContext, OperationFailure};
+use crate::operation_failure::OperationContext;
 use std::fmt::{Display, Formatter};
-use std::path::Path;
 
 #[derive(Debug)]
 pub(crate) struct HostDirectoryError {
     context: OperationContext,
 }
 
+impl From<OperationContext> for HostDirectoryError {
+    fn from(context: OperationContext) -> Self {
+        Self { context }
+    }
+}
+
 impl HostDirectoryError {
-    pub(super) fn new(operation: &'static str, path: &Path, failure: OperationFailure) -> Self {
-        Self {
-            context: OperationContext::new(operation, Some(path), failure),
-        }
-    }
-
-    pub(super) fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
-        Self {
-            context: OperationContext::io(operation, Some(path), source),
-        }
-    }
-
-    pub(super) fn task_failure(
-        operation: &'static str,
-        path: &Path,
-        source: BlockingTaskError,
-    ) -> Self {
-        Self {
-            context: OperationContext::task_failure(operation, Some(path), source),
-        }
-    }
-
     pub(crate) fn context(&self) -> &OperationContext {
         &self.context
     }

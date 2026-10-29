@@ -20,7 +20,7 @@ use golem_worker_executor::services::golem_config::{GolemConfig, make_config_loa
 use golem_worker_executor::services::shutdown::SHUTDOWN_GRACE;
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tracing::{info, warn};
+use tracing::info;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -87,13 +87,10 @@ async fn async_main(
     // for instead of being cut off when the runtime is dropped.
     // InvocationLoops also fences oplogs and cancels workers on this token. The server stays
     // open until tracked shutdown work finishes or the grace expires.
-    run_details.shutdown.cancel();
-    if !run_details.shutdown.wait_for_tracked(SHUTDOWN_GRACE).await {
-        warn!(
-            grace = ?SHUTDOWN_GRACE,
-            "Background tasks did not finish within the shutdown grace period"
-        );
-    }
+    run_details
+        .shutdown
+        .cancel_and_wait_for_tracked(SHUTDOWN_GRACE)
+        .await;
     join_set.shutdown().await;
     Ok(())
 }
