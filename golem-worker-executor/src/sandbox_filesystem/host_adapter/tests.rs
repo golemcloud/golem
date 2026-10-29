@@ -108,7 +108,7 @@ async fn only_bounded_work_on_known_local_storage_can_run_in_place() {
 
     let directory = filesystem
         .open(
-            SandboxPath::at_root(""),
+            SandboxPath::at_root("."),
             existing_open(SandboxObjectKind::Directory, SandboxAccessMode::Read),
         )
         .await
@@ -119,7 +119,7 @@ async fn only_bounded_work_on_known_local_storage_can_run_in_place() {
     spawned(filesystem.read_directory(opened)).await.unwrap();
     let target = create_scratch_directory(parent.path()).await;
     spawned(filesystem.copy_contents(
-        SandboxPath::at_root(""),
+        SandboxPath::at_root("."),
         Arc::new(TreeExclusions::new(std::iter::empty::<PathBuf>())),
         target.path(),
     ))

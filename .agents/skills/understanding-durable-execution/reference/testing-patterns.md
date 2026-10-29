@@ -305,6 +305,12 @@ fresh work—not merely that A's operation returned. For executor shutdown, ente
 callback before shutdown, then prove task destruction and callback/oplog-layer joins complete
 without semantic finalization.
 
+After executor drainage, captured oplog actors are closed even when a test retains their Worker
+handles. Check persisted history through `OplogService`, not actor-backed metadata queries such as
+`worker.oplog().current_oplog_index()`. For example, reciprocal-topology shutdown checks compare
+the stored last indexes after joining the reconcilers and executor drain. Retaining a handle is
+not a promise that its actor accepts more queries.
+
 Copy: `tests/tool_streaming/mod.rs::suspended_restart_replays_completed_tool_without_semantic_retry`,
 the lifecycle propagation and stale-generation cases in `tests/active_agents.rs`, and the retained
 entity shutdown cases in `src/services/active_agents/tests.rs` and

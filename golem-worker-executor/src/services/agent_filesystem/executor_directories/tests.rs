@@ -146,7 +146,11 @@ async fn provision_removes_the_scratch_directory_when_the_initial_files_director
     .expect("a .initial-files that cannot be made must fail the provisioning");
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
 
-    assert!(failure.cleanup_failed(), "{failure}");
+    assert!(
+        !failure.cleanup_failed(),
+        "the initial removal failed, not the rollback: {failure}"
+    );
+    assert_eq!(failure.io_kind(), Some(ErrorKind::PermissionDenied));
     assert!(
         !root.path().join(".scratch").exists(),
         "a failed .initial-files must leave no .scratch"
@@ -448,7 +452,7 @@ fn discards_dropped_while_queued_keep_their_root_until_their_native_work_ends() 
             "the discards must wait for the blocking thread"
         );
     });
-    drop(provisioning);
+    drop((scratch, initial_files, provisioning));
 
     let reused = cancelled_setup::reuse(&unrelated_descriptor, number);
     let kept = reused != number && cancelled_setup::names(number, &original);

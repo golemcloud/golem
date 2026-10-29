@@ -1453,10 +1453,24 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     })
     .await
     .map_err(|_| anyhow::anyhow!("durable stream reconcilers did not stop within 10s"))?;
-    let a_stopped_at = a.oplog().current_oplog_index().await;
-    let b_stopped_at = b.oplog().current_oplog_index().await;
+    // Shutdown closes the captured oplog actors. Read persisted indexes after drainage instead
+    // of submitting metadata queries to those retired actors.
+    seed.active_agents()
+        .invocation_loops()
+        .wait_for_exit()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let oplogs = seed.oplog_service();
+    let a_stopped_at = oplogs.get_last_index(&a_id, AgentMode::Durable).await?;
+    let b_stopped_at = oplogs.get_last_index(&b_id, AgentMode::Durable).await?;
     tokio::time::sleep(CACHE_TTL * 3).await;
-    assert_eq!(a.oplog().current_oplog_index().await, a_stopped_at);
-    assert_eq!(b.oplog().current_oplog_index().await, b_stopped_at);
+    assert_eq!(
+        oplogs.get_last_index(&a_id, AgentMode::Durable).await?,
+        a_stopped_at
+    );
+    assert_eq!(
+        oplogs.get_last_index(&b_id, AgentMode::Durable).await?,
+        b_stopped_at
+    );
     Ok(())
 }
