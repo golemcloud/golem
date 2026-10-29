@@ -637,6 +637,11 @@ object GuestSchemaValueStreamHandle {
  * registered only while the owner may still have to close it: it is dropped
  * once its stream finalizes on its own, once its cleanup has run, or once the
  * stream is transferred out of the owner.
+ *
+ * Finalizers can complete on another thread and remove their entry while the
+ * owner closes, so the registry and each entry guard their state with their own
+ * lock. Neither lock is held while streams close or while the other lock is
+ * acquired.
  */
 private[golem] final class AgentStreamOwnership {
   private implicit val executionContext: ExecutionContext = ExecutionContext.parasitic
@@ -645,33 +650,44 @@ private[golem] final class AgentStreamOwnership {
 
   private[golem] def register(owned: AgentStreamOwnership.Owned): AgentStreamOwnership.Entry = {
     val entry = new AgentStreamOwnership.Entry(this, owned)
-    if (!closed) entries += entry
-    else AgentStreamOwnership.cleanup(entry.close())
+    add(entry)
     entry
   }
 
-  private def remove(entry: AgentStreamOwnership.Entry): Unit =
-    if (!closed) entries -= entry
+  private def add(entry: AgentStreamOwnership.Entry): Unit = {
+    val added = synchronized {
+      if (!closed) entries += entry
+      !closed
+    }
+    if (!added) AgentStreamOwnership.cleanup(entry.close())
+  }
 
-  private[golem] def pendingEntries: Int = entries.size
+  private def remove(entry: AgentStreamOwnership.Entry): Unit =
+    synchronized {
+      if (!closed) entries -= entry
+    }
+
+  private[golem] def pendingEntries: Int = synchronized(entries.size)
 
   /** Successful decoding transfers all acquired streams to the caller. */
-  def handoff(): Unit = entries.toList.foreach(_.commit())
+  def handoff(): Unit = synchronized(entries.toList).foreach(_.commit())
 
   private[golem] def transferTo(target: AgentStreamOwnership): Unit = {
-    val acquired = entries.toList
-    entries.clear()
+    val acquired = synchronized {
+      val snapshot = entries.toList
+      entries.clear()
+      snapshot
+    }
     acquired.foreach(target.accept)
   }
 
   private def accept(entry: AgentStreamOwnership.Entry): Unit = {
-    entry.owner = this
-    if (!closed) entries += entry
-    else AgentStreamOwnership.cleanup(entry.close())
+    entry.moveTo(this)
+    add(entry)
   }
 
   def close(): Future[Unit] = {
-    val owned =
+    val owned = synchronized {
       if (closed) Nil
       else {
         closed = true
@@ -679,6 +695,7 @@ private[golem] final class AgentStreamOwnership {
         entries.clear()
         snapshot
       }
+    }
     Future
       .sequence(owned.map(entry => AgentStreamOwnership.cleanup(entry.close())))
       .map(_ => ())
@@ -700,29 +717,35 @@ private[golem] object AgentStreamOwnership {
   }
 
   final class Entry private[AgentStreamOwnership] (
-    private[AgentStreamOwnership] var owner: AgentStreamOwnership,
+    private var owner: AgentStreamOwnership,
     initialOwned: Owned
   ) {
     private var owned: Owned                                       = initialOwned
     private var state: Either[Boolean, Promise[Unit]]              = Left(false)
     private var transferredOwnership: Option[AgentStreamOwnership] = None
 
+    private[AgentStreamOwnership] def moveTo(target: AgentStreamOwnership): Unit =
+      synchronized { owner = target }
+
     def replace(target: Owned): Unit =
-      state match {
-        case Left(false) => owned = target
-        case _           => ()
+      synchronized {
+        state match {
+          case Left(false) => owned = target
+          case _           => ()
+        }
       }
 
     def commit(): Unit = {
-      val committed =
+      val committed = synchronized {
         state match {
           case Left(false) =>
             transferredOwnership = Some(new AgentStreamOwnership)
             state = Left(true)
-            true
-          case _ => false
+            Some(owner)
+          case _ => None
         }
-      if (committed) owner.remove(this)
+      }
+      committed.foreach(_.remove(this))
     }
 
     /**
@@ -732,7 +755,7 @@ private[golem] object AgentStreamOwnership {
      * part of the outer stream and must not settle the shared entry early.
      */
     def release(target: Owned, completion: Future[Unit]): Unit = {
-      val released =
+      val released = synchronized {
         state match {
           case Left(false) if owned eq target =>
             val done = Promise[Unit]()
@@ -740,29 +763,32 @@ private[golem] object AgentStreamOwnership {
             Some(done)
           case _ => None
         }
+      }
       released.foreach(settle(_, completion))
     }
 
     private def settle(done: Promise[Unit], completion: Future[Unit]): Unit =
       completion.onComplete { result =>
         done.tryComplete(result)
-        owner.remove(this)
+        synchronized(owner).remove(this)
       }(using ExecutionContext.parasitic)
 
     def activeOwner: Option[AgentStreamOwnership] =
-      state match {
-        case Left(false) => Some(owner)
-        case Left(true)  => transferredOwnership
-        case Right(_)    => None
+      synchronized {
+        state match {
+          case Left(false) => Some(owner)
+          case Left(true)  => transferredOwnership
+          case Right(_)    => None
+        }
       }
 
     /**
      * Only an already handed-off reader owns a private per-item child scope.
      */
-    def handoffDecodedItem(): Unit = transferredOwnership.foreach(_.handoff())
+    def handoffDecodedItem(): Unit = synchronized(transferredOwnership).foreach(_.handoff())
 
     def closeTransferredOwnership(): Future[Unit] = {
-      val transferred = {
+      val transferred = synchronized {
         val result = transferredOwnership
         transferredOwnership = None
         result
@@ -771,7 +797,7 @@ private[golem] object AgentStreamOwnership {
     }
 
     def close(): Future[Unit] = {
-      val result =
+      val result = synchronized {
         state match {
           case Left(true)  => Right(Future.successful(()))
           case Right(done) => Right(done.future)
@@ -780,6 +806,7 @@ private[golem] object AgentStreamOwnership {
             state = Right(done)
             Left((done, owned))
         }
+      }
       result match {
         case Right(done)          => done
         case Left((done, target)) =>
