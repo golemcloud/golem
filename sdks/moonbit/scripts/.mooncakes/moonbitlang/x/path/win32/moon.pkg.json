@@ -1,7 +1,0 @@
-{
-    "import": [
-        "moonbitlang/core/env",
-        "moonbitlang/core/json"
-    ],
-    "warn-list": "-1"
-}
