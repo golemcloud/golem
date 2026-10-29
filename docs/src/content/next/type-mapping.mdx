@@ -239,11 +239,16 @@ Custom Scala types need a `zio.blocks.schema.Schema` instance, for example `deri
 
 Case names are preserved. `Text(text: String)` becomes `{"Text":{"text":"hi"}}`. **Only** a single field specifically named `value` unwraps: `Text(value: String)` becomes `{"Text":"hi"}`.
 
-| Rich Scala type                                                       | Category            |
-| --------------------------------------------------------------------- | ------------------- |
-| `java.util.UUID`                                                      | UUID                |
-| `java.time.Instant`, `java.time.Duration`                             | Datetime, duration  |
-| `golem.schema.GolemPath`, `golem.schema.Url`, `golem.schema.Quantity` | Path, URL, quantity |
+| Rich Scala type                                                          | Category            |
+| ------------------------------------------------------------------------ | ------------------- |
+| `java.util.UUID`                                                         | UUID                |
+| `java.time.Instant`, `java.time.Duration`                                | Datetime, duration  |
+| `golem.schema.GolemPath`, `golem.schema.Url`, `golem.schema.Quantity[U]` | Path, URL, quantity |
+| `golem.schema.Text`                                                      | Text                |
+
+`golem.schema.Text(text, language)` is bare text with an optional language code. Its schema has no restrictions.
+
+The unit marker `U` of a quantity declares its units with `@quantityUnit` from `golem.runtime.annotations`. Every listed unit is allowed and the first is the base unit, so `@quantityUnit("m", "cm", "km") sealed trait Length` accepts `m`, `cm` and `km`. A single unit, such as `@quantityUnit("kg")`, is the base unit with no suffixes. The named `suffixes` argument sets the allowed units exactly: `@quantityUnit("m", suffixes = Seq("cm", "km"))` accepts only `cm` and `km`. A marker without the annotation does not compile.
 
 </Tabs.Tab>
 <Tabs.Tab>

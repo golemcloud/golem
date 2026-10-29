@@ -728,7 +728,7 @@ fn pvc_binary_restrictions(
           if !allowed.any(fn(x) { x == m }) {
             pvc_fail("binary MIME type is not allowed")
           }
-        None => pvc_fail("binary MIME type is required by the schema")
+        None => ()
       }
     }
     None => ()

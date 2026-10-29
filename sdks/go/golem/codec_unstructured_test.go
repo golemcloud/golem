@@ -111,3 +111,13 @@ func TestAMultimodalListNeedsARegisteredVariant(t *testing.T) {
 		t.Fatalf("invalid = %q", c.Invalid)
 	}
 }
+
+// An empty payload decodes to an empty slice, not nil, as the external bridge
+// decodes it.
+func TestEmptyBinaryDecodesAsEmpty(t *testing.T) {
+	type payloads struct {
+		Raw   Binary
+		Photo UnstructuredBinary[images]
+	}
+	assertRoundTrip(t, "empty", payloads{Raw: Binary{}, Photo: UnstructuredBinary[images]{Data: []byte{}}})
+}

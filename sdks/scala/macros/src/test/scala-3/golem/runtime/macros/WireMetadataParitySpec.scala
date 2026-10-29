@@ -16,10 +16,21 @@
 
 package golem.runtime.macros
 
-import golem.runtime.annotations.agentDefinition
+import golem.runtime.annotations.{agentDefinition, quantityUnit}
 import golem.runtime.OutputMetadata
-import golem.schema.{FromSchema, IntoSchema, SchemaGraph}
-import golem.schema.wire.{ConcreteCodec, SchemaWire}
+import golem.schema.{
+  FromSchema,
+  IntoSchema,
+  Quantity,
+  QuantitySpec,
+  QuantityValue,
+  SchemaGraph,
+  SchemaType,
+  SchemaTypeBody,
+  Text,
+  TextRestrictions
+}
+import golem.schema.wire.{ConcreteCodec, SchemaWire, WitSchemaValueNode, WitSchemaValueTree}
 import zio.blocks.schema.Schema
 import zio.test.*
 
@@ -36,6 +47,15 @@ private[macros] object WireMetadataParityTypes {
 
   final case class Timed(at: java.time.Instant, took: java.time.Duration)
   object Timed { implicit val schema: Schema[Timed] = Schema.derived }
+
+  @quantityUnit("kg") sealed trait Kg
+  @quantityUnit("m", "cm", "km") sealed trait Length
+
+  final case class Load(weight: Quantity[Kg], legs: List[Quantity[Length]])
+  object Load { implicit val schema: Schema[Load] = Schema.derived }
+
+  final case class Captioned(caption: Text, note: Option[Text], lines: List[Text])
+  object Captioned { implicit val schema: Schema[Captioned] = Schema.derived }
 
   type Wide = (
     Int,
@@ -79,13 +99,19 @@ object WireMetadataParitySpec extends ZIOSpecDefault {
     def animal(value: Animal): Future[Animal]
     def wide(value: Wide): Future[Wide]
     def timed(value: Timed): Future[Timed]
+    def load(value: Load): Future[Load]
+    def text(value: Text): Future[Text]
+    def captioned(value: Captioned): Future[Captioned]
   }
 
   final class ParityAgentImpl() extends ParityAgent {
-    override def set(value: Set[Int]): Future[Set[Int]] = Future.successful(value)
-    override def animal(value: Animal): Future[Animal]  = Future.successful(value)
-    override def wide(value: Wide): Future[Wide]        = Future.successful(value)
-    override def timed(value: Timed): Future[Timed]     = Future.successful(value)
+    override def set(value: Set[Int]): Future[Set[Int]]         = Future.successful(value)
+    override def animal(value: Animal): Future[Animal]          = Future.successful(value)
+    override def wide(value: Wide): Future[Wide]                = Future.successful(value)
+    override def timed(value: Timed): Future[Timed]             = Future.successful(value)
+    override def load(value: Load): Future[Load]                = Future.successful(value)
+    override def text(value: Text): Future[Text]                = Future.successful(value)
+    override def captioned(value: Captioned): Future[Captioned] = Future.successful(value)
   }
 
   private val metadata = AgentMacros.agentMetadata[ParityAgent]
@@ -129,6 +155,57 @@ object WireMetadataParitySpec extends ZIOSpecDefault {
       test("tuples over 22 elements are flat tuples on every path") {
         val value: Wide = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, "last")
         assertTrue(agree("wide", ConcreteCodec.derived[Wide], List(value)))
+      },
+      test("quantity fields are native quantities with the unit spec on every path") {
+        val value  = Load(Quantity[Kg](15, 1, "kg"), List(Quantity[Length](2, 0, "km"), Quantity[Length](-3, 2, "cm")))
+        val fields = input("load").defs.values.head.body.body match {
+          case SchemaTypeBody.RecordType(fields) => fields.map(_.body.body)
+          case _                                 => Nil
+        }
+        assertTrue(
+          fields == List(
+            SchemaTypeBody.QuantityType(QuantitySpec("kg")),
+            SchemaTypeBody.ListType(SchemaType(SchemaTypeBody.QuantityType(QuantitySpec("m", List("m", "cm", "km")))))
+          ),
+          agree("load", ConcreteCodec.derived[Load], List(value))
+        )
+      },
+      test("bare text is the text node on every path") {
+        val text   = SchemaTypeBody.TextType(TextRestrictions.empty)
+        val value  = Captioned(Text("caption", Some("en")), Some(Text("note")), List(Text("a"), Text("b", Some("de"))))
+        val fields = input("captioned").defs.values.head.body.body match {
+          case SchemaTypeBody.RecordType(fields) => fields.map(_.body.body)
+          case _                                 => Nil
+        }
+        assertTrue(
+          input("text").root.body == text,
+          fields == List(
+            text,
+            SchemaTypeBody.OptionType(SchemaType(text)),
+            SchemaTypeBody.ListType(SchemaType(text))
+          ),
+          agree("text", ConcreteCodec.derived[Text], List(Text("hello"), Text("árvíz", Some("hu")))),
+          agree("captioned", ConcreteCodec.derived[Captioned], List(value, Captioned(Text(""), None, Nil)))
+        )
+      },
+      test("the wire codec rejects quantity units the spec does not allow") {
+        val codec                 = ConcreteCodec.derived[Quantity[Length]]
+        def decoded(unit: String) =
+          scala.util.Try(
+            codec.decode(WitSchemaValueTree(Vector(WitSchemaValueNode.QuantityValueNode(QuantityValue(1, 0, unit))), 0))
+          )
+        assertTrue(
+          scala.util.Try(codec.encodeValue(Quantity[Length](1, 0, "m"))).isSuccess,
+          scala.util.Try(codec.encodeValue(Quantity[Length](1, 0, "mi"))).isFailure,
+          decoded("m").toOption.contains(Quantity[Length](1, 0, "m")),
+          decoded("mi").isFailure,
+          decoded("cm").toOption.contains(Quantity[Length](1, 0, "cm"))
+        )
+      },
+      test("a quantity whose marker has no @quantityUnit has no wire codec") {
+        val errors: List[scala.compiletime.testing.Error] =
+          scala.compiletime.testing.typeCheckErrors("ConcreteCodec.derived[Quantity[String]]")
+        assertTrue(errors.exists(_.message.contains("is not a quantity unit marker")))
       },
       test("nested Instant and Duration fields agree on every path") {
         val value = Timed(java.time.Instant.ofEpochSecond(12, 34), java.time.Duration.ofNanos(-56))

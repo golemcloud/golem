@@ -42,8 +42,8 @@ use golem_common::schema::find_host_managed_type;
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, NamedFieldType, PermissionCardSpec, SchemaType, TextRestrictions,
-    VariantCaseType,
+    BinaryRestrictions, NamedFieldType, PermissionCardSpec, QuantitySpec, SchemaType,
+    TextRestrictions, VariantCaseType,
 };
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::unstructured::{
@@ -166,7 +166,8 @@ impl RustRuntimeConfig {
                     pub mod schema {
                         pub use golem_rust::SchemaValue;
                         pub use golem_rust::schema::{
-                            DurationValuePayload, ResultValuePayload, UnionValuePayload,
+                            BinaryValuePayload, DurationValuePayload, QuantityValue,
+                            ResultValuePayload, TextValuePayload, UnionValuePayload,
                             VariantValuePayload,
                         };
                     }
@@ -214,6 +215,9 @@ pub struct RustBridgeGenerator {
     /// Distinct binary mime-type restriction sets discovered while generating,
     /// each mapped to the generated `crate::mimetypes::*` enum name.
     generated_mimetypes_enums: Vec<(Vec<String>, String)>,
+    /// Distinct quantity units (base unit and allowed suffixes) discovered while
+    /// generating, each mapped to the generated `crate::units::*` marker name.
+    generated_quantity_units: Vec<((String, Vec<String>), String)>,
     /// Distinct multimodal modality sets discovered while generating, each
     /// mapped to the generated `crate::Multimodal*` enum name.
     known_multimodals: Vec<(Vec<(String, SchemaType)>, String)>,
@@ -316,6 +320,10 @@ impl RustBridgeGenerator {
                     "__golem_bridge_runtime",
                     "__golem_bridge_types",
                     "AgentBinary",
+                    "AgentText",
+                    "Quantity",
+                    "QuantityUnit",
+                    "QuantityValue",
                     "UnstructuredText",
                     "UnstructuredBinary",
                     "AnyLanguage",
@@ -323,6 +331,7 @@ impl RustBridgeGenerator {
                     "AllowedMimeTypes",
                     "languages",
                     "mimetypes",
+                    "units",
                 ]
                 .into_iter()
                 .map(|name| RustTypeName(name.to_string())),
@@ -337,8 +346,12 @@ impl RustBridgeGenerator {
                         "{}WithScopeCard",
                         Self::guest_client_struct_name_string(&agent_type.type_name.0)
                     )),
+                    RustTypeName("__golem_bridge_types".to_string()),
+                    RustTypeName("AgentBinary".to_string()),
+                    RustTypeName("AgentText".to_string()),
                     RustTypeName("languages".to_string()),
                     RustTypeName("mimetypes".to_string()),
+                    RustTypeName("units".to_string()),
                 ]
                 .into_iter()
                 .chain(extra.into_iter().map(RustTypeName));
@@ -356,6 +369,7 @@ impl RustBridgeGenerator {
             type_naming,
             generated_language_enums: Vec::new(),
             generated_mimetypes_enums: Vec::new(),
+            generated_quantity_units: Vec::new(),
             known_multimodals: Vec::new(),
             schema_graphs: schema_graph::SchemaGraphRegistry::default(),
             stream_items: Vec::new(),
@@ -634,6 +648,7 @@ impl RustBridgeGenerator {
             self.external_multimodal_parts()?;
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
+        let units = self.units_module();
         let portable_helpers = self.external_portable_helpers();
         let helper_codecs = self.external_helper_codecs();
         let runtime_prelude = RustRuntimeConfig::new(self.mode)
@@ -654,6 +669,8 @@ impl RustBridgeGenerator {
             #languages
 
             #mimetypes
+
+            #units
 
             #[cfg(feature = "client")]
             mod __golem_bridge_client {
@@ -1026,6 +1043,8 @@ impl RustBridgeGenerator {
         let stream_factories = self.guest_stream_factories()?;
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
+        let units = self.units_module();
+        let helper_types = self.guest_helper_types();
         let runtime_prelude = RustRuntimeConfig::new(self.mode).generated_prelude();
         let schema_graphs = self.schema_graphs.definitions();
 
@@ -1134,6 +1153,10 @@ impl RustBridgeGenerator {
             #languages
 
             #mimetypes
+
+            #units
+
+            #helper_types
         };
 
         Ok(tokens)
@@ -1203,8 +1226,13 @@ impl RustBridgeGenerator {
 
     fn external_portable_helpers(&self) -> TokenStream {
         let client_name = &self.agent_type.type_name.0;
+        let quantity = Self::external_quantity_type();
         let helper_reexports = [
             "AgentBinary",
+            "AgentText",
+            "Quantity",
+            "QuantityUnit",
+            "QuantityValue",
             "UnstructuredText",
             "UnstructuredBinary",
             "AnyLanguage",
@@ -1232,6 +1260,15 @@ impl RustBridgeGenerator {
                 pub bytes: Vec<u8>,
                 pub mime_type: Option<String>,
             }
+
+            #[derive(Debug, Clone, PartialEq, Eq)]
+            #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+            pub struct AgentText {
+                pub text: String,
+                pub language: Option<String>,
+            }
+
+            #quantity
 
             pub trait AllowedLanguages: std::fmt::Debug + Clone {
                 fn all() -> &'static [&'static str];
@@ -1301,6 +1338,127 @@ impl RustBridgeGenerator {
             }
 
             #(#helper_reexports)*
+        }
+    }
+
+    /// The portable counterpart of the SDK's `Quantity<U>`: the unit marker `U`
+    /// carries the accepted units, and every constructor checks the unit.
+    fn external_quantity_type() -> TokenStream {
+        quote! {
+            pub trait QuantityUnit: 'static {
+                fn base_unit() -> &'static str;
+
+                /// If empty, only the base unit is accepted.
+                fn allowed_suffixes() -> &'static [&'static str] {
+                    &[]
+                }
+            }
+
+            #[derive(Debug, Clone, PartialEq, Eq)]
+            #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+            pub struct QuantityValue {
+                pub mantissa: i64,
+                pub scale: i32,
+                pub unit: String,
+            }
+
+            #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+            #[cfg_attr(feature = "serde", serde(try_from = "QuantityValue", into = "QuantityValue", bound = ""))]
+            pub struct Quantity<U: QuantityUnit> {
+                value: QuantityValue,
+                _unit: std::marker::PhantomData<U>,
+            }
+
+            impl<U: QuantityUnit> Quantity<U> {
+                pub fn new(mantissa: i64, scale: i32, unit: impl Into<String>) -> Result<Self, String> {
+                    Self::from_quantity_value(QuantityValue { mantissa, scale, unit: unit.into() })
+                }
+
+                pub fn from_quantity_value(value: QuantityValue) -> Result<Self, String> {
+                    let allowed = U::allowed_suffixes();
+                    let unit_allowed = if allowed.is_empty() {
+                        value.unit == U::base_unit()
+                    } else {
+                        allowed.contains(&value.unit.as_str())
+                    };
+                    if !unit_allowed {
+                        return Err(format!("Quantity unit '{}' is not allowed", value.unit));
+                    }
+                    Ok(Self { value, _unit: std::marker::PhantomData })
+                }
+
+                pub fn as_quantity_value(&self) -> &QuantityValue {
+                    &self.value
+                }
+
+                pub fn into_quantity_value(self) -> QuantityValue {
+                    self.value
+                }
+            }
+
+            impl<U: QuantityUnit> Clone for Quantity<U> {
+                fn clone(&self) -> Self {
+                    Self { value: self.value.clone(), _unit: std::marker::PhantomData }
+                }
+            }
+
+            impl<U: QuantityUnit> std::fmt::Debug for Quantity<U> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.debug_struct("Quantity").field("value", &self.value).finish()
+                }
+            }
+
+            impl<U: QuantityUnit> PartialEq for Quantity<U> {
+                fn eq(&self, other: &Self) -> bool {
+                    self.value == other.value
+                }
+            }
+
+            impl<U: QuantityUnit> Eq for Quantity<U> {}
+
+            impl<U: QuantityUnit> TryFrom<QuantityValue> for Quantity<U> {
+                type Error = String;
+
+                fn try_from(value: QuantityValue) -> Result<Self, String> {
+                    Self::from_quantity_value(value)
+                }
+            }
+
+            impl<U: QuantityUnit> From<Quantity<U>> for QuantityValue {
+                fn from(value: Quantity<U>) -> Self {
+                    value.value
+                }
+            }
+        }
+    }
+
+    /// Bare `text` and `binary` values in guest bridges. The SDK spells them as
+    /// annotated `String` and `Vec<u8>` fields, which drop the language and the
+    /// MIME type, so the bridge carries the whole value as in external bridges.
+    fn guest_helper_types(&self) -> TokenStream {
+        let reexports = ["AgentBinary", "AgentText"]
+            .into_iter()
+            .filter(|name| !self.root_type_name_conflicts(name))
+            .map(|name| {
+                let ident = Ident::new(name, Span::call_site());
+                quote! { pub use __golem_bridge_types::#ident; }
+            });
+        quote! {
+            pub mod __golem_bridge_types {
+                #[derive(Debug, Clone, PartialEq, Eq)]
+                pub struct AgentBinary {
+                    pub bytes: Vec<u8>,
+                    pub mime_type: Option<String>,
+                }
+
+                #[derive(Debug, Clone, PartialEq, Eq)]
+                pub struct AgentText {
+                    pub text: String,
+                    pub language: Option<String>,
+                }
+            }
+
+            #(#reexports)*
         }
     }
 
@@ -3241,7 +3399,10 @@ impl RustBridgeGenerator {
                             });
                         }
                         None => arms.push(quote! {
-                            #idx_u32 => Ok(#name::#case_ident),
+                            #idx_u32 => match payload {
+                                None => Ok(#name::#case_ident),
+                                Some(_) => Err(format!("Unexpected payload for variant case {}", #idx_u32)),
+                            },
                         }),
                     }
                 }
@@ -3655,22 +3816,41 @@ impl RustBridgeGenerator {
                     }
                 }
             }
-            SchemaType::Text { .. } => {
-                bail!(
-                    "Bare text rich scalars have no Rust bridge surface; \
-                     wrap them in the unstructured text variant (type = {typ:?})"
-                )
-            }
-            SchemaType::Binary { .. } if self.mode == RustBridgeMode::ExternalRest => quote! {
-                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Binary(
-                    crate::__golem_bridge_runtime::schema::BinaryValuePayload {
-                        bytes: #val.bytes,
-                        mime_type: #val.mime_type,
+            SchemaType::Text { .. } => quote! {{
+                let __text = #val;
+                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Text(
+                    crate::__golem_bridge_runtime::schema::TextValuePayload {
+                        text: __text.text,
+                        language: __text.language,
                     }
                 ))
-            },
-            SchemaType::Binary { .. } => {
-                bail!("Bare binary rich scalars have no guest Rust bridge surface")
+            }},
+            SchemaType::Binary { .. } => quote! {{
+                let __binary = #val;
+                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Binary(
+                    crate::__golem_bridge_runtime::schema::BinaryValuePayload {
+                        bytes: __binary.bytes,
+                        mime_type: __binary.mime_type,
+                    }
+                ))
+            }},
+            SchemaType::Quantity { spec, .. } => {
+                let (allowed, message) =
+                    Self::quantity_unit_check(spec, quote! { __q.unit.as_str() });
+                quote! {{
+                    let __q = (#val).into_quantity_value();
+                    if #allowed {
+                        Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Quantity(
+                            crate::__golem_bridge_runtime::schema::QuantityValue {
+                                mantissa: __q.mantissa,
+                                scale: __q.scale,
+                                unit: __q.unit,
+                            }
+                        ))
+                    } else {
+                        Err(#message)
+                    }
+                }}
             }
             SchemaType::Path { .. } => {
                 quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Path { path: #val }) }
@@ -3711,8 +3891,7 @@ impl RustBridgeGenerator {
             | SchemaType::Union { .. } => {
                 bail!("Expected a generated type name for {typ:?} during encoding")
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => {
@@ -3952,7 +4131,8 @@ impl RustBridgeGenerator {
                         }
                     }
                     None => quote! {
-                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { .. }) => Ok(Ok(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { value: None }) => Ok(Ok(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { value: Some(_) }) => Err("Unexpected ok value".to_string()),
                     },
                 };
                 let err_arm = match spec.err.as_deref() {
@@ -3972,7 +4152,8 @@ impl RustBridgeGenerator {
                         }
                     }
                     None => quote! {
-                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { .. }) => Ok(Err(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { value: None }) => Ok(Err(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { value: Some(_) }) => Err("Unexpected err value".to_string()),
                     },
                 };
                 quote! {
@@ -3983,13 +4164,18 @@ impl RustBridgeGenerator {
                     }
                 }
             }
-            SchemaType::Text { .. } => {
-                bail!(
-                    "Bare text rich scalars have no Rust bridge surface; \
-                     wrap them in the unstructured text variant (type = {typ:?})"
-                )
-            }
-            SchemaType::Binary { .. } if self.mode == RustBridgeMode::ExternalRest => quote! {
+            SchemaType::Text { .. } => quote! {
+                match #val {
+                    crate::__golem_bridge_runtime::schema::SchemaValue::Text(__text) => {
+                        Ok(crate::__golem_bridge_types::AgentText {
+                            text: __text.text,
+                            language: __text.language,
+                        })
+                    }
+                    __other => Err(format!("Expected text value, got {:?}", __other)),
+                }
+            },
+            SchemaType::Binary { .. } => quote! {
                 match #val {
                     crate::__golem_bridge_runtime::schema::SchemaValue::Binary(__binary) => {
                         Ok(crate::__golem_bridge_types::AgentBinary {
@@ -4000,8 +4186,22 @@ impl RustBridgeGenerator {
                     __other => Err(format!("Expected binary value, got {:?}", __other)),
                 }
             },
-            SchemaType::Binary { .. } => {
-                bail!("Bare binary rich scalars have no guest Rust bridge surface")
+            SchemaType::Quantity { spec, .. } => {
+                let ty = self.quantity_type(spec);
+                let (allowed, message) =
+                    Self::quantity_unit_check(spec, quote! { __q.unit.as_str() });
+                quote! {
+                    match #val {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Quantity(__q) => {
+                            if #allowed {
+                                <#ty>::new(__q.mantissa, __q.scale, __q.unit).map_err(|__error| __error.to_string())
+                            } else {
+                                Err(#message)
+                            }
+                        }
+                        __other => Err(format!("Expected quantity value, got {:?}", __other)),
+                    }
+                }
             }
             SchemaType::Path { .. } => quote! {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Path { path } => Ok(path), __other => Err(format!("Expected path value, got {:?}", __other)) }
@@ -4043,8 +4243,7 @@ impl RustBridgeGenerator {
             | SchemaType::Union { .. } => {
                 bail!("Expected a generated type name for {typ:?} during decoding")
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => {
@@ -4182,17 +4381,9 @@ impl RustBridgeGenerator {
                 };
                 Ok(quote! { Result<#ok, #err> })
             }
-            SchemaType::Text { .. } => Err(anyhow!(
-                "Bare text rich scalars have no Rust bridge type; \
-                 wrap them in the unstructured text variant ({typ:?})"
-            )),
-            SchemaType::Binary { .. } if self.mode == RustBridgeMode::ExternalRest => {
-                Ok(quote! { crate::__golem_bridge_types::AgentBinary })
-            }
-            SchemaType::Binary { .. } => Err(anyhow!(
-                "Bare binary rich scalars have no guest Rust bridge type; \
-                 wrap them in the unstructured binary variant ({typ:?})"
-            )),
+            SchemaType::Text { .. } => Ok(quote! { crate::__golem_bridge_types::AgentText }),
+            SchemaType::Binary { .. } => Ok(quote! { crate::__golem_bridge_types::AgentBinary }),
+            SchemaType::Quantity { spec, .. } => Ok(self.quantity_type(spec)),
             SchemaType::Path { .. } => Ok(quote! { String }),
             SchemaType::Url { .. } => Ok(quote! { String }),
             SchemaType::Uuid { .. } => Ok(self.uuid_type_tokens()),
@@ -4215,8 +4406,7 @@ impl RustBridgeGenerator {
             | SchemaType::Flags { .. }
             | SchemaType::Record { .. }
             | SchemaType::Union { .. } => Err(anyhow!("Missing type name for {typ:?}")),
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => Err(anyhow!(
@@ -4321,6 +4511,109 @@ impl RustBridgeGenerator {
         };
         let ident = Ident::new(&name, Span::call_site());
         quote! { crate::mimetypes::#ident }
+    }
+
+    fn get_quantity_unit(&mut self, spec: &QuantitySpec) -> TokenStream {
+        let key = (spec.base_unit.clone(), spec.allowed_suffixes.clone());
+        let name = if let Some((_, name)) = self
+            .generated_quantity_units
+            .iter()
+            .find(|(k, _)| *k == key)
+        {
+            name.clone()
+        } else {
+            let base = format!(
+                "Unit{}",
+                spec.base_unit
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                    .collect::<String>()
+                    .to_upper_camel_case()
+            );
+            let mut name = base.clone();
+            let mut index = 1;
+            while self
+                .generated_quantity_units
+                .iter()
+                .any(|(_, n)| *n == name)
+            {
+                name = format!("{base}{index}");
+                index += 1;
+            }
+            self.generated_quantity_units.push((key, name.clone()));
+            name
+        };
+        let ident = Ident::new(&name, Span::call_site());
+        quote! { crate::units::#ident }
+    }
+
+    fn quantity_type(&mut self, spec: &QuantitySpec) -> TokenStream {
+        let unit = self.get_quantity_unit(spec);
+        match self.mode {
+            RustBridgeMode::ExternalRest => {
+                quote! { crate::__golem_bridge_types::Quantity<#unit> }
+            }
+            RustBridgeMode::GuestWasmRpc => quote! { golem_rust::Quantity<#unit> },
+        }
+    }
+
+    /// Boolean expression telling whether `unit` (a `&str`) is one of the units
+    /// the schema accepts, and the message for a unit it does not accept.
+    fn quantity_unit_check(spec: &QuantitySpec, unit: TokenStream) -> (TokenStream, TokenStream) {
+        let allowed = if spec.allowed_suffixes.is_empty() {
+            vec![spec.base_unit.clone()]
+        } else {
+            spec.allowed_suffixes.clone()
+        };
+        let expected = allowed.join(", ");
+        (
+            quote! { [#(#allowed),*].contains(&#unit) },
+            quote! { format!("Quantity unit '{}' is not allowed; expected one of: {}", #unit, #expected) },
+        )
+    }
+
+    fn units_module(&self) -> TokenStream {
+        if self.generated_quantity_units.is_empty() {
+            return quote! {};
+        }
+        let crate_name = self.package_crate_name();
+        let markers = self
+            .generated_quantity_units
+            .iter()
+            .map(|((base, suffixes), name)| {
+                let ident = Ident::new(name, Span::call_site());
+                let doc = format!("The unit of quantities measured in `{base}`.");
+                let unit_impl = match self.mode {
+                    RustBridgeMode::ExternalRest => quote! {
+                        impl crate::__golem_bridge_types::QuantityUnit for #ident {
+                            fn base_unit() -> &'static str { #base }
+                            fn allowed_suffixes() -> &'static [&'static str] { &[#(#suffixes),*] }
+                        }
+                    },
+                    RustBridgeMode::GuestWasmRpc => {
+                        let type_id = format!("{crate_name}.units.{name}");
+                        quote! {
+                            impl golem_rust::QuantityUnit for #ident {
+                                fn type_id() -> golem_rust::schema::TypeId { golem_rust::schema::TypeId::new(#type_id) }
+                                fn base_unit() -> &'static str { #base }
+                                fn allowed_suffixes() -> &'static [&'static str] { &[#(#suffixes),*] }
+                            }
+                        }
+                    }
+                };
+                quote! {
+                    #[doc = #doc]
+                    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+                    pub struct #ident;
+
+                    #unit_impl
+                }
+            });
+        quote! {
+            pub mod units {
+                #(#markers)*
+            }
+        }
     }
 
     fn languages_module(&self) -> TokenStream {

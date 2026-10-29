@@ -960,3 +960,33 @@ func TestACyclicValueTreeIsRefused(t *testing.T) {
 		t.Fatalf("a cyclic tree gave %v", err)
 	}
 }
+
+// The canonical JSON a value renders to rebuilds the same value, unsigned
+// integers included.
+func TestTypedValueJSONRebuildsTheValue(t *testing.T) {
+	type counts struct {
+		Small  uint8
+		Medium uint16
+		Large  uint32
+		Wide   uint64
+		Each   []uint32
+		Maybe  Option[uint16]
+	}
+	in := counts{Small: 255, Medium: 65535, Large: 4294967295, Wide: 18446744073709551615, Each: []uint32{1}, Maybe: Some[uint16](2)}
+	tv := EncodeTypedValue(in)
+	canonical, err := tv.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := tv.WithJSON(canonical)
+	if err != nil {
+		t.Fatalf("WithJSON(%#v): %v", canonical, err)
+	}
+	out, err := DecodeTypedValue[counts](rebuilt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Fatalf("%#v rebuilt as %#v", in, out)
+	}
+}

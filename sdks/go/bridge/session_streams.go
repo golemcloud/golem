@@ -196,6 +196,14 @@ func (in *inputStream) pump() {
 		if err != nil {
 			if in.s.life.Err() == nil {
 				in.unavailable()
+				// An item its schema does not accept, or one the protocol
+				// cannot send, is the caller's mistake, not the source's, so
+				// the call fails with it.
+				var invalid *EncodeError
+				var unsendable *StreamItemError
+				if errors.As(err, &invalid) || errors.As(err, &unsendable) {
+					in.s.abort(err)
+				}
 			}
 			return
 		}
@@ -243,7 +251,7 @@ func (in *inputStream) produce() (*pendingInput, error) {
 	case laneU8:
 		b, ok := v.(schema.U8Value)
 		if !ok {
-			return nil, Mismatch("u8", v)
+			return nil, &StreamItemError{Err: Mismatch("u8", v)}
 		}
 		payload := []byte{b.Value}
 		for len(payload) < maxPackedBytes && in.h.ready() {
@@ -257,7 +265,7 @@ func (in *inputStream) produce() (*pendingInput, error) {
 			}
 			b, isByte := v.(schema.U8Value)
 			if !isByte {
-				return nil, Mismatch("u8", v)
+				return nil, &StreamItemError{Err: Mismatch("u8", v)}
 			}
 			payload = append(payload, b.Value)
 		}
@@ -265,13 +273,13 @@ func (in *inputStream) produce() (*pendingInput, error) {
 	case laneBinary:
 		b, ok := v.(schema.BinaryValue)
 		if !ok {
-			return nil, Mismatch("binary", v)
+			return nil, &StreamItemError{Err: Mismatch("binary", v)}
 		}
 		if len(b.Bytes) > maxBinaryBytes {
-			return nil, errors.New("golem: a binary stream item exceeds 16 MiB")
+			return nil, &StreamItemError{Err: errors.New("golem: a binary stream item exceeds 16 MiB")}
 		}
 		if b.MimeType != nil && !mimePattern.MatchString(*b.MimeType) {
-			return nil, fmt.Errorf("golem: %q is not a MIME type", *b.MimeType)
+			return nil, &StreamItemError{Err: fmt.Errorf("golem: %q is not a MIME type", *b.MimeType)}
 		}
 		return &pendingInput{count: 1, lane: laneBinary, payload: b.Bytes, mime: b.MimeType, bytes: len(b.Bytes)}, nil
 	}
@@ -279,14 +287,14 @@ func (in *inputStream) produce() (*pendingInput, error) {
 	v, err = in.s.registerNested(v)
 	in.s.mu.Unlock()
 	if err != nil {
-		return nil, err
+		return nil, &StreamItemError{Err: err}
 	}
 	raw, err := schema.MarshalWireValue(v)
 	if err != nil {
-		return nil, err
+		return nil, &StreamItemError{Err: err}
 	}
 	if len(raw) > maxBinaryBytes {
-		return nil, errors.New("golem: a stream item exceeds 16 MiB")
+		return nil, &StreamItemError{Err: errors.New("golem: a stream item exceeds 16 MiB")}
 	}
 	return &pendingInput{count: 1, lane: laneJSON, value: raw, bytes: len(raw)}, nil
 }
@@ -333,8 +341,8 @@ func (s *session) registerNested(v schema.SchemaValue) (schema.SchemaValue, erro
 		if !ok {
 			return nil, errors.New("golem: a stream inside a stream item must be a bridge.AgentStream")
 		}
-		if h.err != nil {
-			return nil, h.err
+		if err := h.claim(); err != nil {
+			return nil, err
 		}
 		in := &inputStream{s: s, h: h, provisional: newUUID(), wake: make(chan struct{}, 1)}
 		s.byProvisional[in.provisional] = in

@@ -508,3 +508,51 @@ test "encoders reject unpaired surrogates and non-scalar chars" {
   assert_eq(round_trip(StringValue(emoji)), StringValue(emoji))
   assert_eq(round_trip(CharValue(0x1F600)), CharValue(0x1F600))
 }
+
+///|
+fn rejects(f : () -> Unit raise) -> Bool {
+  try f() catch {
+    _ => true
+  } noraise {
+    _ => false
+  }
+}
+
+///|
+test "public codec checks binary MIME restrictions like the server" {
+  let codec = public_value_codec(
+    "{\"root\":{\"kind\":\"binary\",\"value\":{\"restrictions\":{\"mimeTypes\":[\"image/png\"]}}}}",
+  )
+  for value in [BinaryValue(b"\x01", None), BinaryValue(b"\x01", Some("image/png"))] {
+    assert_eq(codec.decode(codec.encode(value)), value)
+  }
+  let foreign = BinaryValue(b"\x01", Some("image/gif"))
+  assert_true(rejects(() => ignore(codec.encode(foreign))))
+  assert_true(rejects(() => ignore(codec.decode(schema_value_to_json(foreign)))))
+}
+
+///|
+test "public codec checks quantity units on encode and decode" {
+  let suffixed = public_value_codec(
+    "{\"root\":{\"kind\":\"quantity\",\"value\":{\"spec\":{\"baseUnit\":\"kg\",\"allowedSuffixes\":[\"g\",\"kg\"]}}}}",
+  )
+  let base_only = public_value_codec(
+    "{\"root\":{\"kind\":\"quantity\",\"value\":{\"spec\":{\"baseUnit\":\"m\"}}}}",
+  )
+  for accepted in [
+    (suffixed, QuantityValue(5L, 0, "g")),
+    (suffixed, QuantityValue(5L, 0, "kg")),
+    (base_only, QuantityValue(5L, 0, "m")),
+  ] {
+    assert_eq(accepted.0.decode(accepted.0.encode(accepted.1)), accepted.1)
+  }
+  for rejected in [
+    (suffixed, QuantityValue(5L, 0, "lb")),
+    (base_only, QuantityValue(5L, 0, "km")),
+  ] {
+    assert_true(rejects(() => ignore(rejected.0.encode(rejected.1))))
+    assert_true(
+      rejects(() => ignore(rejected.0.decode(schema_value_to_json(rejected.1)))),
+    )
+  }
+}
