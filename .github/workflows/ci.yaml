@@ -149,6 +149,7 @@ jobs:
       - name: Test release tooling
         run: |
           node --test .github/scripts/release-channel.test.mjs
+          cargo test --locked --manifest-path .github/scripts/release-tooling-tests/Cargo.toml
           cargo make --profile ci check-shared-crates-versioning
       # Share cargo-make's full workspace metadata discovery across all checks.
       - name: Unit tests and source drift checks

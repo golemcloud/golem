@@ -462,7 +462,9 @@ pub(crate) async fn metered_resident_with_open_node_for_unload_test() -> (
     (filesystem, control, window, generation_handle, node)
 }
 
-pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() -> (
+pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test(
+    clock: Option<Arc<crate::services::resource_usage_metering::TestClock>>,
+) -> (
     ResidentFilesystem<ScriptedSandboxFilesystem>,
     ScriptedSandboxFilesystemControl,
     ResourceUsageMeteringWindow,
@@ -480,7 +482,19 @@ pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() ->
     .await
     .unwrap();
     let (account, entry) = account();
-    let reconstructing = bind_resource_usage_metering(created, account).unwrap();
+    let reconstructing = match clock {
+        Some(clock) => transitions::bind_configured_resource_usage_metering_with(
+            created,
+            ResourceUsageMeteringConfig::all_enabled(),
+            |config| {
+                crate::services::resource_usage_metering::create_unbound_meter_with_clock(
+                    config, account, clock,
+                )
+            },
+        ),
+        None => bind_resource_usage_metering(created, account),
+    }
+    .unwrap();
     let reconstructing = materialize_baseline(
         reconstructing,
         no_initial_files().await,

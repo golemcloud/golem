@@ -147,6 +147,8 @@ message CreateWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 7;
   optional golem.component.Principal principal = 8;
   optional golem.worker.InvocationContext invocation_context = 9;
+  optional golem.worker.IdempotencyKey idempotency_key = 10;
+  golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
 }
 
 message CreateWorkerSuccessResponse {

@@ -14,7 +14,9 @@
 
 use crate::Tracing;
 use futures::poll;
-use golem_common::model::agent::{AgentMode, AgentPrincipal, Principal};
+use golem_common::model::agent::{
+    AgentMode, AgentPrincipal, InvocationFreshnessDisposition, Principal,
+};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::durable_stream::*;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -55,6 +57,164 @@ inherit_test_dep!(
 );
 
 const CACHE_TTL: Duration = Duration::from_millis(50);
+
+#[test]
+#[timeout("2 minutes")]
+async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
+    let key = IdempotencyKey::fresh();
+    let parsed = agent_id!("EphemeralCounter", "fresh-streaming-preparation")
+        .with_ephemeral_invocation_phantom(&key)
+        .map_err(anyhow::Error::msg)?;
+    let target = OwnedAgentId::new(
+        seed.get_initial_worker_metadata().environment_id,
+        &AgentId::from_agent_id(seed.agent_id().component_id, &parsed)
+            .map_err(anyhow::Error::msg)?,
+    );
+    let demand = seed
+        .all()
+        .rpc()
+        .create_demand(
+            &target,
+            "increment",
+            seed.get_initial_worker_metadata().created_by,
+            &seed.agent_id(),
+            &[],
+            InvocationContextStack::fresh(),
+            vec![],
+            &AuthCtx::System,
+            Some(key.clone()),
+            InvocationFreshnessDisposition::KnownFresh,
+        )
+        .await?;
+
+    assert!(!demand.fingerprint().0.is_nil());
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id, "create_fresh"),
+        1
+    );
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id, "create"),
+        0
+    );
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id, "exists"),
+        0
+    );
+
+    let retry = seed
+        .all()
+        .rpc()
+        .create_demand(
+            &target,
+            "increment",
+            seed.get_initial_worker_metadata().created_by,
+            &seed.agent_id(),
+            &[],
+            InvocationContextStack::fresh(),
+            vec![],
+            &AuthCtx::System,
+            Some(key),
+            InvocationFreshnessDisposition::MayExist,
+        )
+        .await?;
+    assert_eq!(retry.fingerprint(), demand.fingerprint());
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id, "create_fresh"),
+        1
+    );
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id, "create"),
+        0
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the_fingerprint(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition as ProtoFreshness;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+
+    let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
+    let key = IdempotencyKey::fresh();
+    let parsed = agent_id!("EphemeralCounter", "fresh-grpc-streaming-preparation")
+        .with_ephemeral_invocation_phantom(&key)
+        .map_err(anyhow::Error::msg)?;
+    let target = AgentId::from_agent_id(seed.agent_id().component_id, &parsed)
+        .map_err(anyhow::Error::msg)?;
+    let mut request = CreateWorkerRequest {
+        agent_id: Some(target.clone().into()),
+        component_owner_account_id: Some(seed.get_initial_worker_metadata().created_by.into()),
+        environment_id: Some(seed.get_initial_worker_metadata().environment_id.into()),
+        ignore_already_existing: true,
+        auth_ctx: Some(AuthCtx::System.into()),
+        idempotency_key: Some(IdempotencyKey::fresh().into()),
+        freshness_disposition: ProtoFreshness::KnownFresh as i32,
+        ..Default::default()
+    };
+    let invalid = executor
+        .client
+        .clone()
+        .prepare_worker(request.clone())
+        .await?
+        .into_inner();
+    assert!(matches!(
+        invalid.result,
+        Some(create_worker_response::Result::Failure(_))
+    ));
+    assert_eq!(
+        executor.oplog_service_call_count(&target, "create_fresh"),
+        0
+    );
+
+    request.idempotency_key = Some(key.into());
+    let first = executor
+        .client
+        .clone()
+        .prepare_worker(request.clone())
+        .await?
+        .into_inner();
+    let fingerprint = match first.result {
+        Some(create_worker_response::Result::Success(success)) => success.instance_id.unwrap(),
+        other => anyhow::bail!("prepare_worker failed: {other:?}"),
+    };
+    assert_eq!(
+        executor.oplog_service_call_count(&target, "create_fresh"),
+        1
+    );
+    assert_eq!(executor.oplog_service_call_count(&target, "create"), 0);
+    assert_eq!(executor.oplog_service_call_count(&target, "exists"), 0);
+
+    request.freshness_disposition = ProtoFreshness::MayExist as i32;
+    let retry = executor
+        .client
+        .clone()
+        .prepare_worker(request)
+        .await?
+        .into_inner();
+    let retry_fingerprint = match retry.result {
+        Some(create_worker_response::Result::Success(success)) => success.instance_id.unwrap(),
+        other => anyhow::bail!("prepare_worker retry failed: {other:?}"),
+    };
+    assert_eq!(retry_fingerprint, fingerprint);
+    assert_eq!(
+        executor.oplog_service_call_count(&target, "create_fresh"),
+        1
+    );
+    assert_eq!(executor.oplog_service_call_count(&target, "create"), 0);
+    Ok(())
+}
 
 async fn setup(
     last_unique_id: &LastUniqueId,
