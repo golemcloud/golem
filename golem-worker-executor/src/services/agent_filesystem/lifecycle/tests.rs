@@ -2,9 +2,10 @@ use super::*;
 use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
 use crate::host_directories::HostDirectory;
 use crate::sandbox_filesystem::{
-    FilesystemAllocation, ScriptedSandboxFilesystemControl, ScriptedSandboxFilesystemProvisioning,
-    ScriptedSandboxPath, ScriptedSandboxPathBase, ScriptedSandboxPathCall,
+    ScriptedSandboxFilesystemControl, ScriptedSandboxFilesystemProvisioning, ScriptedSandboxPath,
+    ScriptedSandboxPathBase, ScriptedSandboxPathCall,
 };
+use crate::storage_volume::FilesystemAllocation;
 
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use crate::services::agent_filesystem::ExecutorDirectories;
@@ -165,18 +166,14 @@ fn allocation(bytes: u64, objects: u64) -> FilesystemAllocation {
 }
 
 pub(super) fn unsupported_allocation() -> FilesystemStorageError {
-    FilesystemStorageError::allocation_unsupported(Path::new("<scripted>"))
+    FilesystemStorageError::allocation_unsupported_without_path()
 }
 
 pub(super) fn sandbox_error(
     operation: &'static str,
     kind: std::io::ErrorKind,
 ) -> FilesystemStorageError {
-    FilesystemStorageError::io(
-        operation,
-        Path::new("<scripted>"),
-        std::io::Error::new(kind, operation),
-    )
+    FilesystemStorageError::io_without_path(operation, std::io::Error::new(kind, operation))
 }
 
 fn sandbox_provisioning(
@@ -3372,9 +3369,8 @@ async fn terminal_raw_namespace_error_invalidates_despite_no_effect_postconditio
     let generation_handle = resident_generation_handle(&filesystem);
     let directory = open_directory(&generation_handle, &control, 40).await;
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
-    control.push_hard_link(Err(FilesystemStorageError::io(
+    control.push_hard_link(Err(FilesystemStorageError::io_without_path(
         "terminal hard link",
-        Path::new("<scripted>"),
         std::io::Error::from_raw_os_error(libc::EIO),
     )));
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
@@ -9793,9 +9789,8 @@ fn native_permission_errors_and_broken_storage_are_terminal() {
     {
         [libc::EACCES, libc::EPERM].into_iter().for_each(|errno| {
             let refused = || {
-                FilesystemStorageError::io(
+                FilesystemStorageError::io_without_path(
                     "refused",
-                    Path::new("<scripted>"),
                     std::io::Error::from_raw_os_error(errno),
                 )
             };
@@ -9836,10 +9831,9 @@ fn native_permission_errors_and_broken_storage_are_terminal() {
             .into_iter()
             .for_each(|errno| {
                 assert!(
-                    invalidates_generation(&FilesystemStorageError::io(
+                    invalidates_generation(&FilesystemStorageError::io_without_path(
                         "broken",
-                        Path::new("<scripted>"),
-                        std::io::Error::from_raw_os_error(errno),
+                        std::io::Error::from_raw_os_error(errno)
                     )),
                     "errno {errno}"
                 );

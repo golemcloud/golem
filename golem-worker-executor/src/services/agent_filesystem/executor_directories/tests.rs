@@ -64,6 +64,10 @@ fn a_failed_removal_is_the_error_after_a_failed_step() {
     let failed = error_after_removal(step(), Err(removal));
     assert!(failed.cleanup_failed(), "{failed}");
     assert!(
+        failed.to_string().contains("make a host directory"),
+        "{failed}"
+    );
+    assert!(
         failed.to_string().contains("remove a host directory"),
         "{failed}"
     );

@@ -94,10 +94,7 @@ impl CapacityRecoverySource for ScriptedRecovery {
         match self.observations.lock().unwrap().pop_front().unwrap() {
             Ok(observation) => Ok(observation),
             Err(message) => Err(FilesystemPressureError::Observation(
-                StorageVolumeError::verification(
-                    message,
-                    std::path::Path::new("<scripted-volume>"),
-                ),
+                StorageVolumeError::verification_without_path(message),
             )),
         }
     }

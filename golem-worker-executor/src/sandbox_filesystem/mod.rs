@@ -42,7 +42,7 @@ pub(crate) use host_adapter::{
     SandboxFilesystem, SandboxFilesystemName, SandboxFilesystemProvisioning, TreeExclusions,
 };
 
-pub(crate) use crate::storage_volume::{FilesystemAllocation, FilesystemLimits};
+use crate::storage_volume::{FilesystemAllocation, FilesystemLimits};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct InstalledLimits {

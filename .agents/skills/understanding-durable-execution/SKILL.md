@@ -2225,6 +2225,15 @@ On executor shutdown, a tracked task joins invocation loops and snapshot-store s
 entered downloads and outstanding source leases before removing its cache. `Drop` remains a
 best-effort cleanup safety net.
 
+Filesystem creation and source loads use `services/work_admission` registrations. Closing admission
+refuses a new operation immediately and waits for existing registrations without holding a lock.
+Source leases retain their registration, so a multi-file load interrupted by shutdown fails its
+next source request instead of deadlocking behind its own earlier lease. In-process executor
+`release()` waits for tracked shutdown cleanup as well as the service graph; a fixed-root replacement
+must not start while old cleanup still owns the XFS lock or can remove its directories. A failed
+invocation drain disables fallback removal of both host directories and retains their temporary
+parent on disk. Production drain and cleanup share the existing shutdown grace, not a new budget.
+
 `storage_volume` owns shared storage roots, capacity observations, native cloning and XFS project
 allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
 `sandbox_filesystem` owns one capability-confined tree, its handles, provisioning and verified

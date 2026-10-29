@@ -16,11 +16,11 @@ use super::*;
 use crate::host_directories::HostDirectory;
 use crate::sandbox_filesystem::host_adapter::sandbox_provisioning::SandboxFilesystemProvisioning;
 use crate::sandbox_filesystem::{
-    FilesystemAllocation, FilesystemLimits, SandboxFilesystemAdapter, SandboxPath, SeedAccess,
-    SeedEntry, SeedPlacement,
+    SandboxFilesystemAdapter, SandboxPath, SeedAccess, SeedEntry, SeedPlacement,
 };
 use crate::services::golem_config::FilesystemStorageMode;
 use crate::storage_volume::{AgentAccounting, file_project_id};
+use crate::storage_volume::{FilesystemAllocation, FilesystemLimits};
 use std::io::{Seek as _, SeekFrom, Write as _};
 use std::path::Path;
 use std::time::Duration;

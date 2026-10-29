@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::host_directories::{HostDirectory, HostPath};
+use crate::services::work_admission::WorkAdmission;
 use anyhow::anyhow;
 use async_lock::Mutex;
 use futures::TryStreamExt;
@@ -33,9 +34,9 @@ use tracing::debug;
 // Make sure to not drop this token until you are done with the file.
 #[derive(Debug, Clone)]
 pub struct FileUseToken {
-    // Release the cached file before releasing the loader's shutdown read guard.
+    // Release the cached file before releasing the loader's work registration.
     _handle: Arc<CacheEntry>,
-    _loader: Arc<tokio::sync::OwnedRwLockReadGuard<bool>>,
+    _work: Arc<tokio_util::task::task_tracker::TaskTrackerToken>,
     _directory: Arc<HostDirectory>,
 }
 
@@ -128,7 +129,7 @@ impl std::error::Error for InitialFileLoadError {}
 pub struct FileLoader {
     initial_agent_files_service: Arc<InitialAgentFilesService>,
     cache_dir: Arc<HostDirectory>,
-    running: Arc<tokio::sync::RwLock<bool>>,
+    admission: WorkAdmission,
     // Note: The cache is shared between accounts. One account no accessing data from another account
     // is implicitly done by the key being a hash of the content.
     cache: Cache,
@@ -151,7 +152,7 @@ impl FileLoader {
             initial_agent_files_service,
             cache: Mutex::new(HashMap::new()),
             cache_dir: Arc::new(cache_dir),
-            running: Arc::new(tokio::sync::RwLock::new(true)),
+            admission: WorkAdmission::default(),
             item_counter: AtomicU64::new(0),
         }
     }
@@ -164,13 +165,10 @@ impl FileLoader {
         key: AgentFileContentHash,
         file_size: u64,
     ) -> Result<InitialFileSource, InitialFileLoadError> {
-        let running = Arc::clone(&self.running).read_owned().await;
-        if !*running {
-            return Err(InitialFileLoadError::failed(
-                key,
-                "the file loader is shut down",
-            ));
-        }
+        let work = self
+            .admission
+            .enter()
+            .ok_or_else(|| InitialFileLoadError::failed(key, "the file loader is shut down"))?;
         let cache_entry = self
             .get_or_add_cache_entry(environment_id, key, file_size)
             .await?;
@@ -190,7 +188,7 @@ impl FileLoader {
             size,
             _token: FileUseToken {
                 _handle: cache_entry,
-                _loader: Arc::new(running),
+                _work: Arc::new(work),
                 _directory: Arc::clone(&self.cache_dir),
             },
         })
@@ -201,9 +199,13 @@ impl FileLoader {
     pub(crate) async fn shut_down(
         &self,
     ) -> Result<(), crate::host_directories::HostDirectoryError> {
-        let mut running = self.running.write().await;
-        *running = false;
+        self.admission.close();
+        self.admission.wait().await;
         self.cache_dir.remove().await
+    }
+
+    pub(crate) fn retain_cache(&self) {
+        self.cache_dir.retain();
     }
 
     async fn get_or_add_cache_entry(
@@ -765,6 +767,31 @@ mod tests {
         assert!(error.to_string().contains("shut down"));
         assert_eq!(storage.reads(), reads);
         loader.shut_down().await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn a_multi_source_load_during_shutdown_does_not_wait_on_its_own_lease() {
+        use futures::FutureExt as _;
+
+        let content = b"first source retained by an initial-files install";
+        let (loader, hash, environment) = setup(content).await;
+        let first = loader
+            .get_source(environment, hash, content.len() as u64)
+            .await
+            .unwrap();
+        let cache = loader.cache_dir.path().as_path().to_path_buf();
+        let shutdown = loader.shut_down();
+        tokio::pin!(shutdown);
+        assert!(futures::poll!(&mut shutdown).is_pending());
+
+        let next = loader.get_source(environment, hash, content.len() as u64).now_or_never()
+            .expect("a second source request must not queue behind shutdown while holding the first source");
+        assert!(next.unwrap_err().to_string().contains("shut down"));
+        assert!(first.path().as_path().is_file());
+        drop(first);
+        shutdown.await.unwrap();
+        assert!(!cache.exists());
     }
 
     #[test]

@@ -36,15 +36,13 @@ impl FilesystemPressureConfig {
         total_filesystem_objects: u64,
     ) -> Result<(), StorageVolumeError> {
         if self.target_available_bytes() > total_bytes {
-            return Err(StorageVolumeError::verification(
+            return Err(StorageVolumeError::verification_without_path(
                 "fit filesystem pressure byte target within the volume capacity",
-                std::path::Path::new("<configuration>"),
             ));
         }
         if self.target_available_filesystem_objects() > total_filesystem_objects {
-            return Err(StorageVolumeError::verification(
+            return Err(StorageVolumeError::verification_without_path(
                 "fit filesystem pressure object target within the volume capacity",
-                std::path::Path::new("<configuration>"),
             ));
         }
         Ok(())

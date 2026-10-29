@@ -213,6 +213,8 @@ use wasmtime_wasi::WasiView;
 #[cfg(test)]
 test_r::enable!();
 
+mod executor_release;
+
 /// A handle to either an owned `TempDir` (parent process) or a borrowed
 /// on-disk path (worker process).
 ///
@@ -895,13 +897,15 @@ impl TestWorkerExecutor {
     }
 
     /// Removes the agents from the cache of the executor, drops the executor, and waits until
-    /// its service graph is released, for at most 30 seconds. A cached agent refers to the graph,
+    /// its service graph and tracked shutdown cleanup are released, for at most 30 seconds.
+    /// A cached agent refers to the graph,
     /// and a drop only asks the tasks of the executor to stop, so without this a start that
     /// follows in the same process can find what the old graph still holds, such as the
     /// exclusive lock of a managed XFS root. A test calls this before the next start.
     pub async fn release(self) -> anyhow::Result<()> {
-        use futures::StreamExt as _;
         let released = self.leak_detector();
+        let shutdown = self._run_details.shutdown.clone();
+        let invocation_loops = self._run_details.invocation_loops.clone();
         if let Some(services) = &self.services {
             remove_cached_agents(&services.active_agents()).await?;
         }
@@ -909,13 +913,7 @@ impl TestWorkerExecutor {
             remove_cached_agents(active_agents).await?;
         }
         drop(self);
-        let gone = futures::stream::repeat(())
-            .then(|()| tokio::time::sleep(Duration::from_millis(10)))
-            .filter(|()| std::future::ready(released.upgrade().is_none()));
-        tokio::time::timeout(Duration::from_secs(30), std::pin::pin!(gone).next())
-            .await
-            .map(drop)
-            .map_err(|_| anyhow::anyhow!("the executor was not released within 30 seconds"))
+        executor_release::wait_for_release(&shutdown, &invocation_loops, released).await
     }
 
     pub fn auth_ctx(&self) -> AuthCtx {

@@ -30,7 +30,7 @@ mod errors;
 #[cfg(target_os = "linux")]
 mod xfs;
 #[cfg(target_os = "macos")]
-pub(crate) use apfs::clone_file as clone_file_in;
+pub(crate) use apfs::clone_file;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) use xfs::in_process_xfs_quotad;
 #[cfg(target_os = "linux")]
@@ -38,9 +38,7 @@ pub(crate) use xfs::{
     ProjectQuotas, ValidatedXfsNameMode, install_project_limits, project_allocation,
 };
 #[cfg(target_os = "linux")]
-pub(crate) use xfs::{
-    assign_project, clone_file as reflink_file, reflink_into_project, stale_project,
-};
+pub(crate) use xfs::{assign_project, clone_file, reflink_into_project, stale_project};
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) use xfs::{
     cow_extent_size_hint, file_project_id, get_fsxattr, has_project_identity, set_fsxattr,
@@ -262,6 +260,14 @@ impl FilesystemVolume {
         volume_facts(&self.state.mode).copies_on_write
     }
 
+    pub(crate) fn storage_profile(&self) -> NativeStorageProfile {
+        volume_facts(&self.state.mode).storage_profile
+    }
+
+    pub(crate) fn file_copy_mode(&self) -> FileCopyMode {
+        volume_facts(&self.state.mode).file_copy_mode
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn copy_on_write_root(&self) -> Option<&Arc<File>> {
         match &self.state.mode {
@@ -383,16 +389,6 @@ fn volume_facts(mode: &FilesystemVolumeMode) -> VolumeFacts {
     }
 }
 
-/// Gives the storage profile of the native calls on a sandbox on `volume`.
-pub(crate) fn storage_profile(volume: &FilesystemVolume) -> NativeStorageProfile {
-    volume_facts(&volume.state.mode).storage_profile
-}
-
-/// Gives how the files of a sandbox on `volume` are copied.
-pub(crate) fn file_copy_mode(volume: &FilesystemVolume) -> FileCopyMode {
-    volume_facts(&volume.state.mode).file_copy_mode
-}
-
 /// Flushes pending changes on the filesystem containing `root`.
 #[cfg(target_os = "linux")]
 pub(crate) fn sync_volume(root: &Path) -> std::io::Result<()> {
@@ -408,16 +404,19 @@ pub(crate) async fn observe_space(
     ) {
         return Ok(FilesystemSpace::Unlimited);
     }
+    let path = volume.state.root.clone();
     let volume = volume.clone();
     BlockingTask::Spawn
         .run(move || observe_space_blocking(&volume))
         .await
-        .map_err(|error| {
-            StorageVolumeError::task_failure(
+        .map_err(|error| match path.as_deref() {
+            Some(path) => {
+                StorageVolumeError::task_failure("observe filesystem volume space", path, error)
+            }
+            None => StorageVolumeError::task_failure_without_path(
                 "observe filesystem volume space",
-                Path::new("<filesystem-volume>"),
                 error,
-            )
+            ),
         })?
 }
 
@@ -447,12 +446,9 @@ pub(crate) fn observe_space_blocking(
             }
         }
     };
-    observed.map_err(|error| {
-        StorageVolumeError::io(
-            "observe filesystem volume space",
-            Path::new("<filesystem-volume>"),
-            error,
-        )
+    observed.map_err(|error| match volume.state.root.as_deref() {
+        Some(path) => StorageVolumeError::io("observe filesystem volume space", path, error),
+        None => StorageVolumeError::io_without_path("observe filesystem volume space", error),
     })
 }
 

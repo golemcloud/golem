@@ -326,9 +326,8 @@ async fn mutation_attributes_sandbox<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<SandboxAttributes, FilesystemStorageError> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or_else(|| {
-        FilesystemStorageError::verification(
+        FilesystemStorageError::verification_without_path(
             "inspect deleted filesystem attribute postcondition",
-            std::path::Path::new("<agent-filesystem>"),
         )
     })?;
     read_sandbox_attributes(sandbox.as_ref(), target).await

@@ -18,8 +18,8 @@ use crate::metrics::agent_filesystem::{self, StorageRefusal};
 #[cfg(test)]
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::{
-    FilesystemLimits, FilesystemStorageError, InstalledLimits, LinkGroup, SandboxAccessMode,
-    SandboxAttributes, SandboxDirectoryId, SandboxFile, SandboxFileDisposition, SandboxFilesystem,
+    FilesystemStorageError, InstalledLimits, LinkGroup, SandboxAccessMode, SandboxAttributes,
+    SandboxDirectoryId, SandboxFile, SandboxFileDisposition, SandboxFilesystem,
     SandboxFilesystemAdapter, SandboxFilesystemName, SandboxFilesystemProvisioning,
     SandboxFlushLevel, SandboxFollow, SandboxHandle, SandboxNameComparisonKey, SandboxObjectId,
     SandboxObjectKind, SandboxOpenOptions, SandboxPath, SandboxReadRange,
@@ -37,6 +37,7 @@ use crate::services::resource_usage_metering::{
     install_filesystem_usage, open_window, stop_metering,
 };
 use crate::storage_volume::AgentAccounting;
+use crate::storage_volume::FilesystemLimits;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use golem_common::model::OwnedAgentId;
@@ -464,10 +465,7 @@ impl Debug for DeleteFailure {
 impl DeleteFailure {
     fn unverified(operation: &'static str) -> Self {
         Self {
-            source: Arc::new(FilesystemStorageError::verification(
-                operation,
-                std::path::Path::new("<agent-filesystem>"),
-            )),
+            source: Arc::new(FilesystemStorageError::verification_without_path(operation)),
             retry: None,
         }
     }
@@ -584,10 +582,7 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
         let _lease = self.registry.lease_internal_call();
         let sandbox = self.sandbox.read().await;
         let sandbox = sandbox.as_ref().ok_or_else(|| {
-            FilesystemStorageError::verification(
-                "observe deleted agent filesystem",
-                std::path::Path::new("<agent-filesystem>"),
-            )
+            FilesystemStorageError::verification_without_path("observe deleted agent filesystem")
         })?;
         match sandbox.observe_allocation().await {
             Ok(allocation) => Ok(FilesystemUsage::Authoritative {

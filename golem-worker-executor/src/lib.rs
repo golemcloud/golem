@@ -26,6 +26,7 @@ pub mod identity;
 pub mod metrics;
 pub mod model;
 pub mod native_tool;
+pub(crate) mod path_removal;
 pub mod preview2;
 pub(crate) mod sandbox_filesystem;
 pub mod services;
@@ -199,15 +200,25 @@ fn track_executor_directory_cleanup(
     let token = shutdown.token();
     shutdown.spawn(async move {
         token.cancelled().await;
-        if let Err(error) = loops.wait_for_exit().await {
-            tracing::error!(%error, "Executor work did not drain; retaining host directories");
-            return;
-        }
-        snapshots.wait_for_shutdown().await;
-        if let Err(error) = filesystems.shut_down().await {
-            tracing::error!(%error, "Failed to remove executor host directories");
-        }
+        finish_executor_directory_cleanup(loops.wait_for_exit().await, filesystems, snapshots)
+            .await;
     });
+}
+
+async fn finish_executor_directory_cleanup(
+    drained: Result<(), String>,
+    filesystems: Arc<services::agent_filesystem::AgentFilesystems>,
+    snapshots: Arc<AgentFilesystemSnapshots>,
+) {
+    if let Err(error) = drained {
+        filesystems.retain_host_directories();
+        tracing::error!(%error, "Executor work did not drain; retaining host directories");
+        return;
+    }
+    snapshots.wait_for_shutdown().await;
+    if let Err(error) = filesystems.shut_down().await {
+        tracing::error!(%error, "Failed to remove executor host directories");
+    }
 }
 
 /// Binds the service of the filesystem snapshots to the configuration, with the store `given`
@@ -1574,14 +1585,15 @@ mod tests {
         )))
     }
 
-    #[test]
-    #[test_r::timeout("30s")]
-    async fn executor_directory_cleanup_waits_for_invocation_drain_and_is_joined_by_shutdown() {
-        let root = tempfile::tempdir().unwrap();
+    async fn directory_cleanup_services(
+        root: &std::path::Path,
+        shutdown: &services::shutdown::Shutdown,
+    ) -> (
+        Arc<services::agent_filesystem::AgentFilesystems>,
+        Arc<AgentFilesystemSnapshots>,
+    ) {
         let settings = services::golem_config::FilesystemStorageConfig {
-            mode: FilesystemStorageMode::Directory {
-                root: root.path().into(),
-            },
+            mode: FilesystemStorageMode::Directory { root: root.into() },
             ..Default::default()
         };
         let filesystems = Arc::new(
@@ -1592,8 +1604,6 @@ mod tests {
             .await
             .unwrap(),
         );
-        let shutdown = services::shutdown::Shutdown::new();
-        let loops = InvocationLoops::new(shutdown.token());
         let snapshots = AgentFilesystemSnapshots::bind(
             &services::golem_config::FilesystemSnapshotsConfig::default(),
             StoreSource::configured(
@@ -1604,9 +1614,19 @@ mod tests {
                 },
             ),
             filesystems.volume().copies_on_write(),
-            &shutdown,
+            shutdown,
         )
         .unwrap();
+        (filesystems, snapshots)
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn executor_directory_cleanup_waits_for_invocation_drain_and_is_joined_by_shutdown() {
+        let root = tempfile::tempdir().unwrap();
+        let shutdown = services::shutdown::Shutdown::new();
+        let (filesystems, snapshots) = directory_cleanup_services(root.path(), &shutdown).await;
+        let loops = InvocationLoops::new(shutdown.token());
         let (entered, started) = tokio::sync::oneshot::channel();
         let (draining, drain_started) = tokio::sync::oneshot::channel();
         let (release, released) = tokio::sync::oneshot::channel();
@@ -1635,6 +1655,29 @@ mod tests {
         assert!(waiting.await);
         assert!(!root.path().join(".scratch").exists());
         assert!(!root.path().join(".initial-files").exists());
+    }
+
+    #[test]
+    async fn a_failed_invocation_drain_retains_directories_after_the_last_service_owner_drops() {
+        let root = tempfile::tempdir().unwrap();
+        let shutdown = services::shutdown::Shutdown::new();
+        let (filesystems, snapshots) = directory_cleanup_services(root.path(), &shutdown).await;
+        std::fs::write(root.path().join(".scratch/in-use"), b"retained").unwrap();
+        let released = Arc::downgrade(&filesystems);
+        finish_executor_directory_cleanup(Err("oplog close failed".into()), filesystems, snapshots)
+            .await;
+        assert!(released.upgrade().is_none());
+        assert_eq!(
+            std::fs::read(root.path().join(".scratch/in-use")).unwrap(),
+            b"retained"
+        );
+        assert!(root.path().join(".initial-files").is_dir());
+        shutdown.cancel();
+        assert!(
+            shutdown
+                .wait_for_tracked(std::time::Duration::from_secs(5))
+                .await
+        );
     }
 
     /// The snapshot service gets the storage mode of the agent filesystems: on storage without

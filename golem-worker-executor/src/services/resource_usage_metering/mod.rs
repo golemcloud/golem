@@ -1080,10 +1080,7 @@ impl WindowShared {
         let timeout_at = observation.active.started_at.instant + timeout;
         tokio::select! {
             result = &mut observation.receiver => PeriodicAttempt::Completed(result.unwrap_or_else(|_| {
-                Err(FilesystemStorageError::verification(
-                    "observe filesystem usage task completion",
-                    std::path::Path::new("<resource-usage-meter>"),
-                ))
+                Err(FilesystemStorageError::verification_without_path("observe filesystem usage task completion"))
             })),
             () = self.clock.sleep_until(timeout_at) => PeriodicAttempt::TimedOut,
         }

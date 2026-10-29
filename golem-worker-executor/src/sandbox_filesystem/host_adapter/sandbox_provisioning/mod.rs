@@ -116,9 +116,8 @@ impl SandboxFilesystemName {
         }) {
             Ok(Self { components })
         } else {
-            Err(FilesystemStorageError::verification(
+            Err(FilesystemStorageError::verification_without_path(
                 "validate sandbox filesystem name",
-                Path::new("<filesystem-name>"),
             ))
         }
     }

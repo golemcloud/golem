@@ -14,7 +14,8 @@
 
 use super::{QuotaAuthority, SandboxFilesystem};
 use crate::blocking::BlockingTask;
-use crate::sandbox_filesystem::{FilesystemAllocation, FilesystemStorageError};
+use crate::sandbox_filesystem::FilesystemStorageError;
+use crate::storage_volume::FilesystemAllocation;
 
 #[cfg(target_os = "linux")]
 use crate::storage_volume::{FilesystemVolume, project_allocation};

@@ -25,8 +25,8 @@ const SHUTDOWN_GRACE_MILLIS: u64 = 10_000;
 const DEREGISTER_DEADLINE_MILLIS: u64 = 8_000;
 
 /// How long a termination signal waits for the tasks spawned through [`Shutdown::spawn`] to
-/// finish - in practice, for the shard lease deregistration to land. It is a bound, not a wait:
-/// a healthy shutdown drains in milliseconds, and this only binds when the shard manager is slow.
+/// finish, including shard deregistration and executor directory cleanup after invocation and
+/// snapshot work drains. This is a shared bound, not an additional grace for each task.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_millis(SHUTDOWN_GRACE_MILLIS);
 
 /// How long the deregister RPC itself may take. Lives here, beside the grace that contains it,

@@ -295,7 +295,7 @@ fn authoritative(bytes: u64) -> Result<FilesystemUsage, FilesystemStorageError> 
 }
 
 fn observation_error() -> FilesystemStorageError {
-    FilesystemStorageError::verification("observe scripted filesystem usage", Path::new("<test>"))
+    FilesystemStorageError::verification_without_path("observe scripted filesystem usage")
 }
 
 fn configured_account(

@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{
-    FilesystemAllocation, FilesystemIdentity, FilesystemLimits, FilesystemSpace, FilesystemVolume,
-    StorageVolumeError, space_from_values,
-};
-use crate::host_directories::remove_and_verify;
+use super::{FilesystemIdentity, FilesystemVolume, StorageVolumeError, space_from_values};
+
 use crate::metrics::agent_filesystem;
+use crate::path_removal::{self, RemoveFailure};
+use crate::storage_volume::{FilesystemAllocation, FilesystemLimits, FilesystemSpace};
 use golem_common::model::RetryConfig;
 use golem_xfs_quotad::{
     FS_DQUOT_VERSION, FS_PROJ_QUOTA, FS_QSTATV_VERSION1, FsDiskQuota, FsQuotaStatV,
@@ -255,19 +254,31 @@ pub(crate) const REFLINK_PROBE: &str = ".golem-xfs-reflink-probe";
 pub(crate) fn probe_reflink(root: &XfsRoot) -> Result<(), StorageVolumeError> {
     let probe = root.stable_root.join(REFLINK_PROBE);
     let configured_probe = root.root.join(REFLINK_PROBE);
-    remove_and_verify(&probe, "remove stale XFS reflink probe")
-        .map_err(|error| StorageVolumeError::from(error).about(&configured_probe))?;
+    remove_probe(&probe, &configured_probe, "remove stale XFS reflink probe")?;
     std::fs::create_dir(&probe).map_err(|error| {
         StorageVolumeError::io("create XFS reflink probe", &configured_probe, error)
     })?;
     let probed = reflink_probe_contents(&probe);
-    let removed = remove_and_verify(&probe, "remove XFS reflink probe")
-        .map_err(|error| StorageVolumeError::from(error).about(&configured_probe));
+    let removed = remove_probe(&probe, &configured_probe, "remove XFS reflink probe");
     probed
         .map_err(|error| {
             StorageVolumeError::io("validate XFS reflink support", &configured_probe, error)
         })
         .and(removed)
+}
+
+fn remove_probe(
+    path: &Path,
+    configured: &Path,
+    operation: &'static str,
+) -> Result<(), StorageVolumeError> {
+    path_removal::remove_and_verify(path).map_err(|failure| {
+        match failure {
+            RemoveFailure::Io(error) => StorageVolumeError::io(operation, configured, error),
+            RemoveFailure::StillPresent => StorageVolumeError::verification(operation, configured),
+        }
+        .during_cleanup()
+    })
 }
 
 /// Writes a file in the empty directory `probe`, reflinks it into a new file, and checks that the

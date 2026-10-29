@@ -19,6 +19,34 @@ use std::path::Path;
 use test_r::test;
 
 #[test]
+fn operation_errors_have_no_fabricated_path_and_keep_both_cleanup_diagnostics() {
+    let error = FilesystemStorageError::verification_without_path("create executor storage");
+    assert_eq!(
+        error.to_string(),
+        "failed to create executor storage filesystem"
+    );
+    assert!(format!("{error:?}").contains("path: None"));
+    let cleanup = FilesystemStorageError::cleanup_io(
+        "remove scratch",
+        Path::new("/scratch"),
+        std::io::ErrorKind::ReadOnlyFilesystem.into(),
+    );
+    let error = error.with_cleanup_failure(cleanup);
+    assert!(error.to_string().contains("create executor storage"));
+    assert!(
+        error
+            .to_string()
+            .contains("cleanup also failed: failed to remove scratch filesystem /scratch")
+    );
+    assert!(error.cleanup_failed());
+    assert!(error.is_terminal_failure());
+    assert_eq!(
+        error.io_kind(),
+        Some(std::io::ErrorKind::ReadOnlyFilesystem)
+    );
+}
+
+#[test]
 fn volume_error_conversion_preserves_io_and_cleanup_facts() {
     let error = crate::storage_volume::StorageVolumeError::cleanup_io(
         "probe volume",
@@ -93,10 +121,10 @@ fn an_error_about_another_path_keeps_its_operation_and_cause() {
 
 #[test]
 fn unsupported_allocation_classification_is_typed() {
-    let path = Path::new("<test>");
-    let unsupported = FilesystemStorageError::allocation_unsupported(path);
-    let same_message =
-        FilesystemStorageError::verification("observe allocation without quota authority", path);
+    let unsupported = FilesystemStorageError::allocation_unsupported_without_path();
+    let same_message = FilesystemStorageError::verification_without_path(
+        "observe allocation without quota authority",
+    );
 
     assert!(unsupported.allocation_is_unsupported());
     assert!(!same_message.allocation_is_unsupported());
@@ -112,9 +140,8 @@ fn native_task_panic_is_caught_and_classified_as_terminal() {
     let execution_error = runtime
         .block_on(BlockingTask::InPlace.run(|| -> () { panic!("scripted native panic") }))
         .unwrap_err();
-    let error = FilesystemStorageError::task_failure(
+    let error = FilesystemStorageError::task_failure_without_path(
         "run panicking native operation",
-        Path::new("<scripted>"),
         execution_error,
     );
 
@@ -149,9 +176,8 @@ fn namespace_operation_errors_preserve_raw_terminal_errno() {
         ("rename sandbox filesystem path", libc::ESTALE),
         ("rename sandbox filesystem path", libc::ENODEV),
     ] {
-        let error = FilesystemStorageError::io(
+        let error = FilesystemStorageError::io_without_path(
             operation,
-            Path::new("<destination>"),
             std::io::Error::from_raw_os_error(errno),
         );
         assert_eq!(
@@ -161,9 +187,8 @@ fn namespace_operation_errors_preserve_raw_terminal_errno() {
         assert!(error.is_terminal_failure());
     }
 
-    let cross_device = FilesystemStorageError::io(
+    let cross_device = FilesystemStorageError::io_without_path(
         "hard-link sandbox filesystem path",
-        Path::new("<destination>"),
         std::io::Error::from_raw_os_error(libc::EXDEV),
     );
     assert_eq!(

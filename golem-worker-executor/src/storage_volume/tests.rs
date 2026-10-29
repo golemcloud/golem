@@ -78,11 +78,11 @@ fn a_copy_on_write_volume_mode_states_its_facts() {
 #[test]
 fn storage_profile_follows_the_volume() {
     assert_eq!(
-        storage_profile(&FilesystemVolume::unmanaged_development()),
+        FilesystemVolume::unmanaged_development().storage_profile(),
         NativeStorageProfile::Unknown
     );
     assert_eq!(
-        storage_profile(&copy_on_write_volume()),
+        copy_on_write_volume().storage_profile(),
         NativeStorageProfile::KnownLocal
     );
 }
@@ -121,11 +121,11 @@ fn space_rejects_byte_overflow() {
 #[test]
 fn file_copy_mode_follows_the_volume() {
     assert_eq!(
-        file_copy_mode(&FilesystemVolume::unmanaged_development()),
+        FilesystemVolume::unmanaged_development().file_copy_mode(),
         FileCopyMode::Buffered
     );
     assert_eq!(
-        file_copy_mode(&copy_on_write_volume()),
+        copy_on_write_volume().file_copy_mode(),
         FileCopyMode::Reflink
     );
 }

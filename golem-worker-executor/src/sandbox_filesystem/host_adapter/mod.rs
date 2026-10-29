@@ -26,19 +26,17 @@ use super::sandbox_paths::{SandboxPath, SandboxPathBase, SandboxResolvedPathTarg
 #[cfg(test)]
 use super::scripted_adapter::scripted_handle_error;
 use super::{
-    DeleteError, FilesystemAllocation, FilesystemLimits, InstalledLimits, LinkGroup,
-    SandboxAccessMode, SandboxAttributes, SandboxDirectoryEntry, SandboxFileDisposition,
-    SandboxFilesystemAdapter, SandboxFilesystemAllocationReader, SandboxFlushLevel, SandboxFollow,
-    SandboxInspectionFailure, SandboxObjectKind, SandboxOpenOptions, SandboxReadRange,
-    SandboxSymlinkTarget, SandboxTimeChange, SandboxTimeChanges, SandboxWriteAttempt,
-    SandboxWritePlacement, SeedEntry,
+    DeleteError, InstalledLimits, LinkGroup, SandboxAccessMode, SandboxAttributes,
+    SandboxDirectoryEntry, SandboxFileDisposition, SandboxFilesystemAdapter,
+    SandboxFilesystemAllocationReader, SandboxFlushLevel, SandboxFollow, SandboxInspectionFailure,
+    SandboxObjectKind, SandboxOpenOptions, SandboxReadRange, SandboxSymlinkTarget,
+    SandboxTimeChange, SandboxTimeChanges, SandboxWriteAttempt, SandboxWritePlacement, SeedEntry,
 };
 use crate::blocking::BlockingTask;
 use crate::host_directories::HostPath;
 use crate::sandbox_filesystem::FilesystemStorageError;
-use crate::storage_volume::{
-    FilesystemVolume, NativeStorageProfile, file_copy_mode, storage_profile,
-};
+use crate::storage_volume::{FilesystemAllocation, FilesystemLimits};
+use crate::storage_volume::{FilesystemVolume, NativeStorageProfile};
 #[cfg(target_os = "linux")]
 use crate::storage_volume::{ValidatedXfsNameMode, install_project_limits, project_allocation};
 use bytes::Bytes;
@@ -687,7 +685,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         let operation_path = target.operation_path(self.root());
         let parent_path = operation_path
             .parent()
-            .unwrap_or_else(|| Path::new("<sandbox-filesystem>"))
+            .unwrap_or_else(|| self.root())
             .to_path_buf();
         let name_mode_source = self.name_mode_source;
         let name_mode_probe = self.name_mode_probe.clone();
@@ -940,18 +938,10 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         right: SandboxHandle,
     ) -> impl Future<Output = Result<bool, FilesystemStorageError>> + Send {
         let left = into_host_handle(left).map_err(|error| {
-            FilesystemStorageError::io(
-                "compare sandbox filesystem objects",
-                Path::new("<sandbox-filesystem>"),
-                error,
-            )
+            FilesystemStorageError::io_without_path("compare sandbox filesystem objects", error)
         });
         let right = into_host_handle(right).map_err(|error| {
-            FilesystemStorageError::io(
-                "compare sandbox filesystem objects",
-                Path::new("<sandbox-filesystem>"),
-                error,
-            )
+            FilesystemStorageError::io_without_path("compare sandbox filesystem objects", error)
         });
         let task = self.short_task();
         async move {
@@ -963,18 +953,13 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             })
             .await
             .map_err(|error| {
-                FilesystemStorageError::task_failure(
+                FilesystemStorageError::task_failure_without_path(
                     "compare sandbox filesystem objects",
-                    Path::new("<sandbox-filesystem>"),
                     error,
                 )
             })?
             .map_err(|error| {
-                FilesystemStorageError::io(
-                    "compare sandbox filesystem objects",
-                    Path::new("<sandbox-filesystem>"),
-                    error,
-                )
+                FilesystemStorageError::io_without_path("compare sandbox filesystem objects", error)
             })
         }
     }
@@ -1277,7 +1262,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         let platform = tree_copy::native_seed_sync_platform();
         let policy = tree_copy::SeedSyncPolicy::new(
             platform,
-            file_transfer(platform, file_copy_mode(&self.volume), self.quota_authority),
+            file_transfer(platform, self.volume.file_copy_mode(), self.quota_authority),
         );
         async move {
             let error_path = Arc::clone(&materialization_root);
@@ -1377,7 +1362,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<Box<[LinkGroup]>, FilesystemStorageError>> + Send {
         let transfer = file_transfer(
             tree_copy::native_seed_sync_platform(),
-            file_copy_mode(&self.volume),
+            self.volume.file_copy_mode(),
             QuotaAuthority::Unsupported,
         );
         let operation_path = source.operation_path(self.root());
@@ -1430,7 +1415,7 @@ impl SandboxFilesystem {
     // Only bounded work on known-local storage may block in place. Enumeration, copying,
     // flushing and quota operations always use the blocking pool.
     fn short_task(&self) -> BlockingTask {
-        match storage_profile(&self.volume) {
+        match self.volume.storage_profile() {
             NativeStorageProfile::KnownLocal => BlockingTask::InPlace,
             NativeStorageProfile::Unknown => BlockingTask::Spawn,
         }

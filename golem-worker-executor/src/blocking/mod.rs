@@ -14,6 +14,22 @@
 
 use std::fmt::{Display, Formatter};
 
+#[cfg(test)]
+tokio::task_local! {
+    static RECORDED_TASKS: std::cell::RefCell<Vec<BlockingTask>>;
+}
+
+#[cfg(test)]
+pub(crate) async fn record_tasks<F: Future>(future: F) -> (F::Output, Vec<BlockingTask>) {
+    RECORDED_TASKS
+        .scope(std::cell::RefCell::default(), async {
+            let result = future.await;
+            let modes = RECORDED_TASKS.with(|tasks| tasks.take());
+            (result, modes)
+        })
+        .await
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BlockingTask {
     /// Runs on the caller's thread when the runtime supports blocking in place.
@@ -30,6 +46,8 @@ impl BlockingTask {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
+        #[cfg(test)]
+        let _ = RECORDED_TASKS.try_with(|tasks| tasks.borrow_mut().push(self));
         let task = move || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(task))
                 .map_err(|_| BlockingTaskError::Panicked)

@@ -534,7 +534,7 @@ async fn complete_limit_transition<Adapter: SandboxFilesystemAdapter>(
 }
 
 pub(super) fn decide_limit_transition(
-    allocation: crate::sandbox_filesystem::FilesystemAllocation,
+    allocation: crate::storage_volume::FilesystemAllocation,
     limits: FilesystemLimits,
 ) -> LimitDecision {
     if allocation.allocated_bytes > limits.allocated_bytes
@@ -668,9 +668,8 @@ fn spawn_cleanup<Adapter: SandboxFilesystemAdapter>(
                         .get_or_init(Default::default)
                         .fail(crate::metrics::resource_release::Failure::ExclusiveOwnership);
                     *sandbox = Some(adapter);
-                    Err(FilesystemStorageError::verification(
+                    Err(FilesystemStorageError::verification_without_path(
                         "take exclusive ownership for agent filesystem deletion",
-                        std::path::Path::new("<agent-filesystem>"),
                     ))
                 }
             },

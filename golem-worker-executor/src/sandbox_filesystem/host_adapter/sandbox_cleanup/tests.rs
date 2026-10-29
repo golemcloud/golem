@@ -15,7 +15,6 @@
 use super::super::QuotaAuthority;
 use super::super::SandboxFilesystem;
 use super::*;
-use crate::sandbox_filesystem::FilesystemLimits;
 use crate::sandbox_filesystem::SandboxAccessMode;
 use crate::sandbox_filesystem::SandboxFilesystemAdapter;
 use crate::sandbox_filesystem::SandboxFilesystemName;
@@ -34,11 +33,10 @@ use crate::sandbox_filesystem::scripted_adapter::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::scripted_adapter::ScriptedSandboxFilesystemProvisioning;
 use crate::services::golem_config::FilesystemStorageMode;
 use crate::storage_volume::FileCopyMode;
+use crate::storage_volume::FilesystemLimits;
 use crate::storage_volume::FilesystemSpace;
-use crate::storage_volume::file_copy_mode;
 use crate::storage_volume::observe_space;
 use golem_common::model::RetryConfig;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use test_r::test;
@@ -63,9 +61,8 @@ fn unmanaged_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {
 #[test]
 fn creation_failure_selection_keeps_cleanup_failure_priority() {
     let creation = || {
-        FilesystemStorageError::io(
+        FilesystemStorageError::io_without_path(
             "create test filesystem",
-            Path::new("<creation>"),
             std::io::Error::other("creation failure"),
         )
     };
@@ -74,11 +71,11 @@ fn creation_failure_selection_keeps_cleanup_failure_priority() {
     assert!(!selected.cleanup_failed());
     let selected = creation_error_after_cleanup(
         creation(),
-        Err(FilesystemStorageError::cleanup_io(
+        Err(FilesystemStorageError::io_without_path(
             "remove test filesystem",
-            Path::new("<cleanup>"),
             std::io::Error::other("cleanup failure"),
-        )),
+        )
+        .during_cleanup()),
     );
     assert_eq!(selected.io_error().unwrap().to_string(), "cleanup failure");
     assert!(selected.cleanup_failed());
@@ -100,7 +97,7 @@ async fn unmanaged_creation_replaces_stale_contents_and_deletes_verified() {
             .next()
             .is_none()
     );
-    assert_eq!(file_copy_mode(&filesystem.volume), FileCopyMode::Buffered);
+    assert_eq!(filesystem.volume.file_copy_mode(), FileCopyMode::Buffered);
     assert!(matches!(
         filesystem.quota_authority,
         QuotaAuthority::Unsupported
@@ -197,7 +194,7 @@ async fn open_sandbox_directory(
 }
 
 fn scripted_storage_error(operation: &'static str) -> FilesystemStorageError {
-    FilesystemStorageError::verification(operation, Path::new("<scripted-test>"))
+    FilesystemStorageError::verification_without_path(operation)
 }
 
 fn directory_sandbox_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {

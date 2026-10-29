@@ -632,9 +632,8 @@ fn p2_p3_cross_project_link_mapping_is_identical() {
     #[cfg(target_os = "linux")]
     {
         let storage_error = || {
-            FilesystemStorageError::io(
+            FilesystemStorageError::io_without_path(
                 "hard link",
-                std::path::Path::new("<namespace-parity-test>"),
                 std::io::Error::from_raw_os_error(libc::EXDEV),
             )
         };
@@ -1360,11 +1359,7 @@ fn p2_p3_write_progress_and_placement_translation_is_identical() {
 #[test]
 fn p2_p3_write_quota_capacity_and_permission_errors_are_identical() {
     fn storage_error() -> FilesystemStorageError {
-        FilesystemStorageError::io(
-            "write",
-            std::path::Path::new("<wasi-write-test>"),
-            std::io::ErrorKind::StorageFull.into(),
-        )
+        FilesystemStorageError::io_without_path("write", std::io::ErrorKind::StorageFull.into())
     }
 
     use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode as P2ErrorCode;

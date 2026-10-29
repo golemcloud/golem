@@ -330,7 +330,7 @@ fn ordinary_instantiation_errors_are_not_target_refusals() {
 }
 
 fn storage() -> FilesystemStorageError {
-    FilesystemStorageError::verification("seed initial file", Path::new("<scripted>"))
+    FilesystemStorageError::verification_without_path("seed initial file")
 }
 
 fn restore(class: RestoreClass) -> FilesystemError {

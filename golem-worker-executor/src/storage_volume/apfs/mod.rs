@@ -14,7 +14,8 @@
 
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
 use super::space_from_values;
-use super::{FilesystemSpace, FilesystemVolume, StorageVolumeError};
+use super::{FilesystemVolume, StorageVolumeError};
+use crate::storage_volume::FilesystemSpace;
 use rustix::fs::{CloneFlags, StatVfs, StatVfsMountFlags, fclonefileat, fstatvfs};
 use std::fs::File;
 use std::io::Write;

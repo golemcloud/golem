@@ -1776,9 +1776,8 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         {
-            let sandbox = FilesystemStorageError::io(
+            let sandbox = FilesystemStorageError::io_without_path(
                 "hard link",
-                std::path::Path::new("<p2-namespace-test>"),
                 std::io::Error::from_raw_os_error(libc::EXDEV),
             );
             assert_eq!(

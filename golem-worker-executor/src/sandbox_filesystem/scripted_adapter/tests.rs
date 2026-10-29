@@ -14,8 +14,6 @@
 
 use crate::host_directories::HostDirectory;
 use crate::host_directories::HostPath;
-use crate::sandbox_filesystem::FilesystemAllocation;
-use crate::sandbox_filesystem::FilesystemLimits;
 use crate::sandbox_filesystem::InstalledLimits;
 use crate::sandbox_filesystem::SandboxAccessMode;
 use crate::sandbox_filesystem::SandboxAttributes;
@@ -45,6 +43,8 @@ use crate::sandbox_filesystem::sandbox_paths::SandboxPath;
 use crate::sandbox_filesystem::scripted_adapter::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::scripted_adapter::ScriptedSandboxFilesystemProvisioning;
 use crate::services::golem_config::FilesystemStorageMode;
+use crate::storage_volume::FilesystemAllocation;
+use crate::storage_volume::FilesystemLimits;
 use bytes::Bytes;
 use golem_common::model::RetryConfig;
 use std::ffi::OsString;
@@ -91,7 +91,7 @@ fn sandbox_name() -> SandboxFilesystemName {
 }
 
 fn scripted_storage_error(operation: &'static str) -> FilesystemStorageError {
-    FilesystemStorageError::verification(operation, Path::new("<scripted-test>"))
+    FilesystemStorageError::verification_without_path(operation)
 }
 
 fn make_seed_entry(

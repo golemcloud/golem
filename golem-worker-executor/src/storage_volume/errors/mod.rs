@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use crate::blocking::BlockingTaskError;
-use crate::host_directories::{HostDirectoryError, HostDirectoryFailure};
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(crate) struct StorageVolumeError {
     operation: &'static str,
-    path: PathBuf,
+    path: Option<PathBuf>,
     source: Option<std::io::Error>,
     cleanup_failed: bool,
     task_failed: bool,
@@ -29,8 +28,15 @@ pub(crate) struct StorageVolumeError {
 impl StorageVolumeError {
     pub(crate) fn verification(operation: &'static str, path: &Path) -> Self {
         Self {
+            path: Some(path.into()),
+            ..Self::verification_without_path(operation)
+        }
+    }
+
+    pub(crate) fn verification_without_path(operation: &'static str) -> Self {
+        Self {
             operation,
-            path: path.into(),
+            path: None,
             source: None,
             cleanup_failed: false,
             task_failed: false,
@@ -41,6 +47,13 @@ impl StorageVolumeError {
         Self {
             source: Some(source),
             ..Self::verification(operation, path)
+        }
+    }
+
+    pub(crate) fn io_without_path(operation: &'static str, source: std::io::Error) -> Self {
+        Self {
+            source: Some(source),
+            ..Self::verification_without_path(operation)
         }
     }
 
@@ -63,9 +76,19 @@ impl StorageVolumeError {
         }
     }
 
+    pub(crate) fn task_failure_without_path(
+        operation: &'static str,
+        source: BlockingTaskError,
+    ) -> Self {
+        Self {
+            task_failed: true,
+            ..Self::io_without_path(operation, std::io::Error::other(source))
+        }
+    }
+
     #[cfg(target_os = "linux")]
-    pub(super) fn about(mut self, path: &Path) -> Self {
-        self.path = path.into();
+    pub(super) fn during_cleanup(mut self) -> Self {
+        self.cleanup_failed = true;
         self
     }
 
@@ -84,7 +107,15 @@ impl StorageVolumeError {
         self.cleanup_failed
     }
 
-    pub(crate) fn into_parts(self) -> (&'static str, PathBuf, Option<std::io::Error>, bool, bool) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        &'static str,
+        Option<PathBuf>,
+        Option<std::io::Error>,
+        bool,
+        bool,
+    ) {
         (
             self.operation,
             self.path,
@@ -95,27 +126,12 @@ impl StorageVolumeError {
     }
 }
 
-impl From<HostDirectoryError> for StorageVolumeError {
-    fn from(error: HostDirectoryError) -> Self {
-        let (operation, path, failure, cleanup_failed) = error.into_parts();
-        let mut error = match failure {
-            HostDirectoryFailure::Io(source) => Self::io(operation, &path, source),
-            HostDirectoryFailure::Task(source) => Self::task_failure(operation, &path, source),
-            HostDirectoryFailure::Verification => Self::verification(operation, &path),
-        };
-        error.cleanup_failed = cleanup_failed;
-        error
-    }
-}
-
 impl Display for StorageVolumeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "failed to {} filesystem {}",
-            self.operation,
-            self.path.display()
-        )?;
+        write!(f, "failed to {} filesystem", self.operation)?;
+        if let Some(path) = &self.path {
+            write!(f, " {}", path.display())?;
+        }
         if let Some(source) = &self.source {
             write!(f, ": {source}")?;
         }

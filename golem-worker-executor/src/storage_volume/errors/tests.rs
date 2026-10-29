@@ -16,6 +16,16 @@ use super::*;
 use test_r::test;
 
 #[test]
+fn operation_errors_do_not_report_an_invented_volume_path() {
+    let error = StorageVolumeError::verification_without_path("validate pressure configuration");
+    assert_eq!(
+        error.to_string(),
+        "failed to validate pressure configuration filesystem"
+    );
+    assert!(error.into_parts().1.is_none());
+}
+
+#[test]
 fn volume_errors_keep_the_original_io_cause_and_cleanup_status() {
     let error = StorageVolumeError::cleanup_io(
         "remove volume probe",
@@ -30,7 +40,7 @@ fn volume_errors_keep_the_original_io_cause_and_cleanup_status() {
     assert!(error.cleanup_failed());
     let (operation, path, source, cleanup_failed, task_failed) = error.into_parts();
     assert_eq!(operation, "remove volume probe");
-    assert_eq!(path, Path::new("/volume/probe"));
+    assert_eq!(path.as_deref(), Some(Path::new("/volume/probe")));
     assert_eq!(source.unwrap().raw_os_error(), Some(5));
     assert!(cleanup_failed);
     assert!(!task_failed);

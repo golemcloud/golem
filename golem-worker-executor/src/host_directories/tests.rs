@@ -23,10 +23,10 @@ struct Directories {
     initial_files: HostDirectory,
 }
 
-async fn provision(root: Option<&Path>) -> (Option<Arc<tempfile::TempDir>>, Directories) {
+async fn provision(root: Option<&Path>) -> (Option<Arc<TemporaryRoot>>, Directories) {
     let temporary = root
         .is_none()
-        .then(|| Arc::new(tempfile::tempdir().unwrap()));
+        .then(|| Arc::new(TemporaryRoot::new(tempfile::tempdir().unwrap())));
     let root = root.unwrap_or_else(|| temporary.as_ref().unwrap().path());
     let scratch = HostDirectory::create_fresh(root.join(".scratch"), None, temporary.clone())
         .await
@@ -78,6 +78,31 @@ async fn a_temporary_root_lives_while_a_host_directory_lives() {
         !root.exists(),
         "the temporary root must go away with its last host directory"
     );
+}
+
+#[test]
+async fn retained_directories_survive_the_last_owner_of_their_temporary_root() {
+    let parent = tempfile::tempdir().unwrap();
+    let temporary = Arc::new(TemporaryRoot::new(
+        tempfile::tempdir_in(parent.path()).unwrap(),
+    ));
+    let root = temporary.path().to_path_buf();
+    let scratch = HostDirectory::create_fresh(root.join(".scratch"), None, Some(temporary.clone()))
+        .await
+        .unwrap();
+    let initial =
+        HostDirectory::create_fresh(root.join(".initial-files"), None, Some(temporary.clone()))
+            .await
+            .unwrap();
+    std::fs::write(scratch.path().as_path().join("in-use"), b"retained").unwrap();
+    scratch.retain();
+    initial.retain();
+    drop((scratch, initial, temporary));
+    assert_eq!(
+        std::fs::read(root.join(".scratch/in-use")).unwrap(),
+        b"retained"
+    );
+    assert!(root.join(".initial-files").is_dir());
 }
 
 #[test]

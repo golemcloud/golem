@@ -26,14 +26,14 @@ use super::sandbox_paths::{
     ResolvedPathEntry, SandboxPath, SandboxPathBase, SandboxResolvedPathTarget, split_path_target,
 };
 use super::{
-    DeleteError, FilesystemAllocation, FilesystemLimits, InstalledLimits, LinkGroup,
-    SandboxAttributes, SandboxDirectoryEntry, SandboxFilesystemAdapter,
-    SandboxFilesystemAllocationReader, SandboxFlushLevel, SandboxFollow, SandboxOpenOptions,
-    SandboxReadRange, SandboxSymlinkTarget, SandboxTimeChanges, SandboxWriteAttempt,
-    SandboxWritePlacement, SeedEntry,
+    DeleteError, InstalledLimits, LinkGroup, SandboxAttributes, SandboxDirectoryEntry,
+    SandboxFilesystemAdapter, SandboxFilesystemAllocationReader, SandboxFlushLevel, SandboxFollow,
+    SandboxOpenOptions, SandboxReadRange, SandboxSymlinkTarget, SandboxTimeChanges,
+    SandboxWriteAttempt, SandboxWritePlacement, SeedEntry,
 };
 use crate::host_directories::HostPath;
 use crate::sandbox_filesystem::FilesystemStorageError;
+use crate::storage_volume::{FilesystemAllocation, FilesystemLimits};
 use bytes::Bytes;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -47,7 +47,7 @@ use std::sync::{Arc, Mutex};
 pub(in crate::sandbox_filesystem) fn scripted_handle_error(
     operation: &'static str,
 ) -> FilesystemStorageError {
-    FilesystemStorageError::verification(operation, Path::new("<scripted-handle>"))
+    FilesystemStorageError::verification_without_path(operation)
 }
 
 #[derive(Clone)]
@@ -817,9 +817,8 @@ pub(in crate::sandbox_filesystem) async fn scripted_outcome<T: Send + 'static>(
         state.calls.push(call);
         let gate = state.gates.remove(&operation);
         let outcome = outcomes(&mut state).pop_front().unwrap_or_else(|| {
-            Err(FilesystemStorageError::verification(
+            Err(FilesystemStorageError::verification_without_path(
                 "consume programmed scripted sandbox filesystem outcome",
-                Path::new("<scripted-sandbox-filesystem>"),
             ))
         });
         (gate, outcome)
@@ -841,9 +840,8 @@ pub(in crate::sandbox_filesystem) fn scripted_path_resolution(
     programmed: ScriptedPathResolution,
 ) -> Result<SandboxResolvedPathTarget, FilesystemStorageError> {
     let (_, name) = split_path_target(&target.path).map_err(|error| {
-        FilesystemStorageError::io(
+        FilesystemStorageError::io_without_path(
             "resolve scripted sandbox filesystem namespace target",
-            Path::new("<scripted-sandbox-filesystem>"),
             error,
         )
     })?;
@@ -895,9 +893,8 @@ pub(in crate::sandbox_filesystem) fn default_scripted_path_resolution(
     target: SandboxPath,
 ) -> Result<SandboxResolvedPathTarget, FilesystemStorageError> {
     let (relative_parent, name) = split_path_target(&target.path).map_err(|error| {
-        FilesystemStorageError::io(
+        FilesystemStorageError::io_without_path(
             "resolve scripted sandbox filesystem namespace target",
-            Path::new("<scripted-sandbox-filesystem>"),
             error,
         )
     })?;
@@ -966,12 +963,9 @@ pub(in crate::sandbox_filesystem) fn take_outcome(
     outcome: &mut Option<Result<(), FilesystemStorageError>>,
     operation: &'static str,
 ) -> Result<(), FilesystemStorageError> {
-    outcome.take().unwrap_or_else(|| {
-        Err(FilesystemStorageError::verification(
-            operation,
-            Path::new("<scripted-sandbox-filesystem>"),
-        ))
-    })
+    outcome
+        .take()
+        .unwrap_or_else(|| Err(FilesystemStorageError::verification_without_path(operation)))
 }
 
 impl SandboxFile {

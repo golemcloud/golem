@@ -79,7 +79,7 @@ impl DirectoryProvisioning {
             .prefix("golem")
             .tempdir()
             .map_err(|error| {
-                FilesystemStorageError::io("create temporary directory", Path::new("<temp>"), error)
+                FilesystemStorageError::io_without_path("create temporary directory", error)
             })?;
         let lifecycle = Arc::new(AsyncMutex::new(()))
             .try_lock_owned()

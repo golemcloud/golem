@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use crate::blocking::BlockingTask;
-use crate::host_directories::{HostDirectory, HostDirectoryError, HostDirectoryFailure};
+use crate::host_directories::{
+    HostDirectory, HostDirectoryError, HostDirectoryFailure, TemporaryRoot,
+};
 use crate::sandbox_filesystem::{FilesystemStorageError, SandboxFilesystemProvisioning};
 
 use crate::services::golem_config::FilesystemStorageMode;
 use crate::storage_volume::FilesystemVolume;
 use golem_common::model::RetryConfig;
-use std::path::Path;
 use std::sync::Arc;
 
 const SCRATCH: &str = ".scratch";
@@ -49,12 +50,14 @@ pub(crate) async fn make_executor_directories(
     BlockingTask::Spawn
         .run(executor_directories_task(volume))
         .await
-        .map_err(|error| {
-            FilesystemStorageError::task_failure(
+        .map_err(|error| match root.as_deref() {
+            Some(path) => {
+                FilesystemStorageError::task_failure("create executor directories", path, error)
+            }
+            None => FilesystemStorageError::task_failure_without_path(
                 "create executor directories",
-                root.as_deref().unwrap_or(Path::new("<temp>")),
                 error,
-            )
+            ),
         })?
 }
 
@@ -71,13 +74,13 @@ pub(crate) fn executor_directories_task(
                     .prefix("golem-host-directories")
                     .tempdir()
                     .map_err(|error| {
-                        FilesystemStorageError::io(
+                        FilesystemStorageError::io_without_path(
                             "create executor directory root",
-                            Path::new("<temp>"),
                             error,
                         )
                     })?;
-                (Arc::from(directory.path()), Some(Arc::new(directory)))
+                let directory = Arc::new(TemporaryRoot::new(directory));
+                (Arc::from(directory.path()), Some(directory))
             }
         };
         let create = |name| -> Result<HostDirectory, FilesystemStorageError> {
@@ -115,7 +118,10 @@ fn error_after_removal(
     error: FilesystemStorageError,
     removal: Result<(), FilesystemStorageError>,
 ) -> FilesystemStorageError {
-    removal.err().unwrap_or(error)
+    match removal {
+        Ok(()) => error,
+        Err(cleanup) => error.with_cleanup_failure(cleanup),
+    }
 }
 
 impl From<HostDirectoryError> for FilesystemStorageError {

@@ -62,6 +62,7 @@ use std::time::SystemTime;
 use test_r::test;
 
 #[test]
+#[test_r::timeout("30s")]
 async fn only_bounded_work_on_known_local_storage_can_run_in_place() {
     let parent = tempfile::tempdir().unwrap();
     let provisioning = SandboxFilesystemProvisioning::new(
@@ -94,6 +95,80 @@ async fn only_bounded_work_on_known_local_storage_can_run_in_place() {
     assert_eq!(filesystem.transfer_task(0), BlockingTask::InPlace);
     assert_eq!(filesystem.transfer_task(64 * 1024), BlockingTask::InPlace);
     assert_eq!(filesystem.transfer_task(64 * 1024 + 1), BlockingTask::Spawn);
+
+    async fn spawned<F: Future>(future: F) -> F::Output {
+        let (result, modes) = crate::blocking::record_tasks(future).await;
+        assert!(!modes.is_empty(), "the operation must dispatch native work");
+        assert!(
+            modes.iter().all(|mode| *mode == BlockingTask::Spawn),
+            "{modes:?}"
+        );
+        result
+    }
+
+    let directory = filesystem
+        .open(
+            SandboxPath::at_root(""),
+            existing_open(SandboxObjectKind::Directory, SandboxAccessMode::Read),
+        )
+        .await
+        .unwrap();
+    let SandboxHandle::Directory(opened) = &directory else {
+        panic!("root must be a directory")
+    };
+    spawned(filesystem.read_directory(opened)).await.unwrap();
+    let target = create_scratch_directory(parent.path()).await;
+    spawned(filesystem.copy_contents(
+        SandboxPath::at_root(""),
+        Arc::new(TreeExclusions::new(std::iter::empty::<PathBuf>())),
+        target.path(),
+    ))
+    .await
+    .unwrap();
+    spawned(filesystem.seed(Box::new([]))).await.unwrap();
+    let file = filesystem
+        .open(
+            SandboxPath::at_root("flush"),
+            file_open(
+                SandboxAccessMode::ReadWrite,
+                SandboxFileDisposition::CreateExclusive,
+            ),
+        )
+        .await
+        .unwrap();
+    spawned(filesystem.flush(&file, SandboxFlushLevel::DataAndMetadata))
+        .await
+        .unwrap();
+    filesystem.close(file).await.unwrap();
+    filesystem.close(directory).await.unwrap();
+
+    #[cfg(target_os = "linux")]
+    {
+        // The synthetic volume has no quota client. The calls fail after dispatch without issuing
+        // a quota syscall, which still verifies the scheduling of all three quota entry points.
+        filesystem.quota_authority = QuotaAuthority::Project {
+            project_id: NonZeroU32::new(1).unwrap(),
+            filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
+        };
+        assert!(spawned(filesystem.observe_allocation()).await.is_err());
+        assert!(
+            spawned(filesystem.allocation_reader().read_allocation())
+                .await
+                .is_err()
+        );
+        assert!(
+            spawned(
+                filesystem.install_limits(crate::storage_volume::FilesystemLimits {
+                    allocated_bytes: 4096,
+                    filesystem_objects: 1,
+                })
+            )
+            .await
+            .is_err()
+        );
+        filesystem.quota_authority = QuotaAuthority::Unsupported;
+    }
+    target.discard().await.unwrap();
     filesystem.delete_and_verify().await.unwrap();
 }
 

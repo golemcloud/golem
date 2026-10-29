@@ -17,11 +17,9 @@ use super::super::{LinkGroup, SeedAccess, SeedPlacement};
 use super::{NativeRootHandles, QuotaAuthority};
 use crate::storage_volume::FileCopyMode;
 #[cfg(target_os = "macos")]
-use crate::storage_volume::clone_file_in;
+use crate::storage_volume::clone_file;
 #[cfg(target_os = "linux")]
-use crate::storage_volume::{
-    reflink_file as clone_file_extents, reflink_into_project as clone_into_project, sync_volume,
-};
+use crate::storage_volume::{clone_file, reflink_into_project as clone_into_project, sync_volume};
 use cap_fs_ext::{DirExt as _, FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt as _};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -242,7 +240,7 @@ impl<'a> CapabilityTempFile<'a> {
     #[cfg(target_os = "macos")]
     fn from_clone(directory: &'a cap_std::fs::Dir, source: &File) -> std::io::Result<Self> {
         let name = std::iter::repeat_with(temporary_copy_name)
-            .find_map(|name| match clone_file_in(source, directory, &name) {
+            .find_map(|name| match clone_file(source, directory, &name) {
                 Ok(()) => Some(Ok(name)),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
                 Err(error) => Some(Err(error)),
@@ -700,7 +698,7 @@ pub(in crate::sandbox_filesystem) fn clone_copied_file(
             .parent()
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?,
     )?;
-    clone_file_in(
+    clone_file(
         source,
         &parent,
         target
@@ -1665,7 +1663,7 @@ pub(in crate::sandbox_filesystem) fn reflink_file(
     source: &File,
     target: &File,
 ) -> std::io::Result<()> {
-    clone_file_extents(target, source)
+    clone_file(target, source)
 }
 
 #[cfg(not(target_os = "linux"))]
