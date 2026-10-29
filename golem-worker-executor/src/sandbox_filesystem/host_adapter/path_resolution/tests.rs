@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::sandbox_filesystem::SandboxAccessMode;
+#[cfg(target_os = "macos")]
+use crate::sandbox_filesystem::SandboxFileDisposition;
 use crate::sandbox_filesystem::SandboxFilesystemAdapter;
 use crate::sandbox_filesystem::SandboxFollow;
 use crate::sandbox_filesystem::SandboxObjectKind;
