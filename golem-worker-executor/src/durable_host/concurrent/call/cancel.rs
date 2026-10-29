@@ -356,7 +356,7 @@ impl<T: 'static, Ctx: WorkerCtx> ReplayCancelWaiter<T, Ctx> {
         let Self {
             replay_state,
             replay,
-            call,
+            mut call,
             get_ctx,
             activity,
         } = self;
@@ -378,6 +378,9 @@ impl<T: 'static, Ctx: WorkerCtx> ReplayCancelWaiter<T, Ctx> {
                 });
                 if !live {
                     if rejected {
+                        // This check runs only after the shared cursor reaches its tail. A
+                        // completed entity can dispose its Store earlier, cancelling this
+                        // parked waiter; it is not a fence that keeps that Store alive.
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
                             "Cancelled for a dropped future",
                             format!(
@@ -396,6 +399,9 @@ impl<T: 'static, Ctx: WorkerCtx> ReplayCancelWaiter<T, Ctx> {
                     )
                     .await?;
                 }
+                call.live_call_permit = Some(store.with(|mut access| {
+                    LiveCallPermit::new(get_ctx(access.data_mut()).state.live_host_call_counter())
+                }));
                 call.wait_request_upload().await?;
                 call.append_cancelled_with_oplog(oplog, None).await?;
             }

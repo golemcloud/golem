@@ -339,8 +339,12 @@ fn retain_invocation_failure(
         Ok(InvokeResult::Interrupted {
             interrupt_kind: InterruptKind::ShardLost,
             ..
-        })
+        }) | Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost
+        } | WorkerExecutorError::OplogFenced { .. })
     );
+    // Lifecycle interruption must stop the generation even after a body failure;
+    // retaining that failure must not keep a stopped or fenced generation running.
     if !shard_lost
         && (matches!(
             result,
@@ -350,7 +354,9 @@ fn retain_invocation_failure(
             Ok(InvokeResult::Interrupted {
                 interrupt_kind: InterruptKind::ShardLost,
                 ..
-            })
+            }) | Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost
+            } | WorkerExecutorError::OplogFenced { .. })
         ) || (matches!(&failure, Ok(InvokeResult::Interrupted { .. }))
             && !matches!(result, Ok(InvokeResult::Interrupted { .. }))))
     {
@@ -2111,6 +2117,34 @@ mod tests {
                 ..
             })
         ));
+
+        for failure in [
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            },
+            WorkerExecutorError::OplogFenced {
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "fenced".into(),
+                },
+                expected_epoch: 1,
+                actual_epoch: Some(2),
+            },
+        ] {
+            let mut result = Err(WorkerExecutorError::unexpected_oplog_entry(
+                "observation",
+                "disposal",
+            ));
+            retain_invocation_failure(&mut result, Err(failure.clone()));
+            retain_invocation_failure(
+                &mut result,
+                Ok(InvokeResult::Interrupted {
+                    consumed_fuel: 0,
+                    interrupt_kind: InterruptKind::Restart,
+                }),
+            );
+            assert_eq!(result.unwrap_err(), failure);
+        }
     }
 
     #[test]

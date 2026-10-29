@@ -370,7 +370,16 @@ async fn cancelled_stdin_disposal_replay_consumes_historical_finish(
     }
     let replayed = executor.stored_oplog(&worker).await;
     assert_eq!(controls(&replayed), controls(&original));
-    assert_eq!(starts(&replayed), starts(&original));
+    assert_eq!(starts(&replayed[..original.len()]), starts(&original));
+    // The fresh probe performs the SDK's per-invocation identity lookup. Reconstruction
+    // must not add any other host call, including another stdin disposal operation.
+    assert!(matches!(
+        starts(&replayed[original.len()..]).as_slice(),
+        [golem_common::model::oplog::OplogEntry::Start {
+            function_name: golem_common::model::oplog::payload::host_functions::HostFunctionName::WasiCliEnvironmentGetEnvironment,
+            ..
+        }]
+    ));
     executor.delete_worker(&worker).await?;
     Ok(())
 }

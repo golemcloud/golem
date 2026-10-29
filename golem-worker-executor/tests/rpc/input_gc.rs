@@ -1,5 +1,6 @@
 //! A real executor restart selects a different disposal schedule through snapshot load.
 use super::*;
+use anyhow::Context;
 use golem_common::model::AgentEvent;
 use golem_common::schema::IntoSchema;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
@@ -114,6 +115,16 @@ async fn scenario(
         .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
         .unwrap();
     assert!(snapshot.oplog_index < run.oplog_index);
+    executor.commit_oplog(&target).await?;
+    let target_invocations = |history: &[PublicOplogEntryWithIndex]| {
+        history
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .count()
+    };
+    let target_before =
+        target_invocations(&executor.get_oplog(&target, OplogIndex::INITIAL).await?);
+    assert_eq!(target_before, 2, "constructor and one original production");
     drop(executor);
     let executor = start_with_overrides(deps, context, overrides()).await?;
     let mut events = executor.capture_output(&agent).await?;
@@ -145,6 +156,21 @@ async fn scenario(
             panic!("omitting a completed read must reject the snapshot");
         })
         .await?;
+        let report: (bool, u32, u32) = executor
+            .invoke_and_await_agent(&component, &id, "inspect", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(
+            report,
+            (false, reads, u32::from(live == 2)),
+            "fallback must replay the original reads without the restored heap"
+        );
+        executor.commit_oplog(&target).await?;
+        assert_eq!(
+            target_invocations(&executor.get_oplog(&target, OplogIndex::INITIAL).await?),
+            target_before,
+            "rejecting the snapshot and replaying history must not repeat production"
+        );
         return Ok(());
     }
     result?;
@@ -513,7 +539,8 @@ async fn typescript_gc_collects_previously_retained_input_with_identical_reads(
                 data_value!(reads, gate),
             ),
         )
-        .await??;
+        .await
+        .with_context(|| format!("GC replay invocation timed out after {reads} reads"))??;
         tokio::time::timeout(Duration::from_secs(10), async {
             let mut loaded = false;
             while let Some(event) = events.recv().await {
@@ -531,7 +558,8 @@ async fn typescript_gc_collects_previously_retained_input_with_identical_reads(
             }
             panic!("missing snapshot recovery result");
         })
-        .await?;
+        .await
+        .with_context(|| format!("missing GC replay completion events after {reads} reads"))?;
         let report: TsInputGcReport = executor
             .invoke_and_await_agent(&component, &id, "inspect", data_value!())
             .await?

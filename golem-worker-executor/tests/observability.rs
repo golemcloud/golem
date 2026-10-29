@@ -419,6 +419,25 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
             closes(&before),
             "replay drops must not append"
         );
+        if !partial_body && live == 2 && restored == 0 {
+            // The original run retained the response; only replay drops it. SpanClosed
+            // describes a live release, not an obligation to repair at the live tail.
+            // Cleanup samples liveness at the drop, so even a later drain appends nothing.
+            assert_eq!(
+                closes(&after),
+                0,
+                "a replay-only drop has no durable closure"
+            );
+            executor
+                .invoke_and_await_agent(&component, &agent, "release", data_value!())
+                .await?;
+            let released = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            assert_eq!(
+                closes(&released),
+                0,
+                "there is no retained response to close after the replay-only drop"
+            );
+        }
         assert!(
             !after.iter().any(|entry| matches!(&entry.entry,
             PublicOplogEntry::Start(start) if start.function_name == "http::client::span-cleanup"))

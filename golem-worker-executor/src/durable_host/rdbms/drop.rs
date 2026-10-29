@@ -25,7 +25,6 @@ use crate::durable_host::tail_work::TailActivity;
 use crate::services::oplog::OplogOps;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
-use golem_common::model::Timestamp;
 use golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal;
 use golem_common::model::oplog::{
     HostResponse, HostResponseGolemRdbmsTransactionTerminal, OplogEntry,
@@ -158,6 +157,10 @@ where
                         .delete(Resource::<PendingTransactionDrop<T>>::new_own(rep))?;
                     continue;
                 }
+                // This is retained entity cleanup after physical Store disposal, not a
+                // guest cleanup drain. Replayed resolutions report Incomplete only at the
+                // shared cursor's natural tail; live drops already started at that tail.
+                // Revalidate it before publishing live, without skipping sibling history.
                 ctx.state
                     .replay_state
                     .await_natural_tail_end(None)
@@ -460,9 +463,8 @@ where
         );
         let mut retry = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            if !suppressed {
-                ctx.state.current_retry_point = begin;
-            }
+            // The task may finish during a later guest invocation. Its retry point belongs
+            // to this task and SharedDropError, not the guest's ambient retry point.
             TaskRetryContext {
                 retry_point: begin,
                 entity_parent_start_index: ctx.entity_parent_start_index(),
@@ -541,39 +543,15 @@ where
                 RdbmsTransactionState::Closed(_) => unreachable!(),
             };
             if !suppressed {
-                let response = HostResponse::GolemRdbmsTransactionTerminal(
-                    HostResponseGolemRdbmsTransactionTerminal {
-                        outcome: SerializableRdbmsTransactionTerminal::Drop(
-                            result.clone().map_err(Into::into),
-                        ),
-                    },
-                );
-                let bytes = golem_common::serialization::serialize(&response)
-                    .map_err(anyhow::Error::msg)?;
-                let response = oplog
-                    .upload_raw_payload(bytes)
-                    .await
-                    .map_err(anyhow::Error::msg)?
-                    .into_payload()
-                    .map_err(anyhow::Error::msg)?;
-                if result.is_ok() && !confirmed {
-                    oplog
-                        .add(OplogEntry::rolled_back_remote_transaction(begin))
-                        .await?;
-                }
-                oplog
-                    .add(OplogEntry::End {
-                        timestamp: Timestamp::now_utc(),
-                        start_index: begin,
-                        response: Some(response),
-                        forced_commit: true,
-                        span_finished: None,
-                        span_attributes: None,
-                    })
-                    .await?;
-                worker
-                    .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await?;
+                crate::durable_host::calls::persist_transaction_terminal(
+                    oplog.as_ref(),
+                    worker.as_ref(),
+                    begin,
+                    SerializableRdbmsTransactionTerminal::Drop(result.clone().map_err(Into::into)),
+                    (result.is_ok() && !confirmed)
+                        .then(|| OplogEntry::rolled_back_remote_transaction(begin)),
+                )
+                .await?;
             }
             let _ = service
                 .rdbms_type_service()

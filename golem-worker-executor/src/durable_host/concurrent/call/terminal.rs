@@ -838,13 +838,14 @@ pub(crate) async fn record_released_resource_span<Ctx: WorkerCtx>(
         && ctx.state.is_live()
         && !ctx.state.durability_is_suppressed()
     {
+        let finished_at = Timestamp::now_utc();
         let entry = OplogEntry::SpanClosed {
-            timestamp: Timestamp::now_utc(),
+            timestamp: finished_at,
             entity_parent_start_index: ctx.entity_parent_start_index(),
             resource_start_index,
             span_finished: golem_common::model::oplog::SpanFinished {
                 span_id: span_id.clone(),
-                finished_at: Timestamp::now_utc(),
+                finished_at,
                 outcome: golem_common::model::oplog::SpanOutcome::Completed,
             },
         };

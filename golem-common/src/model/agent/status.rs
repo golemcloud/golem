@@ -670,6 +670,11 @@ pub struct OpenEntityReplayScope {
 /// Incremental replay evidence at the enclosing status record's `oplog_idx`.
 /// Routes include completed protocol parents while an enclosing entity is still open.
 /// Persistent maps make status snapshots share unchanged history.
+/// `completed` grows with the number of visible entity completions in the folded history,
+/// not just the number of open entities. These frozen boundaries remain replay evidence after
+/// scope retirement and must not be trimmed by age or invocation completion. Changes to skipped
+/// or deleted regions invalidate affected fold baselines and require refolding visible history;
+/// removing entries from `completed` alone cannot repair boundaries derived from hidden work.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EntityReplayProgress {
     pub completed: OrdMap<OplogIndex, EntityReplayBoundary>,

@@ -513,7 +513,17 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
                 }
             }
         }
-        ResolvedCall::Replay(handle) => {
+        ResolvedCall::Replay(mut handle) => {
+            let recorded = match handle.recorded_request(ctx).await {
+                Ok(recorded) => recorded,
+                Err(error) => return Err(handle.trap(error)),
+            };
+            if recorded.remote_agent_id != request.remote_agent_id {
+                return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
+                    format!("RPC connection to {}", request.remote_agent_id),
+                    format!("RPC connection to {}", recorded.remote_agent_id),
+                )));
+            }
             let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
                     "RPC connection Start carrying span_started",

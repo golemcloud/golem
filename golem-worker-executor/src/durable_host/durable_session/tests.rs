@@ -1,3 +1,14 @@
+//! Session and producer tests exercise cancellation records, exact-source terminal inspection,
+//! and teardown primitives. Calling `replay_disposal_is_complete` directly does not prove the
+//! production `DroppedDurableInput::defer_if_replaying` integration: spawning under resident
+//! task ownership, aborting on teardown, and publishing live through `finish_at` before cleanup
+//! forwarding are integration contracts. The related worker-executor suite is
+//! `tests/tool_streaming/snapshot_attachments.rs`, including
+//! `cancelled_stdin_disposal_replay_consumes_historical_finish`,
+//! `producer_disposal_receipt_blocks_invocation_success`, and
+//! `producer_disposal_receipt_blocks_closed_notification`. Those scenarios do not by themselves
+//! establish coverage of every `defer_if_replaying` spawn/abort/admission branch.
+
 use super::input::discards_input_after_terminal;
 use super::*;
 use crate::durable_host::durable_stream::AttachedStreamSegmentSource;

@@ -36,6 +36,9 @@ impl DroppedDurableInput {
             return Ok(false);
         }
         let Some(tasks) = &ctx.producer_disposal_tasks else {
+            // Failure cleanup already took and aborted the task group. Resource destruction
+            // must not restart source cancellation while the Store is being disposed.
+            // True means the caller must skip inline cancellation, not that it was recorded.
             return Ok(true);
         };
         let cancellation = self.clone();

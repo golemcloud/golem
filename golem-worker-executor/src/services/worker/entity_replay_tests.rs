@@ -33,10 +33,7 @@ fn entity_replay_split_persistence_roundtrip_delta_and_truncation() {
     let mut core = status.clone();
     let parts = split_status(&mut core);
     assert_eq!(core.entity_replay_progress, EntityReplayProgress::default());
-    assert_eq!(
-        serialize(&core).unwrap(),
-        serialize(&status_core(&status)).unwrap()
-    );
+    assert_eq!(core, status_core(&status));
     let (sets, deletes) = compute_status_field_writes(None, &[], &core, &parts).unwrap();
     assert!(deletes.is_empty());
     let mut fields: HashMap<String, bytes::Bytes> =
@@ -134,13 +131,16 @@ fn entity_replay_growing_continuation_writes_only_changed_keys() {
         for (key, bytes) in &sets {
             if key == "eo:1" {
                 assert_eq!(
-                    *bytes,
-                    serialize(&next.entity_replay_progress.open[&root]).unwrap()
+                    deserialize::<OpenEntityReplayScope>(bytes).unwrap(),
+                    OpenEntityReplayScope {
+                        last_required: Some(index),
+                        parent_entity: None,
+                    }
                 );
             } else if key.starts_with("ep:") {
-                assert_eq!(*bytes, serialize(&root).unwrap());
+                assert_eq!(deserialize::<OplogIndex>(bytes).unwrap(), root);
             } else if key.starts_with("em:") {
-                assert_eq!(*bytes, serialize(&()).unwrap());
+                deserialize::<()>(bytes).unwrap();
             }
         }
         fields.extend(sets.into_iter().map(|(k, v)| (k, v.into())));

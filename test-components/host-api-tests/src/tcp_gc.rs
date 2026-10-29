@@ -66,6 +66,8 @@ impl TcpGc for TcpGcImpl {
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        // Store the live schedule; load_snapshot deliberately inverts it to model a
+        // restored heap collecting the same idle reader at a different host-call boundary.
         let mut bytes = vec![u8::from(self.early)];
         bytes.extend_from_slice(self.bytes.as_bytes());
         Ok(bytes)
@@ -76,6 +78,7 @@ impl TcpGc for TcpGcImpl {
         _context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
         Ok(Self {
+            // Invert the live flag written by save_snapshot, not the completed read.
             early: bytes[0] == 0,
             restored: true,
             bytes: String::from_utf8(bytes[1..].to_vec()).map_err(|error| error.to_string())?,

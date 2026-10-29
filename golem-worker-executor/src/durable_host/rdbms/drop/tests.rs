@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! These tests exercise retained resolution/completion ownership and error classification.
+//! They do not drive the production `drop_transaction` -> `TransactionDrop::finish` ->
+//! `cleanup_pending` lifecycle. Task spawning, Store destruction, cleanup handoff, terminal
+//! validation and live rollback admission are integration contracts, not proved by manually
+//! constructing `PendingTransactionDrop` here. The worker-executor suites are
+//! `tests/rdbms.rs::rdbms_postgres_snapshot_changes_transaction_drop_schedule` and
+//! `tests/tool_streaming/rdbms_drop.rs::{trapped_tool_transaction_drop_survives_replay_store_disposal,
+//! trapped_tool_transaction_drop_retains_terminal_read_failure_after_disposal}`.
+
 use super::*;
 use crate::durable_host::concurrent::LiveCallPermit;
 use crate::services::rdbms::postgres::PostgresType;

@@ -451,6 +451,7 @@ test_r::tag_suite!(tick, group5);
 
 #[test]
 #[timeout("3m")]
+#[test_r::tag(group5)]
 async fn idle_tcp_reader_collection_does_not_create_a_receive_chunk(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -573,6 +574,7 @@ async fn idle_tcp_reader_collection_does_not_create_a_receive_chunk(
 
 #[test]
 #[timeout("3m")]
+#[test_r::tag(group5)]
 async fn partial_tcp_receive_preserves_completed_read_and_reports_session_loss(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

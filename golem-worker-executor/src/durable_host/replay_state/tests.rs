@@ -6880,6 +6880,116 @@ async fn retained_start_claim_rejects_mismatched_identity() {
 }
 
 #[test]
+async fn retained_invocation_identity_is_checked_before_live_continuation() {
+    let invocation_id = DurableInvocationId {
+        anchor: OplogIndex::INITIAL,
+        ordinal: 1,
+    };
+    let correct = StartClaim::unowned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+    )
+    .with_invocation_id(Some(invocation_id));
+    for exhausted in [false, true] {
+        for store_live in [false, true] {
+            let mut retained = start_now();
+            if let OplogEntry::Start {
+                invocation_id: id, ..
+            } = &mut retained
+            {
+                *id = Some(invocation_id);
+            }
+            let mut entries = vec![
+                OplogEntry::RecoverySucceeded {
+                    timestamp: Timestamp::now_utc(),
+                },
+                start_now(),
+                retained,
+                end_for(2, 42),
+                end_for(3, 43),
+            ];
+            if !exhausted {
+                entries.push(remove_retry_policy());
+            }
+            let rs = replay_state_over(entries).await;
+            let first = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            rs.await_resolution(first).await.unwrap();
+            assert_eq!(rs.is_live(), exhausted);
+            let position = rs.last_replayed_index();
+
+            for wrong in [
+                StartClaim::unowned(
+                    &HostFunctionName::MonotonicClockResolution,
+                    &DurableFunctionType::ReadLocal,
+                ),
+                StartClaim::unowned(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadRemote,
+                ),
+                StartClaim::owned(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                    OplogIndex::INITIAL,
+                ),
+                StartClaim::unowned(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .with_observational_owner(Some(OplogIndex::INITIAL)),
+            ] {
+                let result = rs
+                    .claim_start_for_store(
+                        wrong.with_invocation_id(Some(invocation_id)),
+                        store_live,
+                    )
+                    .await;
+                assert!(
+                    matches!(
+                        result,
+                        Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+                    ),
+                    "mismatched retained identity must fail: exhausted={exhausted}, store_live={store_live}"
+                );
+                assert_eq!(rs.last_replayed_index(), position);
+            }
+
+            if exhausted || store_live {
+                let new_call = correct
+                    .clone()
+                    .with_invocation_id(Some(DurableInvocationId {
+                        ordinal: 2,
+                        ..invocation_id
+                    }));
+                assert!(matches!(
+                    rs.claim_start_for_store(new_call, store_live)
+                        .await
+                        .unwrap(),
+                    ReplayStartClaimOutcome::ReplayEnded
+                        | ReplayStartClaimOutcome::StoreAlreadyLive
+                ));
+                assert!(rs.has_unclaimed_retained_starts());
+            }
+            let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+                .claim_start_for_store(correct.clone(), store_live)
+                .await
+                .unwrap()
+            else {
+                panic!("the original identity must still claim its retained Start");
+            };
+            assert_eq!(handle.start_idx(), OplogIndex::from_u64(3));
+            assert!(matches!(rs.await_resolution(handle).await.unwrap(),
+                Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(5)));
+        }
+    }
+}
+
+#[test]
 async fn retained_start_counts_are_published_per_quota_class() {
     // [RecoverySucceeded, Start(A=2 now), Start(B=3 p3 http send), Start(C=4 rpc invoke),
     //  Start(D=5 resolution), End(A=2→6), End(B=3→7), End(C=4→8), End(D=5→9)] — resolving A

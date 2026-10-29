@@ -29,8 +29,8 @@ Other call types can remain buffered until a later barrier. Snapshot calls recor
 | After the effect, before `End` | `Start` only | Same as above. For external peers this is the ambiguous window: the effect may have happened; the peer must be idempotent | Peer-side idempotency, not Golem |
 | After `End`, before guest observation (including a Store unload or executor shutdown that tears the armed delivery token or terminal guard) | `Start`, `End` | `Delivered`/`AtReplayTail`: result withheld until the cursor drains, then delivered live-armed; no re-execution. The tear must not record `CompletionDiscarded` (`TeardownProbe`) | `End` payload |
 | After `CompletionDelivered` | `Start`, `End`, marker | `Delivered`: result released at the recorded boundary | Marker position |
-| Guest dropped the future before completion | `Start`, `Cancelled { partial }` | `partial: Some` → `Delivered`/`Immediate`; `partial: None` → `Undelivered` (parked for the guest's deterministic drop) | `Cancelled` entry |
-| Guest dropped the completion after `End` without reading it | `Start`, `End`, `CompletionDiscarded` | `Undelivered`: parked, the guest drops at the same point | Marker |
+| Guest dropped the future before completion | `Start`, `Cancelled { partial }` | `partial: Some` → `Delivered`/`Immediate` for the recorded partial response, without a delivery-marker gate; `partial: None` → `Undelivered`, with no guest value. Resource-drop resolution can be deferred without blocking the guest; actual guest observations must remain unchanged | `Cancelled` entry, not destructor timing |
+| Guest dropped the completion after `End` without reading it | `Start`, `End`, `CompletionDiscarded` | `Undelivered`: accessor delivery stays pending; deferred disposal preserves the recorded terminal even when GC or snapshot restoration changes the drop point | Marker, not destructor timing |
 | Guest trapped mid-call | `Start` only | Same as "after Start" — trap is never `Cancelled` | `abandon_for_trap` |
 
 Repair never rewinds or discards sibling history. Resolve explicit-child authorization and

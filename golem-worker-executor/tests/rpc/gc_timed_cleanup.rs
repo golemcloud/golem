@@ -4,6 +4,7 @@
 //! that releases at other points still claims the same history.
 
 use super::*;
+use golem_common::model::AgentEvent;
 use golem_common::schema::IntoSchema;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use pretty_assertions::assert_eq;
@@ -650,12 +651,7 @@ async fn release_in_read_only_invocation_records_only_hints(
     .await?;
     caller.configure(RETAIN, RETAIN).await?;
     assert_eq!(caller.run(3).await?, 3);
-    let starts_before = caller
-        .oplog()
-        .await?
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(_)))
-        .count();
+    let before = caller.oplog().await?.last().unwrap().oplog_index;
     let released: u32 = caller
         .invoke("release_retained_read_only", data_value!())
         .await?
@@ -665,10 +661,14 @@ async fn release_in_read_only_invocation_records_only_hints(
     assert_eq!(
         oplog
             .iter()
-            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(_)))
-            .count(),
-        starts_before,
-        "releasing a client records no durable call"
+            .filter(|entry| entry.oplog_index > before)
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) => Some(start.function_name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        ["cli::environment::get-environment"],
+        "only the SDK invocation identity lookup records a call; client release does not"
     );
     assert_eq!(caller.released_spans().await?, 3);
     assert_settled_history(&oplog);
@@ -720,8 +720,8 @@ async fn release_during_snapshot_save_records_nothing(
     Ok(())
 }
 
-/// After a restore the agent makes one call more than the one recorded: replay must still reject
-/// it. Releasing a client is no longer a durable call, but every real call still is.
+/// Extra calls and changed function or owner identities must still diverge after restoration.
+/// Releasing a client is no longer a durable call, but every real call still is.
 #[test]
 #[timeout("3 minutes")]
 async fn negative_control_wrong_ordinal_still_diverges(
@@ -730,27 +730,66 @@ async fn negative_control_wrong_ordinal_still_diverges(
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    assert_divergent_snapshot_rejected(last_unique_id, deps, fixture, "extra").await
+}
+
+#[test]
+#[timeout("3 minutes")]
+async fn negative_control_wrong_function_still_diverges(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_divergent_snapshot_rejected(last_unique_id, deps, fixture, "function").await
+}
+
+#[test]
+#[timeout("3 minutes")]
+async fn negative_control_wrong_owner_still_diverges(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_divergent_snapshot_rejected(last_unique_id, deps, fixture, "owner").await
+}
+
+async fn assert_divergent_snapshot_rejected(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &PrecompiledComponent,
+    kind: &str,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let caller = Caller::start(
-        deps,
-        &context,
-        fixture,
-        snapshot_every_invocation(),
-        "diverge",
-    )
-    .await?;
+    let name = format!("diverge-{kind}");
+    let caller = Caller::start(deps, &context, fixture, snapshot_every_invocation(), &name).await?;
     let promise = caller.create_promise().await?;
     let key = IdempotencyKey::fresh();
     caller
         .start_and_suspend(
             &key,
             "misbehave_then_await",
-            data_value!("extra", promise.clone()),
+            data_value!(kind, promise.clone()),
         )
         .await?;
-    let caller = caller
-        .restart(deps, &context, snapshot_every_invocation())
-        .await?;
+    assert_eq!(caller.target_count(&caller.target).await?, 1);
+    let history = caller.oplog().await?;
+    let snapshot_index = history
+        .iter()
+        .rfind(|entry| is_snapshot(entry))
+        .expect("the suspended invocation has a periodic snapshot baseline")
+        .oplog_index;
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let overrides = TestExecutorOverrides {
+        wrap_rpc: Some(Arc::new({
+            let attempts = attempts.clone();
+            move |rpc| Arc::new(RecordingRpc::new(rpc, "increment", attempts.clone()))
+        })),
+        ..snapshot_every_invocation()
+    };
+    let caller = caller.restart(deps, &context, overrides).await?;
+    let mut events = caller.executor.capture_output(&caller.agent).await?;
     caller.executor.complete_promise(&promise, vec![]).await?;
     let result = tokio::time::timeout(
         REPLAY_TIMEOUT,
@@ -759,15 +798,55 @@ async fn negative_control_wrong_ordinal_still_diverges(
             &caller.id,
             &key,
             "misbehave_then_await",
-            data_value!("extra", promise.clone()),
+            data_value!(kind, promise.clone()),
         ),
     )
+    .await??;
+    assert_eq!(result.into_typed::<u64>()?, 1);
+    tokio::time::timeout(REPLAY_TIMEOUT, async {
+        while let Some(event) = events.recv().await {
+            if let Ok(AgentEvent::SnapshotRecoveryFailed {
+                snapshot_index: rejected_index,
+                error,
+                ..
+            }) = AgentEvent::try_from(event)
+            {
+                assert!(
+                    error.contains("Unexpected oplog entry"),
+                    "the {kind} snapshot must be rejected for replay divergence: {error}"
+                );
+                if rejected_index == snapshot_index {
+                    return;
+                }
+            }
+        }
+        panic!("missing explicit {kind} divergence rejection for snapshot {snapshot_index}");
+    })
     .await?;
-    let error = result.expect_err("a replay that makes an extra call must not complete");
+    let report = caller.inspect().await?;
+    assert_eq!(report.completed, 1);
+    assert!(!report.restored, "fallback must replay without a snapshot");
+    assert_eq!(caller.target_count(&caller.target).await?, 1);
     assert!(
-        format!("{error:#}").contains("Unexpected oplog entry"),
-        "the replay reports the divergence: {error:#}"
+        attempts.lock().unwrap().is_empty(),
+        "snapshot rejection and full replay must not dispatch another awaited increment"
     );
+    if kind == "owner" {
+        let other = agent_id!("GcTimingTarget", format!("{name}-other"));
+        assert_eq!(caller.target_count(&other).await?, 0);
+    }
+    let history = caller.oplog().await?;
+    assert_eq!(
+        starts_named(&history, "golem::rpc::wasm-rpc::invoke_and_await").count(),
+        1,
+        "only the original increment may have a durable Start"
+    );
+    assert_eq!(
+        starts_named(&history, "golem::rpc::wasm-rpc::invoke").count(),
+        0,
+        "the changed fire-and-forget call must be rejected before dispatch"
+    );
+    assert_settled_history(&history);
     Ok(())
 }
 
@@ -1425,13 +1504,14 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
         assert_eq!(
             repaired
                 .iter()
-                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(_)))
-                .count(),
-            original
-                .iter()
-                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(_)))
-                .count(),
-            "inspect opens no calls and repair must retain the original Starts"
+                .filter(|entry| entry.oplog_index > a_finished)
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start) => Some(start.function_name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            ["cli::environment::get-environment"],
+            "only inspect's SDK identity lookup opens a call; repair retains the original Starts"
         );
         assert_settled_history(&repaired);
         let after = caller
@@ -1594,6 +1674,13 @@ async fn ts_snapshot_restore_replays_gc_released_clients(
         )),
         "the collecting invocation releases clients created before the snapshot"
     );
+    let closes = |history: &[PublicOplogEntryWithIndex]| {
+        history
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::SpanClosed(_)))
+            .count()
+    };
+    let closes_before_restart = closes(&history);
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
@@ -1617,7 +1704,13 @@ async fn ts_snapshot_restore_replays_gc_released_clients(
         .await?
         .into_typed::<f64>()?;
     assert_eq!(target_count, expected);
-    assert_settled_history(&ts_oplog(&executor, &agent).await?);
+    let history = ts_oplog(&executor, &agent).await?;
+    assert_eq!(
+        closes(&history),
+        closes_before_restart,
+        "replaying GC releases must not append SpanClosed hints"
+    );
+    assert_settled_history(&history);
     let next = executor
         .invoke_and_await_agent(&component, &id, "run", data_value!(1_f64, -1_f64))
         .await?

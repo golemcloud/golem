@@ -1594,9 +1594,15 @@ resolve its terminal through `ConcurrentReplayResolver`, then classify with
 |---|---|---|
 | `End` + `CompletionDelivered` | `Delivered`, `AtMarker` | released exactly at the recorded marker boundary (`ReplayDeliveryBarrier` holds the cursor gate) |
 | `End`, no marker (guest-facing accessor) | `Delivered`, `AtReplayTail` | crash after host completion, before observation: withheld until the cursor drains (`await_natural_tail_end`, `replay_state/resolution.rs`), then delivered live-armed; the effect is **not** re-run |
-| `Cancelled { partial: Some }` | `Delivered`, `Immediate` | guest-initiated, deterministic drop point; no gating |
-| `Cancelled { partial: None }` or `End` + `CompletionDiscarded` | `Undelivered` | the guest never saw a value; the future is parked for the guest's deterministic drop |
+| `Cancelled { partial: Some }` | `Delivered`, `Immediate` | recorded partial response available without a delivery-marker gate; this is not permission to change guest observations |
+| `Cancelled { partial: None }` or `End` + `CompletionDiscarded` | `Undelivered` | no value reached the guest; accessor delivery stays pending, while resource disposal may resolve the recorded terminal in a runtime-owned task without blocking guest progress |
 | `Start` without terminal | `Incomplete` | see below |
+
+These classifications describe completion delivery, not deterministic resource-release timing.
+GC and snapshot restoration can move an unobserved handle's drop. Deferred cancellation must
+preserve its original call identity and terminal kind; a missing terminal permits live disposal
+only after the natural replay-to-live transition. A recorded partial response is distinct from
+an unread cancellation, and actual guest observations must still be reproduced.
 
 **Custom durable invocations** (`golem:durability/durability.begin-custom-durable-invocation`,
 `durability.rs::begin_custom_durable_invocation`) wrap a whole guest block as one logical durable
@@ -1873,9 +1879,17 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   against the entry the cursor stops at: the replay target is `ReplayEnded`, and anything else
   (including the call of a settled body, or a foreign id under an ordinary call) is
   divergence. An unclaimed `Start` with the claim's own invocation id was recorded by the
-  claiming guest call itself and is divergence before the cursor moves. Tests:
+  claiming guest call itself and is divergence before the cursor moves. This identity check
+  also precedes `ReplayEnded` and `StoreAlreadyLive`: cursor exhaustion can leave unclaimed
+  retained calls, and neither exhaustion nor Store liveness permits replacing their function,
+  type, parent, or observational owner. Tests:
+  `replay_state/tests.rs::retained_invocation_identity_is_checked_before_live_continuation`,
   `replay_state/tests.rs::missing_start_claim_*`,
   `tests/websocket.rs::websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start`.
+- RPC connection reconstruction also validates the requested remote agent against the recorded
+  constructor request before restoring its span or resource. Matching a call's invocation id
+  and function does not authorize a different RPC target. The snapshot negative controls in
+  `tests/rpc/gc_timed_cleanup.rs` require rejection and full replay without duplicate effects.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
