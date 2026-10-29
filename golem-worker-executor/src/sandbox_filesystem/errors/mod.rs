@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::blocking::BlockingTaskError;
-use crate::filesystem_error::FilesystemOperationError;
+use crate::operation_failure::OperationFailure;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
 
@@ -29,16 +29,26 @@ pub struct FilesystemStorageError {
 }
 
 struct FilesystemStorageErrorInner {
-    error: FilesystemOperationError,
+    operation: &'static str,
+    path: Option<PathBuf>,
+    failure: OperationFailure,
+    cleanup_failed: bool,
     kind: FilesystemStorageErrorKind,
     original_error: Option<Box<FilesystemStorageError>>,
 }
 
 impl FilesystemStorageError {
-    fn context(error: FilesystemOperationError) -> Self {
+    pub(crate) fn from_failure(
+        operation: &'static str,
+        path: Option<PathBuf>,
+        failure: OperationFailure,
+    ) -> Self {
         Self {
             inner: Box::new(FilesystemStorageErrorInner {
-                error,
+                operation,
+                path,
+                failure,
+                cleanup_failed: false,
                 kind: FilesystemStorageErrorKind::General,
                 original_error: None,
             }),
@@ -54,13 +64,21 @@ impl FilesystemStorageError {
         {
             kind = FilesystemStorageErrorKind::SandboxEscape;
         }
-        let mut error = Self::context(FilesystemOperationError::io(operation, path, source));
+        let mut error = Self::from_failure(
+            operation,
+            path.map(Path::to_path_buf),
+            OperationFailure::Io(source),
+        );
         error.inner.kind = kind;
         error
     }
 
     pub(crate) fn verification(operation: &'static str, path: Option<&Path>) -> Self {
-        Self::context(FilesystemOperationError::verification(operation, path))
+        Self::from_failure(
+            operation,
+            path.map(Path::to_path_buf),
+            OperationFailure::Verification,
+        )
     }
 
     pub(crate) fn allocation_unsupported(path: Option<&Path>) -> Self {
@@ -75,9 +93,12 @@ impl FilesystemStorageError {
         source: std::io::Error,
     ) -> Self {
         // A cleanup error keeps its storage classification rather than becoming an escape refusal.
-        Self::context(FilesystemOperationError::cleanup_io(
-            operation, path, source,
-        ))
+        Self::from_failure(
+            operation,
+            path.map(Path::to_path_buf),
+            OperationFailure::Io(source),
+        )
+        .during_cleanup()
     }
 
     pub(in crate::sandbox_filesystem) fn cleanup_verification(
@@ -92,23 +113,25 @@ impl FilesystemStorageError {
         path: Option<&Path>,
         source: BlockingTaskError,
     ) -> Self {
-        Self::context(FilesystemOperationError::task_failure(
-            operation, path, source,
-        ))
+        Self::from_failure(
+            operation,
+            path.map(Path::to_path_buf),
+            OperationFailure::Task(source),
+        )
     }
 
     #[cfg(test)]
     pub(in crate::sandbox_filesystem) fn about(mut self, path: &Path) -> Self {
-        self.inner.error.path = Some(path.to_path_buf());
+        self.inner.path = Some(path.to_path_buf());
         self
     }
 
     pub(crate) fn cleanup_failed(&self) -> bool {
-        self.inner.error.cleanup_failed()
+        self.inner.cleanup_failed
     }
 
     pub(crate) fn during_cleanup(mut self) -> Self {
-        self.inner.error = self.inner.error.during_cleanup();
+        self.inner.cleanup_failed = true;
         self
     }
 
@@ -128,7 +151,7 @@ impl FilesystemStorageError {
     }
 
     pub(crate) fn is_terminal_failure(&self) -> bool {
-        self.inner.error.task_failed()
+        self.task_error().is_some()
             || (!self.is_sandbox_escape()
                 && self.io_error().is_some_and(|source| {
                     matches!(
@@ -144,10 +167,17 @@ impl FilesystemStorageError {
         self.inner.kind == FilesystemStorageErrorKind::SandboxEscape
     }
     pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
-        self.inner.error.io_kind()
+        self.io_error().map(std::io::Error::kind)
     }
     pub(crate) fn io_error(&self) -> Option<&std::io::Error> {
-        self.inner.error.io_error()
+        self.inner.failure.io_error()
+    }
+
+    pub(crate) fn task_error(&self) -> Option<&BlockingTaskError> {
+        match &self.inner.failure {
+            OperationFailure::Task(error) => Some(error),
+            OperationFailure::Io(_) | OperationFailure::Verification => None,
+        }
     }
     pub(crate) fn allocation_is_unsupported(&self) -> bool {
         self.inner.kind == FilesystemStorageErrorKind::AllocationUnsupported
@@ -167,19 +197,11 @@ pub(in crate::sandbox_filesystem) fn is_terminal_storage_errno(_error: &std::io:
 impl Debug for FilesystemStorageError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         let mut debug = formatter.debug_struct("FilesystemStorageError");
-        debug.field("operation", &self.inner.error.operation);
-        match &self.inner.error.path {
-            Some(path) => {
-                debug.field("path", path);
-            }
-            None => {
-                debug.field("path", &Option::<PathBuf>::None);
-            }
-        }
         debug
-            .field("source", &self.io_error())
+            .field("operation", &self.inner.operation)
+            .field("path", &self.inner.path)
+            .field("failure", &self.inner.failure)
             .field("cleanup_failed", &self.cleanup_failed())
-            .field("task_failed", &self.inner.error.task_failed())
             .field("kind", &self.inner.kind);
         if let Some(original) = &self.inner.original_error {
             debug.field("original_error", original);
@@ -193,19 +215,20 @@ impl Display for FilesystemStorageError {
         if let Some(original) = &self.inner.original_error {
             write!(formatter, "{original}; cleanup also failed: ")?;
         }
-        Display::fmt(&self.inner.error, formatter)
+        write!(formatter, "failed to {}", self.inner.operation)?;
+        if let Some(path) = &self.inner.path {
+            write!(formatter, " at {}", path.display())?;
+        }
+        if let Some(cause) = self.inner.failure.cause() {
+            write!(formatter, ": {cause}")?;
+        }
+        Ok(())
     }
 }
 
 impl std::error::Error for FilesystemStorageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.inner.error.source()
-    }
-}
-
-impl From<FilesystemOperationError> for FilesystemStorageError {
-    fn from(error: FilesystemOperationError) -> Self {
-        Self::context(error)
+        self.inner.failure.cause()
     }
 }
 

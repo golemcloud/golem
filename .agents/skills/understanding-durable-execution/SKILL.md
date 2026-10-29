@@ -2227,34 +2227,48 @@ Executor startup creates `.scratch` and `.initial-files` through
 their filesystem operations and does not know about sandbox provisioning or filesystem-specific
 quotas. Executor setup first opens and validates `storage_volume::FilesystemVolume`, then creates
 the host directories and constructs sandbox provisioning on that shared volume.
-On executor shutdown, a tracked task joins invocation loops and snapshot-store shutdown before
+On executor shutdown, `AgentFilesystems::track_shutdown` joins invocation loops and snapshot-store shutdown before
 `AgentFilesystems::shut_down` removes both directories. The file loader stops new loads and drains
 entered downloads and outstanding source leases before removing its cache. `Drop` remains a
-best-effort cleanup safety net.
+best-effort cleanup safety net. That fallback is synchronous: without explicit shutdown, dropping
+the last cache lease after its loader can remove the cache directory on the caller's thread.
 
 Filesystem creation and source loads use `services/work_admission` registrations. Closing admission
 refuses a new operation immediately and waits for existing registrations without holding a lock.
 Source leases retain their registration, so a multi-file load interrupted by shutdown fails its
 next source request as `InitialFileLoadFailure::Unavailable` instead of deadlocking behind its
-own earlier lease. In-process executor
-`release()` waits for tracked shutdown cleanup as well as the service graph; a fixed-root replacement
+own earlier lease. In-process executor `release()` waits for tracked shutdown cleanup as well as
+the service graph. `shutdown_and_wait_for_invocation_loops()` also joins tracked cleanup, but does
+not drop the service graph or release its root lock. A fixed-root replacement
 must not start while old cleanup still owns the XFS lock or can remove its directories. A failed
 invocation drain disables fallback removal of both host directories and retains their temporary
 parent on disk. Production drain and cleanup share the existing shutdown grace, not a new budget.
-Bootstrap owns a cancellation guard until it returns `RunDetails`. Once the service graph exists,
-`RunDetails` owns its epoch thread before server startup, so a later startup failure stops that
-thread and cancels tracked cleanup instead of leaving its filesystem owners waiting indefinitely.
+Bootstrap owns a cancellation guard until it returns `RunDetails`. `epoch_ticker::EpochTicker`
+owns its thread from creation, before snapshot binding or service construction can fail. Every
+drop stops and joins that thread. An ordinary bootstrap error cancels shutdown, stops server
+tasks and joins tracked cleanup before it returns. A cancelled bootstrap future still has the
+Drop fallback, not a completed asynchronous cleanup receipt.
 
 `storage_volume` owns shared storage roots, capacity observations, native cloning and XFS project
 allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
 `sandbox_filesystem` owns one capability-confined tree, its handles, provisioning and verified
 deletion, and seed/copy orchestration. XFS quotas account and limit allocation; root capabilities
 confine path access. Physical pressure recovery observes the volume without accessing a sandbox.
-Volume and host-directory operations use `filesystem_error::FilesystemOperationError`, with an
-optional path and typed I/O, task or verification failure. Conversion to sandbox errors retains
-these facts without classifying a storage failure as a sandbox escape. Executor directory setup
+Sandbox, volume and host-directory errors own their operation and path. They share only
+`operation_failure::OperationFailure`, a typed I/O, task or verification cause without context or
+cleanup policy. Pressure validation returns its own configuration error. At service binding,
+`FilesystemSetupError` keeps that cause distinct from storage failures; filesystem and active-agent
+constructors use explicit `Result<_, FilesystemSetupError>` contracts. Task errors retain
+`BlockingTaskError`; they do not acquire an invented I/O kind. Conversion to sandbox errors retains
+these facts without classifying a storage failure as a sandbox escape. A primary host-directory
+discard is not a cleanup failure; its caller marks it as cleanup only during rollback or shutdown. Executor directory setup
 and sandbox creation rollback retain the original and cleanup diagnostics, with the cleanup
 failure's classification.
+
+Native cloning uses source-first arguments. APFS `clone_file_at` creates a directory entry;
+XFS `clone_file_contents` fills an already-open target. The XFS project-aware operation keeps
+the same source and target order. Tree-copy dispatch calls these operations without aliases or
+argument-swapping wrappers.
 
 `AgentFilesystemSnapshots::bind` requires a volume that makes copy-on-write copies. Production
 uses Linux 5.8 or later with XFS and reflink, through `ManagedXfs` or `ReflinkXfs`. Local development

@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::FilesystemVolume;
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
 use super::space_from_values;
-use crate::filesystem_error::FilesystemOperationError;
+use super::{FilesystemVolume, StorageVolumeError};
 use crate::storage_volume::FilesystemSpace;
 use rustix::fs::{CloneFlags, StatVfs, StatVfsMountFlags, fclonefileat, fstatvfs};
 use std::fs::File;
@@ -23,10 +22,10 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
-pub(crate) fn bind(root: &Path) -> Result<FilesystemVolume, FilesystemOperationError> {
+pub(crate) fn bind(root: &Path) -> Result<FilesystemVolume, StorageVolumeError> {
     bind_with_probe(
         root,
-        |source, parent, name| clone_file(source, parent, name),
+        |source, parent, name| clone_file_at(source, parent, name),
         tempfile::TempDir::close,
     )
 }
@@ -35,13 +34,12 @@ pub(crate) fn bind_with_probe(
     root: &Path,
     clone: impl FnOnce(&File, &File, &Path) -> std::io::Result<()>,
     close: impl FnOnce(tempfile::TempDir) -> std::io::Result<()>,
-) -> Result<FilesystemVolume, FilesystemOperationError> {
+) -> Result<FilesystemVolume, StorageVolumeError> {
     std::fs::create_dir_all(root).map_err(|error| {
-        FilesystemOperationError::io("create APFS development root", Some(root), error)
+        StorageVolumeError::io("create APFS development root", Some(root), error)
     })?;
-    let directory = File::open(root).map_err(|error| {
-        FilesystemOperationError::io("open APFS development root", Some(root), error)
-    })?;
+    let directory = File::open(root)
+        .map_err(|error| StorageVolumeError::io("open APFS development root", Some(root), error))?;
     probe_clone(root, clone, close)?;
     tracing::info!(root = %root.display(), "APFS storage is for local development and tests only");
     let mut volume = FilesystemVolume::copy_on_write(Arc::new(directory));
@@ -53,25 +51,23 @@ pub(crate) fn probe_clone(
     root: &Path,
     clone: impl FnOnce(&File, &File, &Path) -> std::io::Result<()>,
     close: impl FnOnce(tempfile::TempDir) -> std::io::Result<()>,
-) -> Result<(), FilesystemOperationError> {
+) -> Result<(), StorageVolumeError> {
     let probe = tempfile::Builder::new()
         .prefix(".golem-apfs-clone-probe-")
         .tempdir_in(root)
-        .map_err(|error| {
-            FilesystemOperationError::io("create APFS clone probe", Some(root), error)
-        })?;
+        .map_err(|error| StorageVolumeError::io("create APFS clone probe", Some(root), error))?;
     let result = probe_contents(probe.path(), clone);
     let cleanup = close(probe);
     result.map_err(|error| {
         let operation = "probe APFS clone for local development";
         if cleanup.is_err() {
-            FilesystemOperationError::cleanup_io(operation, Some(root), error)
+            StorageVolumeError::cleanup_io(operation, Some(root), error)
         } else {
-            FilesystemOperationError::io(operation, Some(root), error)
+            StorageVolumeError::io(operation, Some(root), error)
         }
     })?;
     cleanup.map_err(|error| {
-        FilesystemOperationError::cleanup_io("remove APFS clone probe", Some(root), error)
+        StorageVolumeError::cleanup_io("remove APFS clone probe", Some(root), error)
     })
 }
 
@@ -97,7 +93,7 @@ pub(crate) fn probe_contents(
     Ok(())
 }
 
-pub(crate) fn clone_file(
+pub(crate) fn clone_file_at(
     source: &File,
     parent: impl std::os::fd::AsFd,
     name: &Path,

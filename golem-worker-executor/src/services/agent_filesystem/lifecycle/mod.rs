@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::filesystem_error::FilesystemOperationError;
 use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
 use crate::host_directories::HostDirectory;
+use crate::host_directories::HostDirectoryError;
 use crate::metrics::agent_filesystem::{self, StorageRefusal};
 #[cfg(test)]
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
@@ -529,8 +529,8 @@ impl From<FilesystemStorageError> for Error {
     }
 }
 
-impl From<FilesystemOperationError> for Error {
-    fn from(source: FilesystemOperationError) -> Self {
+impl From<HostDirectoryError> for Error {
+    fn from(source: HostDirectoryError) -> Self {
         Self::Sandbox(source.into())
     }
 }

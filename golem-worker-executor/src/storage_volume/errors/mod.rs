@@ -13,49 +13,35 @@
 // limitations under the License.
 
 use crate::blocking::BlockingTaskError;
+use crate::operation_failure::OperationFailure;
+#[cfg(target_os = "linux")]
 use crate::path_removal::RemoveFailure;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 
-/// The context and cause of a volume or host-directory operation.
 #[derive(Debug)]
-pub(crate) struct FilesystemOperationError {
-    pub(crate) operation: &'static str,
-    pub(crate) path: Option<PathBuf>,
-    failure: FilesystemFailure,
+pub(crate) struct StorageVolumeError {
+    operation: &'static str,
+    path: Option<PathBuf>,
+    failure: OperationFailure,
     cleanup_failed: bool,
 }
 
-#[derive(Debug)]
-enum FilesystemFailure {
-    Io(std::io::Error),
-    Task(std::io::Error),
-    Verification,
-}
-
-impl FilesystemOperationError {
+impl StorageVolumeError {
     pub(crate) fn verification(operation: &'static str, path: Option<&Path>) -> Self {
         Self {
             operation,
             path: path.map(Path::to_path_buf),
-            failure: FilesystemFailure::Verification,
+            failure: OperationFailure::Verification,
             cleanup_failed: false,
         }
     }
 
     pub(crate) fn io(operation: &'static str, path: Option<&Path>, source: std::io::Error) -> Self {
         Self {
-            failure: FilesystemFailure::Io(source),
+            failure: OperationFailure::Io(source),
             ..Self::verification(operation, path)
         }
-    }
-
-    pub(crate) fn cleanup_io(
-        operation: &'static str,
-        path: Option<&Path>,
-        source: std::io::Error,
-    ) -> Self {
-        Self::io(operation, path, source).during_cleanup()
     }
 
     pub(crate) fn task_failure(
@@ -64,60 +50,77 @@ impl FilesystemOperationError {
         source: BlockingTaskError,
     ) -> Self {
         Self {
-            failure: FilesystemFailure::Task(std::io::Error::other(source)),
+            failure: OperationFailure::Task(source),
             ..Self::verification(operation, path)
         }
     }
 
-    pub(crate) fn removal(operation: &'static str, path: &Path, failure: RemoveFailure) -> Self {
-        match failure {
-            RemoveFailure::Io(source) => Self::io(operation, Some(path), source),
-            RemoveFailure::StillPresent => Self::verification(operation, Some(path)),
+    #[cfg(target_os = "linux")]
+    pub(super) fn from_removal(
+        operation: &'static str,
+        path: &Path,
+        failure: RemoveFailure,
+    ) -> Self {
+        Self {
+            failure: failure.into(),
+            ..Self::verification(operation, Some(path))
         }
-        .during_cleanup()
     }
 
-    pub(crate) fn during_cleanup(mut self) -> Self {
+    #[cfg(any(test, target_os = "linux", target_os = "macos"))]
+    pub(crate) fn cleanup_io(
+        operation: &'static str,
+        path: Option<&Path>,
+        source: std::io::Error,
+    ) -> Self {
+        Self::io(operation, path, source).during_cleanup()
+    }
+
+    #[cfg(any(test, target_os = "linux", target_os = "macos"))]
+    pub(super) fn during_cleanup(mut self) -> Self {
         self.cleanup_failed = true;
         self
     }
 
+    pub(crate) fn operation(&self) -> &'static str {
+        self.operation
+    }
+    pub(crate) fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
     pub(crate) fn cleanup_failed(&self) -> bool {
         self.cleanup_failed
     }
-
-    pub(crate) fn task_failed(&self) -> bool {
-        matches!(self.failure, FilesystemFailure::Task(_))
+    pub(crate) fn into_failure(self) -> OperationFailure {
+        self.failure
     }
 
+    #[cfg(test)]
     pub(crate) fn io_error(&self) -> Option<&std::io::Error> {
-        match &self.failure {
-            FilesystemFailure::Io(source) | FilesystemFailure::Task(source) => Some(source),
-            FilesystemFailure::Verification => None,
-        }
+        self.failure.io_error()
     }
-
+    #[cfg(test)]
     pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
         self.io_error().map(std::io::Error::kind)
     }
 }
 
-impl Display for FilesystemOperationError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "failed to {} filesystem", self.operation)?;
+impl Display for StorageVolumeError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "failed to {}", self.operation)?;
         if let Some(path) = &self.path {
-            write!(f, " {}", path.display())?;
+            write!(formatter, " at {}", path.display())?;
         }
-        if let Some(source) = self.io_error() {
-            write!(f, ": {source}")?;
+        if let Some(cause) = self.failure.cause() {
+            write!(formatter, ": {cause}")?;
         }
         Ok(())
     }
 }
 
-impl std::error::Error for FilesystemOperationError {
+impl std::error::Error for StorageVolumeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.io_error().map(|source| source as _)
+        self.failure.cause()
     }
 }
 

@@ -16,7 +16,7 @@ pub(crate) mod blocking;
 pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
-pub(crate) mod filesystem_error;
+mod epoch_ticker;
 pub(crate) mod filesystem_pressure;
 pub(crate) mod filesystem_snapshot;
 #[cfg(feature = "test-utils")]
@@ -27,6 +27,7 @@ pub mod identity;
 pub mod metrics;
 pub mod model;
 pub mod native_tool;
+pub(crate) mod operation_failure;
 pub(crate) mod path_removal;
 pub mod preview2;
 pub(crate) mod sandbox_filesystem;
@@ -131,6 +132,7 @@ use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use epoch_ticker::EpochTicker;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
@@ -151,7 +153,6 @@ use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -168,8 +169,7 @@ use wasmtime::component::{HasSelf, Linker};
 pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
-    pub epoch_thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
-    pub epoch_stop: Arc<AtomicBool>,
+    _epoch: EpochTicker,
     /// Graph-wide shutdown signal. Cancelled in `Drop` before stopping the
     /// epoch thread so that all service background tasks exit promptly.
     pub shutdown: services::shutdown::Shutdown,
@@ -185,40 +185,6 @@ pub struct RunDetails {
 impl Drop for RunDetails {
     fn drop(&mut self) {
         self.shutdown.cancel();
-        self.epoch_stop.store(true, Ordering::Release);
-        if let Some(handle) = self.epoch_thread.lock().unwrap().take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-fn track_executor_directory_cleanup(
-    shutdown: &services::shutdown::Shutdown,
-    loops: InvocationLoops,
-    filesystems: Arc<services::agent_filesystem::AgentFilesystems>,
-    snapshots: Arc<AgentFilesystemSnapshots>,
-) {
-    let token = shutdown.token();
-    shutdown.spawn(async move {
-        token.cancelled().await;
-        finish_executor_directory_cleanup(loops.wait_for_exit().await, filesystems, snapshots)
-            .await;
-    });
-}
-
-async fn finish_executor_directory_cleanup(
-    drained: Result<(), String>,
-    filesystems: Arc<services::agent_filesystem::AgentFilesystems>,
-    snapshots: Arc<AgentFilesystemSnapshots>,
-) {
-    if let Err(error) = drained {
-        filesystems.retain_host_directories();
-        tracing::error!(%error, "Executor work did not drain; retaining host directories");
-        return;
-    }
-    snapshots.wait_for_shutdown().await;
-    if let Err(error) = filesystems.shut_down().await {
-        tracing::error!(%error, "Failed to remove executor host directories");
     }
 }
 
@@ -748,7 +714,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     }
 }
 
-pub async fn create_worker_executor_impl<
+async fn create_worker_executor_impl<
     Ctx: WorkerCtx,
     BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
 >(
@@ -758,15 +724,7 @@ pub async fn create_worker_executor_impl<
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
     shutdown: services::shutdown::Shutdown,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<
-    (
-        All<Ctx>,
-        std::thread::JoinHandle<()>,
-        Arc<AtomicBool>,
-        Arc<dyn RegistryService>,
-    ),
-    anyhow::Error,
-> {
+) -> Result<(All<Ctx>, EpochTicker, Arc<dyn RegistryService>), anyhow::Error> {
     let shutdown_token = shutdown.token();
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
@@ -1094,14 +1052,8 @@ pub async fn create_worker_executor_impl<
 
     let engine_ref: Arc<Engine> = engine.clone();
 
-    let epoch_interval = golem_config.limits.epoch_interval;
-    let epoch_stop = Arc::new(AtomicBool::new(false));
-    let epoch_stop_clone = epoch_stop.clone();
-    let epoch_thread = std::thread::spawn(move || {
-        while !epoch_stop_clone.load(Ordering::Acquire) {
-            std::thread::sleep(epoch_interval);
-            engine_ref.increment_epoch();
-        }
+    let epoch = EpochTicker::start(golem_config.limits.epoch_interval, move || {
+        engine_ref.increment_epoch()
     });
 
     let linker = Arc::new(linker);
@@ -1271,7 +1223,7 @@ pub async fn create_worker_executor_impl<
         ))
         .await;
 
-    Ok((all, epoch_thread, epoch_stop, registry_service))
+    Ok((all, epoch, registry_service))
 }
 
 /// Derives a `DbSqliteConfig` for a module that should live in a separate
@@ -1345,16 +1297,24 @@ pub async fn bootstrap_and_run_worker_executor<
     let shutdown = services::shutdown::Shutdown::new();
     let cancel_failed_bootstrap = shutdown.token().drop_guard();
 
-    let (worker_executor_impl, epoch_thread, epoch_stop, registry_service) =
-        create_worker_executor_impl::<Ctx, BootstrapImpl>(
-            golem_config.clone(),
-            bootstrap,
-            runtime.clone(),
-            &lazy_worker_activator,
-            shutdown.clone(),
-            join_set,
-        )
-        .await?;
+    let created = create_worker_executor_impl::<Ctx, BootstrapImpl>(
+        golem_config.clone(),
+        bootstrap,
+        runtime.clone(),
+        &lazy_worker_activator,
+        shutdown.clone(),
+        join_set,
+    )
+    .await;
+    let (worker_executor_impl, epoch, registry_service) = match created {
+        Ok(created) => created,
+        Err(error) => {
+            shutdown.cancel();
+            join_set.shutdown().await;
+            shutdown.join_tracked().await;
+            return Err(error);
+        }
+    };
 
     if start_registry_invalidation_handler {
         let registry_service = registry_service.clone();
@@ -1384,18 +1344,19 @@ pub async fn bootstrap_and_run_worker_executor<
     let mut run_details = RunDetails {
         http_port: 0,
         grpc_port: 0,
-        epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
-        epoch_stop,
+        _epoch: epoch,
         shutdown,
         leak_detector,
         invocation_loops,
     };
-    track_executor_directory_cleanup(
-        &run_details.shutdown,
-        run_details.invocation_loops.clone(),
-        worker_executor_impl.active_agents().agent_filesystems(),
-        worker_executor_impl.agent_filesystem_snapshots(),
-    );
+    worker_executor_impl
+        .active_agents()
+        .agent_filesystems()
+        .track_shutdown(
+            &run_details.shutdown,
+            run_details.invocation_loops.clone(),
+            worker_executor_impl.agent_filesystem_snapshots(),
+        );
     bootstrap.capture_services(&worker_executor_impl);
 
     crate::metrics::runtime::install_runtime_metrics(
@@ -1404,16 +1365,26 @@ pub async fn bootstrap_and_run_worker_executor<
         join_set,
     );
 
-    run_details.grpc_port =
-        run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
+    let started: Result<(), anyhow::Error> = async {
+        run_details.grpc_port =
+            run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
-    run_details.http_port = golem_service_base::observability::start_health_and_metrics_server(
-        golem_config.http_addr(),
-        prometheus_registry,
-        "Worker executor is running",
-        join_set,
-    )
-    .await?;
+        run_details.http_port = golem_service_base::observability::start_health_and_metrics_server(
+            golem_config.http_addr(),
+            prometheus_registry,
+            "Worker executor is running",
+            join_set,
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = started {
+        run_details.shutdown.cancel();
+        join_set.shutdown().await;
+        run_details.shutdown.join_tracked().await;
+        return Err(error);
+    }
 
     cancel_failed_bootstrap.disarm();
     Ok(run_details)
@@ -1648,7 +1619,7 @@ mod tests {
             },
         );
         started.await.unwrap();
-        track_executor_directory_cleanup(&shutdown, loops, Arc::clone(&filesystems), snapshots);
+        filesystems.track_shutdown(&shutdown, loops, snapshots);
         shutdown.cancel();
         drain_started.await.unwrap();
         let waiting = shutdown.wait_for_tracked(std::time::Duration::from_secs(10));
@@ -1674,13 +1645,13 @@ mod tests {
             let _run_details = RunDetails {
                 http_port: 0,
                 grpc_port: 0,
-                epoch_thread: std::sync::Mutex::new(None),
-                epoch_stop: Arc::new(AtomicBool::new(false)),
+                _epoch: EpochTicker::start(std::time::Duration::from_secs(60), || {}),
                 shutdown: shutdown.clone(),
                 leak_detector: std::sync::Weak::new(),
                 invocation_loops: loops.clone(),
             };
-            track_executor_directory_cleanup(&shutdown, loops, filesystems, snapshots);
+            filesystems.track_shutdown(&shutdown, loops, snapshots);
+            drop(filesystems);
             Err(anyhow!("server bind failed"))
         };
         assert!(failed.is_err());
@@ -1689,29 +1660,6 @@ mod tests {
         assert!(released.upgrade().is_none());
         assert!(!root.path().join(".scratch").exists());
         assert!(!root.path().join(".initial-files").exists());
-    }
-
-    #[test]
-    async fn a_failed_invocation_drain_retains_directories_after_the_last_service_owner_drops() {
-        let root = tempfile::tempdir().unwrap();
-        let shutdown = services::shutdown::Shutdown::new();
-        let (filesystems, snapshots) = directory_cleanup_services(root.path(), &shutdown).await;
-        std::fs::write(root.path().join(".scratch/in-use"), b"retained").unwrap();
-        let released = Arc::downgrade(&filesystems);
-        finish_executor_directory_cleanup(Err("oplog close failed".into()), filesystems, snapshots)
-            .await;
-        assert!(released.upgrade().is_none());
-        assert_eq!(
-            std::fs::read(root.path().join(".scratch/in-use")).unwrap(),
-            b"retained"
-        );
-        assert!(root.path().join(".initial-files").is_dir());
-        shutdown.cancel();
-        assert!(
-            shutdown
-                .wait_for_tracked(std::time::Duration::from_secs(5))
-                .await
-        );
     }
 
     /// The snapshot service gets the storage mode of the agent filesystems: on storage without

@@ -337,7 +337,7 @@ async fn scripted_adapter_surfaces_each_programmed_native_outcome() {
     );
     assert_eq!(
         filesystem.read(&file, range).await.unwrap_err().to_string(),
-        "failed to changed read outcome filesystem <scripted-test>"
+        "failed to changed read outcome"
     );
     assert_eq!(
         control.calls(),
@@ -403,10 +403,7 @@ async fn scripted_adapter_programs_creation_through_associated_provisioning() {
     .await
     .expect_err("scripted creation must return the programmed failure");
 
-    assert_eq!(
-        error.to_string(),
-        "failed to programmed creation failure filesystem <scripted-test>"
-    );
+    assert_eq!(error.to_string(), "failed to programmed creation failure");
     assert_eq!(
         control.calls(),
         vec!["create_fresh(name=environment/component/filesystem, limits=None)"]
@@ -456,13 +453,10 @@ async fn scripted_adapter_programs_copy_contents_with_gates() {
         .await
         .unwrap_err();
 
-    assert_eq!(
-        failed.to_string(),
-        "failed to programmed copy failure filesystem <scripted-test>"
-    );
+    assert_eq!(failed.to_string(), "failed to programmed copy failure");
     assert_eq!(
         unprogrammed.to_string(),
-        "failed to consume programmed scripted sandbox filesystem outcome filesystem <scripted-sandbox-filesystem>"
+        "failed to consume programmed scripted sandbox filesystem outcome"
     );
     let target_path = target.as_path().display();
     assert_eq!(
@@ -521,13 +515,10 @@ async fn scripted_adapter_programs_seed_with_gates() {
     let failed = filesystem.seed(entries()).await.unwrap_err();
     let unprogrammed = filesystem.seed(entries()).await.unwrap_err();
 
-    assert_eq!(
-        failed.to_string(),
-        "failed to programmed seed failure filesystem <scripted-test>"
-    );
+    assert_eq!(failed.to_string(), "failed to programmed seed failure");
     assert_eq!(
         unprogrammed.to_string(),
-        "failed to consume programmed scripted sandbox filesystem outcome filesystem <scripted-sandbox-filesystem>"
+        "failed to consume programmed scripted sandbox filesystem outcome"
     );
     let call = format!(
         "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"\" }}, access=FromSource, placement=CreateNew}}, {{source={}, target=SandboxPath {{ base: Root, path: \"lib/file\" }}, access=ReadOnly, placement=Replace}}])",

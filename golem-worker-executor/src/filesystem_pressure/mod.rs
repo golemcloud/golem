@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::filesystem_error::FilesystemOperationError;
 use crate::metrics::agent_filesystem::{self, PressureRecovery, PressureUnload};
 use crate::services::active_agents::{
     ActiveAgents, FilesystemPressureVictim, eligible_loaded_idle_filesystem_pressure_victims,
     request_loaded_idle_filesystem_unload,
 };
 use crate::services::golem_config::FilesystemPressureConfig;
-use crate::storage_volume::{FilesystemSpace, FilesystemVolume, observe_space};
+use crate::storage_volume::{FilesystemSpace, FilesystemVolume, StorageVolumeError, observe_space};
 use crate::worker::{EvictionStopOutcome, UnloadReason, UnloadRequest};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -34,22 +33,45 @@ impl FilesystemPressureConfig {
         &self,
         total_bytes: u64,
         total_filesystem_objects: u64,
-    ) -> Result<(), FilesystemOperationError> {
+    ) -> Result<(), FilesystemPressureConfigError> {
         if self.target_available_bytes() > total_bytes {
-            return Err(FilesystemOperationError::verification(
-                "fit filesystem pressure byte target within the volume capacity",
-                None,
-            ));
+            return Err(FilesystemPressureConfigError::Bytes {
+                target: self.target_available_bytes(),
+                capacity: total_bytes,
+            });
         }
         if self.target_available_filesystem_objects() > total_filesystem_objects {
-            return Err(FilesystemOperationError::verification(
-                "fit filesystem pressure object target within the volume capacity",
-                None,
-            ));
+            return Err(FilesystemPressureConfigError::Objects {
+                target: self.target_available_filesystem_objects(),
+                capacity: total_filesystem_objects,
+            });
         }
         Ok(())
     }
 }
+
+#[derive(Debug)]
+pub(crate) enum FilesystemPressureConfigError {
+    Bytes { target: u64, capacity: u64 },
+    Objects { target: u64, capacity: u64 },
+}
+
+impl Display for FilesystemPressureConfigError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bytes { target, capacity } => write!(
+                formatter,
+                "filesystem pressure byte target {target} exceeds volume capacity {capacity}"
+            ),
+            Self::Objects { target, capacity } => write!(
+                formatter,
+                "filesystem pressure object target {target} exceeds volume capacity {capacity}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FilesystemPressureConfigError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FilesystemCapacityTarget {
@@ -213,7 +235,7 @@ impl FilesystemWriteRecovery {
 #[derive(Debug)]
 pub(crate) enum FilesystemPressureError {
     Deadline,
-    Observation(FilesystemOperationError),
+    Observation(StorageVolumeError),
     CleanupFailed,
 }
 

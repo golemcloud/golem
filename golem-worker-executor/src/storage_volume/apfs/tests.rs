@@ -59,7 +59,7 @@ fn assert_bind_clone_failure_precedes_cleanup_failure(errno: i32) {
     assert_eq!(
         error.to_string(),
         format!(
-            "failed to probe APFS clone for local development filesystem {}: {original}",
+            "failed to probe APFS clone for local development at {}: {original}",
             root.display()
         )
     );
@@ -137,7 +137,7 @@ fn apfs_clone_across_system_and_data_volumes_fails() {
     let source = File::open("/System/Library/CoreServices/SystemVersion.plist").unwrap();
     let target = tempfile::tempdir().unwrap();
     let parent = File::open(target.path()).unwrap();
-    let error = clone_file(&source, &parent, Path::new("clone")).unwrap_err();
+    let error = clone_file_at(&source, &parent, Path::new("clone")).unwrap_err();
     assert_eq!(error.raw_os_error(), Some(libc::EXDEV));
     assert!(!target.path().join("clone").exists());
 }

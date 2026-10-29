@@ -27,6 +27,35 @@ use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
 use tokio::sync::Notify;
 
+#[test]
+fn pressure_configuration_errors_report_the_target_and_capacity() {
+    let config = FilesystemPressureConfig::default();
+    let byte_target = config.target_available_bytes();
+    let error = config
+        .validate_capacity(byte_target - 1, u64::MAX)
+        .unwrap_err();
+    assert!(
+        matches!(error, FilesystemPressureConfigError::Bytes { target, capacity }
+        if target == byte_target && capacity == byte_target - 1)
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "filesystem pressure byte target {byte_target} exceeds volume capacity {}",
+            byte_target - 1
+        )
+    );
+    let object_target = config.target_available_filesystem_objects();
+    let error = config
+        .validate_capacity(u64::MAX, object_target - 1)
+        .unwrap_err();
+    assert!(
+        matches!(error, FilesystemPressureConfigError::Objects { target, capacity }
+        if target == object_target && capacity == object_target - 1)
+    );
+    assert!(!error.to_string().ends_with("filesystem"));
+}
+
 struct ScriptedRecovery {
     observations: Mutex<VecDeque<Result<FilesystemSpace, &'static str>>>,
     candidates: Mutex<Option<Vec<u8>>>,
@@ -94,7 +123,7 @@ impl CapacityRecoverySource for ScriptedRecovery {
         match self.observations.lock().unwrap().pop_front().unwrap() {
             Ok(observation) => Ok(observation),
             Err(message) => Err(FilesystemPressureError::Observation(
-                FilesystemOperationError::verification(message, None),
+                StorageVolumeError::verification(message, None),
             )),
         }
     }

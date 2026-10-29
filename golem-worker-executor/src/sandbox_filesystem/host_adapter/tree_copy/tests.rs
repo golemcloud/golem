@@ -3305,7 +3305,7 @@ fn apfs_temporary_clone_open_failure_removes_the_native_clone() {
     let directory = cap_std::fs::Dir::from_std_file(File::open(destination.path()).unwrap());
     let name = temporary_copy_name();
 
-    clone_file(&source, &directory, &name).unwrap();
+    clone_file_at(&source, &directory, &name).unwrap();
     assert_eq!(directory.read(&name).unwrap().as_slice(), &[b'Z'; 4096]);
     std::fs::set_permissions(
         destination.path().join(&name),

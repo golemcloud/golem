@@ -22,6 +22,74 @@ use file_creation_mask::{probed_file_creation_mask, status_umask};
 use file_creation_mask_for_test::{thread_file_creation_mask, with_private_file_creation_mask};
 use test_r::test;
 
+#[test]
+async fn a_failed_invocation_drain_retains_directories_after_the_last_service_owner_drops() {
+    use crate::services::agent_filesystem_snapshots::{StoreSource, VolumeRoom};
+    use crate::services::golem_config::FilesystemSnapshotsConfig;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().unwrap();
+    let shutdown = Shutdown::new();
+    let settings = FilesystemStorageConfig {
+        mode: FilesystemStorageMode::Directory {
+            root: root.path().into(),
+        },
+        ..Default::default()
+    };
+    let filesystems = Arc::new(
+        AgentFilesystems::new(&settings, initial_files_service())
+            .await
+            .unwrap(),
+    );
+    let snapshots = AgentFilesystemSnapshots::bind(
+        &FilesystemSnapshotsConfig::default(),
+        StoreSource::configured(
+            Arc::new(InMemoryBlobStorage::new()),
+            VolumeRoom::Pressure {
+                volume: filesystems.volume().clone(),
+                pressure: filesystems.pressure_policy().clone(),
+            },
+        ),
+        filesystems.volume().copies_on_write(),
+        &shutdown,
+    )
+    .unwrap();
+    std::fs::write(root.path().join(".scratch/in-use"), b"retained").unwrap();
+    let released = Arc::downgrade(&filesystems);
+    filesystems
+        .finish_shutdown(Err("oplog close failed".into()), &snapshots)
+        .await;
+    drop((filesystems, snapshots));
+    assert!(released.upgrade().is_none());
+    assert_eq!(
+        std::fs::read(root.path().join(".scratch/in-use")).unwrap(),
+        b"retained"
+    );
+    assert!(root.path().join(".initial-files").is_dir());
+    shutdown.cancel();
+    assert!(shutdown.wait_for_tracked(Duration::from_secs(5)).await);
+}
+
+#[test]
+async fn converting_a_primary_host_failure_does_not_mark_it_as_cleanup() {
+    let filesystems =
+        AgentFilesystems::new(&FilesystemStorageConfig::default(), initial_files_service())
+            .await
+            .unwrap();
+    let error = filesystems
+        .scratch
+        .path()
+        .child(std::ffi::OsStr::new(".."))
+        .unwrap_err();
+    assert!(!error.to_string().contains("directory filesystem"));
+    let error = FilesystemStorageError::from(error);
+    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::InvalidInput));
+    assert!(!error.cleanup_failed());
+    assert!(error.during_cleanup().cleanup_failed());
+    filesystems.shut_down().await.unwrap();
+}
+
 fn initial_files_service() -> Arc<InitialAgentFilesService> {
     Arc::new(InitialAgentFilesService::new(Arc::new(
         golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
@@ -313,7 +381,7 @@ async fn agent_filesystems_binding_rejects_pressure_target_above_observed_capaci
     assert!(
         error
             .to_string()
-            .contains("fit filesystem pressure byte target within the volume capacity")
+            .contains("filesystem pressure byte target")
     );
 }
 
@@ -468,6 +536,6 @@ async fn agent_filesystems_binding_rejects_object_pressure_target_above_observed
     assert!(
         error
             .to_string()
-            .contains("fit filesystem pressure object target within the volume capacity")
+            .contains("filesystem pressure object target")
     );
 }

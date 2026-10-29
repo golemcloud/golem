@@ -35,7 +35,9 @@ use super::{
 use crate::blocking::BlockingTask;
 use crate::host_directories::HostPath;
 use crate::sandbox_filesystem::FilesystemStorageError;
-use crate::storage_volume::{AgentAccounting, FilesystemAllocation, FilesystemLimits};
+use crate::storage_volume::{
+    AgentAccounting, FilesystemAllocation, FilesystemLimits, StorageVolumeError,
+};
 use crate::storage_volume::{FilesystemVolume, NativeStorageProfile};
 #[cfg(target_os = "linux")]
 use crate::storage_volume::{ValidatedXfsNameMode, install_project_limits, project_allocation};
@@ -563,6 +565,20 @@ pub(in crate::sandbox_filesystem) fn check_inspection_kind(
             failure,
         )),
         None => Ok(()),
+    }
+}
+
+impl From<StorageVolumeError> for FilesystemStorageError {
+    fn from(error: StorageVolumeError) -> Self {
+        let operation = error.operation();
+        let path = error.path().map(Path::to_path_buf);
+        let cleanup_failed = error.cleanup_failed();
+        let error = Self::from_failure(operation, path, error.into_failure());
+        if cleanup_failed {
+            error.during_cleanup()
+        } else {
+            error
+        }
     }
 }
 

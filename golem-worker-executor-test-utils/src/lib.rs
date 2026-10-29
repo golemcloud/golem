@@ -723,13 +723,17 @@ impl TestWorkerExecutor {
 
     pub async fn shutdown_and_wait_for_invocation_loops(&self) -> anyhow::Result<()> {
         self._run_details.shutdown.cancel();
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            self._run_details.invocation_loops.wait_for_exit(),
-        )
+        tokio::time::timeout(Duration::from_secs(10), async {
+            self._run_details
+                .invocation_loops
+                .wait_for_exit()
+                .await
+                .map_err(anyhow::Error::msg)?;
+            self._run_details.shutdown.join_tracked().await;
+            Ok(())
+        })
         .await
         .map_err(|_| anyhow!("executor tasks did not retire within 10s"))?
-        .map_err(anyhow::Error::msg)
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {

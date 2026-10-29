@@ -56,7 +56,7 @@ use tracing::{Instrument, debug, info, warn};
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
-use crate::services::agent_filesystem::{AgentFilesystems, FilesystemStorageError};
+use crate::services::agent_filesystem::{AgentFilesystems, FilesystemSetupError};
 use crate::services::card_interest::{
     CardAuthorityRecoveryEpoch, CardAuthorityRecoveryFinalize, CardInterestIndex,
 };
@@ -234,7 +234,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Result<Self, FilesystemStorageError> {
+    ) -> Result<Self, FilesystemSetupError> {
         // Build the probe once and hand it to the measured-headroom gate, which
         // bases its decision on the pod's cgroup limit when constrained (not host
         // RAM).
@@ -263,7 +263,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Result<Self, FilesystemStorageError> {
+    ) -> Result<Self, FilesystemSetupError> {
         let agent_filesystems =
             Arc::new(AgentFilesystems::new(storage_config, initial_files_service).await?);
         let admission = memory_config.enable_measured_admission.then(|| {

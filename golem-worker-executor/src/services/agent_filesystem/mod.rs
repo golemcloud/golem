@@ -13,14 +13,17 @@
 // limitations under the License.
 
 use crate::filesystem_pressure::FilesystemWriteRecovery;
-use crate::host_directories::HostDirectory;
+use crate::host_directories::{HostDirectory, HostDirectoryError};
 pub use crate::sandbox_filesystem::FilesystemStorageError;
 use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+use crate::services::active_agents::InvocationLoops;
+use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::{
     FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
+use crate::services::shutdown::Shutdown;
 use crate::services::work_admission::WorkAdmission;
 use crate::storage_volume::{
     AgentAccounting, FilesystemLimits, FilesystemSpace, FilesystemVolume, observe_space_blocking,
@@ -42,7 +45,9 @@ mod executor_directories;
 #[cfg(unix)]
 mod file_creation_mask;
 mod lifecycle;
+mod setup_error;
 pub(crate) use executor_directories::{ExecutorDirectories, provision_executor_directories};
+pub use setup_error::FilesystemSetupError;
 
 #[cfg(test)]
 pub(crate) use lifecycle::tests::{
@@ -84,7 +89,7 @@ fn resolve_storage_limits(
 fn validate_volume_capacity(
     provisioning: &SandboxFilesystemProvisioning,
     settings: &FilesystemStorageConfig,
-) -> Result<(), FilesystemStorageError> {
+) -> Result<(), FilesystemSetupError> {
     match observe_space_at_binding(provisioning.volume())? {
         FilesystemSpace::Observed {
             total_bytes,
@@ -142,6 +147,38 @@ pub(crate) struct AgentFilesystems {
 }
 
 impl AgentFilesystems {
+    pub(crate) fn track_shutdown(
+        self: &Arc<Self>,
+        shutdown: &Shutdown,
+        loops: InvocationLoops,
+        snapshots: Arc<AgentFilesystemSnapshots>,
+    ) {
+        let filesystems = Arc::clone(self);
+        let token = shutdown.token();
+        shutdown.spawn(async move {
+            token.cancelled().await;
+            filesystems
+                .finish_shutdown(loops.wait_for_exit().await, &snapshots)
+                .await;
+        });
+    }
+
+    async fn finish_shutdown(
+        &self,
+        drained: Result<(), String>,
+        snapshots: &AgentFilesystemSnapshots,
+    ) {
+        if let Err(error) = drained {
+            self.retain_host_directories();
+            tracing::error!(%error, "Executor work did not drain; retaining host directories");
+            return;
+        }
+        snapshots.wait_for_shutdown().await;
+        if let Err(error) = self.shut_down().await {
+            tracing::error!(%error, "Failed to remove executor host directories");
+        }
+    }
+
     /// Binds sandbox storage and provisions the executor-owned `.scratch` and `.initial-files`
     /// directories. The initial-files directory goes by value to the service's one file loader.
     /// Sandbox creation and deletion do not own these directories.
@@ -154,18 +191,14 @@ impl AgentFilesystems {
     pub(crate) async fn new(
         settings: &FilesystemStorageConfig,
         initial_files_service: Arc<InitialAgentFilesService>,
-    ) -> Result<Self, FilesystemStorageError> {
+    ) -> Result<Self, FilesystemSetupError> {
         let (
             provisioning,
             ExecutorDirectories {
                 scratch,
                 initial_files,
             },
-        ) = crate::services::agent_filesystem::provision_executor_directories(
-            &settings.mode,
-            settings.cleanup_retry.clone(),
-        )
-        .await?;
+        ) = provision_executor_directories(&settings.mode, settings.cleanup_retry.clone()).await?;
         if let Err(error) = validate_volume_capacity(&provisioning, settings) {
             futures::future::join_all([scratch.discard(), initial_files.discard()])
                 .await
@@ -208,10 +241,12 @@ impl AgentFilesystems {
         self.admission.close();
         self.admission.wait().await;
         let (initial_files, scratch) =
-            futures::join!(self.file_loader.shut_down(), self.scratch.remove());
+            futures::join!(self.file_loader.shut_down(), self.scratch.discard());
         match (initial_files, scratch) {
             (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error.into()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => {
+                Err(FilesystemStorageError::from(error).during_cleanup())
+            }
             (Err(initial), Err(scratch)) => {
                 Err(FilesystemStorageError::from(initial).with_cleanup_failure(scratch.into()))
             }
@@ -285,6 +320,14 @@ impl AgentFilesystems {
     pub(crate) fn retain_host_directories(&self) {
         self.scratch.retain();
         self.file_loader.retain_cache();
+    }
+}
+
+impl From<HostDirectoryError> for FilesystemStorageError {
+    fn from(error: HostDirectoryError) -> Self {
+        let operation = error.operation();
+        let path = Some(error.path().to_path_buf());
+        Self::from_failure(operation, path, error.into_failure())
     }
 }
 

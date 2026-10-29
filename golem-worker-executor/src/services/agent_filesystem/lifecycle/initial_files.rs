@@ -1208,7 +1208,8 @@ pub(super) fn load_error(error: InitialFileLoadError, path: &Path) -> Error {
 ///
 /// Worker startup calls this before materialization. Targets are relative to the agent filesystem
 /// root and must be unique; duplicate targets, inconsistent sizes for one content hash, and loader
-/// failures return `Error::Sandbox` without changing the filesystem lifecycle.
+/// failures keep their retryable, refused or permanent classification without changing the
+/// filesystem lifecycle.
 pub(crate) async fn prepare_initial_files(
     file_loader: Arc<FileLoader>,
     environment_id: EnvironmentId,

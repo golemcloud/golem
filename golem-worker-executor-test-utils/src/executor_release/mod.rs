@@ -16,13 +16,15 @@ use golem_worker_executor::services::{active_agents::InvocationLoops, shutdown::
 use std::sync::Weak;
 use std::time::Duration;
 
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The graph sentinel can disappear before independently owned shutdown cleanup has finished.
 pub(super) async fn wait_for_release(
     shutdown: &Shutdown,
     invocation_loops: &InvocationLoops,
     released: Weak<()>,
 ) -> anyhow::Result<()> {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(RELEASE_TIMEOUT, async {
         shutdown.join_tracked().await;
         invocation_loops
             .wait_for_exit()
@@ -34,7 +36,7 @@ pub(super) async fn wait_for_release(
         Ok(())
     })
     .await
-    .map_err(|_| anyhow::anyhow!("the executor was not released within 30 seconds"))?
+    .map_err(|_| anyhow::anyhow!("the executor was not released within {RELEASE_TIMEOUT:?}"))?
 }
 
 #[cfg(test)]

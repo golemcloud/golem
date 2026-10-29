@@ -208,7 +208,8 @@ async fn discard_reports_a_removal_failure() {
 
     let error = directory.discard().await.unwrap_err();
 
-    assert!(error.cleanup_failed(), "{error}");
+    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
+    assert!(!error.to_string().contains("directory filesystem"));
     assert!(
         error
             .to_string()

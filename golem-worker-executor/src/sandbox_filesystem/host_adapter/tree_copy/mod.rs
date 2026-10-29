@@ -17,9 +17,9 @@ use super::super::{LinkGroup, SeedAccess, SeedPlacement};
 use super::{NativeRootHandles, QuotaAuthority};
 use crate::storage_volume::FileCopyMode;
 #[cfg(target_os = "macos")]
-use crate::storage_volume::clone_file;
+use crate::storage_volume::clone_file_at;
 #[cfg(target_os = "linux")]
-use crate::storage_volume::{clone_file, reflink_into_project as clone_into_project, sync_volume};
+use crate::storage_volume::{clone_file_contents, clone_file_contents_into_project, sync_volume};
 use cap_fs_ext::{DirExt as _, FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt as _};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -240,7 +240,7 @@ impl<'a> CapabilityTempFile<'a> {
     #[cfg(target_os = "macos")]
     fn from_clone(directory: &'a cap_std::fs::Dir, source: &File) -> std::io::Result<Self> {
         let name = std::iter::repeat_with(temporary_copy_name)
-            .find_map(|name| match clone_file(source, directory, &name) {
+            .find_map(|name| match clone_file_at(source, directory, &name) {
                 Ok(()) => Some(Ok(name)),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
                 Err(error) => Some(Err(error)),
@@ -698,7 +698,7 @@ pub(in crate::sandbox_filesystem) fn clone_copied_file(
             .parent()
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?,
     )?;
-    clone_file(
+    clone_file_at(
         source,
         &parent,
         target
@@ -1241,26 +1241,6 @@ pub(in crate::sandbox_filesystem) fn seeded_permissions(
     permissions
 }
 
-/// Makes `target` share the extents of `source` in the project `project_id` of the sandbox.
-pub(in crate::sandbox_filesystem) fn reflink_into_project(
-    project_id: NonZeroU32,
-    target: &File,
-    source: &File,
-) -> std::io::Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        clone_into_project(project_id, target, source)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (project_id, target, source);
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "managed XFS is unavailable on this platform",
-        ))
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::sandbox_filesystem) enum SeedSyncPlatform {
     MacOs,
@@ -1653,28 +1633,18 @@ pub(in crate::sandbox_filesystem) fn transfer_file(
     match transfer {
         FileTransfer::Bytes => std::io::copy(&mut &*source, &mut &*target).map(|_| ()),
         FileTransfer::Clone => Ok(()),
-        FileTransfer::Reflink => reflink_file(source, target),
-        FileTransfer::ReflinkIntoProject(project) => reflink_into_project(project, target, source),
+        #[cfg(target_os = "linux")]
+        FileTransfer::Reflink => clone_file_contents(source, target),
+        #[cfg(target_os = "linux")]
+        FileTransfer::ReflinkIntoProject(project) => {
+            clone_file_contents_into_project(source, target, project)
+        }
+        #[cfg(not(target_os = "linux"))]
+        FileTransfer::Reflink | FileTransfer::ReflinkIntoProject(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Linux file-descriptor cloning is unavailable on this platform",
+        )),
     }
-}
-
-#[cfg(target_os = "linux")]
-pub(in crate::sandbox_filesystem) fn reflink_file(
-    source: &File,
-    target: &File,
-) -> std::io::Result<()> {
-    clone_file(target, source)
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(in crate::sandbox_filesystem) fn reflink_file(
-    _source: &File,
-    _target: &File,
-) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "Linux file-descriptor reflink is unavailable on this platform",
-    ))
 }
 
 pub(in crate::sandbox_filesystem) fn capability_time(

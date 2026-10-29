@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::filesystem_error::FilesystemOperationError;
-use crate::host_directories::{HostDirectory, HostPath};
+use crate::host_directories::{HostDirectory, HostDirectoryError, HostPath};
 use crate::services::work_admission::WorkAdmission;
 use anyhow::anyhow;
 use async_lock::Mutex;
@@ -198,10 +197,10 @@ impl FileLoader {
 
     /// Stops new loads, joins downloads and source leases, and removes the executor-owned cache.
     /// Executor shutdown drains filesystem users before calling this.
-    pub(crate) async fn shut_down(&self) -> Result<(), FilesystemOperationError> {
+    pub(crate) async fn shut_down(&self) -> Result<(), HostDirectoryError> {
         self.admission.close();
         self.admission.wait().await;
-        self.cache_dir.remove().await
+        self.cache_dir.discard().await
     }
 
     pub(crate) fn retain_cache(&self) {

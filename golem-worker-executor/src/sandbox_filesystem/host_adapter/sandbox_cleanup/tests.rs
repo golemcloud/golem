@@ -225,10 +225,7 @@ async fn failed_delete_returns_adapter_for_retry() {
         Err(failure) => failure,
     };
     let (filesystem, error) = failure.into_parts();
-    assert_eq!(
-        error.to_string(),
-        "failed to first delete filesystem <scripted-test>"
-    );
+    assert_eq!(error.to_string(), "failed to first delete");
 
     assert!(
         <ScriptedSandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
@@ -283,7 +280,7 @@ async fn production_adapter_uses_concrete_static_dispatch_for_creation_and_delet
     assert_eq!(
         error.to_string(),
         format!(
-            "failed to install limits without quota authority filesystem {}",
+            "failed to install limits without quota authority at {}",
             rejected_root.display()
         )
     );
