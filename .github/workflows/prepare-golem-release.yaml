@@ -107,12 +107,11 @@ jobs:
                   ] | max_by(.version) | .tag // empty
                 '
             )
-            notes_args=(--generate-notes)
-            if [[ -n "$previous_tag" ]]; then
-              notes_args+=(--notes-start-tag "$previous_tag")
-            fi
+            notes_file=$(mktemp)
+            trap 'rm -f "$notes_file"' EXIT
+            node .github/scripts/release-notes.mjs "$GITHUB_REF_NAME" "$previous_tag" > "$notes_file"
             gh release create "$GITHUB_REF_NAME" --repo golemcloud/golem \
-              --verify-tag --draft --latest=false --prerelease="$prerelease" --title "$GITHUB_REF_NAME" "${notes_args[@]}"
+              --verify-tag --draft --latest=false --prerelease="$prerelease" --title "$GITHUB_REF_NAME" --notes-file "$notes_file"
           fi
       - name: Publish built-ins and attach the verified manifest
         shell: bash
