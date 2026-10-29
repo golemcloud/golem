@@ -8544,6 +8544,13 @@ async fn build_preserves_wasm_bytes_and_output_paths(_tracing: &Tracing) {
         let updated =
             wat::parse_str(r#"(component $new-name (@custom "version" "3.4.5"))"#).unwrap();
         fs::write(&source, &updated).unwrap();
+        // Kernel-assigned write timestamps can lag behind the copy's explicit timestamp.
+        std::fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now())
+            .unwrap();
         let result = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
         assert!(result.success_or_dump());
         assert_eq!(fs::read(&target).unwrap(), updated);
