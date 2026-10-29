@@ -171,7 +171,10 @@ impl CursorTx<'_> {
 }
 
 impl ReplayState {
-    pub(in crate::durable_host::replay_state) fn record_delivery_failure(&self, failure: String) {
+    pub(in crate::durable_host::replay_state) fn record_delivery_failure(
+        &self,
+        failure: WorkerExecutorError,
+    ) {
         let mut current = self.cursor.delivery_failure.lock().unwrap();
         if current.is_none() {
             tracing::error!("{failure}");
@@ -185,10 +188,10 @@ impl ReplayState {
         marker_index: OplogIndex,
         reason: impl Into<String>,
     ) {
-        self.record_delivery_failure(format!(
+        self.record_delivery_failure(WorkerExecutorError::runtime(format!(
             "replay could not reproduce CompletionDelivered at {marker_index} for durable call Start at {start_index}: {}",
             reason.into()
-        ));
+        )));
         self.cursor.progress.notify_waiters();
     }
 
@@ -201,10 +204,10 @@ impl ReplayState {
         start_index: OplogIndex,
         reason: impl Into<String>,
     ) {
-        self.record_delivery_failure(format!(
+        self.record_delivery_failure(WorkerExecutorError::runtime(format!(
             "replay could not withhold the markerless completion of durable call Start at {start_index} until the end of the replay tail: {}",
             reason.into()
-        ));
+        )));
         self.cursor.progress.notify_waiters();
     }
 

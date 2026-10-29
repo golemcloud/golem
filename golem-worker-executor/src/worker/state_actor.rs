@@ -881,9 +881,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// refusal of that rebuild instead of the detached status, so a caller that chooses work from
     /// the status never chooses it from one that is not a fold of the oplog.
     pub async fn repaired_status(&self) -> Result<Arc<AgentStatusRecord>, OplogRefusal> {
-        self.commit
-            .run_status_job(|done| StatusJob::RepairedStatus { done })
-            .await
+        self.commit.repaired_status().await
     }
 
     /// Observational reads can race retirement. A closed queue or dropped reply means the
@@ -1025,6 +1023,11 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 }
 
 impl OwnerCommitController {
+    pub(crate) async fn repaired_status(&self) -> Result<Arc<AgentStatusRecord>, OplogRefusal> {
+        self.run_status_job(|done| StatusJob::RepairedStatus { done })
+            .await
+    }
+
     /// Sends a job to the status task and waits for its reply. Gives `None` when the task has
     /// ended or dropped the job without a reply. It never panics.
     async fn try_run_status_job<R>(

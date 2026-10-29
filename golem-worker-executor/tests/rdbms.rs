@@ -63,6 +63,167 @@ async fn mysql() -> DockerMysqlRdb {
     DockerMysqlRdb::new(&unique_network_id).await
 }
 
+#[test]
+#[test_r::timeout("300s")]
+async fn rdbms_postgres_snapshot_changes_transaction_drop_schedule(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::PromiseId;
+    use golem_worker_executor::services::golem_config::SnapshotPolicy;
+    use std::sync::Arc;
+
+    for (live_early, restored_early, incomplete, mode) in [
+        (false, true, false, 0u32),
+        (true, false, false, 0),
+        (false, true, true, 0),
+        (true, false, false, 1),
+        (false, true, false, 2),
+        (false, false, false, 3),
+        (false, false, true, 1),
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let overrides = || TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .store()
+            .await?;
+        let table = format!("drop_timing_{}", Uuid::new_v4().simple());
+        let address = postgres.public_connection_string();
+        let id = agent_id!(
+            "TransactionDropTiming",
+            address.clone(),
+            table.clone(),
+            live_early,
+            restored_early,
+            incomplete,
+            mode
+        );
+        let worker = executor.start_agent(&component.id, id.clone()).await?;
+        let promise: PromiseId = executor
+            .invoke_and_await_agent(&component, &id, "prepare", data_value!())
+            .await?
+            .into_typed()?;
+        let key = IdempotencyKey::fresh();
+        executor
+            .invoke_agent_with_key(&component, &id, &key, "run", data_value!(promise.clone()))
+            .await?;
+        executor
+            .wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(30))
+            .await?;
+        let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        assert!(
+            before
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        );
+        let transaction = before
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if start.function_name == "<scope:transaction>" => {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .expect("transaction Start");
+        assert_eq!(before.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == transaction)).count(), usize::from(!incomplete));
+        let pool = sqlx::PgPool::connect(&address).await?;
+        let count: (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(count.0, 0, "an abandoned transaction must not commit");
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides()).await?;
+        executor.complete_promise(&promise, vec![]).await?;
+        if mode == 2 {
+            let error = tokio::time::timeout(
+                Duration::from_secs(30),
+                executor.invoke_and_await_agent_with_key(
+                    &component,
+                    &id,
+                    &key,
+                    "run",
+                    data_value!(promise.clone()),
+                ),
+            )
+            .await?
+            .expect_err("Drop must not accept the recorded Rollback terminal");
+            assert!(
+                format!("{error:#}")
+                    .contains("Transaction terminal does not match recorded Drop outcome"),
+                "{error:#}"
+            );
+            let count: (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await?;
+            assert_eq!(count.0, 0);
+            continue;
+        }
+        let result: (bool, u64) = tokio::time::timeout(
+            Duration::from_secs(30),
+            executor.invoke_and_await_agent(&component, &id, "inspect", data_value!()),
+        )
+        .await??
+        .into_typed()?;
+        assert_eq!(result, (true, 0));
+        if incomplete && mode == 1 {
+            let retained = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            assert_eq!(retained.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == transaction)).count(), 0,
+                "retaining an incomplete transaction does not authorize a synthetic Drop");
+            assert_eq!(
+                retained
+                    .iter()
+                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+                    .count(),
+                before
+                    .iter()
+                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+                    .count(),
+                "a genuinely open transaction still excludes snapshots"
+            );
+            let lost: bool = executor
+                .invoke_and_await_agent(&component, &id, "close_retained", data_value!())
+                .await?
+                .into_typed()?;
+            assert!(
+                lost,
+                "explicit rollback must retain nonresumable loss semantics"
+            );
+            executor
+                .invoke_and_await_agent(&component, &id, "inspect", data_value!())
+                .await?;
+        }
+        let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        assert!(
+            after
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+                .count()
+                > before
+                    .iter()
+                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+                    .count(),
+            "a reconstructed transaction must not prevent the next snapshot, even without a destructor"
+        );
+        assert_eq!(after.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == transaction)).count(), 1,
+            "replay must consume the recorded Drop or repair an absent terminal exactly once");
+        let count: (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(count.0, 0, "replay must not commit the abandoned write");
+    }
+    Ok(())
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 enum StatementAction {

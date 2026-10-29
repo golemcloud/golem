@@ -73,9 +73,13 @@ impl ReplayState {
         let reason = format!(
             "cancelled native stream read cannot retain its recorded guest delivery at {index}"
         );
-        self.record_delivery_failure(reason.clone());
+        let error = WorkerExecutorError::unexpected_oplog_entry(
+            "recorded consumer stream observation",
+            reason,
+        );
+        self.record_delivery_failure(error.clone());
         self.cursor.progress.notify_waiters();
-        WorkerExecutorError::unexpected_oplog_entry("recorded consumer stream observation", reason)
+        error
     }
 
     /// Drops a resolver awaiter from outside a cursor transaction. Acquires the cursor lock briefly
@@ -140,7 +144,7 @@ impl ReplayState {
         outcome: ResolutionOutcome,
     ) -> Result<ResolutionOutcome, WorkerExecutorError> {
         if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
-            return Err(WorkerExecutorError::runtime(failure));
+            return Err(failure);
         }
         let marker = match &outcome {
             ResolutionOutcome::Resolved(Resolution::Completed {
@@ -356,6 +360,16 @@ impl ReplayState {
         &self,
         handle: ReplayCallHandle,
     ) -> Result<ResolutionOutcome, WorkerExecutorError> {
+        self.await_resolution_outcome_for_drop(handle, None).await
+    }
+
+    /// Destructor waits may span invocations only while passively waiting for sibling history.
+    /// Queued and running cursor operations, including cleanup, remain active.
+    pub(in crate::durable_host) async fn await_resolution_outcome_for_drop(
+        &self,
+        handle: ReplayCallHandle,
+        activity: Option<&TailActivity>,
+    ) -> Result<ResolutionOutcome, WorkerExecutorError> {
         let (start_idx, mut receiver, mut historical_reconstruction) = handle.into_parts();
         let validate = |outcome: ResolutionOutcome| self.validate_resolved_outcome(outcome);
 
@@ -391,7 +405,7 @@ impl ReplayState {
                         routed = &mut receiver => Some(routed),
                     };
                     if let Some(failure) = state.cursor.delivery_failure.lock().unwrap().clone() {
-                        return Err(WorkerExecutorError::runtime(failure));
+                        return Err(failure);
                     }
                     match routed {
                         Some(Ok(outcome)) => {
@@ -479,25 +493,31 @@ impl ReplayState {
             // This call's terminal is not at the cursor head and replay is not over: a
             // concurrently-replaying sibling owns the cursor head. Suspend until our resolution
             // arrives or the cursor advances, then re-drive.
-            tokio::select! {
-                biased;
-                failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
-                    self.unregister_awaiter(start_idx, historical_reconstruction).await;
-                    return Err(super::cursor::historical_reconstruction_owner_failure(failure));
+            let wait = async {
+                tokio::select! {
+                    biased;
+                    failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
+                        Err(super::cursor::historical_reconstruction_owner_failure(failure))
+                    }
+                    resolved = &mut receiver => {
+                        resolved.map(Some).map_err(|_| WorkerExecutorError::runtime(format!(
+                            "concurrent replay resolver channel closed for Start at {start_idx}"
+                        )))
+                    }
+                    _ = progress.as_mut() => Ok(None),
                 }
-                resolved = &mut receiver => {
-                    return match resolved {
-                        Ok(outcome) => validate(outcome),
-                        Err(_closed) => {
-                            self.unregister_awaiter(start_idx, historical_reconstruction).await;
-                            Err(WorkerExecutorError::runtime(format!(
-                                "concurrent replay resolver channel closed for Start at {start_idx}"
-                            )))
-                        }
-                    };
-                }
-                _ = progress.as_mut() => {
-                    // The cursor advanced; loop to re-drain and re-check.
+            };
+            let result = match activity {
+                Some(activity) => activity.park(wait).await,
+                None => wait.await,
+            };
+            match result {
+                Ok(Some(outcome)) => return validate(outcome),
+                Ok(None) => {}
+                Err(err) => {
+                    self.unregister_awaiter(start_idx, historical_reconstruction)
+                        .await;
+                    return Err(err);
                 }
             }
         }

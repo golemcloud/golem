@@ -2731,6 +2731,15 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             filesystem_snapshot: "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9".to_string(),
         }),
+        PublicOplogEntry::SpanClosed(SpanClosedParams {
+            timestamp: timestamp(),
+            resource_start_index: Some(OplogIndex::from_u64(12)),
+            span_finished: PublicSpanFinished {
+                span_id: span_id("0000000000000003"),
+                finished_at: timestamp(),
+                outcome: PublicSpanOutcome::Completed,
+            },
+        }),
         PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
             timestamp: timestamp(),
             plugin: plugin(4),
