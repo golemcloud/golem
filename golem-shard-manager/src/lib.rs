@@ -1818,6 +1818,7 @@ pub async fn run(
                 shard_manager_config.state_write_timeout,
                 shard_manager_config.initial_health_check_timeout,
                 shard_manager_config.number_of_shards,
+                matches!(deployment, Deployment::Embedded),
             )
             .await?)
         })

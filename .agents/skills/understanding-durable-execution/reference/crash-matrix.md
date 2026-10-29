@@ -15,6 +15,11 @@ below for what that leaves behind.
 
 ## Durable host call (`concurrent/call.rs`, `concurrent/delivery.rs`)
 
+The table describes retained entries. An append alone can remain buffered. For durable agents,
+both shared start paths commit a `WriteRemote` Start and its preceding history before allowing
+the effect. A crash during that commit cannot lose a request that already left the executor.
+Other call types can remain buffered until a later barrier. Snapshot calls record nothing.
+
 | Crash window | Oplog shape left behind | Reconstruction behaviour | Durable fact relied on |
 |---|---|---|---|
 | Before `Start` is appended | nothing | Guest replays to this point and issues the call live for the first time | Guest determinism reaches the same call |
@@ -204,7 +209,8 @@ stages do not.
 | Crash window | Oplog shape left behind | What happens here | Durable fact relied on |
 |---|---|---|---|
 | Assignment revoked/reassigned, before any write is attempted | whatever was already committed, plus any buffered entries the stop commits while storage still accepts this executor's epoch | `give_up_matching` retires matching agents through `interrupt_and_retire`; no status blob, checkpoint or recovery-index row is written (`record_retirement` stops the flusher and checkpointer) | `ShardService::check_worker` / the delivered assignment, not the oplog |
-| The shard moves while a live call's `Start` is only buffered | nothing from this call | The effect may have run; the next commit is refused and the agent is retired; the new owner runs the call again | Peer deduplication for remote writes; socket sends, DemandStream parents, and RDBMS protocol owners commit their actual `Start` first |
+| The shard moves before a durable `WriteRemote` Start commits | nothing from this call | The shared start barrier refuses the commit before dispatch; the agent is retired | Direct and accessor start paths await `DurableOnly` before allowing the effect |
+| The shard moves after a durable `WriteRemote` Start commits | the Start and preceding guest observations | The effect may run; the new owner repairs the recorded call with the same inputs | Peer deduplication is still required; the oplog fence is not atomic with an external effect |
 | A write is attempted after the shard actually moved | nothing new; the attempted batch is refused, not partially written | The refusal is returned (`OplogError::Fenced`), not retried or swallowed; the agent is retired | Epoch asserted inside the storage transaction |
 | An earlier attempt of the refused batch ended indeterminate | that attempt's entries, if it landed before the takeover | The refusal is still returned, so the batch is never acknowledged here; the owner replays it like any committed entry | Nothing is acknowledged that the owner cannot see |
 | Any later write on the same oplog handle | still nothing new | The fence latches: every later add/commit is refused immediately, without a second storage round trip | The oplog's own latched `OplogFence` |

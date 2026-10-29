@@ -20,7 +20,7 @@ use golem_shard_manager::{
     RoutingTablePersistence, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
     ShardLeaseState, ShardManagement, ShardManagerError, WorkerExecutorService,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -642,6 +642,105 @@ async fn shard_manager_restart_clears_stale_executor_shards() {
     );
 
     join_set.abort_all();
+}
+
+#[test]
+async fn embedded_restart_discards_stored_executors_before_serving() {
+    for expired in [false, true] {
+        let old_pod = pod(1, 9000);
+        let mut seeded = shard_state_with_executors(
+            3,
+            vec![
+                (executor(1), old_pod, "old-1", &[0, 1]),
+                (executor(2), pod(2, 9001), "old-2", &[2]),
+            ],
+        );
+        seeded.assign_shard(executor(2), ShardId::new(0));
+        seeded.assign_shard(executor(1), ShardId::new(0));
+        if !expired {
+            seeded.regrant_leases(
+                &HashSet::from([executor(1), executor(2)]),
+                Utc::now(),
+                LEASE_TTL,
+            );
+        }
+        assert_eq!(seeded.has_expired_lease(Utc::now()), expired);
+        let epochs = seeded.shard_epochs.clone();
+        let persistence = TestPersistence::at_revision(seeded, 37);
+        let worker_executors = Arc::new(TestWorkerExecutors::default());
+        let prepared = tokio::time::timeout(
+            Duration::from_secs(1),
+            ShardManagement::prepare(
+                Arc::new(persistence.clone()),
+                worker_executors.clone(),
+                Arc::new(TestHealthCheck::never_answering_at(old_pod)),
+                0.0,
+                LEASE_TTL,
+                Duration::from_secs(5),
+                Duration::from_secs(1),
+                Duration::from_secs(30),
+                3,
+                true,
+            ),
+        )
+        .await
+        .expect("embedded recovery must not wait for dead executors")
+        .expect("embedded recovery failed");
+
+        let cleared = persistence.latest().await;
+        assert_eq!(cleared.executor_count(), 0);
+        assert!(cleared.shard_assignments.is_empty());
+        assert_eq!(cleared.get_unassigned_shards(), shard_ids(&[0, 1, 2]));
+        assert_eq!(cleared.shard_epochs, epochs);
+        assert!(persistence.external_revision().await > 37);
+
+        let mut join_set = JoinSet::new();
+        let management = prepared.start(&mut join_set);
+        let replacement = pod(3, 9002);
+        management
+            .register_executor(executor(3), replacement.into(), None)
+            .await
+            .expect("replacement registration failed");
+        wait_for_local_assignment(&worker_executors, replacement, shard_ids(&[0, 1, 2])).await;
+        let after = persistence.latest().await;
+        assert_eq!(after.executor_count(), 1);
+        assert_eq!(
+            claim_of(&after, executor(3)),
+            BTreeMap::from([
+                (ShardId::new(0), ShardEpoch(3)),
+                (ShardId::new(1), ShardEpoch(1)),
+                (ShardId::new(2), ShardEpoch(1)),
+            ])
+        );
+        join_set.abort_all();
+    }
+}
+
+#[test]
+async fn embedded_restart_stops_when_discarding_stored_executors_fails() {
+    let seeded = balanced_pair();
+    let persistence = TestPersistence::new(seeded.clone());
+    persistence
+        .fail_writes(vec![Some(ShardManagerError::ConcurrentModification)])
+        .await;
+    let prepared = ShardManagement::prepare(
+        Arc::new(persistence.clone()),
+        Arc::new(TestWorkerExecutors::default()),
+        Arc::new(TestHealthCheck::all_healthy()),
+        0.0,
+        LEASE_TTL,
+        Duration::from_secs(5),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        4,
+        true,
+    )
+    .await;
+    assert!(matches!(
+        prepared,
+        Err(ShardManagerError::ConcurrentModification)
+    ));
+    assert_eq!(persistence.latest().await, seeded);
 }
 
 #[test]

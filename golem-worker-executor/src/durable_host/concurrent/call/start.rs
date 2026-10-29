@@ -652,7 +652,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         )
                         .await;
                         drop(boundary);
-                        result
+                        let result = result?;
+                        if initiation_type == DurableFunctionType::WriteRemote {
+                            worker
+                                .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                                .await?;
+                        }
+                        Ok::<_, WorkerExecutorError>(result)
                     }
                     .await;
                     let result =
@@ -1106,6 +1112,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                 |_, _| {},
             )
             .await?;
+            if self.retry.function_type() == &DurableFunctionType::WriteRemote {
+                ctx.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await?;
+            }
             (idx, true, request_upload)
         };
         let live_call_permit = Some(LiveCallPermit::new(ctx.state.live_host_call_counter()));

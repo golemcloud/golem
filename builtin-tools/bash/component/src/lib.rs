@@ -65,10 +65,20 @@ pub enum BashError {
     Internal { reason: String },
 }
 
-#[tool_definition(version = "0.3.1")]
+/// Run Bash scripts in the agent's filesystem and tool context.
+///
+/// Use shell commands, pipelines and redirections to inspect or modify files and call bound
+/// tools. Each call starts a fresh shell; shell variables, functions and jobs do not persist
+/// between calls. Filesystem changes do persist.
+#[tool_definition(version = "0.3.2")]
 pub trait Bash {
-    /// Execute a script in a fresh shell; pass a previous result's cwd to start in that directory.
-    /// A script still running after `timeout` seconds (at most 3600) is stopped with TERM, then
+    /// Execute a Bash script and return stdout, stderr, exit code and the final working directory.
+    ///
+    /// Each call starts a fresh shell in the agent's filesystem and tool context. Pass an absolute
+    /// `cwd`, or leave it empty to use the default directory. Pass a previous result's `cwd` to
+    /// continue in that directory; shell variables, functions and jobs do not persist between calls.
+    /// `timeout` defaults to 600 seconds and must be between 1 and 3600 seconds.
+    /// A script still running after `timeout` seconds is stopped with TERM, then
     /// KILL a second later, and the call returns exit code 124. `stdin` is not the script's
     /// input: a caller that cancels it stops the script with INT, then KILL a second later, and
     /// the call returns exit code 130.

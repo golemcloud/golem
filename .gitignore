@@ -80,3 +80,5 @@ docs/snippets/loop.log
 
 /sdks/moonbit/_build
 /sdks/moonbit/.mooncakes
+/sdks/moonbit/scripts/_build
+/sdks/moonbit/scripts/.mooncakes
