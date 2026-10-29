@@ -1508,6 +1508,31 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// Pauses the next reconstruction of the agent after `prepare_instance` returns, before the
+    /// invocation loop takes a queued interrupt. Dropping the release sender also unblocks it.
+    pub fn gate_next_prepared_instance(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .prepared_instance_gates
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                OplogReadGate {
+                    entered_tx,
+                    release_rx,
+                },
+            );
+        (entered_rx, release_tx)
+    }
+
     /// Appends a buffered lifecycle hint after the next source commit has flushed.
     pub fn append_after_next_oplog_commit(&self, agent_id: &AgentId) {
         self.additional_test_deps
@@ -3496,7 +3521,20 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         instance: &Instance,
         store: &mut Store<TestWorkerCtx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await
+        let result =
+            DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await;
+        let gate = store
+            .data()
+            .additional_test_deps
+            .prepared_instance_gates
+            .lock()
+            .unwrap()
+            .remove(agent_id);
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
+        result
     }
 
     async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync + 'static>(
@@ -7077,6 +7115,7 @@ pub struct AdditionalTestDeps {
     runtime_card_audit_gates:
         Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
     wallet_install_commit_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
+    prepared_instance_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
     append_after_commit: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
@@ -7162,6 +7201,7 @@ impl AdditionalTestDeps {
             oplog_delete_gates: Arc::default(),
             runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wallet_install_commit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            prepared_instance_gates: Arc::default(),
             append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),

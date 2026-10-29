@@ -10,6 +10,134 @@ mod retained_terminal;
 
 #[test]
 #[timeout("60s")]
+async fn monthly_stop_queued_after_reconstruction_suspends_the_pending_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let policy = MonthlyResourcePolicy {
+        period: AccountUsagePeriod::current(),
+        mode: MonthlyUsageMode::HardLimit,
+        available_fuel: u64::MAX,
+        available_memory_gb_seconds: u64::MAX,
+        available_memory_byte_nanoseconds_remainder: 0,
+        available_durable_storage_byte_seconds: u64::MAX,
+        available_durable_storage_byte_nanoseconds_remainder: 0,
+        available_ephemeral_storage_byte_seconds: u64::MAX,
+        available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+    };
+    let registry = Arc::new(MutableResourceLimitsRegistry::new(policy.clone()));
+    let shutdown = CancellationToken::new();
+    let _shutdown = shutdown.clone().drop_guard();
+    let metering = ResourceUsageMeteringConfig {
+        compute: false,
+        memory: true,
+        filesystem: false,
+    };
+    let limits = ResourceLimitsGrpc::new(
+        registry.clone(),
+        Duration::from_secs(3600),
+        Duration::ZERO,
+        metering,
+        shutdown,
+    );
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.resource_usage_metering = metering
+            })),
+            resource_limits: Some(limits.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let name = agent_id!("Counter", "monthly-after-reconstruction");
+    let id = executor.start_agent(&component.id, name.clone()).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &name,
+                &IdempotencyKey::fresh(),
+                "increment",
+                data_value!()
+            )
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+    let worker = executor
+        .active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .await
+        .unwrap()
+        .primary();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !worker.stop_if_idle().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("idle unload")?;
+    // The next invocation reconstructs the agent. The monthly stop arrives after the replay
+    // has run, before the invocation loop takes queued interrupts.
+    let (reconstructed, release) = executor.gate_next_prepared_instance(&id);
+    let key = IdempotencyKey::fresh();
+    let invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let name = name.clone();
+        let key = key.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &name,
+                    &key,
+                    "increment",
+                    data_value!(),
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), reconstructed)
+        .await
+        .context("reconstruction")??;
+    limits.initialize_account(context.account_id).await?;
+    let mut exhausted = policy.clone();
+    exhausted.available_memory_gb_seconds = 0;
+    registry.set_policy(exhausted);
+    let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
+    let mut terminal = worker.terminal_interrupt();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        terminal.wait_for(|pending| *pending),
+    )
+    .await
+    .context("queued monthly stop")??;
+    release.send(()).unwrap();
+    executor
+        .wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+    refresh.await?;
+    registry.set_policy(policy);
+    applied_refresh(&limits, &registry, context.account_id)
+        .await?
+        .await?;
+    executor.resume(&id, false).await?;
+    assert_eq!(invocation.await??.into_typed::<u32>()?, 2);
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
 async fn same_cached_worker_reconstructs_and_enforces_current_quota(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
