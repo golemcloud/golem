@@ -2511,7 +2511,8 @@ impl TestContext {
             let result = tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
                 .await
                 .map_err(|_| anyhow!(
-                    "Executor tasks did not exit within 10s; refusing to start a replacement over the same storage"
+                    "Executor tasks did not exit within 10s; refusing to start a replacement over the same storage ({})",
+                    loops.describe_pending_exit()
                 ))?;
             result.map_err(anyhow::Error::msg)?;
             drained.push(loops.clone());

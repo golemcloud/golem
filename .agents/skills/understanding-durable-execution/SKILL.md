@@ -1299,9 +1299,12 @@ captured oplog generations, then cancels executor-owned invocation and entity ta
 above, and joins their destruction before closing those generations.
 Already-spawned metadata loads and attachment queries finish independently, so a suspended Store
 cannot retain their locks; registration occurs once per spawned task, never on cached no-spawn
-queries. Attachment queries may spawn every time. Worker-state actors register once at construction
-and drain lifecycle jobs before status jobs and the status flusher, including on ordinary worker
-drop. Final retirement also joins oplog actors, payload uploads, archive transfers, and monitors.
+queries. A replay claim that such a task runs (`owned_access_claim`) and that waits for cursor
+progress or an active body ends with `Interrupted(Jump)` once the owner's tasks are stopped: no
+Store remains to move the cursor, so the wait must not keep retirement pending. Attachment queries
+may spawn every time. Worker-state actors register once at construction and drain lifecycle jobs
+before status jobs and the status flusher, including on ordinary worker drop. Final retirement
+also joins oplog actors, payload uploads, archive transfers, and monitors.
 An error is reported only after all owned work finishes. Deletion records that completion separately
 so an explicit retry can remove storage without reusing a retained stop error; the original attempt
 keeps its error. A later cold acquisition reloads persisted state rather than inheriting a stopped

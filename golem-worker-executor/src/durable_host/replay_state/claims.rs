@@ -335,6 +335,11 @@ impl ReplayState {
     }
 
     /// Waits until a blocked claim may run again.
+    ///
+    /// Only a running Store of the owner moves the cursor, changes the active bodies or selects
+    /// an owner failure. When the owner's tasks are stopped (executor shutdown or deletion), no
+    /// such Store remains, so the wait ends there instead of keeping the owner's retirement
+    /// pending forever.
     pub(super) async fn wait_while_blocked(
         &self,
         blocked: BlockedOn,
@@ -346,11 +351,20 @@ impl ReplayState {
                 .active_body_waits
                 .send_modify(|waits| *waits += 1);
         }
+        let owner_tasks_stopped = async {
+            match self.cursor.oplog.task_owner() {
+                Some(tasks) => tasks.stopped().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             biased;
             failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
                 Err(super::cursor::historical_reconstruction_owner_failure(failure))
             }
+            () = owner_tasks_stopped => Err(WorkerExecutorError::Interrupted {
+                kind: golem_service_base::error::worker_executor::InterruptKind::Jump,
+            }),
             _ = blocked.wait(progress) => Ok(()),
         }
     }
