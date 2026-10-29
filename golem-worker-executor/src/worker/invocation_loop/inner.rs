@@ -134,6 +134,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
                 command => command,
             };
+            #[cfg(feature = "test-utils")]
+            self.parent.pause_at_resident_wakeup_gate().await;
             // Wake notifications can outlive the work already drained by an earlier wake.
             if matches!(
                 cmd,

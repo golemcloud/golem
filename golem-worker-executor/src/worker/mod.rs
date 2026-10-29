@@ -510,6 +510,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     cache_retirement_in_progress: AtomicBool,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
+    #[cfg(feature = "test-utils")]
+    resident_wakeup_gate: StdMutex<Option<Arc<ResidentWakeupGate>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<Interrupts>,
@@ -1020,6 +1022,36 @@ pub enum EvictionClass {
     LoadedIdle,
     /// Resident in memory, not executing, has durable pending invocations.
     WarmRunnable,
+}
+
+/// Holds the invocation loop after it took a resident wakeup command and before it reads the
+/// pending work, while the worker still reports that it waits for a command.
+#[cfg(feature = "test-utils")]
+struct ResidentWakeupGate {
+    entered: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
+
+#[cfg(feature = "test-utils")]
+pub struct ResidentWakeupGateHandle {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<ResidentWakeupGate>,
+}
+
+#[cfg(feature = "test-utils")]
+impl ResidentWakeupGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered)
+            .await
+            .expect("resident wakeup gate was dropped without firing");
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl Drop for ResidentWakeupGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

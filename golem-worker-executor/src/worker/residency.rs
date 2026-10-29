@@ -427,7 +427,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// Re-checks the eviction classification under the worker lifecycle lock to avoid
     /// races. Returns `true` if the worker was actually stopped.
-    pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> bool {
+    pub async fn stop_if_evictable(self: &Arc<Self>, target_class: EvictionClass) -> bool {
         self.stop_if_evictable_with_outcome(
             target_class,
             None,
@@ -437,7 +437,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             != EvictionStopOutcome::Ineligible
     }
     pub(crate) async fn stop_if_evictable_with_outcome(
-        &self,
+        self: &Arc<Self>,
         target_class: EvictionClass,
         expected_eligibility: Option<FilesystemPressureEligibility>,
         unload_request: UnloadRequest,
@@ -505,11 +505,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             drop(instance_guard);
             self.handle_stop_result(stop_result).await;
-            match &*self.instance.lock().await {
+            let outcome = match &*self.instance.lock().await {
                 WorkerInstance::CleanupFailed(_) => EvictionStopOutcome::CleanupFailed,
                 WorkerInstance::Unloaded { .. } => EvictionStopOutcome::Unloaded,
                 _ => EvictionStopOutcome::CleanupFailed,
+            };
+            if outcome == EvictionStopOutcome::Unloaded
+                && !self.pending_invocations().await.is_empty()
+            {
+                // Only the invocation loop runs durable pending invocations, and their callers
+                // already started the worker and only wait. The start waits for memory admission.
+                // It is spawned because eviction can run inside the memory growth of another
+                // worker.
+                let worker = self.clone();
+                self.tasks.spawn(async move {
+                    if let Err(error) = Worker::start_if_needed(worker).await {
+                        warn!(%error, "Failed to restart an evicted worker with pending invocations");
+                    }
+                });
             }
+            outcome
         } else {
             drop(instance_guard);
             if let (Some(generation), Some(active_agent)) = (reopen_entity_generation, active_agent)
@@ -637,6 +652,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap()
             .clone()
             .expect("linear memory grant requested while worker is not running")
+    }
+    /// Holds the next resident wakeup of the invocation loop until the handle is dropped.
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_hold_next_resident_wakeup(&self) -> ResidentWakeupGateHandle {
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ResidentWakeupGate {
+            entered: StdMutex::new(Some(entered)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        *self.resident_wakeup_gate.lock().unwrap() = Some(gate.clone());
+        ResidentWakeupGateHandle {
+            entered: entered_rx,
+            gate,
+        }
+    }
+    #[cfg(feature = "test-utils")]
+    pub(in crate::worker) async fn pause_at_resident_wakeup_gate(&self) {
+        let Some(gate) = self.resident_wakeup_gate.lock().unwrap().take() else {
+            return;
+        };
+        if let Some(entered) = gate.entered.lock().unwrap().take() {
+            let _ = entered.send(());
+        }
+        gate.release.acquire().await.unwrap().forget();
     }
     pub(in crate::worker) fn release_linear_memory_grant(&self) {
         if let Some(grant) = self.linear_memory_grant.lock().unwrap().take() {

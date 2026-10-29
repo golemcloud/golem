@@ -920,6 +920,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             cache_retirement_in_progress: AtomicBool::new(false),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
+            #[cfg(feature = "test-utils")]
+            resident_wakeup_gate: StdMutex::new(None),
             interrupt_signal: Arc::default(),
             interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
             release_scope: StdMutex::default(),

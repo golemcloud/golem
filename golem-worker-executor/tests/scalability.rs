@@ -16,12 +16,15 @@ use crate::Tracing;
 use crate::execution_observations::WorkerObservations;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use golem_common::base_model::agent::Principal;
 use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentId, AgentInvocation, AgentStatus, IdempotencyKey, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{MemoryConfig, OplogConfig};
+use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
@@ -746,6 +749,95 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
     assert_eq!(meta_b_final.status, AgentStatus::Idle);
     info!("Worker B's pending invocation completed");
 
+    Ok(())
+}
+
+/// Memory eviction may unload a resident agent whose durable pending invocation its invocation
+/// loop has not taken yet. The caller of that invocation only waits for the result, so the
+/// eviction itself must start the agent again.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn warm_runnable_eviction_still_runs_the_pending_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, large_dynamic_memory)
+        .store()
+        .await?;
+    let agent = agent_id!("LargeDynamicMemoryAgent", "warm-runnable-eviction");
+    let agent_id = executor.start_agent(&component.id, agent.clone()).await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "run_with_memory_and_work",
+            data_value!(0u64, 0u64),
+        )
+        .await?;
+    let worker = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .expect("the invoked agent is resident")
+        .primary();
+
+    // The invocation loop is held after it took the wakeup of the enqueue, so the agent is
+    // resident, waits for a command and has a durable pending invocation. `Worker::invoke` only
+    // enqueues, as the callers do once they started the agent: nothing starts it again.
+    let mut wakeup = worker.test_hold_next_resident_wakeup();
+    let idempotency_key = IdempotencyKey::fresh();
+    worker
+        .clone()
+        .invoke(AgentInvocation::AgentMethod {
+            idempotency_key: idempotency_key.clone(),
+            method_name: "run_with_memory_and_work".to_string(),
+            input: data_value!(0u64, 0u64).value().clone(),
+            invocation_context: InvocationContextStack::fresh(),
+            principal: Principal::anonymous(),
+            scope_card: None,
+        })
+        .await?;
+    wakeup.entered().await;
+    assert_eq!(
+        worker.eviction_class().await,
+        Some(EvictionClass::WarmRunnable)
+    );
+    let eviction = spawn({
+        let worker = worker.clone();
+        async move { worker.stop_if_evictable(EvictionClass::WarmRunnable).await }
+    });
+    // The eviction waits for the invocation loop to exit once it stopped the agent.
+    while worker.eviction_class().await.is_some() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    drop(wakeup);
+    assert!(eviction.await?);
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while worker
+            .pending_invocations()
+            .await
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&idempotency_key))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("the evicted pending invocation did not run"))?;
+    assert_eq!(
+        executor
+            .search_oplog(&agent_id, "AgentInvocationFinished")
+            .await?
+            .len(),
+        3
+    );
     Ok(())
 }
 

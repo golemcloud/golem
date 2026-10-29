@@ -276,7 +276,9 @@ reconstructing, that generation is retired — stopped without writing its statu
 this executor and never restarted — and the executor that now holds the shard reconstructs it.
 
 Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a
-worker that is executing or holds non-durable in-memory work. Ephemeral agents are fail-stop:
+worker that is executing or holds non-durable in-memory work. A `WarmRunnable` eviction starts the
+worker again in a spawned task (`stop_if_evictable_with_outcome`): the callers of its pending
+invocations already started it and only wait, and the start waits for memory admission. Ephemeral agents are fail-stop:
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
