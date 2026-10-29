@@ -1035,6 +1035,13 @@ finalization, joins Store destruction and retained callbacks, then joins those c
 layers. These distinctions prevent an old owner from removing, reopening, or writing lifecycle
 state for its replacement without adding a second recovery path.
 
+The production shutdown token closes construction admission, fences oplogs and cancels worker
+tasks through the `InvocationLoops` watcher before gRPC stops. `server.rs` waits for tracked
+shutdown work within `SHUTDOWN_GRACE`, then stops the server join set. This interval can therefore
+refuse requests even though the transport remains open. `wait_for_exit()` also stops worker roots
+and joins cleanup; it is an active drain, not a passive wait. Concurrent drain callers serialize,
+and a failed drain keeps registrations for retry.
+
 On executor shutdown, the active-agent cache task removes its cached workers regardless of TTL.
 Each worker owns the service graph that owns the cache, so leaving the entries cached would
 retain the graph and its storage pools after task cancellation. This drops cache references only;
@@ -2228,18 +2235,26 @@ best-effort cleanup safety net.
 Filesystem creation and source loads use `services/work_admission` registrations. Closing admission
 refuses a new operation immediately and waits for existing registrations without holding a lock.
 Source leases retain their registration, so a multi-file load interrupted by shutdown fails its
-next source request instead of deadlocking behind its own earlier lease. In-process executor
+next source request as `InitialFileLoadFailure::Unavailable` instead of deadlocking behind its
+own earlier lease. In-process executor
 `release()` waits for tracked shutdown cleanup as well as the service graph; a fixed-root replacement
 must not start while old cleanup still owns the XFS lock or can remove its directories. A failed
 invocation drain disables fallback removal of both host directories and retains their temporary
 parent on disk. Production drain and cleanup share the existing shutdown grace, not a new budget.
+Bootstrap owns a cancellation guard until it returns `RunDetails`. Once the service graph exists,
+`RunDetails` owns its epoch thread before server startup, so a later startup failure stops that
+thread and cancels tracked cleanup instead of leaving its filesystem owners waiting indefinitely.
 
 `storage_volume` owns shared storage roots, capacity observations, native cloning and XFS project
 allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
 `sandbox_filesystem` owns one capability-confined tree, its handles, provisioning and verified
 deletion, and seed/copy orchestration. XFS quotas account and limit allocation; root capabilities
 confine path access. Physical pressure recovery observes the volume without accessing a sandbox.
-Volume errors retain their I/O cause and cleanup/task facts when converted to sandbox errors.
+Volume and host-directory operations use `filesystem_error::FilesystemOperationError`, with an
+optional path and typed I/O, task or verification failure. Conversion to sandbox errors retains
+these facts without classifying a storage failure as a sandbox escape. Executor directory setup
+and sandbox creation rollback retain the original and cleanup diagnostics, with the cleanup
+failure's classification.
 
 `AgentFilesystemSnapshots::bind` requires a volume that makes copy-on-write copies. Production
 uses Linux 5.8 or later with XFS and reflink, through `ManagedXfs` or `ReflinkXfs`. Local development

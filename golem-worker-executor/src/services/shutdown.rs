@@ -103,10 +103,15 @@ impl Shutdown {
     /// Waits up to `grace` for every task spawned through [`Self::spawn`] to
     /// finish. Meant to follow [`Self::cancel`]. `true` if they all did.
     pub async fn wait_for_tracked(&self, grace: Duration) -> bool {
-        self.inner.tracker.close();
-        tokio::time::timeout(grace, self.inner.tracker.wait())
+        tokio::time::timeout(grace, self.join_tracked())
             .await
             .is_ok()
+    }
+
+    /// Joins tracked tasks when the caller already owns the shutdown deadline.
+    pub async fn join_tracked(&self) {
+        self.inner.tracker.close();
+        self.inner.tracker.wait().await;
     }
 }
 

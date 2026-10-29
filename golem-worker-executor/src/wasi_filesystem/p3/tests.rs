@@ -587,7 +587,7 @@ fn p2_p3_sandbox_escape_errors_are_access_denied() {
     let refusal = || {
         AgentFilesystemError::Sandbox(FilesystemStorageError::io(
             "open sandbox path",
-            root.path(),
+            Some(root.path()),
             directory.open("../outside").unwrap_err(),
         ))
     };
@@ -632,8 +632,9 @@ fn p2_p3_cross_project_link_mapping_is_identical() {
     #[cfg(target_os = "linux")]
     {
         let storage_error = || {
-            FilesystemStorageError::io_without_path(
+            FilesystemStorageError::io(
                 "hard link",
+                None,
                 std::io::Error::from_raw_os_error(libc::EXDEV),
             )
         };
@@ -1359,7 +1360,7 @@ fn p2_p3_write_progress_and_placement_translation_is_identical() {
 #[test]
 fn p2_p3_write_quota_capacity_and_permission_errors_are_identical() {
     fn storage_error() -> FilesystemStorageError {
-        FilesystemStorageError::io_without_path("write", std::io::ErrorKind::StorageFull.into())
+        FilesystemStorageError::io("write", None, std::io::ErrorKind::StorageFull.into())
     }
 
     use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode as P2ErrorCode;

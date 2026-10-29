@@ -165,6 +165,7 @@ pub struct InvocationLoops {
     tracker: TaskTracker,
     owner_oplogs: Arc<Mutex<Vec<RegisteredOwnerOplog>>>,
     construction_admission: Arc<Mutex<bool>>,
+    drain: Arc<tokio::sync::Mutex<()>>,
     _watcher_lifetime: Arc<InvocationLoopWatcherLifetime>,
 }
 

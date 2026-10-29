@@ -47,13 +47,13 @@ fn a_failed_removal_is_the_error_after_a_failed_step() {
     let step = || {
         FilesystemStorageError::io(
             "make a host directory",
-            Path::new("/step"),
+            Some(Path::new("/step")),
             std::io::Error::from(ErrorKind::PermissionDenied),
         )
     };
     let removal = FilesystemStorageError::cleanup_io(
         "remove a host directory",
-        Path::new("/removal"),
+        Some(Path::new("/removal")),
         std::io::Error::from(ErrorKind::PermissionDenied),
     );
 
@@ -525,12 +525,10 @@ mod xfs_directory_checks {
         with_project.fsx_xflags |= linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
         set_fsxattr(&directory, with_project).unwrap();
 
-        let error =
-            match crate::services::agent_filesystem::make_executor_directories(&provisioning).await
-            {
-                Ok(_) => panic!("a host directory with a project identity must be refused"),
-                Err(error) => error.to_string(),
-            };
+        let error = match make_executor_directories(&provisioning).await {
+            Ok(_) => panic!("a host directory with a project identity must be refused"),
+            Err(error) => error.to_string(),
+        };
 
         assert!(
             error.contains("verify XFS host directory has no project identity"),

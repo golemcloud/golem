@@ -61,7 +61,7 @@ impl ManagedSandboxProvisioning {
             .map_err(|error| {
                 FilesystemStorageError::io(
                     "provision managed XFS sandbox filesystem",
-                    &error_path,
+                    Some(&error_path),
                     std::io::Error::other(error),
                 )
             })?
@@ -81,10 +81,12 @@ impl ManagedSandboxProvisioning {
             .map_err(|error| {
                 FilesystemStorageError::io(
                     "open managed runtime directory parent",
-                    &self
-                        .projects
-                        .root()
-                        .join(owner.parent().expect("owner must have a parent")),
+                    Some(
+                        &self
+                            .projects
+                            .root()
+                            .join(owner.parent().expect("owner must have a parent")),
+                    ),
                     error,
                 )
             })?;
@@ -100,7 +102,7 @@ impl ManagedSandboxProvisioning {
                         .map_err(|error| {
                             FilesystemStorageError::cleanup_io(
                                 "open stale managed XFS runtime path",
-                                &cleanup_path,
+                                Some(&cleanup_path),
                                 error,
                             )
                         })?;
@@ -110,14 +112,14 @@ impl ManagedSandboxProvisioning {
                     .map_err(|error| {
                         FilesystemStorageError::task_failure(
                             "inspect stale managed XFS project",
-                            &cleanup_path,
+                            Some(&cleanup_path),
                             error,
                         )
                     })?
                     .map_err(|error| {
                         FilesystemStorageError::io(
                             "inspect stale managed XFS project",
-                            &cleanup_path,
+                            Some(&cleanup_path),
                             error,
                         )
                     })?
@@ -127,7 +129,7 @@ impl ManagedSandboxProvisioning {
             Err(error) => {
                 return Err(FilesystemStorageError::cleanup_io(
                     "inspect stale managed XFS runtime path",
-                    &cleanup_path,
+                    Some(&cleanup_path),
                     error,
                 ));
             }
@@ -136,7 +138,7 @@ impl ManagedSandboxProvisioning {
         let Ok(stale_project) = stale_project(disk_project, reserved_project) else {
             return Err(FilesystemStorageError::cleanup_verification(
                 "match stale managed XFS path and reserved project",
-                &cleanup_path,
+                Some(&cleanup_path),
             ));
         };
 
@@ -144,7 +146,7 @@ impl ManagedSandboxProvisioning {
             let cleanup_parent = parent.try_clone().map_err(|error| {
                 FilesystemStorageError::cleanup_io(
                     "retain managed XFS runtime directory parent",
-                    &cleanup_path,
+                    Some(&cleanup_path),
                     error,
                 )
             })?;
@@ -153,7 +155,7 @@ impl ManagedSandboxProvisioning {
                 .map_err(|error| {
                     FilesystemStorageError::cleanup_io(
                         "reserve stale managed XFS project for cleanup",
-                        &cleanup_path,
+                        Some(&cleanup_path),
                         error,
                     )
                 })?;
@@ -199,7 +201,7 @@ impl ManagedSandboxProvisioning {
                 &cleanup_path,
                 FilesystemStorageError::io(
                     "create fresh managed runtime directory",
-                    &cleanup_path,
+                    Some(&cleanup_path),
                     error,
                 ),
                 &self.cleanup_retry,
@@ -208,7 +210,7 @@ impl ManagedSandboxProvisioning {
         }
 
         let project_id = self.projects.reserve_project(&owner).map_err(|error| {
-            FilesystemStorageError::io("allocate managed XFS project", &cleanup_path, error)
+            FilesystemStorageError::io("allocate managed XFS project", Some(&cleanup_path), error)
         });
         let project_id = match project_id {
             Ok(project_id) => project_id,
@@ -224,7 +226,7 @@ impl ManagedSandboxProvisioning {
                     &cleanup_path,
                     FilesystemStorageError::io(
                         "open fresh managed runtime directory",
-                        &cleanup_path,
+                        Some(&cleanup_path),
                         error,
                     ),
                     &self.cleanup_retry,
@@ -234,7 +236,7 @@ impl ManagedSandboxProvisioning {
         };
         let root = PathBuf::from(format!("/proc/self/fd/{}", root_fd.as_raw_fd()));
         let assignment_result = assign_project(&root_fd, project_id).map_err(|error| {
-            FilesystemStorageError::io("assign managed XFS project", &root, error)
+            FilesystemStorageError::io("assign managed XFS project", Some(&root), error)
         });
         let native_root =
             NativeRoot::from_directory(root, Arc::new(cap_std::fs::Dir::from_std_file(root_fd)));
@@ -420,7 +422,7 @@ impl ProjectCleanup {
                 .map_err(|error| {
                     let failure = FilesystemStorageError::task_failure(
                         "verify and clear managed XFS project",
-                        &self.path,
+                        Some(&self.path),
                         error,
                     );
                     failure.during_cleanup()
@@ -434,7 +436,7 @@ impl ProjectCleanup {
                     if !retry.failed_attempt().await {
                         return Err(FilesystemStorageError::cleanup_io(
                             "verify and clear managed XFS project",
-                            &self.path,
+                            Some(&self.path),
                             error,
                         ));
                     }
@@ -456,7 +458,7 @@ impl ProjectCleanup {
                 Err(error) if attempt == attempts => {
                     return Err(FilesystemStorageError::cleanup_io(
                         "verify and clear managed XFS project",
-                        &self.path,
+                        Some(&self.path),
                         error,
                     ));
                 }

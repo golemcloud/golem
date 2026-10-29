@@ -649,7 +649,7 @@ impl InitialFileSources {
                     Some(source) if source.size() == file.size => Ok(sources),
                     Some(_) => Err(Error::Sandbox(FilesystemStorageError::verification(
                         "verify consistent initial-file source size",
-                        path,
+                        Some(path),
                     ))),
                     None => {
                         let source = sources
@@ -673,7 +673,7 @@ impl InitialFileSources {
             .ok_or_else(|| {
                 Error::Sandbox(FilesystemStorageError::verification(
                     "find the loaded initial-file source of",
-                    path,
+                    Some(path),
                 ))
             })
     }
@@ -856,7 +856,7 @@ pub(super) async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
         SandboxHandle::Directory(directory) => sandbox.read_directory(directory).await,
         SandboxHandle::File(_) => Err(FilesystemStorageError::verification(
             "list the entries of an initial-file directory at",
-            path,
+            Some(path),
         )),
     };
     let closed = sandbox.close(node).await;
@@ -958,7 +958,7 @@ pub(super) async fn content_hash<Adapter: SandboxFilesystemAdapter>(
         .map(|hasher| hasher.finalize()),
         SandboxHandle::Directory(_) => Err(FilesystemStorageError::verification(
             "hash the content of an initial file at",
-            path,
+            Some(path),
         )),
     };
     let closed = sandbox.close(node).await;
@@ -1144,7 +1144,7 @@ pub(super) fn declarations_of(
             let path = Arc::<Path>::from(PathBuf::from(file.path.to_rel_string()));
             match declarations.entry(path) {
                 Entry::Occupied(entry) => Err(Error::Sandbox(
-                    FilesystemStorageError::verification(duplicate_operation, entry.key()),
+                    FilesystemStorageError::verification(duplicate_operation, Some(entry.key())),
                 )),
                 Entry::Vacant(entry) => {
                     entry.insert(Arc::new(file));
@@ -1170,7 +1170,7 @@ pub(super) fn validate_compatible(
         .map_or(Ok(()), |(path, _)| {
             Err(Error::Sandbox(FilesystemStorageError::verification(
                 "resolve conflicting owner filesystem provision declarations at",
-                path,
+                Some(path),
             )))
         })
 }
@@ -1194,7 +1194,7 @@ pub(super) fn load_error(error: InitialFileLoadError, path: &Path) -> Error {
     let failure = error.failure;
     let source = FilesystemStorageError::io(
         "load verified initial-file source",
-        path,
+        Some(path),
         std::io::Error::other(error),
     );
     match failure {
@@ -1220,7 +1220,7 @@ pub(crate) async fn prepare_initial_files(
         if !targets.insert(target.clone()) {
             return Err(Error::Sandbox(FilesystemStorageError::verification(
                 "prepare unique initial-file target",
-                &target,
+                Some(&target),
             )));
         }
     }
@@ -1234,7 +1234,7 @@ pub(crate) async fn prepare_initial_files(
             Some(_) => {
                 return Err(Error::Sandbox(FilesystemStorageError::verification(
                     "verify consistent initial-file source size",
-                    &target,
+                    Some(&target),
                 )));
             }
             None => {

@@ -146,7 +146,7 @@ impl SandboxResolvedPathTarget {
                 );
                 Err(FilesystemStorageError::io(
                     "resolve sandbox filesystem target permissions",
-                    &self.parent.path.join(self.name.as_ref()),
+                    Some(&self.parent.path.join(self.name.as_ref())),
                     source,
                 ))
             }

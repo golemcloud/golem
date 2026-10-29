@@ -692,8 +692,9 @@ async fn symlink_postcondition<Adapter: SandboxFilesystemAdapter>(
     }
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or_else(|| {
-        FilesystemStorageError::verification_without_path(
+        FilesystemStorageError::verification(
             "inspect deleted filesystem symlink postcondition",
+            None,
         )
     })?;
     let desired = sandbox
@@ -792,8 +793,9 @@ async fn namespace_path_state<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<NamespacePathState, FilesystemStorageError> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or_else(|| {
-        FilesystemStorageError::verification_without_path(
+        FilesystemStorageError::verification(
             "inspect deleted filesystem namespace postcondition",
+            None,
         )
     })?;
     match sandbox.get_path_attributes(target, SandboxFollow::No).await {
@@ -837,8 +839,9 @@ fn namespace_kind_mismatch_error(
     } else {
         std::io::ErrorKind::InvalidInput
     };
-    FilesystemStorageError::io_without_path(
+    FilesystemStorageError::io(
         "validate namespace object kind",
+        None,
         std::io::Error::new(
             kind,
             format!("expected {expected:?}, observed {observed:?}"),

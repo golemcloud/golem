@@ -45,7 +45,9 @@ impl SandboxFilesystemAllocationObserver {
             ..
         } = self.quota_authority
         else {
-            return Err(FilesystemStorageError::allocation_unsupported(&self.root));
+            return Err(FilesystemStorageError::allocation_unsupported(Some(
+                &self.root,
+            )));
         };
         #[cfg(target_os = "linux")]
         {
@@ -57,14 +59,14 @@ impl SandboxFilesystemAllocationObserver {
                 .map_err(|error| {
                     FilesystemStorageError::task_failure(
                         "observe managed XFS project allocation",
-                        &root,
+                        Some(&root),
                         error,
                     )
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io(
                         "observe managed XFS project allocation",
-                        &self.root,
+                        Some(&self.root),
                         error,
                     )
                 })

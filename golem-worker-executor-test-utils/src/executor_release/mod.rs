@@ -23,10 +23,7 @@ pub(super) async fn wait_for_release(
     released: Weak<()>,
 ) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(30), async {
-        anyhow::ensure!(
-            shutdown.wait_for_tracked(Duration::from_secs(30)).await,
-            "executor shutdown work did not finish before release"
-        );
+        shutdown.join_tracked().await;
         invocation_loops
             .wait_for_exit()
             .await

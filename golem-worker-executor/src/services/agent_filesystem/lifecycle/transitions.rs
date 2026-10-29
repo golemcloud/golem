@@ -93,8 +93,7 @@ pub(crate) fn create_fresh(
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    let accounting = provisioning.volume().agent_accounting();
-    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits, accounting)
+    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits)
 }
 
 /// Creates an empty sandbox filesystem and returns it in the `Created` stage.
@@ -109,14 +108,12 @@ pub fn create_fresh_with_pressure_recovery(
     limits: ResolvedStorageLimits,
     pressure_recovery: FilesystemWriteRecovery,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    let accounting = provisioning.volume().agent_accounting();
     create_fresh_with_recovery::<SandboxFilesystem>(
         provisioning,
         scratch,
         agent,
         limits,
         Some(pressure_recovery),
-        accounting,
     )
 }
 
@@ -126,19 +123,17 @@ fn create_fresh_with<Adapter: SandboxFilesystemAdapter>(
     scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
-    accounting: AgentAccounting,
 ) -> impl Future<Output = Result<CreatedFilesystem<Adapter>, CreateFailure>> + Send + 'static {
-    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None, accounting)
+    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None)
 }
 
-/// Creates a generation on storage that accounts for each agent as `accounting` says.
+/// Creates a generation with the accounting policy of its sandbox.
 pub(super) async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
     provisioning: Adapter::Provisioning,
     scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
     pressure_recovery: Option<FilesystemWriteRecovery>,
-    accounting: AgentAccounting,
 ) -> Result<CreatedFilesystem<Adapter>, CreateFailure> {
     let name = SandboxFilesystemName::new(
         agent.environment_id.to_string(),
@@ -150,6 +145,7 @@ pub(super) async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter
         .await
         .map_err(|source| CreateFailure { source })?;
     let allocation_reader = sandbox.allocation_reader();
+    let accounting = sandbox.agent_accounting();
     Ok(AgentFilesystem {
         generation: Some(Arc::new(FilesystemGeneration {
             usage_activation: None,
@@ -668,8 +664,9 @@ fn spawn_cleanup<Adapter: SandboxFilesystemAdapter>(
                         .get_or_init(Default::default)
                         .fail(crate::metrics::resource_release::Failure::ExclusiveOwnership);
                     *sandbox = Some(adapter);
-                    Err(FilesystemStorageError::verification_without_path(
+                    Err(FilesystemStorageError::verification(
                         "take exclusive ownership for agent filesystem deletion",
+                        None,
                     ))
                 }
             },

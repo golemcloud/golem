@@ -943,7 +943,11 @@ async fn write_capture<Adapter: SandboxFilesystemAdapter>(
     tokio::fs::create_dir(tree.as_path())
         .await
         .map_err(|error| {
-            FilesystemStorageError::io("create filesystem capture tree", tree.as_path(), error)
+            FilesystemStorageError::io(
+                "create filesystem capture tree",
+                Some(tree.as_path()),
+                error,
+            )
         })?;
     let excluded = Arc::new(TreeExclusions::new(left_out.iter()));
     let link_groups = sandbox
@@ -959,7 +963,7 @@ async fn write_capture<Adapter: SandboxFilesystemAdapter>(
     let bytes = serde_json::to_vec(&record).map_err(|error| {
         FilesystemStorageError::io(
             "encode filesystem capture record",
-            record_path.as_path(),
+            Some(record_path.as_path()),
             std::io::Error::other(error),
         )
     })?;
@@ -968,7 +972,7 @@ async fn write_capture<Adapter: SandboxFilesystemAdapter>(
         .map_err(|error| {
             FilesystemStorageError::io(
                 "write filesystem capture record",
-                record_path.as_path(),
+                Some(record_path.as_path()),
                 error,
             )
         })
@@ -1275,7 +1279,7 @@ async fn restore_directory_times<Adapter: SandboxFilesystemAdapter>(
                 .map_err(|error| {
                     FilesystemStorageError::io(
                         "read the time of a restored directory",
-                        &source,
+                        Some(&source),
                         error,
                     )
                 })?;
@@ -1445,7 +1449,7 @@ mod tests {
         let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
         control.push_path_resolution_error(FilesystemStorageError::io(
             "resolve stored spelling",
-            Path::new("a"),
+            Some(Path::new("a")),
             std::io::ErrorKind::PermissionDenied.into(),
         ));
         let sandbox = ScriptedSandboxFilesystem::create_fresh(
@@ -1481,12 +1485,12 @@ mod tests {
         control.push_open(Ok(SandboxHandle::scripted_directory(1)));
         control.push_read_directory(Err(FilesystemStorageError::io(
             "read stored names",
-            Path::new(""),
+            Some(Path::new("")),
             std::io::ErrorKind::PermissionDenied.into(),
         )));
         control.push_close(Err(FilesystemStorageError::verification(
             "close stored names",
-            Path::new(""),
+            Some(Path::new("")),
         )));
         let sandbox = ScriptedSandboxFilesystem::create_fresh(
             provisioning,

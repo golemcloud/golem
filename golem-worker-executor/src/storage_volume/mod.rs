@@ -15,8 +15,8 @@
 //! Executor-wide storage ownership, capabilities and native operations. Sandboxes share this
 //! storage, but own their confined trees and their creation and deletion separately.
 
-pub(crate) use self::errors::StorageVolumeError;
 use crate::blocking::BlockingTask;
+use crate::filesystem_error::FilesystemOperationError;
 use crate::services::golem_config::FilesystemStorageMode;
 use golem_common::model::RetryConfig;
 use std::fmt::Debug;
@@ -26,7 +26,6 @@ use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
 mod apfs;
-mod errors;
 #[cfg(target_os = "linux")]
 mod xfs;
 #[cfg(target_os = "macos")]
@@ -119,7 +118,7 @@ impl FilesystemVolume {
     pub(crate) fn open(
         storage: &FilesystemStorageMode,
         cleanup_retry: RetryConfig,
-    ) -> Result<Self, StorageVolumeError> {
+    ) -> Result<Self, FilesystemOperationError> {
         let mut volume = match storage {
             FilesystemStorageMode::Temporary => Self::unmanaged_development(),
             FilesystemStorageMode::Directory { root } => {
@@ -144,7 +143,7 @@ impl FilesystemVolume {
         root: &Path,
         socket: &Path,
         retry: &RetryConfig,
-    ) -> Result<Self, StorageVolumeError> {
+    ) -> Result<Self, FilesystemOperationError> {
         let projects = ProjectQuotas::new(xfs::XfsRoot::open(root)?, socket, retry)?;
         let mut volume = Self::copy_on_write(
             Arc::clone(&projects.root_fd),
@@ -163,15 +162,15 @@ impl FilesystemVolume {
         root: &Path,
         _socket: &Path,
         _retry: &RetryConfig,
-    ) -> Result<Self, StorageVolumeError> {
-        Err(StorageVolumeError::verification(
+    ) -> Result<Self, FilesystemOperationError> {
+        Err(FilesystemOperationError::verification(
             "initialize XFS storage on a non-Linux platform",
-            root,
+            Some(root),
         ))
     }
 
     #[cfg(target_os = "linux")]
-    fn open_reflink(root: &Path) -> Result<Self, StorageVolumeError> {
+    fn open_reflink(root: &Path) -> Result<Self, FilesystemOperationError> {
         let (mut volume, root, name_mode) = xfs::bind_reflink(xfs::XfsRoot::open(root)?)?;
         let state = volume.unique();
         state.root = Some(root);
@@ -180,23 +179,23 @@ impl FilesystemVolume {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn open_reflink(root: &Path) -> Result<Self, StorageVolumeError> {
-        Err(StorageVolumeError::verification(
+    fn open_reflink(root: &Path) -> Result<Self, FilesystemOperationError> {
+        Err(FilesystemOperationError::verification(
             "initialize XFS storage on a non-Linux platform",
-            root,
+            Some(root),
         ))
     }
 
     #[cfg(target_os = "macos")]
-    fn open_apfs(root: &Path) -> Result<Self, StorageVolumeError> {
+    fn open_apfs(root: &Path) -> Result<Self, FilesystemOperationError> {
         apfs::bind(root)
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn open_apfs(root: &Path) -> Result<Self, StorageVolumeError> {
-        Err(StorageVolumeError::verification(
+    fn open_apfs(root: &Path) -> Result<Self, FilesystemOperationError> {
+        Err(FilesystemOperationError::verification(
             "initialize APFS storage on a non-macOS platform",
-            root,
+            Some(root),
         ))
     }
 
@@ -289,7 +288,10 @@ impl FilesystemVolume {
         (self.state.root.clone(), anchor)
     }
 
-    pub(crate) fn validate_host_directory(&self, path: &Path) -> Result<(), StorageVolumeError> {
+    pub(crate) fn validate_host_directory(
+        &self,
+        path: &Path,
+    ) -> Result<(), FilesystemOperationError> {
         if self.state.host_directory_check == HostDirectoryCheck::None {
             return Ok(());
         }
@@ -397,7 +399,7 @@ pub(crate) fn sync_volume(root: &Path) -> std::io::Result<()> {
 
 pub(crate) async fn observe_space(
     volume: &FilesystemVolume,
-) -> Result<FilesystemSpace, StorageVolumeError> {
+) -> Result<FilesystemSpace, FilesystemOperationError> {
     if matches!(
         &volume.state.mode,
         FilesystemVolumeMode::UnmanagedDevelopment
@@ -409,20 +411,18 @@ pub(crate) async fn observe_space(
     BlockingTask::Spawn
         .run(move || observe_space_blocking(&volume))
         .await
-        .map_err(|error| match path.as_deref() {
-            Some(path) => {
-                StorageVolumeError::task_failure("observe filesystem volume space", path, error)
-            }
-            None => StorageVolumeError::task_failure_without_path(
+        .map_err(|error| {
+            FilesystemOperationError::task_failure(
                 "observe filesystem volume space",
+                path.as_deref(),
                 error,
-            ),
+            )
         })?
 }
 
 pub(crate) fn observe_space_blocking(
     volume: &FilesystemVolume,
-) -> Result<FilesystemSpace, StorageVolumeError> {
+) -> Result<FilesystemSpace, FilesystemOperationError> {
     let observed = match &volume.state.mode {
         FilesystemVolumeMode::UnmanagedDevelopment => Ok(FilesystemSpace::Unlimited),
         FilesystemVolumeMode::CopyOnWrite {
@@ -446,9 +446,12 @@ pub(crate) fn observe_space_blocking(
             }
         }
     };
-    observed.map_err(|error| match volume.state.root.as_deref() {
-        Some(path) => StorageVolumeError::io("observe filesystem volume space", path, error),
-        None => StorageVolumeError::io_without_path("observe filesystem volume space", error),
+    observed.map_err(|error| {
+        FilesystemOperationError::io(
+            "observe filesystem volume space",
+            volume.state.root.as_deref(),
+            error,
+        )
     })
 }
 

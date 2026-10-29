@@ -16,6 +16,7 @@ pub(crate) mod blocking;
 pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
+pub(crate) mod filesystem_error;
 pub(crate) mod filesystem_pressure;
 pub(crate) mod filesystem_snapshot;
 #[cfg(feature = "test-utils")]
@@ -1342,6 +1343,7 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
     let shutdown = services::shutdown::Shutdown::new();
+    let cancel_failed_bootstrap = shutdown.token().drop_guard();
 
     let (worker_executor_impl, epoch_thread, epoch_stop, registry_service) =
         create_worker_executor_impl::<Ctx, BootstrapImpl>(
@@ -1379,9 +1381,18 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
     let invocation_loops = worker_executor_impl.active_agents().invocation_loops();
+    let mut run_details = RunDetails {
+        http_port: 0,
+        grpc_port: 0,
+        epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
+        epoch_stop,
+        shutdown,
+        leak_detector,
+        invocation_loops,
+    };
     track_executor_directory_cleanup(
-        &shutdown,
-        invocation_loops.clone(),
+        &run_details.shutdown,
+        run_details.invocation_loops.clone(),
         worker_executor_impl.active_agents().agent_filesystems(),
         worker_executor_impl.agent_filesystem_snapshots(),
     );
@@ -1393,9 +1404,10 @@ pub async fn bootstrap_and_run_worker_executor<
         join_set,
     );
 
-    let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
+    run_details.grpc_port =
+        run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
-    let http_port = golem_service_base::observability::start_health_and_metrics_server(
+    run_details.http_port = golem_service_base::observability::start_health_and_metrics_server(
         golem_config.http_addr(),
         prometheus_registry,
         "Worker executor is running",
@@ -1403,15 +1415,8 @@ pub async fn bootstrap_and_run_worker_executor<
     )
     .await?;
 
-    Ok(RunDetails {
-        http_port,
-        grpc_port,
-        epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
-        epoch_stop,
-        shutdown,
-        leak_detector,
-        invocation_loops,
-    })
+    cancel_failed_bootstrap.disarm();
+    Ok(run_details)
 }
 
 pub async fn run_grpc_server<Ctx: WorkerCtx>(
@@ -1653,6 +1658,35 @@ mod tests {
         assert!(root.path().join(".initial-files").is_dir());
         release.send(()).unwrap();
         assert!(waiting.await);
+        assert!(!root.path().join(".scratch").exists());
+        assert!(!root.path().join(".initial-files").exists());
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn failed_bootstrap_drops_run_details_and_releases_cleanup_owners() {
+        let root = tempfile::tempdir().unwrap();
+        let shutdown = services::shutdown::Shutdown::new();
+        let (filesystems, snapshots) = directory_cleanup_services(root.path(), &shutdown).await;
+        let released = Arc::downgrade(&filesystems);
+        let loops = InvocationLoops::new(shutdown.token());
+        let failed: anyhow::Result<RunDetails> = {
+            let _run_details = RunDetails {
+                http_port: 0,
+                grpc_port: 0,
+                epoch_thread: std::sync::Mutex::new(None),
+                epoch_stop: Arc::new(AtomicBool::new(false)),
+                shutdown: shutdown.clone(),
+                leak_detector: std::sync::Weak::new(),
+                invocation_loops: loops.clone(),
+            };
+            track_executor_directory_cleanup(&shutdown, loops, filesystems, snapshots);
+            Err(anyhow!("server bind failed"))
+        };
+        assert!(failed.is_err());
+        assert!(shutdown.token().is_cancelled());
+        shutdown.join_tracked().await;
+        assert!(released.upgrade().is_none());
         assert!(!root.path().join(".scratch").exists());
         assert!(!root.path().join(".initial-files").exists());
     }

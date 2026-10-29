@@ -79,7 +79,7 @@ impl DirectoryProvisioning {
             .prefix("golem")
             .tempdir()
             .map_err(|error| {
-                FilesystemStorageError::io_without_path("create temporary directory", error)
+                FilesystemStorageError::io("create temporary directory", None, error)
             })?;
         let lifecycle = Arc::new(AsyncMutex::new(()))
             .try_lock_owned()
@@ -109,7 +109,7 @@ impl DirectoryProvisioning {
         if let Err(error) = tokio::fs::create_dir_all(parent).await {
             return Err(rollback_creation(
                 &root,
-                FilesystemStorageError::io("create runtime directory parent", parent, error),
+                FilesystemStorageError::io("create runtime directory parent", Some(parent), error),
                 &self.cleanup_retry,
             )
             .await);
@@ -117,7 +117,7 @@ impl DirectoryProvisioning {
         if let Err(error) = tokio::fs::create_dir(&root).await {
             return Err(rollback_creation(
                 &root,
-                FilesystemStorageError::io("create fresh runtime directory", &root, error),
+                FilesystemStorageError::io("create fresh runtime directory", Some(&root), error),
                 &self.cleanup_retry,
             )
             .await);
@@ -136,7 +136,7 @@ impl DirectoryProvisioning {
             Err(error) => {
                 return Err(rollback_creation(
                     &root,
-                    FilesystemStorageError::io("open fresh runtime directory", &root, error),
+                    FilesystemStorageError::io("open fresh runtime directory", Some(&root), error),
                     &self.cleanup_retry,
                 )
                 .await);
@@ -176,6 +176,6 @@ pub(in crate::sandbox_filesystem) async fn spawn_creation(
     future: impl Future<Output = Result<SandboxFilesystem, FilesystemStorageError>> + Send + 'static,
 ) -> Result<SandboxFilesystem, FilesystemStorageError> {
     tokio::spawn(future).await.map_err(|error| {
-        FilesystemStorageError::io(operation, error_path, std::io::Error::other(error))
+        FilesystemStorageError::io(operation, Some(error_path), std::io::Error::other(error))
     })?
 }

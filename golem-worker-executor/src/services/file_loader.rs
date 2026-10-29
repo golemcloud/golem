@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::filesystem_error::FilesystemOperationError;
 use crate::host_directories::{HostDirectory, HostPath};
 use crate::services::work_admission::WorkAdmission;
 use anyhow::anyhow;
@@ -29,6 +30,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicU64;
 use tokio::io::AsyncWriteExt;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::debug;
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
@@ -36,7 +38,7 @@ use tracing::debug;
 pub struct FileUseToken {
     // Release the cached file before releasing the loader's work registration.
     _handle: Arc<CacheEntry>,
-    _work: Arc<tokio_util::task::task_tracker::TaskTrackerToken>,
+    _work: TaskTrackerToken,
     _directory: Arc<HostDirectory>,
 }
 
@@ -61,7 +63,7 @@ impl InitialFileSource {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InitialFileLoadFailure {
     /// The blob storage could not give the source, or a concurrent download of it stopped
-    /// before its end. A later load can pass.
+    /// before its end, or this executor is shutting down. A later load can pass on a live executor.
     Unavailable,
     /// The blob storage refuses the executor. A later load passes only after an operator fixes
     /// the storage.
@@ -165,10 +167,10 @@ impl FileLoader {
         key: AgentFileContentHash,
         file_size: u64,
     ) -> Result<InitialFileSource, InitialFileLoadError> {
-        let work = self
-            .admission
-            .enter()
-            .ok_or_else(|| InitialFileLoadError::failed(key, "the file loader is shut down"))?;
+        let work = self.admission.enter().ok_or_else(|| InitialFileLoadError {
+            failure: InitialFileLoadFailure::Unavailable,
+            reason: format!("{key}: the file loader is shut down").into(),
+        })?;
         let cache_entry = self
             .get_or_add_cache_entry(environment_id, key, file_size)
             .await?;
@@ -188,7 +190,7 @@ impl FileLoader {
             size,
             _token: FileUseToken {
                 _handle: cache_entry,
-                _work: Arc::new(work),
+                _work: work,
                 _directory: Arc::clone(&self.cache_dir),
             },
         })
@@ -196,9 +198,7 @@ impl FileLoader {
 
     /// Stops new loads, joins downloads and source leases, and removes the executor-owned cache.
     /// Executor shutdown drains filesystem users before calling this.
-    pub(crate) async fn shut_down(
-        &self,
-    ) -> Result<(), crate::host_directories::HostDirectoryError> {
+    pub(crate) async fn shut_down(&self) -> Result<(), FilesystemOperationError> {
         self.admission.close();
         self.admission.wait().await;
         self.cache_dir.remove().await
@@ -765,6 +765,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("shut down"));
+        assert_eq!(error.failure, InitialFileLoadFailure::Unavailable);
         assert_eq!(storage.reads(), reads);
         loader.shut_down().await.unwrap();
     }
@@ -787,7 +788,9 @@ mod tests {
 
         let next = loader.get_source(environment, hash, content.len() as u64).now_or_never()
             .expect("a second source request must not queue behind shutdown while holding the first source");
-        assert!(next.unwrap_err().to_string().contains("shut down"));
+        let error = next.unwrap_err();
+        assert!(error.to_string().contains("shut down"));
+        assert_eq!(error.failure, InitialFileLoadFailure::Unavailable);
         assert!(first.path().as_path().is_file());
         drop(first);
         shutdown.await.unwrap();

@@ -898,10 +898,9 @@ impl TestWorkerExecutor {
 
     /// Removes the agents from the cache of the executor, drops the executor, and waits until
     /// its service graph and tracked shutdown cleanup are released, for at most 30 seconds.
-    /// A cached agent refers to the graph,
-    /// and a drop only asks the tasks of the executor to stop, so without this a start that
-    /// follows in the same process can find what the old graph still holds, such as the
-    /// exclusive lock of a managed XFS root. A test calls this before the next start.
+    /// Cached agents retain the graph. Dropping the executor only asks its tasks to stop.
+    /// A test calls this before a replacement starts so that the old executor cannot retain
+    /// the exclusive lock of a managed XFS root or remove the replacement's directories.
     pub async fn release(self) -> anyhow::Result<()> {
         let released = self.leak_detector();
         let shutdown = self._run_details.shutdown.clone();

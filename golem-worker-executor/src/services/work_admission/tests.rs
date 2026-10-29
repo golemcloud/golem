@@ -18,8 +18,8 @@ use test_r::test;
 #[test]
 async fn closing_refuses_new_work_without_waiting_for_an_existing_lease() {
     let admission = WorkAdmission::default();
-    let lease = std::sync::Arc::new(admission.enter().unwrap());
-    let retained = std::sync::Arc::clone(&lease);
+    let lease = admission.enter().unwrap();
+    let retained = lease.clone();
     admission.close();
     assert!(admission.enter().is_none());
     let waiting = admission.wait();

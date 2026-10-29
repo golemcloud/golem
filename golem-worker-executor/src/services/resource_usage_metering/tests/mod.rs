@@ -119,7 +119,7 @@ fn window_open_failures_keep_bounded_typed_reasons() {
         (
             MeteringOpenError::FilesystemObservation(FilesystemStorageError::verification(
                 "opening observation",
-                Path::new("unused"),
+                Some(Path::new("unused")),
             )),
             Failure::FilesystemObservation,
         ),
@@ -295,7 +295,7 @@ fn authoritative(bytes: u64) -> Result<FilesystemUsage, FilesystemStorageError> 
 }
 
 fn observation_error() -> FilesystemStorageError {
-    FilesystemStorageError::verification_without_path("observe scripted filesystem usage")
+    FilesystemStorageError::verification("observe scripted filesystem usage", None)
 }
 
 fn configured_account(

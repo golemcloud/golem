@@ -91,7 +91,7 @@ fn sandbox_name() -> SandboxFilesystemName {
 }
 
 fn scripted_storage_error(operation: &'static str) -> FilesystemStorageError {
-    FilesystemStorageError::verification_without_path(operation)
+    FilesystemStorageError::verification(operation, None)
 }
 
 fn make_seed_entry(

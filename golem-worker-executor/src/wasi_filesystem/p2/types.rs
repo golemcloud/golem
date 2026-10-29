@@ -1776,8 +1776,9 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         {
-            let sandbox = FilesystemStorageError::io_without_path(
+            let sandbox = FilesystemStorageError::io(
                 "hard link",
+                None,
                 std::io::Error::from_raw_os_error(libc::EXDEV),
             );
             assert_eq!(

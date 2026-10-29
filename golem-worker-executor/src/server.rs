@@ -85,6 +85,8 @@ async fn async_main(
     // deregistering, which lets the shard manager re-home this executor's
     // shards now rather than after the lease expires - so the RPC is waited
     // for instead of being cut off when the runtime is dropped.
+    // InvocationLoops also fences oplogs and cancels workers on this token. The server stays
+    // open until tracked shutdown work finishes or the grace expires.
     run_details.shutdown.cancel();
     if !run_details.shutdown.wait_for_tracked(SHUTDOWN_GRACE).await {
         warn!(

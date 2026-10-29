@@ -14,13 +14,14 @@
 
 use super::*;
 use crate::blocking::BlockingTask;
+use crate::filesystem_error::FilesystemOperationError;
 use crate::sandbox_filesystem::errors::FilesystemStorageError;
 use std::path::Path;
 use test_r::test;
 
 #[test]
 fn operation_errors_have_no_fabricated_path_and_keep_both_cleanup_diagnostics() {
-    let error = FilesystemStorageError::verification_without_path("create executor storage");
+    let error = FilesystemStorageError::verification("create executor storage", None);
     assert_eq!(
         error.to_string(),
         "failed to create executor storage filesystem"
@@ -28,7 +29,7 @@ fn operation_errors_have_no_fabricated_path_and_keep_both_cleanup_diagnostics() 
     assert!(format!("{error:?}").contains("path: None"));
     let cleanup = FilesystemStorageError::cleanup_io(
         "remove scratch",
-        Path::new("/scratch"),
+        Some(Path::new("/scratch")),
         std::io::ErrorKind::ReadOnlyFilesystem.into(),
     );
     let error = error.with_cleanup_failure(cleanup);
@@ -48,9 +49,9 @@ fn operation_errors_have_no_fabricated_path_and_keep_both_cleanup_diagnostics() 
 
 #[test]
 fn volume_error_conversion_preserves_io_and_cleanup_facts() {
-    let error = crate::storage_volume::StorageVolumeError::cleanup_io(
+    let error = FilesystemOperationError::cleanup_io(
         "probe volume",
-        Path::new("/volume"),
+        Some(Path::new("/volume")),
         std::io::ErrorKind::ReadOnlyFilesystem.into(),
     );
     let message = error.to_string();
@@ -66,14 +67,29 @@ fn volume_error_conversion_preserves_io_and_cleanup_facts() {
 }
 
 #[test]
+fn shared_storage_failures_do_not_become_sandbox_escape_refusals() {
+    let source = std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "a path led outside of the filesystem",
+    );
+    let error = FilesystemStorageError::from(FilesystemOperationError::io(
+        "open volume root",
+        None,
+        source,
+    ));
+    assert!(!error.is_sandbox_escape());
+    assert!(error.is_terminal_failure());
+}
+
+#[test]
 async fn volume_task_failure_remains_terminal_after_conversion() {
     let failure = BlockingTask::Spawn
         .run(|| panic!("volume task"))
         .await
         .unwrap_err();
-    let error = crate::storage_volume::StorageVolumeError::task_failure(
+    let error = FilesystemOperationError::task_failure(
         "observe volume",
-        Path::new("/volume"),
+        Some(Path::new("/volume")),
         failure,
     );
     let error = FilesystemStorageError::from(error);
@@ -103,7 +119,7 @@ fn unix_storage_errors_are_terminal_only_when_the_storage_is_unavailable() {
 fn an_error_about_another_path_keeps_its_operation_and_cause() {
     let error = FilesystemStorageError::io(
         "remove XFS reflink probe",
-        Path::new("/proc/self/fd/7/.golem-xfs-reflink-probe"),
+        Some(Path::new("/proc/self/fd/7/.golem-xfs-reflink-probe")),
         std::io::Error::from(std::io::ErrorKind::PermissionDenied),
     )
     .about(Path::new("/var/lib/golem/agents/.golem-xfs-reflink-probe"));
@@ -121,10 +137,9 @@ fn an_error_about_another_path_keeps_its_operation_and_cause() {
 
 #[test]
 fn unsupported_allocation_classification_is_typed() {
-    let unsupported = FilesystemStorageError::allocation_unsupported_without_path();
-    let same_message = FilesystemStorageError::verification_without_path(
-        "observe allocation without quota authority",
-    );
+    let unsupported = FilesystemStorageError::allocation_unsupported(None);
+    let same_message =
+        FilesystemStorageError::verification("observe allocation without quota authority", None);
 
     assert!(unsupported.allocation_is_unsupported());
     assert!(!same_message.allocation_is_unsupported());
@@ -140,8 +155,9 @@ fn native_task_panic_is_caught_and_classified_as_terminal() {
     let execution_error = runtime
         .block_on(BlockingTask::InPlace.run(|| -> () { panic!("scripted native panic") }))
         .unwrap_err();
-    let error = FilesystemStorageError::task_failure_without_path(
+    let error = FilesystemStorageError::task_failure(
         "run panicking native operation",
+        None,
         execution_error,
     );
 
@@ -159,8 +175,10 @@ fn storage_error_is_one_pointer_wide() {
 
 #[test]
 fn storage_error_debug_output_names_each_fact() {
-    let error =
-        FilesystemStorageError::cleanup_verification("remove directory", Path::new("/root/a"));
+    let error = FilesystemStorageError::cleanup_verification(
+        "remove directory",
+        Some(Path::new("/root/a")),
+    );
 
     assert_eq!(
         format!("{error:?}"),
@@ -176,10 +194,8 @@ fn namespace_operation_errors_preserve_raw_terminal_errno() {
         ("rename sandbox filesystem path", libc::ESTALE),
         ("rename sandbox filesystem path", libc::ENODEV),
     ] {
-        let error = FilesystemStorageError::io_without_path(
-            operation,
-            std::io::Error::from_raw_os_error(errno),
-        );
+        let error =
+            FilesystemStorageError::io(operation, None, std::io::Error::from_raw_os_error(errno));
         assert_eq!(
             error.io_error().and_then(std::io::Error::raw_os_error),
             Some(errno)
@@ -187,8 +203,9 @@ fn namespace_operation_errors_preserve_raw_terminal_errno() {
         assert!(error.is_terminal_failure());
     }
 
-    let cross_device = FilesystemStorageError::io_without_path(
+    let cross_device = FilesystemStorageError::io(
         "hard-link sandbox filesystem path",
+        None,
         std::io::Error::from_raw_os_error(libc::EXDEV),
     );
     assert_eq!(

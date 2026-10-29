@@ -1506,8 +1506,11 @@ fn each_capture_result_has_its_metric_label() {
             WholeCapture::InitialFiles.label(),
             CaptureError::Busy.label(),
             CaptureError::Invalidated.label(),
-            CaptureError::Sandbox(FilesystemStorageError::verification("test", Path::new("x"),))
-                .label(),
+            CaptureError::Sandbox(FilesystemStorageError::verification(
+                "test",
+                Some(Path::new("x")),
+            ))
+            .label(),
         ],
         [
             "unchanged",

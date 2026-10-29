@@ -392,9 +392,7 @@ async fn open_postcondition<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<bool, FilesystemStorageError> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or_else(|| {
-        FilesystemStorageError::verification_without_path(
-            "inspect deleted filesystem open postcondition",
-        )
+        FilesystemStorageError::verification("inspect deleted filesystem open postcondition", None)
     })?;
     let attributes = sandbox
         .get_path_attributes(
@@ -472,8 +470,9 @@ async fn execute_write<Adapter: SandboxFilesystemAdapter>(
         let error = match result {
             Ok(()) if completed == bytes.len() as u64 => break,
             Ok(()) if written != 0 => continue,
-            Ok(()) => FilesystemStorageError::io_without_path(
+            Ok(()) => FilesystemStorageError::io(
                 "write sandbox filesystem file",
+                None,
                 std::io::ErrorKind::WriteZero.into(),
             ),
             Err(error) => error,

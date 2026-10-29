@@ -61,8 +61,9 @@ fn unmanaged_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {
 #[test]
 fn creation_failure_selection_keeps_cleanup_failure_priority() {
     let creation = || {
-        FilesystemStorageError::io_without_path(
+        FilesystemStorageError::io(
             "create test filesystem",
+            None,
             std::io::Error::other("creation failure"),
         )
     };
@@ -71,14 +72,17 @@ fn creation_failure_selection_keeps_cleanup_failure_priority() {
     assert!(!selected.cleanup_failed());
     let selected = creation_error_after_cleanup(
         creation(),
-        Err(FilesystemStorageError::io_without_path(
+        Err(FilesystemStorageError::io(
             "remove test filesystem",
+            None,
             std::io::Error::other("cleanup failure"),
         )
         .during_cleanup()),
     );
     assert_eq!(selected.io_error().unwrap().to_string(), "cleanup failure");
     assert!(selected.cleanup_failed());
+    assert!(selected.to_string().contains("creation failure"));
+    assert!(selected.to_string().contains("cleanup failure"));
 }
 
 #[test]
@@ -194,7 +198,7 @@ async fn open_sandbox_directory(
 }
 
 fn scripted_storage_error(operation: &'static str) -> FilesystemStorageError {
-    FilesystemStorageError::verification_without_path(operation)
+    FilesystemStorageError::verification(operation, None)
 }
 
 fn directory_sandbox_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {

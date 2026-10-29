@@ -33,7 +33,7 @@ use super::{
 };
 use crate::host_directories::HostPath;
 use crate::sandbox_filesystem::FilesystemStorageError;
-use crate::storage_volume::{FilesystemAllocation, FilesystemLimits};
+use crate::storage_volume::{AgentAccounting, FilesystemAllocation, FilesystemLimits};
 use bytes::Bytes;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -47,12 +47,13 @@ use std::sync::{Arc, Mutex};
 pub(in crate::sandbox_filesystem) fn scripted_handle_error(
     operation: &'static str,
 ) -> FilesystemStorageError {
-    FilesystemStorageError::verification_without_path(operation)
+    FilesystemStorageError::verification(operation, None)
 }
 
 #[derive(Clone)]
 pub(crate) struct ScriptedSandboxFilesystem {
     pub(in crate::sandbox_filesystem) state: Arc<Mutex<ScriptedState>>,
+    accounting: AgentAccounting,
 }
 
 impl Debug for ScriptedSandboxFilesystem {
@@ -65,6 +66,7 @@ impl Debug for ScriptedSandboxFilesystem {
 
 pub(crate) struct ScriptedSandboxFilesystemProvisioning {
     pub(in crate::sandbox_filesystem) state: Arc<Mutex<ScriptedState>>,
+    accounting: AgentAccounting,
 }
 
 #[derive(Clone)]
@@ -166,9 +168,15 @@ impl ScriptedSandboxFilesystemProvisioning {
         (
             Self {
                 state: Arc::clone(&state),
+                accounting: AgentAccounting::Development,
             },
             ScriptedSandboxFilesystemControl { state },
         )
+    }
+
+    pub(crate) fn with_accounting(mut self, accounting: AgentAccounting) -> Self {
+        self.accounting = accounting;
+        self
     }
 }
 
@@ -410,6 +418,10 @@ impl SandboxFilesystemAdapter for ScriptedSandboxFilesystem {
     type Provisioning = ScriptedSandboxFilesystemProvisioning;
     type AllocationReader = ScriptedSandboxFilesystem;
 
+    fn agent_accounting(&self) -> AgentAccounting {
+        self.accounting
+    }
+
     async fn create_fresh(
         provisioning: Self::Provisioning,
         name: SandboxFilesystemName,
@@ -427,6 +439,7 @@ impl SandboxFilesystemAdapter for ScriptedSandboxFilesystem {
         drop(state);
         Ok(Self {
             state: provisioning.state,
+            accounting: provisioning.accounting,
         })
     }
 
@@ -817,8 +830,9 @@ pub(in crate::sandbox_filesystem) async fn scripted_outcome<T: Send + 'static>(
         state.calls.push(call);
         let gate = state.gates.remove(&operation);
         let outcome = outcomes(&mut state).pop_front().unwrap_or_else(|| {
-            Err(FilesystemStorageError::verification_without_path(
+            Err(FilesystemStorageError::verification(
                 "consume programmed scripted sandbox filesystem outcome",
+                None,
             ))
         });
         (gate, outcome)
@@ -840,8 +854,9 @@ pub(in crate::sandbox_filesystem) fn scripted_path_resolution(
     programmed: ScriptedPathResolution,
 ) -> Result<SandboxResolvedPathTarget, FilesystemStorageError> {
     let (_, name) = split_path_target(&target.path).map_err(|error| {
-        FilesystemStorageError::io_without_path(
+        FilesystemStorageError::io(
             "resolve scripted sandbox filesystem namespace target",
+            None,
             error,
         )
     })?;
@@ -893,8 +908,9 @@ pub(in crate::sandbox_filesystem) fn default_scripted_path_resolution(
     target: SandboxPath,
 ) -> Result<SandboxResolvedPathTarget, FilesystemStorageError> {
     let (relative_parent, name) = split_path_target(&target.path).map_err(|error| {
-        FilesystemStorageError::io_without_path(
+        FilesystemStorageError::io(
             "resolve scripted sandbox filesystem namespace target",
+            None,
             error,
         )
     })?;
@@ -965,7 +981,7 @@ pub(in crate::sandbox_filesystem) fn take_outcome(
 ) -> Result<(), FilesystemStorageError> {
     outcome
         .take()
-        .unwrap_or_else(|| Err(FilesystemStorageError::verification_without_path(operation)))
+        .unwrap_or_else(|| Err(FilesystemStorageError::verification(operation, None)))
 }
 
 impl SandboxFile {

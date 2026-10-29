@@ -216,13 +216,13 @@ pub(in crate::sandbox_filesystem) fn filesystem_lease_probe(
 pub(in crate::sandbox_filesystem) async fn verify_fresh_directory(
     path: &Path,
 ) -> Result<(), FilesystemStorageError> {
-    let metadata = tokio::fs::symlink_metadata(path)
-        .await
-        .map_err(|error| FilesystemStorageError::io("verify runtime directory", path, error))?;
+    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        FilesystemStorageError::io("verify runtime directory", Some(path), error)
+    })?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(FilesystemStorageError::verification(
             "verify fresh runtime directory",
-            path,
+            Some(path),
         ));
     }
     verify_empty_directory(path).await
@@ -232,13 +232,13 @@ pub(in crate::sandbox_filesystem) async fn verify_fresh_directory(
 pub(in crate::sandbox_filesystem) async fn verify_fresh_open_directory(
     path: &Path,
 ) -> Result<(), FilesystemStorageError> {
-    let metadata = tokio::fs::metadata(path)
-        .await
-        .map_err(|error| FilesystemStorageError::io("verify runtime directory", path, error))?;
+    let metadata = tokio::fs::metadata(path).await.map_err(|error| {
+        FilesystemStorageError::io("verify runtime directory", Some(path), error)
+    })?;
     if !metadata.is_dir() {
         return Err(FilesystemStorageError::verification(
             "verify fresh runtime directory",
-            path,
+            Some(path),
         ));
     }
     verify_empty_directory(path).await
@@ -248,17 +248,19 @@ pub(in crate::sandbox_filesystem) async fn verify_empty_directory(
     path: &Path,
 ) -> Result<(), FilesystemStorageError> {
     let mut entries = tokio::fs::read_dir(path).await.map_err(|error| {
-        FilesystemStorageError::io("verify empty runtime directory", path, error)
+        FilesystemStorageError::io("verify empty runtime directory", Some(path), error)
     })?;
     if entries
         .next_entry()
         .await
-        .map_err(|error| FilesystemStorageError::io("verify empty runtime directory", path, error))?
+        .map_err(|error| {
+            FilesystemStorageError::io("verify empty runtime directory", Some(path), error)
+        })?
         .is_some()
     {
         return Err(FilesystemStorageError::verification(
             "verify empty runtime directory",
-            path,
+            Some(path),
         ));
     }
     Ok(())
@@ -268,10 +270,12 @@ pub(in crate::sandbox_filesystem) async fn rollback_created_filesystem(
     filesystem: SandboxFilesystem,
     creation_error: FilesystemStorageError,
 ) -> FilesystemStorageError {
-    match SandboxFilesystem::delete_owned_filesystem(filesystem).await {
-        Ok(()) => creation_error,
-        Err(cleanup_error) => cleanup_error.into_source(),
-    }
+    creation_error_after_cleanup(
+        creation_error,
+        SandboxFilesystem::delete_owned_filesystem(filesystem)
+            .await
+            .map_err(|error| error.into_source()),
+    )
 }
 
 pub(in crate::sandbox_filesystem) fn creation_error_after_cleanup(
@@ -280,7 +284,7 @@ pub(in crate::sandbox_filesystem) fn creation_error_after_cleanup(
 ) -> FilesystemStorageError {
     match cleanup {
         Ok(()) => creation_error,
-        Err(cleanup_error) => cleanup_error,
+        Err(cleanup_error) => creation_error.with_cleanup_failure(cleanup_error),
     }
 }
 
@@ -318,17 +322,23 @@ pub(in crate::sandbox_filesystem) async fn remove_and_verify_once(
 ) -> Result<(), FilesystemStorageError> {
     match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            tokio::fs::remove_dir_all(path)
-                .await
-                .map_err(|error| FilesystemStorageError::cleanup_io(operation, path, error))?;
+            tokio::fs::remove_dir_all(path).await.map_err(|error| {
+                FilesystemStorageError::cleanup_io(operation, Some(path), error)
+            })?;
         }
         Ok(_) => {
-            tokio::fs::remove_file(path)
-                .await
-                .map_err(|error| FilesystemStorageError::cleanup_io(operation, path, error))?;
+            tokio::fs::remove_file(path).await.map_err(|error| {
+                FilesystemStorageError::cleanup_io(operation, Some(path), error)
+            })?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(FilesystemStorageError::cleanup_io(operation, path, error)),
+        Err(error) => {
+            return Err(FilesystemStorageError::cleanup_io(
+                operation,
+                Some(path),
+                error,
+            ));
+        }
     }
 
     verify_absent(path, operation)
@@ -340,15 +350,23 @@ pub(in crate::sandbox_filesystem) fn remove_and_verify_blocking(
 ) -> Result<(), FilesystemStorageError> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            std::fs::remove_dir_all(path)
-                .map_err(|error| FilesystemStorageError::cleanup_io(operation, path, error))?;
+            std::fs::remove_dir_all(path).map_err(|error| {
+                FilesystemStorageError::cleanup_io(operation, Some(path), error)
+            })?;
         }
         Ok(_) => {
-            std::fs::remove_file(path)
-                .map_err(|error| FilesystemStorageError::cleanup_io(operation, path, error))?;
+            std::fs::remove_file(path).map_err(|error| {
+                FilesystemStorageError::cleanup_io(operation, Some(path), error)
+            })?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(FilesystemStorageError::cleanup_io(operation, path, error)),
+        Err(error) => {
+            return Err(FilesystemStorageError::cleanup_io(
+                operation,
+                Some(path),
+                error,
+            ));
+        }
     }
     verify_absent(path, operation)
 }
@@ -360,9 +378,14 @@ pub(in crate::sandbox_filesystem) fn verify_absent(
     match std::fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Ok(_) => Err(FilesystemStorageError::cleanup_verification(
-            operation, path,
+            operation,
+            Some(path),
         )),
-        Err(error) => Err(FilesystemStorageError::cleanup_io(operation, path, error)),
+        Err(error) => Err(FilesystemStorageError::cleanup_io(
+            operation,
+            Some(path),
+            error,
+        )),
     }
 }
 

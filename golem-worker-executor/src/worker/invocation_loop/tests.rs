@@ -616,8 +616,9 @@ async fn loaded_idle_wait_wakes_for_a_terminal_filesystem_failure() {
     let (_commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let waiting =
         tokio::spawn(async move { wait_for_resident_wakeup(&mut receiver, &activity).await });
-    control.push_flush(Err(FilesystemStorageError::io_without_path(
+    control.push_flush(Err(FilesystemStorageError::io(
         "detached terminal flush",
+        None,
         std::io::ErrorKind::Other.into(),
     )));
 
@@ -632,8 +633,9 @@ async fn loaded_idle_wait_wakes_for_a_terminal_filesystem_failure() {
         ResidentWakeup::FilesystemTerminalFailure
     ));
 
-    control.push_observe_allocation(Err(FilesystemStorageError::verification_without_path(
+    control.push_observe_allocation(Err(FilesystemStorageError::verification(
         "observe unsupported allocation during idle wakeup cleanup",
+        None,
     )));
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
@@ -1124,8 +1126,9 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
         metered_resident_with_open_node_for_unload_test().await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
-    control.push_delete_and_verify(Err(FilesystemStorageError::verification_without_path(
+    control.push_delete_and_verify(Err(FilesystemStorageError::verification(
         "injected verified deletion failure",
+        None,
     )));
     let held = Arc::new(AtomicBool::new(false));
     let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
@@ -1328,8 +1331,9 @@ async fn startup_disposal_releases_execution_before_failed_deletion_and_repair()
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
-    control.push_delete_and_verify(Err(FilesystemStorageError::verification_without_path(
+    control.push_delete_and_verify(Err(FilesystemStorageError::verification(
         "startup deletion failure",
+        None,
     )));
     let deletion = control.block("delete_and_verify");
     let settled = window.settlement_observer();
@@ -1490,8 +1494,9 @@ async fn active_allocation_failure_remains_failed_after_successful_physical_dele
     let (filesystem, control, window, _generation_handle, node) =
         billing_metered_resident_with_open_node_for_unload_test().await;
     filesystem.set_release_metrics_for_test(metrics.scope());
-    control.push_observe_allocation(Err(FilesystemStorageError::verification_without_path(
+    control.push_observe_allocation(Err(FilesystemStorageError::verification(
         "active allocation observation failed",
+        None,
     )));
     let observation = control.block("observe_allocation");
     let mut health = window.subscribe_enforcement_failure();
@@ -1684,8 +1689,9 @@ async fn concrete_failed_unload_retains_retry_owner_and_immutable_results() {
     let scope = metrics.scope();
     let (filesystem, control) = resident_for_unload_test().await;
     filesystem.set_release_metrics_for_test(metrics.scope());
-    control.push_delete_and_verify(Err(FilesystemStorageError::verification_without_path(
+    control.push_delete_and_verify(Err(FilesystemStorageError::verification(
         "first cleanup failure",
+        None,
     )));
     let mut permits = ConcurrentAgentPermitState::new(None, Arc::new(AtomicBool::new(false)));
     permits.release_scope = scope.clone();
@@ -1706,8 +1712,9 @@ async fn concrete_failed_unload_retains_retry_owner_and_immutable_results() {
     assert!(original_error.to_string().contains("first cleanup failure"));
     assert_eq!(cleanup.wait().await.unwrap_err(), original_error);
 
-    control.push_delete_and_verify(Err(FilesystemStorageError::verification_without_path(
+    control.push_delete_and_verify(Err(FilesystemStorageError::verification(
         "persistent cleanup failure",
+        None,
     )));
     let failed_retry = cleanup.retry();
     let retry_error = failed_retry.wait().await.unwrap_err();
@@ -1761,8 +1768,9 @@ async fn startup_rollback_retains_cleanup_retry_without_clearing_close_failure()
         let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
         let (filesystem, control) = resident_for_unload_test().await;
         filesystem.set_release_metrics_for_test(metrics.scope());
-        control.push_delete_and_verify(Err(FilesystemStorageError::verification_without_path(
+        control.push_delete_and_verify(Err(FilesystemStorageError::verification(
             "startup cleanup failure",
+            None,
         )));
         let failure = crate::worker::cleanup_typed_agent_filesystem(
             seal(filesystem),

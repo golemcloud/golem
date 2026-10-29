@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::filesystem_error::FilesystemOperationError;
 use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
 use crate::host_directories::HostDirectory;
 use crate::metrics::agent_filesystem::{self, StorageRefusal};
@@ -465,7 +466,7 @@ impl Debug for DeleteFailure {
 impl DeleteFailure {
     fn unverified(operation: &'static str) -> Self {
         Self {
-            source: Arc::new(FilesystemStorageError::verification_without_path(operation)),
+            source: Arc::new(FilesystemStorageError::verification(operation, None)),
             retry: None,
         }
     }
@@ -528,8 +529,8 @@ impl From<FilesystemStorageError> for Error {
     }
 }
 
-impl From<crate::host_directories::HostDirectoryError> for Error {
-    fn from(source: crate::host_directories::HostDirectoryError) -> Self {
+impl From<FilesystemOperationError> for Error {
+    fn from(source: FilesystemOperationError) -> Self {
         Self::Sandbox(source.into())
     }
 }
@@ -582,7 +583,7 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
         let _lease = self.registry.lease_internal_call();
         let sandbox = self.sandbox.read().await;
         let sandbox = sandbox.as_ref().ok_or_else(|| {
-            FilesystemStorageError::verification_without_path("observe deleted agent filesystem")
+            FilesystemStorageError::verification("observe deleted agent filesystem", None)
         })?;
         match sandbox.observe_allocation().await {
             Ok(allocation) => Ok(FilesystemUsage::Authoritative {

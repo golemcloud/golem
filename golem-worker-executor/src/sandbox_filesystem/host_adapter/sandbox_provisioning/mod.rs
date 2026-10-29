@@ -14,7 +14,11 @@
 
 use super::{NativeNameModeSource, SandboxFilesystem, directory_provisioning};
 use crate::sandbox_filesystem::FilesystemStorageError;
+#[cfg(test)]
+use crate::services::golem_config::FilesystemStorageMode;
 use crate::storage_volume::FilesystemVolume;
+#[cfg(all(test, target_os = "linux"))]
+use crate::storage_volume::{FilesystemAllocation, project_allocation};
 use golem_common::model::RetryConfig;
 use std::path::{Component, Path, PathBuf};
 
@@ -60,7 +64,7 @@ impl SandboxFilesystemProvisioning {
 
     #[cfg(test)]
     pub(crate) fn new(
-        storage: &crate::services::golem_config::FilesystemStorageMode,
+        storage: &FilesystemStorageMode,
         cleanup_retry: RetryConfig,
     ) -> Result<Self, FilesystemStorageError> {
         let volume = FilesystemVolume::open(storage, cleanup_retry.clone())?;
@@ -90,8 +94,8 @@ impl SandboxFilesystemProvisioning {
     pub(crate) fn project_allocation_for_test(
         &self,
         project_id: std::num::NonZeroU32,
-    ) -> std::io::Result<crate::storage_volume::FilesystemAllocation> {
-        crate::storage_volume::project_allocation(&self.volume, project_id)
+    ) -> std::io::Result<FilesystemAllocation> {
+        project_allocation(&self.volume, project_id)
     }
 }
 
@@ -116,8 +120,9 @@ impl SandboxFilesystemName {
         }) {
             Ok(Self { components })
         } else {
-            Err(FilesystemStorageError::verification_without_path(
+            Err(FilesystemStorageError::verification(
                 "validate sandbox filesystem name",
+                None,
             ))
         }
     }

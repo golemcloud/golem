@@ -166,14 +166,14 @@ fn allocation(bytes: u64, objects: u64) -> FilesystemAllocation {
 }
 
 pub(super) fn unsupported_allocation() -> FilesystemStorageError {
-    FilesystemStorageError::allocation_unsupported_without_path()
+    FilesystemStorageError::allocation_unsupported(None)
 }
 
 pub(super) fn sandbox_error(
     operation: &'static str,
     kind: std::io::ErrorKind,
 ) -> FilesystemStorageError {
-    FilesystemStorageError::io_without_path(operation, std::io::Error::new(kind, operation))
+    FilesystemStorageError::io(operation, None, std::io::Error::new(kind, operation))
 }
 
 fn sandbox_provisioning(
@@ -344,12 +344,11 @@ async fn bound_reconstructing_with_accounting(
 ) {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
-        provisioning,
+        provisioning.with_accounting(accounting),
         scratch_directory().await,
         agent_id(),
         limits,
         pressure_recovery,
-        accounting,
     )
     .await
     .unwrap();
@@ -382,7 +381,6 @@ async fn unmetered_reconstructing_with_recovery(
         agent_id(),
         limits,
         pressure_recovery,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -405,7 +403,6 @@ async fn created_product_supports_observed_verified_cleanup() {
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -478,7 +475,6 @@ pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() ->
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -2876,7 +2872,7 @@ async fn a_cleanup_permission_failure_of_a_writable_open_invalidates_a_read_only
     control.push_read_only_resolution(1, "alias", false, false);
     control.push_open(Err(FilesystemStorageError::cleanup_io(
         "open cleanup",
-        Path::new("alias"),
+        Some(Path::new("alias")),
         std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cleanup denied"),
     )));
     control.push_get_attributes(Ok(SandboxAttributes {
@@ -2984,7 +2980,7 @@ async fn hard_link_collision_preserves_non_directory_and_nonterminal_proof_resul
             None,
             Err(FilesystemStorageError::verification(
                 "source proof",
-                Path::new("source"),
+                Some(Path::new("source")),
             )),
         ),
         (
@@ -3056,7 +3052,7 @@ async fn a_terminal_source_probe_after_hard_link_collision_invalidates_the_gener
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         FilesystemStorageError::io(
             "source proof",
-            Path::new("source"),
+            Some(Path::new("source")),
             std::io::Error::from_raw_os_error(libc::EIO),
         ),
     ]);
@@ -3113,7 +3109,7 @@ async fn hard_link_policy_proof_does_not_replace_escape_or_cleanup_errors() {
     let errors: Box<[_]> = Box::new([
         FilesystemStorageError::io(
             "hard link",
-            Path::new("source"),
+            Some(Path::new("source")),
             std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "a path led outside of the filesystem",
@@ -3121,7 +3117,7 @@ async fn hard_link_policy_proof_does_not_replace_escape_or_cleanup_errors() {
         ),
         FilesystemStorageError::cleanup_io(
             "hard link",
-            Path::new("source"),
+            Some(Path::new("source")),
             std::io::Error::new(std::io::ErrorKind::AlreadyExists, "cleanup"),
         ),
     ]);
@@ -3227,7 +3223,7 @@ async fn a_cleanup_permission_failure_of_a_directory_hard_link_invalidates_the_g
     control.push_get_attributes(Err(missing("destination before the link")));
     control.push_hard_link(Err(FilesystemStorageError::cleanup_io(
         "hard link cleanup",
-        Path::new("directory"),
+        Some(Path::new("directory")),
         std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cleanup denied"),
     )));
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
@@ -3369,8 +3365,9 @@ async fn terminal_raw_namespace_error_invalidates_despite_no_effect_postconditio
     let generation_handle = resident_generation_handle(&filesystem);
     let directory = open_directory(&generation_handle, &control, 40).await;
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
-    control.push_hard_link(Err(FilesystemStorageError::io_without_path(
+    control.push_hard_link(Err(FilesystemStorageError::io(
         "terminal hard link",
+        None,
         std::io::Error::from_raw_os_error(libc::EIO),
     )));
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
@@ -7064,7 +7061,6 @@ async fn allocation_timeout_retains_the_read_and_permit_until_close_and_stops_sa
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -7132,7 +7128,6 @@ async fn timed_out_billing_observer_does_not_block_sandbox_deletion() {
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -9702,7 +9697,7 @@ fn a_capability_escape_refusal_is_a_guest_error_without_effect() {
         cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
     let refusal = directory.open("../outside").unwrap_err();
     assert_eq!(refusal.kind(), std::io::ErrorKind::PermissionDenied);
-    let error = FilesystemStorageError::io("open sandbox path", root.path(), refusal);
+    let error = FilesystemStorageError::io("open sandbox path", Some(root.path()), refusal);
     assert!(!error.is_terminal_failure());
     let cause = classify_failure(&error, FailureFacts::default());
     assert_eq!(cause, FailureCause::Guest);
@@ -9789,8 +9784,9 @@ fn native_permission_errors_and_broken_storage_are_terminal() {
     {
         [libc::EACCES, libc::EPERM].into_iter().for_each(|errno| {
             let refused = || {
-                FilesystemStorageError::io_without_path(
+                FilesystemStorageError::io(
                     "refused",
+                    None,
                     std::io::Error::from_raw_os_error(errno),
                 )
             };
@@ -9831,8 +9827,9 @@ fn native_permission_errors_and_broken_storage_are_terminal() {
             .into_iter()
             .for_each(|errno| {
                 assert!(
-                    invalidates_generation(&FilesystemStorageError::io_without_path(
+                    invalidates_generation(&FilesystemStorageError::io(
                         "broken",
+                        None,
                         std::io::Error::from_raw_os_error(errno)
                     )),
                     "errno {errno}"

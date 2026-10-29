@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::blocking::BlockingTask;
-use crate::host_directories::{
-    HostDirectory, HostDirectoryError, HostDirectoryFailure, TemporaryRoot,
-};
+use crate::host_directories::{HostDirectory, TemporaryRoot};
 use crate::sandbox_filesystem::{FilesystemStorageError, SandboxFilesystemProvisioning};
 
 use crate::services::golem_config::FilesystemStorageMode;
@@ -43,25 +41,23 @@ pub(crate) async fn provision_executor_directories(
     Ok((provisioning, directories))
 }
 
-pub(crate) async fn make_executor_directories(
+async fn make_executor_directories(
     volume: &FilesystemVolume,
 ) -> Result<ExecutorDirectories, FilesystemStorageError> {
     let (root, _) = volume.root_location();
     BlockingTask::Spawn
         .run(executor_directories_task(volume))
         .await
-        .map_err(|error| match root.as_deref() {
-            Some(path) => {
-                FilesystemStorageError::task_failure("create executor directories", path, error)
-            }
-            None => FilesystemStorageError::task_failure_without_path(
+        .map_err(|error| {
+            FilesystemStorageError::task_failure(
                 "create executor directories",
+                root.as_deref(),
                 error,
-            ),
+            )
         })?
 }
 
-pub(crate) fn executor_directories_task(
+fn executor_directories_task(
     volume: &FilesystemVolume,
 ) -> impl FnOnce() -> Result<ExecutorDirectories, FilesystemStorageError> + Send + 'static {
     let volume = volume.clone();
@@ -74,10 +70,7 @@ pub(crate) fn executor_directories_task(
                     .prefix("golem-host-directories")
                     .tempdir()
                     .map_err(|error| {
-                        FilesystemStorageError::io_without_path(
-                            "create executor directory root",
-                            error,
-                        )
+                        FilesystemStorageError::io("create executor directory root", None, error)
                     })?;
                 let directory = Arc::new(TemporaryRoot::new(directory));
                 (Arc::from(directory.path()), Some(directory))
@@ -121,22 +114,6 @@ fn error_after_removal(
     match removal {
         Ok(()) => error,
         Err(cleanup) => error.with_cleanup_failure(cleanup),
-    }
-}
-
-impl From<HostDirectoryError> for FilesystemStorageError {
-    fn from(error: HostDirectoryError) -> Self {
-        let (operation, path, failure, cleanup_failed) = error.into_parts();
-        let error = match failure {
-            HostDirectoryFailure::Io(source) => Self::io(operation, &path, source),
-            HostDirectoryFailure::Task(source) => Self::task_failure(operation, &path, source),
-            HostDirectoryFailure::Verification => Self::verification(operation, &path),
-        };
-        if cleanup_failed {
-            error.during_cleanup()
-        } else {
-            error
-        }
     }
 }
 

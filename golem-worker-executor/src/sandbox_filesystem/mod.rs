@@ -42,7 +42,7 @@ pub(crate) use host_adapter::{
     SandboxFilesystem, SandboxFilesystemName, SandboxFilesystemProvisioning, TreeExclusions,
 };
 
-use crate::storage_volume::{FilesystemAllocation, FilesystemLimits};
+use crate::storage_volume::{AgentAccounting, FilesystemAllocation, FilesystemLimits};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct InstalledLimits {
@@ -305,6 +305,9 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     type Provisioning: Send + 'static;
     /// A detached reader used by periodic allocation metering.
     type AllocationReader: SandboxFilesystemAllocationReader;
+
+    /// The allocation accounting policy of this sandbox's volume.
+    fn agent_accounting(&self) -> AgentAccounting;
 
     /// Creates an empty, exclusively owned runtime filesystem and optionally installs limits.
     ///

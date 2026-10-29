@@ -94,7 +94,7 @@ impl CapacityRecoverySource for ScriptedRecovery {
         match self.observations.lock().unwrap().pop_front().unwrap() {
             Ok(observation) => Ok(observation),
             Err(message) => Err(FilesystemPressureError::Observation(
-                StorageVolumeError::verification_without_path(message),
+                FilesystemOperationError::verification(message, None),
             )),
         }
     }
