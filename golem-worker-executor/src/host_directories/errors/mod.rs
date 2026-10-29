@@ -13,28 +13,26 @@
 // limitations under the License.
 
 use crate::blocking::BlockingTaskError;
-use crate::operation_failure::OperationFailure;
+use crate::operation_failure::{OperationContext, OperationFailure};
 use std::fmt::{Display, Formatter};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug)]
 pub(crate) struct HostDirectoryError {
-    operation: &'static str,
-    path: PathBuf,
-    failure: OperationFailure,
+    context: OperationContext,
 }
 
 impl HostDirectoryError {
     pub(super) fn new(operation: &'static str, path: &Path, failure: OperationFailure) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            failure,
+            context: OperationContext::new(operation, Some(path), failure),
         }
     }
 
     pub(super) fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
-        Self::new(operation, path, OperationFailure::Io(source))
+        Self {
+            context: OperationContext::io(operation, Some(path), source),
+        }
     }
 
     pub(super) fn task_failure(
@@ -42,42 +40,27 @@ impl HostDirectoryError {
         path: &Path,
         source: BlockingTaskError,
     ) -> Self {
-        Self::new(operation, path, OperationFailure::Task(source))
+        Self {
+            context: OperationContext::task_failure(operation, Some(path), source),
+        }
     }
 
-    pub(crate) fn operation(&self) -> &'static str {
-        self.operation
+    pub(crate) fn context(&self) -> &OperationContext {
+        &self.context
     }
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-    pub(crate) fn into_failure(self) -> OperationFailure {
-        self.failure
-    }
-
-    #[cfg(test)]
-    pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
-        self.failure.io_error().map(std::io::Error::kind)
+    pub(crate) fn into_context(self) -> OperationContext {
+        self.context
     }
 }
 
 impl Display for HostDirectoryError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "failed to {} at {}",
-            self.operation,
-            self.path.display()
-        )?;
-        if let Some(cause) = self.failure.cause() {
-            write!(formatter, ": {cause}")?;
-        }
-        Ok(())
+        Display::fmt(self.context(), formatter)
     }
 }
 
 impl std::error::Error for HostDirectoryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.failure.cause()
+        self.context().source()
     }
 }

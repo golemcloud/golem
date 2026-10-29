@@ -56,19 +56,12 @@ pub(crate) fn probe_clone(
         .prefix(".golem-apfs-clone-probe-")
         .tempdir_in(root)
         .map_err(|error| StorageVolumeError::io("create APFS clone probe", Some(root), error))?;
-    let result = probe_contents(probe.path(), clone);
-    let cleanup = close(probe);
-    result.map_err(|error| {
-        let operation = "probe APFS clone for local development";
-        if cleanup.is_err() {
-            StorageVolumeError::cleanup_io(operation, Some(root), error)
-        } else {
-            StorageVolumeError::io(operation, Some(root), error)
-        }
-    })?;
-    cleanup.map_err(|error| {
-        StorageVolumeError::cleanup_io("remove APFS clone probe", Some(root), error)
-    })
+    let result = probe_contents(probe.path(), clone).map_err(|error| {
+        StorageVolumeError::io("probe APFS clone for local development", Some(root), error)
+    });
+    let cleanup = close(probe)
+        .map_err(|error| StorageVolumeError::io("remove APFS clone probe", Some(root), error));
+    StorageVolumeError::after_cleanup(result, cleanup)
 }
 
 pub(crate) fn probe_contents(

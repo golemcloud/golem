@@ -16,6 +16,27 @@ use super::*;
 use crate::services::golem_config::FilesystemStorageMode;
 use test_r::{test, timeout};
 
+#[test]
+fn stale_probe_removal_is_a_primary_failure_and_reports_the_configured_path() {
+    let parent = tempfile::tempdir().unwrap();
+    let file = parent.path().join("not-a-directory");
+    std::fs::write(&file, b"sentinel").unwrap();
+    let configured = Path::new("/configured/.golem-xfs-reflink-probe");
+    let error = remove_probe(
+        &file.join("probe"),
+        configured,
+        "remove stale XFS reflink probe",
+    )
+    .unwrap_err();
+    assert!(!error.cleanup_failed());
+    assert_eq!(error.context().path(), Some(configured));
+    assert_eq!(
+        error.context().io_kind(),
+        Some(std::io::ErrorKind::NotADirectory)
+    );
+    assert_eq!(std::fs::read(file).unwrap(), b"sentinel");
+}
+
 const MOUNT_TABLE_FIXTURE: &str = "\
 22 1 0:21 / / rw,relatime shared:1 - ext4 /dev/root rw
 36 22 7:0 / /var/lib/golem/agents rw,relatime shared:2 - xfs /dev/loop0 rw,attr2,inode64,noquota

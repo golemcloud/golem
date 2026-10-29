@@ -13,35 +13,34 @@
 // limitations under the License.
 
 use crate::blocking::BlockingTaskError;
-use crate::operation_failure::OperationFailure;
+use crate::operation_failure::OperationContext;
 #[cfg(target_os = "linux")]
 use crate::path_removal::RemoveFailure;
 use std::fmt::{Display, Formatter};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug)]
 pub(crate) struct StorageVolumeError {
-    operation: &'static str,
-    path: Option<PathBuf>,
-    failure: OperationFailure,
+    context: OperationContext,
     cleanup_failed: bool,
+    original_error: Option<Box<StorageVolumeError>>,
 }
 
 impl StorageVolumeError {
-    pub(crate) fn verification(operation: &'static str, path: Option<&Path>) -> Self {
+    fn from_context(context: OperationContext) -> Self {
         Self {
-            operation,
-            path: path.map(Path::to_path_buf),
-            failure: OperationFailure::Verification,
+            context,
             cleanup_failed: false,
+            original_error: None,
         }
     }
 
+    pub(crate) fn verification(operation: &'static str, path: Option<&Path>) -> Self {
+        Self::from_context(OperationContext::verification(operation, path))
+    }
+
     pub(crate) fn io(operation: &'static str, path: Option<&Path>, source: std::io::Error) -> Self {
-        Self {
-            failure: OperationFailure::Io(source),
-            ..Self::verification(operation, path)
-        }
+        Self::from_context(OperationContext::io(operation, path, source))
     }
 
     pub(crate) fn task_failure(
@@ -49,10 +48,7 @@ impl StorageVolumeError {
         path: Option<&Path>,
         source: BlockingTaskError,
     ) -> Self {
-        Self {
-            failure: OperationFailure::Task(source),
-            ..Self::verification(operation, path)
-        }
+        Self::from_context(OperationContext::task_failure(operation, path, source))
     }
 
     #[cfg(target_os = "linux")]
@@ -61,10 +57,7 @@ impl StorageVolumeError {
         path: &Path,
         failure: RemoveFailure,
     ) -> Self {
-        Self {
-            failure: failure.into(),
-            ..Self::verification(operation, Some(path))
-        }
+        Self::from_context(OperationContext::new(operation, Some(path), failure.into()))
     }
 
     #[cfg(any(test, target_os = "linux", target_os = "macos"))]
@@ -82,45 +75,49 @@ impl StorageVolumeError {
         self
     }
 
-    pub(crate) fn operation(&self) -> &'static str {
-        self.operation
-    }
-    pub(crate) fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
+    pub(crate) fn context(&self) -> &OperationContext {
+        &self.context
     }
     pub(crate) fn cleanup_failed(&self) -> bool {
         self.cleanup_failed
     }
-    pub(crate) fn into_failure(self) -> OperationFailure {
-        self.failure
+    pub(crate) fn into_context(self) -> OperationContext {
+        self.context
+    }
+    pub(crate) fn take_original_error(&mut self) -> Option<Box<Self>> {
+        self.original_error.take()
     }
 
-    #[cfg(test)]
-    pub(crate) fn io_error(&self) -> Option<&std::io::Error> {
-        self.failure.io_error()
-    }
-    #[cfg(test)]
-    pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
-        self.io_error().map(std::io::Error::kind)
+    /// A probe failure is primary. Only failure of its subsequent removal is cleanup failure.
+    #[cfg(any(test, target_os = "linux", target_os = "macos"))]
+    pub(super) fn after_cleanup(
+        result: Result<(), Self>,
+        cleanup: Result<(), Self>,
+    ) -> Result<(), Self> {
+        match (result, cleanup) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(cleanup)) => Err(cleanup.during_cleanup()),
+            (Err(error), Err(mut cleanup)) => {
+                cleanup.original_error = Some(Box::new(error));
+                Err(cleanup.during_cleanup())
+            }
+        }
     }
 }
 
 impl Display for StorageVolumeError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "failed to {}", self.operation)?;
-        if let Some(path) = &self.path {
-            write!(formatter, " at {}", path.display())?;
+        if let Some(original) = &self.original_error {
+            write!(formatter, "{original}; cleanup also failed: ")?;
         }
-        if let Some(cause) = self.failure.cause() {
-            write!(formatter, ": {cause}")?;
-        }
-        Ok(())
+        Display::fmt(self.context(), formatter)
     }
 }
 
 impl std::error::Error for StorageVolumeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.failure.cause()
+        self.context().source()
     }
 }
 

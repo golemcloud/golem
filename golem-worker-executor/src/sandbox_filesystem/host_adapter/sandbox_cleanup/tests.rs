@@ -86,6 +86,31 @@ fn creation_failure_selection_keeps_cleanup_failure_priority() {
 }
 
 #[test]
+fn rollback_marks_an_unflagged_delete_failure_as_failed_cleanup() {
+    let creation = FilesystemStorageError::io(
+        "create sandbox",
+        None,
+        std::io::ErrorKind::Unsupported.into(),
+    );
+    let deletion = FilesystemStorageError::io(
+        "delete sandbox",
+        None,
+        std::io::ErrorKind::PermissionDenied.into(),
+    );
+    assert!(!deletion.cleanup_failed());
+    let error = creation_error_after_cleanup(creation, Err(deletion));
+    assert!(error.cleanup_failed());
+    assert!(error.is_terminal_failure());
+    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
+    assert!(error.to_string().contains("failed to create sandbox"));
+    assert!(
+        error
+            .to_string()
+            .contains("cleanup also failed: failed to delete sandbox")
+    );
+}
+
+#[test]
 async fn unmanaged_creation_replaces_stale_contents_and_deletes_verified() {
     let parent = tempfile::tempdir().unwrap();
     let provisioning = unmanaged_provisioning(parent.path().to_path_buf());

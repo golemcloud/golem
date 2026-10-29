@@ -102,6 +102,7 @@ use crate::services::registry_event_subscriber::WorkerExecutorRegistryInvalidati
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
+use crate::services::shutdown::SHUTDOWN_GRACE;
 use crate::services::worker::{DefaultWorkerService, WorkerService};
 use crate::services::worker_activator::{LazyWorkerActivator, WorkerActivator};
 use crate::services::worker_enumeration::{
@@ -153,6 +154,7 @@ use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
 use std::sync::Arc;
+use std::time::Duration;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -1263,6 +1265,17 @@ async fn build_scheduler_storage(
     }
 }
 
+/// Signals only this executor's shutdown. The caller still owns every task in its join set.
+async fn finish_failed_bootstrap(shutdown: &services::shutdown::Shutdown, grace: Duration) {
+    shutdown.cancel();
+    if !shutdown.wait_for_tracked(grace).await {
+        tracing::warn!(
+            ?grace,
+            "Failed-bootstrap cleanup exceeded the shutdown grace; executor resources may still be held"
+        );
+    }
+}
+
 /// Runs the worker executor
 pub async fn bootstrap_and_run_worker_executor<
     Ctx: WorkerCtx,
@@ -1295,6 +1308,7 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
     let shutdown = services::shutdown::Shutdown::new();
+    // The guard handles cancellation of this future. Error paths must signal before awaiting cleanup.
     let cancel_failed_bootstrap = shutdown.token().drop_guard();
 
     let created = create_worker_executor_impl::<Ctx, BootstrapImpl>(
@@ -1309,9 +1323,7 @@ pub async fn bootstrap_and_run_worker_executor<
     let (worker_executor_impl, epoch, registry_service) = match created {
         Ok(created) => created,
         Err(error) => {
-            shutdown.cancel();
-            join_set.shutdown().await;
-            shutdown.join_tracked().await;
+            finish_failed_bootstrap(&shutdown, SHUTDOWN_GRACE).await;
             return Err(error);
         }
     };
@@ -1380,9 +1392,7 @@ pub async fn bootstrap_and_run_worker_executor<
     }
     .await;
     if let Err(error) = started {
-        run_details.shutdown.cancel();
-        join_set.shutdown().await;
-        run_details.shutdown.join_tracked().await;
+        finish_failed_bootstrap(&run_details.shutdown, SHUTDOWN_GRACE).await;
         return Err(error);
     }
 
@@ -1525,6 +1535,49 @@ mod tests {
     use crate::services::golem_config::FilesystemStorageMode;
     use crate::workerctx::default::Context;
     use test_r::test;
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn failed_bootstrap_cleanup_is_bounded_and_leaves_caller_tasks_running() {
+        let mut caller_tasks = JoinSet::<Result<(), anyhow::Error>>::new();
+        let (started, running) = tokio::sync::oneshot::channel();
+        let (release_caller, released_caller) = tokio::sync::oneshot::channel();
+        let caller_task = caller_tasks.spawn(async move {
+            started.send(()).unwrap();
+            released_caller.await.unwrap();
+            Ok(())
+        });
+        running.await.unwrap();
+
+        let shutdown = services::shutdown::Shutdown::new();
+        let (release_cleanup, released_cleanup) = tokio::sync::oneshot::channel();
+        let token = shutdown.token();
+        let cleanup = shutdown.spawn(async move {
+            token.cancelled().await;
+            released_cleanup.await.unwrap();
+        });
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            finish_failed_bootstrap(&shutdown, Duration::from_millis(10)),
+        )
+        .await
+        .expect("failed-bootstrap cleanup must return after its grace");
+        assert!(shutdown.token().is_cancelled());
+        assert!(
+            !cleanup.is_finished(),
+            "a timeout must not abandon owned cleanup"
+        );
+        assert!(
+            !caller_task.is_finished(),
+            "executor failure must not abort caller tasks"
+        );
+
+        release_cleanup.send(()).unwrap();
+        shutdown.join_tracked().await;
+        cleanup.await.unwrap();
+        release_caller.send(()).unwrap();
+        caller_tasks.join_next().await.unwrap().unwrap().unwrap();
+    }
 
     /// Records the file mode creation mask of the thread when bootstrap starts the active agents,
     /// and starts none.

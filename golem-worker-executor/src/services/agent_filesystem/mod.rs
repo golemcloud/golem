@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::filesystem_pressure::FilesystemWriteRecovery;
-use crate::host_directories::{HostDirectory, HostDirectoryError};
+use crate::host_directories::HostDirectory;
 pub use crate::sandbox_filesystem::FilesystemStorageError;
 use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
 use crate::services::active_agents::InvocationLoops;
@@ -320,14 +320,6 @@ impl AgentFilesystems {
     pub(crate) fn retain_host_directories(&self) {
         self.scratch.retain();
         self.file_loader.retain_cache();
-    }
-}
-
-impl From<HostDirectoryError> for FilesystemStorageError {
-    fn from(error: HostDirectoryError) -> Self {
-        let operation = error.operation();
-        let path = Some(error.path().to_path_buf());
-        Self::from_failure(operation, path, error.into_failure())
     }
 }
 

@@ -2238,32 +2238,40 @@ refuses a new operation immediately and waits for existing registrations without
 Source leases retain their registration, so a multi-file load interrupted by shutdown fails its
 next source request as `InitialFileLoadFailure::Unavailable` instead of deadlocking behind its
 own earlier lease. In-process executor `release()` waits for tracked shutdown cleanup as well as
-the service graph. `shutdown_and_wait_for_invocation_loops()` also joins tracked cleanup, but does
+the service graph. `shutdown_and_wait_for_invocation_loops()` keeps the invocation-drain timeout
+separate from its tracked-cleanup grace. Only a successful return proves both completed. It does
 not drop the service graph or release its root lock. A fixed-root replacement
 must not start while old cleanup still owns the XFS lock or can remove its directories. A failed
 invocation drain disables fallback removal of both host directories and retains their temporary
 parent on disk. Production drain and cleanup share the existing shutdown grace, not a new budget.
 Bootstrap owns a cancellation guard until it returns `RunDetails`. `epoch_ticker::EpochTicker`
 owns its thread from creation, before snapshot binding or service construction can fail. Every
-drop stops and joins that thread. An ordinary bootstrap error cancels shutdown, stops server
-tasks and joins tracked cleanup before it returns. A cancelled bootstrap future still has the
-Drop fallback, not a completed asynchronous cleanup receipt.
+drop stops and joins that thread. An ordinary bootstrap error cancels only this executor's token
+and waits up to `SHUTDOWN_GRACE` for tracked cleanup. It never shuts down the caller's join set,
+which can also contain other services. A timeout logs that resources may still be held and returns
+the original error. Neither that error nor cancellation of the bootstrap future is a completed
+cleanup receipt. The cancellation guard exists for abandoned futures; normal error paths must
+signal before awaiting their bounded cleanup.
 
 `storage_volume` owns shared storage roots, capacity observations, native cloning and XFS project
 allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
 `sandbox_filesystem` owns one capability-confined tree, its handles, provisioning and verified
 deletion, and seed/copy orchestration. XFS quotas account and limit allocation; root capabilities
 confine path access. Physical pressure recovery observes the volume without accessing a sandbox.
-Sandbox, volume and host-directory errors own their operation and path. They share only
-`operation_failure::OperationFailure`, a typed I/O, task or verification cause without context or
-cleanup policy. Pressure validation returns its own configuration error. At service binding,
+Sandbox, volume and host-directory errors embed `operation_failure::OperationContext`. It owns
+the operation, optional path and typed `OperationFailure`, plus their construction, formatting
+and cause access. It carries no domain classification, cleanup flag or error-selection policy.
+The domains own those decisions. Pressure validation returns its own configuration error. At service binding,
 `FilesystemSetupError` keeps that cause distinct from storage failures; filesystem and active-agent
 constructors use explicit `Result<_, FilesystemSetupError>` contracts. Task errors retain
 `BlockingTaskError`; they do not acquire an invented I/O kind. Conversion to sandbox errors retains
 these facts without classifying a storage failure as a sandbox escape. A primary host-directory
-discard is not a cleanup failure; its caller marks it as cleanup only during rollback or shutdown. Executor directory setup
-and sandbox creation rollback retain the original and cleanup diagnostics, with the cleanup
-failure's classification.
+discard or preflight stale-probe removal is not a cleanup failure. Only the owning cleanup path
+applies that flag. Volume probes, executor directory setup and sandbox creation
+rollback retain both diagnostics when the operation and its cleanup fail, with the actual cleanup
+failure's classification. A failed rollback deletion always sets `cleanup_failed`, even if the
+lower-level error was unflagged. Worker startup then retains its cleanup obligation instead of
+treating the result only as a creation error. Task failures have no I/O kind and remain terminal.
 
 Native cloning uses source-first arguments. APFS `clone_file_at` creates a directory entry;
 XFS `clone_file_contents` fills an already-open target. The XFS project-aware operation keeps

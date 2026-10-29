@@ -268,17 +268,15 @@ pub(crate) fn probe_reflink(root: &XfsRoot) -> Result<(), StorageVolumeError> {
     std::fs::create_dir(&probe).map_err(|error| {
         StorageVolumeError::io("create XFS reflink probe", Some(&configured_probe), error)
     })?;
-    let probed = reflink_probe_contents(&probe);
+    let probed = reflink_probe_contents(&probe).map_err(|error| {
+        StorageVolumeError::io(
+            "validate XFS reflink support",
+            Some(&configured_probe),
+            error,
+        )
+    });
     let removed = remove_probe(&probe, &configured_probe, "remove XFS reflink probe");
-    probed
-        .map_err(|error| {
-            StorageVolumeError::io(
-                "validate XFS reflink support",
-                Some(&configured_probe),
-                error,
-            )
-        })
-        .and(removed)
+    StorageVolumeError::after_cleanup(probed, removed)
 }
 
 fn remove_probe(
@@ -286,9 +284,8 @@ fn remove_probe(
     configured: &Path,
     operation: &'static str,
 ) -> Result<(), StorageVolumeError> {
-    path_removal::remove_and_verify(path).map_err(|failure| {
-        StorageVolumeError::from_removal(operation, configured, failure).during_cleanup()
-    })
+    path_removal::remove_and_verify(path)
+        .map_err(|failure| StorageVolumeError::from_removal(operation, configured, failure))
 }
 
 /// Writes a file in the empty directory `probe`, reflinks it into a new file, and checks that the
@@ -538,7 +535,7 @@ impl ProjectQuotas {
         let probe = self.root.join(".golem-xfs-project-probe");
         if probe.exists() {
             std::fs::remove_dir_all(&probe).map_err(|error| {
-                StorageVolumeError::cleanup_io(
+                StorageVolumeError::io(
                     "remove stale managed XFS startup probe",
                     Some(&probe),
                     error,
@@ -569,17 +566,19 @@ impl ProjectQuotas {
         std::fs::create_dir(&probe).map_err(|error| {
             StorageVolumeError::io("create managed XFS startup probe", Some(&probe), error)
         })?;
-        if let Err(error) = self.probe_project_inheritance(&probe, project_id) {
-            let _ = std::fs::remove_dir_all(&probe);
-            return Err(StorageVolumeError::io(
-                "validate managed XFS project assignment and inheritance",
-                Some(&probe),
-                error,
-            ));
-        }
-        std::fs::remove_dir_all(&probe).map_err(|error| {
-            StorageVolumeError::cleanup_io("remove managed XFS startup probe", Some(&probe), error)
-        })?;
+        let probed = self
+            .probe_project_inheritance(&probe, project_id)
+            .map_err(|error| {
+                StorageVolumeError::io(
+                    "validate managed XFS project assignment and inheritance",
+                    Some(&probe),
+                    error,
+                )
+            });
+        let removed = std::fs::remove_dir_all(&probe).map_err(|error| {
+            StorageVolumeError::io("remove managed XFS startup probe", Some(&probe), error)
+        });
+        StorageVolumeError::after_cleanup(probed, removed)?;
         self.finish_project_cleanup_with_retry(project_id, cleanup_retry)
             .map_err(|error| {
                 StorageVolumeError::cleanup_io(

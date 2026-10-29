@@ -126,9 +126,15 @@ async fn create_in_refuses_an_existing_name() {
 
     assert_eq!(child.path().as_path(), root.path().join(".scratch/child"));
     assert!(child.path().as_path().is_dir());
-    assert_eq!(existing_directory.io_kind(), Some(ErrorKind::AlreadyExists));
-    assert_eq!(existing_file.io_kind(), Some(ErrorKind::AlreadyExists));
-    assert_eq!(invalid.io_kind(), Some(ErrorKind::InvalidInput));
+    assert_eq!(
+        existing_directory.context().io_kind(),
+        Some(ErrorKind::AlreadyExists)
+    );
+    assert_eq!(
+        existing_file.context().io_kind(),
+        Some(ErrorKind::AlreadyExists)
+    );
+    assert_eq!(invalid.context().io_kind(), Some(ErrorKind::InvalidInput));
 }
 
 #[test]
@@ -144,6 +150,7 @@ async fn child_refuses_a_name_that_is_not_one_normal_component() {
                     .path()
                     .child(OsStr::new(name))
                     .unwrap_err()
+                    .context()
                     .io_kind(),
                 Some(ErrorKind::InvalidInput),
                 "{name:?} must be refused"
@@ -208,7 +215,10 @@ async fn discard_reports_a_removal_failure() {
 
     let error = directory.discard().await.unwrap_err();
 
-    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
+    assert_eq!(
+        error.context().io_kind(),
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
     assert!(!error.to_string().contains("directory filesystem"));
     assert!(
         error

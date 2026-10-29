@@ -672,7 +672,7 @@ impl InitialFileSources {
             .map(|source| source.path().clone())
             .ok_or_else(|| {
                 Error::Sandbox(FilesystemStorageError::verification(
-                    "find the loaded initial-file source of",
+                    "find the loaded initial-file source",
                     Some(path),
                 ))
             })
@@ -855,7 +855,7 @@ pub(super) async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
     let entries = match &node {
         SandboxHandle::Directory(directory) => sandbox.read_directory(directory).await,
         SandboxHandle::File(_) => Err(FilesystemStorageError::verification(
-            "list the entries of an initial-file directory at",
+            "list the entries of an initial-file directory",
             Some(path),
         )),
     };
@@ -957,7 +957,7 @@ pub(super) async fn content_hash<Adapter: SandboxFilesystemAdapter>(
         .await
         .map(|hasher| hasher.finalize()),
         SandboxHandle::Directory(_) => Err(FilesystemStorageError::verification(
-            "hash the content of an initial file at",
+            "hash the content of an initial file",
             Some(path),
         )),
     };
@@ -1169,7 +1169,7 @@ pub(super) fn validate_compatible(
         })
         .map_or(Ok(()), |(path, _)| {
             Err(Error::Sandbox(FilesystemStorageError::verification(
-                "resolve conflicting owner filesystem provision declarations at",
+                "resolve conflicting owner filesystem provision declarations",
                 Some(path),
             )))
         })

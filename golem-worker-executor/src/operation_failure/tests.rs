@@ -19,7 +19,46 @@ use test_r::test;
 fn task_failures_are_not_io_errors() {
     let failure = OperationFailure::Task(BlockingTaskError::Panicked);
     assert!(failure.io_error().is_none());
+    assert!(matches!(
+        failure.task_error(),
+        Some(BlockingTaskError::Panicked)
+    ));
     assert!(failure.cause().unwrap().is::<BlockingTaskError>());
+}
+
+#[test]
+fn operation_context_formats_paths_and_preserves_typed_causes_without_policy() {
+    let context = OperationContext::verification("inspect tree", Some(Path::new("/root")));
+    assert_eq!(context.to_string(), "failed to inspect tree at /root");
+    assert!(std::error::Error::source(&context).is_none());
+    let context = OperationContext::verification("validate capacity", None);
+    assert_eq!(context.to_string(), "failed to validate capacity");
+    let context =
+        OperationContext::task_failure("observe volume", None, BlockingTaskError::Panicked);
+    assert!(context.io_kind().is_none());
+    assert!(matches!(
+        context.task_error(),
+        Some(BlockingTaskError::Panicked)
+    ));
+    assert!(
+        std::error::Error::source(&context)
+            .unwrap()
+            .is::<BlockingTaskError>()
+    );
+    let context = OperationContext::io(
+        "read tree",
+        Some(Path::new("/root")),
+        std::io::ErrorKind::PermissionDenied.into(),
+    );
+    assert_eq!(
+        context.io_kind(),
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
+    assert!(
+        std::error::Error::source(&context)
+            .unwrap()
+            .is::<std::io::Error>()
+    );
 }
 
 #[test]

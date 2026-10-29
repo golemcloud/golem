@@ -17,7 +17,7 @@ use crate::services::golem_config::FilesystemStorageMode;
 use golem_common::model::RetryConfig;
 use test_r::test;
 
-fn assert_bind_clone_failure_precedes_cleanup_failure(errno: i32) {
+fn assert_bind_keeps_clone_and_cleanup_failures(errno: i32) {
     use std::cell::Cell;
     use std::os::unix::fs::FileExt as _;
 
@@ -47,25 +47,36 @@ fn assert_bind_clone_failure_precedes_cleanup_failure(errno: i32) {
             Err(std::io::Error::from_raw_os_error(libc::EIO))
         },
     );
-    let Err(error) = result else {
+    let Err(mut error) = result else {
         panic!("bind must not return a volume after the clone probe fails");
     };
     assert_eq!(clone_attempts.get(), 1);
     assert_eq!(close_attempts.get(), 1);
     assert!(root.is_dir());
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
-    assert_eq!(error.io_error().unwrap().raw_os_error(), Some(errno));
+    assert_eq!(
+        error.context().io_error().unwrap().raw_os_error(),
+        Some(libc::EIO)
+    );
     let original = std::io::Error::from_raw_os_error(errno);
+    let cleanup = std::io::Error::from_raw_os_error(libc::EIO);
     assert_eq!(
         error.to_string(),
         format!(
-            "failed to probe APFS clone for local development at {}: {original}",
+            "failed to probe APFS clone for local development at {}: {original}; cleanup also failed: failed to remove APFS clone probe at {}: {cleanup}",
+            root.display(),
             root.display()
         )
     );
-    assert_eq!(error.io_kind(), Some(original.kind()));
+    assert_eq!(error.context().io_kind(), Some(cleanup.kind()));
     assert!(error.cleanup_failed());
-    assert!(!error.into_parts().4);
+    assert!(error.context().task_error().is_none());
+    let primary = error.take_original_error().unwrap();
+    assert_eq!(
+        primary.context().io_error().unwrap().raw_os_error(),
+        Some(errno)
+    );
+    assert!(!primary.cleanup_failed());
 }
 
 #[test]
@@ -90,7 +101,7 @@ fn apfs_constructor_refuses_a_root_on_a_non_cloning_filesystem() {
     );
     assert!(error.to_string().contains(root.path().to_str().unwrap()));
     assert_eq!(
-        error.io_error().unwrap().raw_os_error(),
+        error.context().io_error().unwrap().raw_os_error(),
         Some(libc::ENOTSUP),
     );
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
@@ -113,22 +124,53 @@ fn apfs_failed_clone_probe_reports_the_root_and_removes_its_files() {
     );
     assert!(error.to_string().contains(root.path().to_str().unwrap()));
     assert_eq!(
-        error.io_kind(),
+        error.context().io_kind(),
         Some(std::io::Error::from_raw_os_error(libc::ENOTSUP).kind())
     );
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    assert!(!error.cleanup_failed());
 }
 
 #[test]
 #[test_r::tag(native_apfs)]
-fn apfs_bind_enotsup_clone_failure_precedes_cleanup_failure() {
-    assert_bind_clone_failure_precedes_cleanup_failure(libc::ENOTSUP);
+fn apfs_bind_enotsup_clone_and_cleanup_failures_keep_both_causes() {
+    assert_bind_keeps_clone_and_cleanup_failures(libc::ENOTSUP);
 }
 
 #[test]
 #[test_r::tag(native_apfs)]
-fn apfs_bind_exdev_clone_failure_precedes_cleanup_failure() {
-    assert_bind_clone_failure_precedes_cleanup_failure(libc::EXDEV);
+fn apfs_bind_exdev_clone_and_cleanup_failures_keep_both_causes() {
+    assert_bind_keeps_clone_and_cleanup_failures(libc::EXDEV);
+}
+
+#[test]
+#[test_r::tag(native_apfs)]
+fn apfs_successful_probe_with_failed_removal_reports_the_cleanup_cause() {
+    use std::os::unix::fs::FileExt as _;
+    let root = tempfile::tempdir().unwrap();
+    let mut error = probe_clone(
+        root.path(),
+        |source, directory, name| {
+            let parent = cap_std::fs::Dir::from_std_file(directory.try_clone().unwrap());
+            let mut target = parent.create(name)?;
+            let mut contents = [0; 4096];
+            source.read_exact_at(&mut contents, 0)?;
+            target.write_all(&contents)?;
+            Ok(())
+        },
+        |probe| {
+            probe.close()?;
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        },
+    )
+    .unwrap_err();
+    assert!(error.cleanup_failed());
+    assert_eq!(error.context().operation(), "remove APFS clone probe");
+    assert_eq!(
+        error.context().io_kind(),
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
+    assert!(error.take_original_error().is_none());
 }
 
 #[test]
