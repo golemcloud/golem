@@ -14,7 +14,7 @@ export const meta = {
 export const hero = {
   eyebrow: "Pricing",
   heading: "Golem Cloud pricing",
-  lead: "Run your agents on infrastructure we manage. Start building with the free Developer Preview.",
+  lead: "Run your agents and tools on infrastructure we manage. Start with the free Developer Preview.",
 };
 export const offers = [
   {
@@ -123,7 +123,7 @@ export const budget = {
     body: "For an agent holding 256 MiB throughout that active time. Measure compute separately in GCU; there is no fixed conversion from request count or elapsed time.",
   },
   externalCosts:
-    "Budget separately for model APIs and other services you use through your own provider accounts. Their charges are independent of Golem’s resource usage.",
+    "Golem Cloud runs your agent code and tools. Budget separately for model APIs and other services billed through your provider accounts.",
   cta: contact,
   secondary: { label: "Ask in the community", href: urls.discord },
 };
