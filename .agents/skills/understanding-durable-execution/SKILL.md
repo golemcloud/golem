@@ -1180,7 +1180,9 @@ even the empty status baseline are corrupt history; they do not mean the worker 
 status can still name an invocation whose completion was committed and published as current, so
 the hydrated result cache keeps the keys of committed completions that the status has not folded
 yet, apart from the evictable payloads, and the terminal stop (`fail_pending_invocations`) does not
-fail those keys. When
+fail those keys. For a key that it fails, it caches the typed agent error and stderr of an
+`InvocationFailed` (any other error as `AgentError::Unknown`), so a later lookup of the key returns
+the same error as its waiters. When
 `on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
 classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
 that failed for good fails the invocation with its cause. A storage that did not answer returns

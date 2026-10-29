@@ -568,6 +568,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let mut origins = self.external_invocation_origins.write().await;
         let keys_to_fail = invocation_keys_to_fail(&status, None, true);
+        // A later lookup of a failed key must return the error its waiters received.
+        let (cached_error, cached_stderr) = match &error {
+            WorkerExecutorError::InvocationFailed { error, stderr } => {
+                (error.clone(), stderr.clone())
+            }
+            _ => (
+                golem_common::model::oplog::AgentError::Unknown(error.to_string()),
+                String::new(),
+            ),
+        };
 
         let mut invocation_results = self.hydrated_invocation_results.write().await;
         for idempotency_key in &keys_to_fail {
@@ -584,13 +594,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 InvocationResult::Cached {
                     result: Err(FailedInvocationResult {
                         trap_type: TrapType::Error {
-                            error: golem_common::model::oplog::AgentError::Unknown(
-                                error.to_string(),
-                            ),
+                            error: cached_error.clone(),
                             retry_from: OplogIndex::INITIAL,
                             semantic_trap_retry_override: None,
                         },
-                        stderr: String::new(),
+                        stderr: cached_stderr.clone(),
                     }),
                 },
                 status.invocation_results.revert_generation(),
