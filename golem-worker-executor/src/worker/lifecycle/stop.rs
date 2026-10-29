@@ -194,6 +194,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
                         .await;
                 }
+                // As in the `Running` arm: the worker is unloaded from here on, so a start can
+                // register the next generation's grant before this loop task exits.
+                self.release_linear_memory_grant();
                 let pending_live_invocations = stopping.pending_live_invocations;
                 let (instance, notify) = complete_stopping_worker(stopping, final_state);
                 *runtime = instance;

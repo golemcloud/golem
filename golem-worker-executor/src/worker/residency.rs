@@ -427,7 +427,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// Re-checks the eviction classification under the worker lifecycle lock to avoid
     /// races. Returns `true` if the worker was actually stopped.
-    pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> bool {
+    pub async fn stop_if_evictable(self: &Arc<Self>, target_class: EvictionClass) -> bool {
         self.stop_if_evictable_with_outcome(
             target_class,
             None,
@@ -437,7 +437,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             != EvictionStopOutcome::Ineligible
     }
     pub(crate) async fn stop_if_evictable_with_outcome(
-        &self,
+        self: &Arc<Self>,
         target_class: EvictionClass,
         expected_eligibility: Option<FilesystemPressureEligibility>,
         unload_request: UnloadRequest,
@@ -505,11 +505,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             drop(instance_guard);
             self.handle_stop_result(stop_result).await;
-            match &*self.instance.lock().await {
+            let outcome = match &*self.instance.lock().await {
                 WorkerInstance::CleanupFailed(_) => EvictionStopOutcome::CleanupFailed,
                 WorkerInstance::Unloaded { .. } => EvictionStopOutcome::Unloaded,
                 _ => EvictionStopOutcome::CleanupFailed,
+            };
+            if outcome == EvictionStopOutcome::Unloaded
+                && !self.pending_invocations().await.is_empty()
+            {
+                // Only the invocation loop runs durable pending invocations, and their callers
+                // already started the worker and only wait. The start waits for memory admission.
+                // It is spawned because eviction can run inside the memory growth of another
+                // worker.
+                let worker = self.clone();
+                self.tasks.spawn(async move {
+                    if let Err(error) = Worker::start_if_needed(worker).await {
+                        warn!(%error, "Failed to restart an evicted worker with pending invocations");
+                    }
+                });
             }
+            outcome
         } else {
             drop(instance_guard);
             if let (Some(generation), Some(active_agent)) = (reopen_entity_generation, active_agent)
