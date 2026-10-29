@@ -1,5 +1,0 @@
-{
-    "import": [
-        "moonbitlang/x/sys/internal/ffi"
-    ]
-}

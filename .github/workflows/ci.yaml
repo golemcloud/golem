@@ -147,7 +147,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-
       - name: Test release tooling
-        run: cargo make --profile ci check-shared-crates-versioning
+        run: |
+          node --test .github/scripts/release-channel.test.mjs
+          cargo test --locked --manifest-path .github/scripts/release-tooling-tests/Cargo.toml
+          cargo make --profile ci check-shared-crates-versioning
       # Share cargo-make's full workspace metadata discovery across all checks.
       - name: Unit tests and source drift checks
         run: cargo make --profile ci --time-summary --skip-tasks test-component-middleware-unit-tests unit-tests-and-checks

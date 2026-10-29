@@ -147,11 +147,15 @@ agent is retired for its lost shard instead of retried. The refusal travels as a
 `WorkerExecutorError::OplogFenced`) to whoever acts on it; nothing re-reads the latch to
 reinterpret a failure that already happened.
 
-The check sits at the commit, not at the effect. A call whose `Start` is only buffered when its
-effect runs can still run on an executor that has just lost the shard; its commit is then
-refused and the new owner runs it again, the same window as a crash before that commit.
-Socket sends, DemandStream parents, and RDBMS protocol owners commit their actual `Start`
-before the effect, so a refusal stops them before the effect. Oplogs that
+The shared direct and accessor durable-call start paths commit `WriteRemote` with
+`CommitLevel::DurableOnly` after appending the actual `Start` and before returning the session
+that permits the effect. This preserves preceding guest observations, including random inputs
+used in a guest-supplied idempotency key. A refused commit prevents dispatch. The accessor path
+releases the owner-wallet boundary before awaiting the commit. Completion still commits the `End`.
+Snapshot calls append nothing; the barrier does not force storage for ephemeral agents.
+The fence is checked at the commit, not atomically with the external effect: a shard can still
+move after a successful commit, so the receiver must deduplicate retries. Socket sends,
+DemandStream parents, and RDBMS protocol owners retain their explicit barriers. Oplogs that
 assert no epoch are never refused: a handle opened before this executor has an assignment, and
 fork stages and their publication. The archive transfer is fenced like the primary oplog (see
 "Resharding, revocation and the oplog epoch fence" below), and so is an ephemeral agent's oplog,
@@ -1977,7 +1981,9 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    without `End`) re-dispatches with the **same** key (`InvocationFreshnessDisposition::MayExist`,
    the default). RPC is a `WriteRemote` call, so repair completes the existing `Start`.
 6. Only the first live dispatch to an ephemeral target may use `KnownFresh`
-   (`wasm_rpc/mod.rs`), after a `DurableOnly` commit makes the caller's `Start` durable.
+   (`durable_host/rpc/`), after a `DurableOnly` commit makes the caller's `Start` durable.
+   Streaming RPC consumes this hint during target preparation, before it builds stream mappings
+   with the returned fingerprint; the subsequent invocation uses `MayExist`.
    Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
    identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the idempotency key — deterministic,
    never random.
