@@ -41,6 +41,108 @@ struct RateLimitBackendStats {
     recorded_decisions: u64,
 }
 
+struct AcceptedToolSettlementHook {
+    owner: OwnedAgentId,
+    start: OplogIndex,
+    release: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    released: Arc<std::sync::atomic::AtomicBool>,
+    entered: tokio::sync::Semaphore,
+    unloading: tokio::sync::Semaphore,
+    settlement_wait: tokio::sync::Semaphore,
+    filesystem_cleanup: tokio::sync::Semaphore,
+    deadline: Option<Duration>,
+}
+
+struct AcceptedToolSettlementControl {
+    released: Arc<std::sync::atomic::AtomicBool>,
+    _release: tokio::sync::oneshot::Sender<()>,
+}
+
+impl Drop for AcceptedToolSettlementControl {
+    fn drop(&mut self) {
+        self.released.store(true, Ordering::Release);
+    }
+}
+
+impl AcceptedToolSettlementHook {
+    fn new(
+        owner: OwnedAgentId,
+        start: OplogIndex,
+        deadline: Option<Duration>,
+    ) -> (Arc<Self>, AcceptedToolSettlementControl) {
+        let (release, receive) = tokio::sync::oneshot::channel();
+        let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (
+            Arc::new(Self {
+                owner,
+                start,
+                release: std::sync::Mutex::new(Some(receive)),
+                released: released.clone(),
+                entered: tokio::sync::Semaphore::new(0),
+                unloading: tokio::sync::Semaphore::new(0),
+                settlement_wait: tokio::sync::Semaphore::new(0),
+                filesystem_cleanup: tokio::sync::Semaphore::new(0),
+                deadline,
+            }),
+            AcceptedToolSettlementControl {
+                released,
+                _release: release,
+            },
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl golem_worker_executor::worker::WorkerDeletionHook for AcceptedToolSettlementHook {
+    async fn before_owner_operation_settlement(&self, owner: &OwnedAgentId) {
+        if owner == &self.owner {
+            self.settlement_wait.add_permits(1);
+        }
+    }
+
+    async fn before_failed_tool_settlement(&self, owner: &OwnedAgentId, start: OplogIndex) {
+        if owner == &self.owner && start == self.start {
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                self.entered.add_permits(1);
+                let _ = release.await;
+            }
+        }
+    }
+
+    fn unload_deadline(
+        &self,
+        owner: &OwnedAgentId,
+        deadline: std::time::Instant,
+    ) -> std::time::Instant {
+        if owner == &self.owner && !self.released.load(Ordering::Acquire) {
+            self.unloading.add_permits(1);
+            self.deadline
+                .map_or(deadline, |duration| std::time::Instant::now() + duration)
+        } else {
+            deadline
+        }
+    }
+
+    async fn before_filesystem_cleanup(&self, owner: &OwnedAgentId) {
+        if owner == &self.owner {
+            assert!(
+                self.released.load(Ordering::Acquire),
+                "filesystem cleanup passed the original accepted supervisor"
+            );
+            self.filesystem_cleanup.add_permits(1);
+        }
+    }
+
+    async fn before_stage(
+        &self,
+        _owner: &OwnedAgentId,
+        _stage: golem_worker_executor::worker::WorkerDeletionStage,
+    ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
+        Ok(())
+    }
+}
+
 fn rate_limit_parameters(
     definition: &ToolMiddleware,
     policy: &str,
@@ -2556,6 +2658,33 @@ async fn rate_3_crash_after_leaf_effect_replays_without_an_extra_charge_or_effec
     #[tagged_as("rate_limit_middleware")] rate_limit: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    accepted_supervisor_crash_checkpoint(last_unique_id, deps, provider, caller, rate_limit, false)
+        .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn accepted_supervisor_outlives_unload_deadline_without_restarting_the_owner(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("rate_limit_middleware")] rate_limit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    accepted_supervisor_crash_checkpoint(last_unique_id, deps, provider, caller, rate_limit, true)
+        .await
+}
+
+async fn accepted_supervisor_crash_checkpoint(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    rate_limit: &PrecompiledComponent,
+    expire_unload: bool,
+) -> anyhow::Result<()> {
     setup_rate_limit_chain!(
         last_unique_id,
         deps,
@@ -2577,6 +2706,10 @@ async fn rate_3_crash_after_leaf_effect_replays_without_an_extra_charge_or_effec
     let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut arrivals) =
         start_crash_checkpoint_server().await;
     let agent_id = agent_id!("ToolStreamingCaller", "rate-3-owner");
+    let mut primary_disposal = executor.probe_runtime_disposal(&golem_common::model::AgentId {
+        component_id: caller_component.id,
+        agent_id: agent_id.to_string(),
+    });
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -2624,8 +2757,122 @@ async fn rate_3_crash_after_leaf_effect_replays_without_an_extra_charge_or_effec
     assert_eq!(before.attempts, 1);
     assert_eq!(before.committed_charges, 1);
 
-    executor.simulated_crash(&worker_id).await?;
-    let replay = next_crash_checkpoint(&mut arrivals, "rate-limit-leaf-after-effect").await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let active = executor.active_agent(&owner).await.unwrap();
+    let worker = active.primary();
+    let initial = worker.owner_execution().tool_operation_metadata();
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let leaf_start =
+        entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe")[0].oplog_index;
+    let original_operation = initial
+        .operations
+        .iter()
+        .find(|operation| operation.start_index == Some(leaf_start))
+        .expect("the leaf checkpoint belongs to a real accepted operation")
+        .clone();
+    let (hook, control) = AcceptedToolSettlementHook::new(
+        owner.clone(),
+        leaf_start,
+        expire_unload.then_some(Duration::from_millis(250)),
+    );
+    executor.set_worker_deletion_hook(hook.clone());
+    let crash = executor.signal_simulated_crash(&worker_id).await?;
+    crash.await?;
+    tokio::select! {
+        permit = hook.entered.acquire() => permit?.forget(),
+        result = invocation.as_mut() => panic!("call settled before the accepted supervisor hold: {result:?}"),
+    }
+    let retained = worker.owner_execution().tool_operation_metadata();
+    assert_eq!(
+        retained.owner_failure,
+        Some(ToolOwnerFailureMetadata::Lifecycle)
+    );
+    assert!(retained.operations.iter().any(|operation| {
+        operation.operation_id == original_operation.operation_id
+            && operation.start_index == Some(leaf_start)
+            && operation.winner == ToolOperationWinnerMetadata::FencedByOwner
+    }));
+    assert!(
+        active.entity_metadata().slots.iter().all(|slot| {
+            slot.invocations
+                .iter()
+                .all(|invocation| invocation.invocation_id.start_index() != leaf_start)
+        }),
+        "the held supervisor no longer owns an entity registration or Store"
+    );
+    hook.unloading.acquire().await?.forget();
+    tokio::time::timeout(Duration::from_secs(30), primary_disposal.recv())
+        .await?
+        .expect("the primary runtime was physically destroyed before supervisor release");
+    tokio::time::timeout(Duration::from_secs(30), hook.settlement_wait.acquire())
+        .await??
+        .forget();
+    assert_eq!(executor.instance_load_count(&worker_id), 1);
+
+    if expire_unload {
+        let invocation_failure = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut())
+            .await?
+            .expect_err("the unload deadline must fail the pending invocation");
+        assert!(
+            invocation_failure
+                .to_string()
+                .contains("agent unload deadline reached"),
+            "{invocation_failure}"
+        );
+        let failure = tokio::time::timeout(
+            Duration::from_secs(30),
+            golem_worker_executor::worker::Worker::start_if_needed(worker.clone()),
+        )
+        .await?
+        .expect_err("a real unload deadline must publish CleanupFailed");
+        assert!(
+            failure
+                .to_string()
+                .contains("agent unload deadline reached"),
+            "{failure}"
+        );
+        assert!(executor.resume(&worker_id, false).await.is_err());
+        assert_eq!(executor.instance_load_count(&worker_id), 1);
+        assert_eq!(hook.filesystem_cleanup.available_permits(), 0);
+        let cleanup = worker.wait_for_unload_cleanup();
+        tokio::pin!(cleanup);
+        assert!(
+            futures::FutureExt::now_or_never(cleanup.as_mut()).is_none(),
+            "CleanupFailed retains the original pending cleanup, not just its deadline error"
+        );
+        drop(control);
+        tokio::time::timeout(Duration::from_secs(30), cleanup).await??;
+        hook.filesystem_cleanup.acquire().await?.forget();
+        assert!(
+            worker
+                .owner_execution()
+                .tool_operation_metadata()
+                .operations
+                .is_empty()
+        );
+        assert!(
+            golem_worker_executor::worker::Worker::start_if_needed(worker.clone())
+                .await
+                .is_err()
+        );
+        assert!(executor.resume(&worker_id, false).await.is_err());
+        assert_eq!(
+            executor.instance_load_count(&worker_id),
+            1,
+            "late cleanup must not silently restart a failed owner"
+        );
+        checkpoint_server.abort();
+        effect_server.abort();
+        return Ok(());
+    }
+
+    assert_eq!(hook.filesystem_cleanup.available_permits(), 0);
+    assert_eq!(executor.instance_load_count(&worker_id), 1);
+    drop(control);
+    let replay = tokio::select! {
+        checkpoint = next_crash_checkpoint(&mut arrivals, "rate-limit-leaf-after-effect") => checkpoint?,
+        result = invocation.as_mut() => panic!("rate-limit call settled before its replayed leaf checkpoint: {result:?}"),
+    };
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(200), effects.recv())
             .await

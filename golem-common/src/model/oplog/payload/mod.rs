@@ -304,9 +304,6 @@ oplog_payload! {
         GolemRpcCreate {
             remote_agent_id: AgentId
         },
-        GolemRpcResource {
-            creation_index: OplogIndex
-        },
         GolemRpcAsyncInvokeRejection {
             remote_agent_id: AgentId,
             idempotency_key: IdempotencyKey,
@@ -341,9 +338,6 @@ oplog_payload! {
         },
         P3HttpClientSend {
             request: SerializableP3HttpClientSend
-        },
-        P3HttpSpanCleanup {
-            send_start_index: OplogIndex
         },
         /// Payload of a `HostStreamFrame` hint oplog entry recording one frame of a
         /// P3 HTTP outgoing request body. Not a host-call request: these frames are
@@ -995,11 +989,9 @@ pub mod host_functions {
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemApiRetryNextRetryDelay => "golem::api::retry", "next_retry_delay", GolemRetryNextDelay, GolemRetryNextDelay),
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
-        (GolemRpcWasmRpcDrop => "golem::rpc::wasm-rpc", "drop", GolemRpcResource, GolemRpcUnit),
         (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),
         (GolemContextStartSpan => "golem::api::context", "start-span", NoInput, GolemApiUnit),
         (GolemContextSpanFinish => "golem::api::context::span", "finish", GolemContextSpanResource, GolemApiUnit),
-        (GolemContextSpanDrop => "golem::api::context::span", "drop", GolemContextSpanResource, GolemApiUnit),
         (GolemContextSpanSetAttributes => "golem::api::context::span", "set-attributes", GolemContextSpanAttributes, GolemApiUnit),
         (P3KeyvalueCacheGet => "keyvalue::cache", "get", KVCacheKey, KVGet, denied = denied::keyvalue::kv_get),
         (P3KeyvalueCacheExists => "keyvalue::cache", "exists", KVCacheKey, KVDelete, denied = denied::keyvalue::kv_delete),
@@ -1007,7 +999,6 @@ pub mod host_functions {
         (P3KeyvalueCacheGetOrSet => "keyvalue::cache", "get-or-set", KVCacheKey, KVGet, denied = denied::keyvalue::kv_get),
         (P3KeyvalueCacheDelete => "keyvalue::cache", "delete", KVCacheKey, KVUnit, denied = denied::keyvalue::kv_unit),
         (P3KeyvalueCacheVacancyFill => "keyvalue::cache::vacancy", "vacancy-fill", KVCacheKeyAndTtl, KVUnit),
-        (P3KeyvalueCacheVacancyDrop => "keyvalue::cache::vacancy", "drop", KVCacheKey, KVUnit),
         (P3KeyvalueTypesIncomingValueConsumeAsync => "keyvalue::types::incoming_value", "incoming_value_consume_async", NoInput, P3KeyvalueIncomingValueStream),
         (P3BlobstoreTypesIncomingValueConsumeAsync => "blobstore::types::incoming_value", "incoming_value_consume_async", NoInput, P3BlobstoreIncomingValueStream),
         (P3SystemClockNow => "clocks::system-clock", "now", NoInput, WallClock),
@@ -1030,7 +1021,6 @@ pub mod host_functions {
         (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend, denied = denied::sockets::p3_udp_send),
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
         (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult, denied = denied::http::p3_send),
-        (P3HttpSpanCleanup => "http::client", "span-cleanup", P3HttpSpanCleanup, GolemApiUnit),
         (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
         (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk),
         (P3HttpClientRequestBodyTransmission => "http::types::request", "body-transmission", NoInput, P3HttpClientRequestBodyTransmission),

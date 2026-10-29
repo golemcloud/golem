@@ -205,6 +205,8 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
             .prepare(
@@ -216,6 +218,8 @@ impl WorkerProxy for LoopbackCardTransferProxy {
                 config,
                 principal,
                 auth_ctx,
+                idempotency_key,
+                freshness_disposition,
             )
             .await
     }

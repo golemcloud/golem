@@ -82,6 +82,7 @@ message OplogEntry {
     SnapshotConfirmedParameters SnapshotConfirmed = 67;
     ToolAttachmentReadParameters ToolAttachmentRead = 68;
     ToolAttachmentControlParameters ToolAttachmentControl = 69;
+    SpanClosedParameters SpanClosed = 70;
   }
 }
 
@@ -729,6 +730,13 @@ message SnapshotDataParameters {
 message SnapshotConfirmedParameters {
   google.protobuf.Timestamp timestamp = 1;
   string filesystem_snapshot = 2;
+}
+
+// The agent released a host resource whose only durable content is its span, and the span closed.
+message SpanClosedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  optional uint64 resource_start_index = 2;
+  SpanFinished span_finished = 3;
 }
 
 message RawSnapshotData {

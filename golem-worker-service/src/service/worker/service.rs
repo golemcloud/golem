@@ -823,6 +823,8 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         let component = self
             .component_service
@@ -849,6 +851,8 @@ impl WorkerService {
                 auth_ctx,
                 invocation_context,
                 principal,
+                idempotency_key,
+                freshness_disposition,
             )
             .await?;
 
@@ -4405,6 +4409,8 @@ mod tests {
             _: AuthCtx,
             _: Option<InvocationContext>,
             _: Option<golem_api_grpc::proto::golem::component::Principal>,
+            _: Option<IdempotencyKey>,
+            _: InvocationFreshnessDisposition,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
             self.prepared_agent_ids
                 .lock()
@@ -5368,6 +5374,8 @@ mod tests {
                 auth_ctx_with_permissions(vec![run_permission.clone()]),
                 None,
                 None,
+                None,
+                InvocationFreshnessDisposition::MayExist,
             )
             .await
             .unwrap();
@@ -5405,6 +5413,8 @@ mod tests {
                     auth_ctx_with_permissions(vec![other_method_permission]),
                     None,
                     None,
+                    None,
+                    InvocationFreshnessDisposition::MayExist,
                 )
                 .await
                 .is_err()

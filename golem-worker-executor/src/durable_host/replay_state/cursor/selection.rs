@@ -63,6 +63,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         | OplogEntry::CancelPendingInvocation { .. }
         | OplogEntry::Snapshot { .. }
         | OplogEntry::SnapshotConfirmed { .. }
+        | OplogEntry::SpanClosed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }
@@ -136,6 +137,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::RolledBackRemoteTransaction { .. }
         | OplogEntry::Snapshot { .. }
         | OplogEntry::SnapshotConfirmed { .. }
+        | OplogEntry::SpanClosed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }
@@ -392,16 +394,6 @@ impl CursorTx<'_> {
         &mut self,
         claim: &StartClaim,
     ) -> Result<MissingStart, WorkerExecutorError> {
-        if let Some(invocation_id) = claim.expected_invocation_id()
-            && self.unclaimed_start_with_invocation_id(invocation_id)
-        {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                claim.expected_description(),
-                "no matching Start; a Start with the same invocation id exists but does not match"
-                    .to_string(),
-            ));
-        }
-
         loop {
             self.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
                 .await?;
@@ -543,7 +535,10 @@ impl CursorTx<'_> {
 
     /// Whether a `Start` nobody has claimed yet carries `invocation_id`: a retained one, or one
     /// between the cursor and the replay target.
-    fn unclaimed_start_with_invocation_id(&self, invocation_id: DurableInvocationId) -> bool {
+    pub(in crate::durable_host::replay_state) fn unclaimed_start_with_invocation_id(
+        &self,
+        invocation_id: DurableInvocationId,
+    ) -> bool {
         self.st
             .retained_starts
             .values()

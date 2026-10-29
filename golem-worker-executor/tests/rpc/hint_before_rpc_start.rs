@@ -52,9 +52,13 @@ impl Rpc for DispatchThenHangRpc {
         stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
+        key: Option<IdempotencyKey>,
+        freshness: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         self.inner
-            .create_demand(agent, method, created_by, caller, env, stack, config, auth)
+            .create_demand(
+                agent, method, created_by, caller, env, stack, config, auth, key, freshness,
+            )
             .await
     }
 

@@ -1144,6 +1144,8 @@ async fn an_agent_whose_shard_leaves_while_it_is_being_created_is_given_up_once_
             auth_ctx: Some(executor.auth_ctx().into()),
             principal: None,
             invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
         };
         async move { client.prepare_worker(request).await }
     });

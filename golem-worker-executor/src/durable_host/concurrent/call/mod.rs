@@ -55,6 +55,7 @@ pub(in crate::durable_host::concurrent) use execution::ambient_trap_context;
 use terminal::encode_response;
 pub(crate) use terminal::end_durable_function_access;
 pub(crate) use terminal::finish_span_in_memory;
+pub(crate) use terminal::record_released_resource_span;
 #[cfg(test)]
 use terminal::response_has_bounded_encoding_stack;
 

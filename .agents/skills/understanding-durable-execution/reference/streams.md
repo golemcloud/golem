@@ -144,6 +144,15 @@ fork tests, and the CLI `reference_client_export_protocol_compatibility` scenari
 The target is pinned by `streaming_target_fingerprint`: `AgentFingerprint`
 (`golem-common/src/base_model/worker.rs`) is minted once at agent creation and stable across
 restarts, so a deleted-and-recreated agent with the same `AgentId` is a different producer.
+For an ephemeral target, the first live preparation after the caller's `Start` commit uses
+`KnownFresh` with the call's derived idempotency key. Preparation validates the key-derived
+phantom identity and skips the creation-time existence lookup. Both remote routing layers
+downgrade preparation retries to `MayExist`; replay repair also prepares with `MayExist`.
+The subsequent streaming invocation always uses `MayExist`, since preparation has already
+created the target whose fingerprint it carries. No second fresh creation is authorized.
+Attachment probes resolve each owner's actual agent mode and inspect that mode's session
+and consumer journals. Ephemeral owners retain the same fingerprint, epoch, mapping and
+cancellation authority checks as durable owners; attachment authorization never restarts them.
 
 ### Public session identity and expiry
 

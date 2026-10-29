@@ -198,8 +198,22 @@ impl OwnerToolOperation {
         self.admission_refusal.lock().unwrap().expected.clone()
     }
 
+    pub(crate) fn expected_disposal_refusal(
+        &self,
+    ) -> Option<(SerializableToolAdmissionRefusal, OplogIndex)> {
+        self.expected_admission_refusal().filter(|(refusal, _)| {
+            matches!(
+                refusal,
+                SerializableToolAdmissionRefusal::BeforeAttachmentDisposal { .. }
+                    | SerializableToolAdmissionRefusal::BeforeDurableInputDisposal { .. }
+            )
+        })
+    }
+
     /// The caller must first prefer any recorded effect for this demand. A concurrent missing
     /// demand waits for the recorded first refusal, rather than changing which call observes it.
+    /// Disposal callbacks also wait for the owner boundary: even an exact callback can run
+    /// before the recorded calls and guest deliveries when collection happens earlier.
     pub(crate) async fn reject_missing_replay_admission(
         &self,
         boundary: &SerializableToolAdmissionRefusal,
@@ -208,9 +222,10 @@ impl OwnerToolOperation {
         let Some((expected, _)) = self.expected_admission_refusal() else {
             return Ok(());
         };
+        let disposal = self.expected_disposal_refusal().is_some();
         loop {
             let winner = changes.borrow_and_update().clone();
-            if &expected == boundary || self.observed_admission_refusal().is_some() {
+            if (!disposal && &expected == boundary) || self.observed_admission_refusal().is_some() {
                 return Err(self.reproduce_admission_refusal(expected).await);
             }
             match winner {

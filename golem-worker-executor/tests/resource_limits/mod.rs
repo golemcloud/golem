@@ -1355,6 +1355,8 @@ async fn prepare_worker_does_not_start_target_and_public_create_waits_for_loadin
             auth_ctx: Some(executor.auth_ctx().into()),
             principal: None,
             invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
         };
 
         let first = tokio::time::timeout(

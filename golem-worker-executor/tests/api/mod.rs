@@ -969,6 +969,8 @@ impl WorkerProxy for RecordingWorkerProxy {
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
             .prepare(
@@ -980,6 +982,8 @@ impl WorkerProxy for RecordingWorkerProxy {
                 config,
                 principal,
                 auth_ctx,
+                idempotency_key,
+                freshness_disposition,
             )
             .await
     }
@@ -4127,10 +4131,34 @@ async fn component_env_variables_update(
 
     let env = get_env_result_from_value(env);
 
-    assert_eq!(env.get("FOO"), None); // Only applied at runtime, not an ovveride
-    assert_eq!(env.get("BAR"), Some(&"baz".to_string()));
+    // Rust initializes libc's environment cache during agent initialization. Replaying
+    // that initialization restores its recorded values, even after a component update.
+    assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
+    assert_eq!(env.get("BAR"), None);
     let worker_name = agent_id.to_string();
     assert_eq!(env.get("GOLEM_AGENT_ID"), Some(&worker_name));
+
+    let fresh_agent = agent_id!("Environment", "component-env-variables-2");
+    executor
+        .start_agent(&updated_component.id, fresh_agent.clone())
+        .await?;
+    let fresh_env = executor
+        .invoke_and_await_agent(
+            &updated_component,
+            &fresh_agent,
+            "get_environment",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let fresh_env = get_env_result_from_value(fresh_env);
+    assert_eq!(fresh_env.get("FOO"), None);
+    assert_eq!(fresh_env.get("BAR"), Some(&"baz".to_string()));
+    assert_eq!(
+        fresh_env.get("GOLEM_AGENT_ID"),
+        Some(&fresh_agent.to_string())
+    );
 
     Ok(())
 }
@@ -7797,6 +7825,8 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             auth_ctx: Some(caller_auth_ctx),
             principal: None,
             invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
         })
         .await?
         .into_inner();
@@ -7896,6 +7926,8 @@ async fn worker_environment_reflects_component_not_caller(
             auth_ctx: Some(caller_auth_ctx),
             principal: None,
             invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
         })
         .await?
         .into_inner();
@@ -8039,6 +8071,8 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             auth_ctx: Some(caller_auth_ctx),
             principal: None,
             invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
         })
         .await?
         .into_inner();

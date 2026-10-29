@@ -17,9 +17,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use golem_common::model::IdempotencyKey;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
-use golem_common::model::oplog::{
-    HostRequest, HostRequestP3HttpSpanCleanup, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
-};
+use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
@@ -200,36 +198,23 @@ async fn p3_unread_response_cleanup_reconstructs_before_next_accessor(
             _ => None,
         })
         .expect("P3 send Start");
-    let cleanup_request: HostRequest = HostRequestP3HttpSpanCleanup {
-        send_start_index: send_index,
-    }
-    .into();
-    let cleanup_request = cleanup_request.into_typed_schema_value()?;
-    let cleanup_index = initial_oplog
+    let cleanup = initial_oplog
         .iter()
         .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::Start(start)
-                if start.function_name == "http::client::span-cleanup"
-                    && start.request.as_ref() == Some(&cleanup_request) =>
+            PublicOplogEntry::SpanClosed(close)
+                if close.resource_start_index == Some(send_index) =>
             {
-                Some(entry.oplog_index)
+                Some(close)
             }
             _ => None,
         })
-        .expect("span cleanup Start referencing the P3 send");
-    let cleanup_end = initial_oplog
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(end) if end.start_index == cleanup_index => Some(end),
-            _ => None,
-        })
-        .expect("span cleanup End");
-    assert!(cleanup_end.span_finished.is_some());
-    assert!(!initial_oplog.iter().any(|entry| match &entry.entry {
-        PublicOplogEntry::CompletionDelivered(marker) => marker.start_index == cleanup_index,
-        PublicOplogEntry::CompletionDiscarded(marker) => marker.start_index == cleanup_index,
-        _ => false,
-    }));
+        .expect("span close hint referencing the P3 send");
+    assert_eq!(
+        cleanup.span_finished.outcome,
+        golem_common::model::oplog::PublicSpanOutcome::Abandoned
+    );
+    assert!(!initial_oplog.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::Start(start) if start.function_name == "http::client::span-cleanup")));
 
     drop(executor);
     let executor = start(deps, &context).await?;
@@ -252,18 +237,224 @@ async fn p3_unread_response_cleanup_reconstructs_before_next_accessor(
     assert_eq!(
         reconstructed
             .iter()
-            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "http::client::span-cleanup" && start.request.as_ref() == Some(&cleanup_request)))
-            .count(),
-        1
-    );
-    assert_eq!(
-        reconstructed
-            .iter()
-            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == cleanup_index && end.span_finished.is_some()))
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::SpanClosed(close) if close.resource_start_index == Some(send_index)))
             .count(),
         1
     );
     server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("5m")]
+async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentStatus;
+    use golem_worker_executor::services::golem_config::SnapshotPolicy;
+    use golem_worker_executor_test_utils::{TestExecutorOverrides, start_with_overrides};
+    use std::time::Duration;
+
+    let overrides = || TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+        })),
+        ..Default::default()
+    };
+    for (live, restored, partial_body) in [
+        (1u8, 0u8, false),
+        (0, 1, false),
+        (0, 2, false),
+        (2, 0, false),
+        (2, 2, false),
+        (1, 0, true),
+        (0, 1, true),
+        (0, 2, true),
+        (2, 0, true),
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = requests.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let server = tokio::spawn(async move {
+            let route = Router::new().route(
+                "/drop-unread",
+                post(move || {
+                    server_requests.fetch_add(1, Ordering::SeqCst);
+                    async {
+                        let mut trailers = HeaderMap::new();
+                        trailers.insert("x-finished", http::HeaderValue::from_static("yes"));
+                        let frames = futures::stream::iter([
+                            Ok::<_, std::convert::Infallible>(http_body::Frame::data(
+                                bytes::Bytes::from_static(b"unread response"),
+                            )),
+                            Ok(http_body::Frame::trailers(trailers)),
+                        ]);
+                        http::Response::builder()
+                            .status(201)
+                            .header("trailer", "x-finished")
+                            .body(axum::body::Body::new(http_body_util::StreamBody::new(
+                                frames,
+                            )))
+                            .unwrap()
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        });
+        let executor = start_with_overrides(deps, &context, overrides()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let agent = agent_id!("HttpGc", format!("drop-{live}-{restored}-{partial_body}"));
+        let worker = executor
+            .start_agent_with(
+                &component.id,
+                agent.clone(),
+                HashMap::from([("PORT".to_string(), port.to_string())]),
+                Vec::new(),
+            )
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "configure", data_value!(live, restored))
+            .await?;
+        let promise = executor
+            .invoke_and_await_agent(&component, &agent, "create_promise", data_value!())
+            .await?
+            .into_typed::<golem_common::model::PromiseId>()?;
+        executor
+            .invoke_agent_with_key(
+                &component,
+                &agent,
+                &IdempotencyKey::fresh(),
+                "run",
+                data_value!(promise.clone(), partial_body),
+            )
+            .await?;
+        if partial_body && live == 2 {
+            // The retained consume-body task is unfinished HTTP work, not an idle owner.
+            // Suspend explicitly after the completed read and sentinel to test Store loss.
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                    if history.iter().any(|entry| {
+                        matches!(&entry.entry,
+                        PublicOplogEntry::RemoveRetryPolicy(params)
+                            if params.name == "http-gc-sentinel")
+                    }) {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await??;
+            executor
+                .interrupt_loaded_worker(
+                    &worker,
+                    golem_service_base::error::worker_executor::InterruptKind::Suspend(
+                        golem_common::model::Timestamp::now_utc(),
+                    ),
+                )
+                .await?;
+        }
+        executor
+            .wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(30))
+            .await?;
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        assert!(
+            before
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        );
+        let send_index = before
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if start.function_name == "http::client::send" => {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .expect("send Start");
+        let closes = |history: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+            history.iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::SpanClosed(close) if close.resource_start_index == Some(send_index))).count()
+        };
+        if !partial_body {
+            assert_eq!(closes(&before), usize::from(live != 2));
+        }
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides()).await?;
+        executor.complete_promise(&promise, Vec::new()).await?;
+        let report = executor
+            .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
+            .await?
+            .into_typed::<(bool, u16)>()?;
+        assert_eq!(report, (true, 201), "schedule {live} -> {restored}");
+        assert_eq!(requests.load(Ordering::SeqCst), 1, "replay must not resend");
+        let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let http_starts = |history: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+            history
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start) if start.function_name.starts_with("http::") => {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            http_starts(&after),
+            http_starts(&before),
+            "collection must not create HTTP calls"
+        );
+        assert_eq!(
+            closes(&after),
+            closes(&before),
+            "replay drops must not append"
+        );
+        if !partial_body && live == 2 && restored == 0 {
+            // The original run retained the response; only replay drops it. SpanClosed
+            // describes a live release, not an obligation to repair at the live tail.
+            // Cleanup samples liveness at the drop, so even a later drain appends nothing.
+            assert_eq!(
+                closes(&after),
+                0,
+                "a replay-only drop has no durable closure"
+            );
+            executor
+                .invoke_and_await_agent(&component, &agent, "release", data_value!())
+                .await?;
+            let released = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            assert_eq!(
+                closes(&released),
+                0,
+                "there is no retained response to close after the replay-only drop"
+            );
+        }
+        assert!(
+            !after.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Start(start) if start.function_name == "http::client::span-cleanup"))
+        );
+        if !partial_body && live == 2 && restored == 2 {
+            executor
+                .invoke_and_await_agent(&component, &agent, "release", data_value!())
+                .await?;
+            let released = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            assert_eq!(
+                closes(&released),
+                1,
+                "a replay-created response dropped live must close its span"
+            );
+        }
+        server.abort();
+    }
     Ok(())
 }
 

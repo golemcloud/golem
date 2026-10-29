@@ -29,6 +29,7 @@ pub(super) fn matching_admission_refusal(
         SerializableToolAdmissionRefusal::AtRecordedOplogEntry { .. }
         | SerializableToolAdmissionRefusal::BeforePositional { .. }
         | SerializableToolAdmissionRefusal::BeforeInputRead { .. }
+        | SerializableToolAdmissionRefusal::BeforeDurableInputDisposal { .. }
         | SerializableToolAdmissionRefusal::BeforeAttachmentDisposal { .. } => false,
     };
     Ok(
@@ -456,13 +457,23 @@ impl ReplayState {
                                 Ok((Some((handle, entry)), None, None))
                             }
                             Ok(StartClaimAttempt::Blocked(on)) => Ok((None, Some(on), None)),
-                            Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
-                                Ok((None, None, Some(Missing::ReplayEnded)))
-                            }
-                            Ok(StartClaimAttempt::Missing) if store_live => {
-                                Ok((None, None, Some(Missing::StoreAlreadyLive)))
-                            }
                             Ok(StartClaimAttempt::Missing) => {
+                                // Draining the cursor can retain calls the guest has not
+                                // reproduced. Exhaustion does not permit changing their identity.
+                                if let Some(invocation_id) = owned_claim.expected_invocation_id()
+                                    && tx.unclaimed_start_with_invocation_id(invocation_id)
+                                {
+                                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                        owned_claim.expected_description(),
+                                        "no matching Start; a Start with the same invocation id exists but does not match",
+                                    ));
+                                }
+                                if tx.cursor.is_live() {
+                                    return Ok((None, None, Some(Missing::ReplayEnded)));
+                                }
+                                if store_live {
+                                    return Ok((None, None, Some(Missing::StoreAlreadyLive)));
+                                }
                                 if let Some(bodies) = tx.active_body_owning_head(
                                     tx.buffered_head_owner(),
                                     owned_claim.expected_parent_start_index(),
