@@ -410,7 +410,7 @@ jobs:
         run: |
           mkdir -p tmp/apfs-test-bin
           cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor \
-            --features test-utils --lib --no-run --message-format=json \
+            --features test-utils --lib --no-run --message-format=json-render-diagnostics \
             > tmp/apfs-cargo-messages.jsonl
           integration-tests/scripts/managed-filesystem/test-select-cargo-test-executables.py
           python3 integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py \
