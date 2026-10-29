@@ -1230,7 +1230,9 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
     tokio::time::timeout(Duration::from_secs(20), fold.entered()).await?;
     tokio::time::timeout(Duration::from_secs(1), receipt).await???;
     let mut events = worker.events().subscribe();
-    let mut cleanup = Box::pin(worker.test_fail_pending_invocations());
+    let mut cleanup = Box::pin(
+        worker.test_fail_pending_invocations(WorkerExecutorError::runtime("test stop failure")),
+    );
     assert!(poll!(cleanup.as_mut()).is_pending());
     // No hydrated success existed when cleanup began. Publishing it must not await the fold.
     tokio::time::timeout(
@@ -1272,7 +1274,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
     executor.delete_worker(&worker.agent_id()).await?;
     tokio::time::timeout(
         Duration::from_secs(1),
-        worker.test_fail_pending_invocations(),
+        worker.test_fail_pending_invocations(WorkerExecutorError::runtime("test stop failure")),
     )
     .await?;
     assert!(
@@ -1280,6 +1282,71 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
             .await
             .is_err()
     );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn failed_pending_invocation_lookup_returns_the_published_typed_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{AgentError, EphemeralCannotSuspendError};
+    use golem_worker_executor::services::HasEvents;
+    use golem_worker_executor::services::events::Event;
+
+    let (_executor, worker, _faults) = setup(last_unique_id, deps, component).await?;
+    let key = IdempotencyKey::new("failed-pending-invocation".into());
+    let context = InvocationContextStack::fresh();
+    worker
+        .add_and_commit_oplog(OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: key.clone(),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "increment".into(),
+                input: data_value!().value().clone(),
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })),
+            trace_id: context.trace_id.clone(),
+            trace_states: context.trace_states.clone(),
+            invocation_context: context.to_oplog_data(),
+        })
+        .await?;
+    let error = WorkerExecutorError::InvocationFailed {
+        error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+            reason: "monthly memory exhausted".to_string(),
+        }),
+        stderr: "partial stderr".to_string(),
+    };
+
+    let mut events = worker.events().subscribe();
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        worker.test_fail_pending_invocations(error.clone()),
+    )
+    .await?;
+    let published = tokio::time::timeout(
+        Duration::from_secs(1),
+        events.wait_for(|event| match event {
+            Event::InvocationCompleted {
+                idempotency_key,
+                result,
+                ..
+            } if idempotency_key == &key => Some(result.as_ref().clone()),
+            _ => None,
+        }),
+    )
+    .await??;
+    assert_eq!(published.err(), Some(error.clone()));
+    // A caller that looks the key up after the failure must get the same typed error.
+    match worker.lookup_invocation_result(&key).await {
+        LookupResult::Complete(Err(cached)) => assert_eq!(cached, error),
+        other => panic!("unexpected lookup result: {other:?}"),
+    }
     Ok(())
 }
 
