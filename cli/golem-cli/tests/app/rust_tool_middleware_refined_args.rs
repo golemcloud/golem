@@ -24,7 +24,7 @@ inherit_test_dep!(Tracing);
 const SLUG_DEFINITION: &str = indoc! { r#"
     #[golem_rust::tool_definition(version = "1.0.0")]
     pub trait Slug {
-        #[arg(name = "positional", min_length = 2, max_length = 8)]
+        #[arg(name = "positional", max_length = 8, regex = "^[a-z]+$")]
         fn slug(&self, name: String) -> String;
 
         #[arg(count = "positional", max = 3)]
@@ -220,7 +220,7 @@ async fn rust_tool_middleware_forwards_refined_arguments() {
 
                 async fn call_all(&self) -> Vec<String> {{
                     let mut results = Vec::new();
-                    for name in ["golem", "toolongslug", "g"] {{
+                    for name in ["golem", "toolongslug", "Golem"] {{
                         // `slug` has the name of the tool, so it is the root command.
                         let result = invoke(&[], text(name)).await;
                         results.push(format!("slug-{{name}}={{result}}"));
@@ -278,12 +278,12 @@ async fn rust_tool_middleware_forwards_refined_arguments() {
             && too_long.contains("above max-length 8"),
         "an argument above max_length must fail with a length validation error:\n{stdout}"
     );
-    let too_short = result("slug-g=");
+    let not_matching = result("slug-Golem=");
     assert!(
-        too_short.starts_with("slug-g=err:")
-            && too_short.contains("invalid input")
-            && too_short.contains("below min-length 2"),
-        "an argument below min_length must fail with a length validation error:\n{stdout}"
+        not_matching.starts_with("slug-Golem=err:")
+            && not_matching.contains("invalid input")
+            && not_matching.contains("does not match required regex"),
+        "an argument that breaks the regex must fail with a regex validation error:\n{stdout}"
     );
     assert_eq!(
         result("limit-2="),
