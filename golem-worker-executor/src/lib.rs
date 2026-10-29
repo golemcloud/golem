@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod blocking;
 pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
@@ -20,6 +21,7 @@ pub(crate) mod filesystem_snapshot;
 #[cfg(feature = "test-utils")]
 pub mod filesystem_snapshot_testing;
 pub mod grpc;
+pub(crate) mod host_directories;
 pub mod identity;
 pub mod metrics;
 pub mod model;
@@ -28,6 +30,7 @@ pub mod preview2;
 pub(crate) mod sandbox_filesystem;
 pub mod services;
 pub mod storage;
+pub(crate) mod storage_volume;
 pub(crate) mod wasi_filesystem;
 pub mod wasi_host;
 pub mod worker;
@@ -51,6 +54,7 @@ fn tracing() -> Tracing {
 test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
+use self::services::HasAgentFilesystemSnapshots;
 use self::services::HasQuotaService;
 use self::services::agent_webhooks::AgentWebhooksService;
 use self::services::direct_invocation_auth::{
@@ -184,6 +188,26 @@ impl Drop for RunDetails {
             let _ = handle.join();
         }
     }
+}
+
+fn track_executor_directory_cleanup(
+    shutdown: &services::shutdown::Shutdown,
+    loops: InvocationLoops,
+    filesystems: Arc<services::agent_filesystem::AgentFilesystems>,
+    snapshots: Arc<AgentFilesystemSnapshots>,
+) {
+    let token = shutdown.token();
+    shutdown.spawn(async move {
+        token.cancelled().await;
+        if let Err(error) = loops.wait_for_exit().await {
+            tracing::error!(%error, "Executor work did not drain; retaining host directories");
+            return;
+        }
+        snapshots.wait_for_shutdown().await;
+        if let Err(error) = filesystems.shut_down().await {
+            tracing::error!(%error, "Failed to remove executor host directories");
+        }
+    });
 }
 
 /// Binds the service of the filesystem snapshots to the configuration, with the store `given`
@@ -1344,6 +1368,12 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
     let invocation_loops = worker_executor_impl.active_agents().invocation_loops();
+    track_executor_directory_cleanup(
+        &shutdown,
+        invocation_loops.clone(),
+        worker_executor_impl.active_agents().agent_filesystems(),
+        worker_executor_impl.agent_filesystem_snapshots(),
+    );
     bootstrap.capture_services(&worker_executor_impl);
 
     crate::metrics::runtime::install_runtime_metrics(
@@ -1542,6 +1572,69 @@ mod tests {
         Arc::new(InitialAgentFilesService::new(Arc::new(
             golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
         )))
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn executor_directory_cleanup_waits_for_invocation_drain_and_is_joined_by_shutdown() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = services::golem_config::FilesystemStorageConfig {
+            mode: FilesystemStorageMode::Directory {
+                root: root.path().into(),
+            },
+            ..Default::default()
+        };
+        let filesystems = Arc::new(
+            services::agent_filesystem::AgentFilesystems::new(
+                &settings,
+                in_memory_initial_files_service(),
+            )
+            .await
+            .unwrap(),
+        );
+        let shutdown = services::shutdown::Shutdown::new();
+        let loops = InvocationLoops::new(shutdown.token());
+        let snapshots = AgentFilesystemSnapshots::bind(
+            &services::golem_config::FilesystemSnapshotsConfig::default(),
+            StoreSource::configured(
+                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new()),
+                VolumeRoom::Pressure {
+                    volume: filesystems.volume().clone(),
+                    pressure: filesystems.pressure_policy().clone(),
+                },
+            ),
+            filesystems.volume().copies_on_write(),
+            &shutdown,
+        )
+        .unwrap();
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (draining, drain_started) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        loops.spawn(
+            async move {
+                let _ = entered.send(());
+                std::future::pending::<()>().await;
+            },
+            move || {
+                Box::pin(async move {
+                    let _ = draining.send(());
+                    let _ = released.await;
+                })
+            },
+        );
+        started.await.unwrap();
+        track_executor_directory_cleanup(&shutdown, loops, Arc::clone(&filesystems), snapshots);
+        shutdown.cancel();
+        drain_started.await.unwrap();
+        let waiting = shutdown.wait_for_tracked(std::time::Duration::from_secs(10));
+        tokio::pin!(waiting);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        assert!(root.path().join(".scratch").is_dir());
+        assert!(root.path().join(".initial-files").is_dir());
+        release.send(()).unwrap();
+        assert!(waiting.await);
+        assert!(!root.path().join(".scratch").exists());
+        assert!(!root.path().join(".initial-files").exists());
     }
 
     /// The snapshot service gets the storage mode of the agent filesystems: on storage without

@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use crate::filesystem_pressure::FilesystemWriteRecovery;
+use crate::host_directories::HostDirectory;
+pub(crate) use crate::sandbox_filesystem::FilesystemLimits;
 pub use crate::sandbox_filesystem::FilesystemStorageError;
-use crate::sandbox_filesystem::{
-    AgentAccounting, FilesystemVolume, HostDirectories, HostDirectory,
-    SandboxFilesystemProvisioning, observe_space_blocking,
-};
-pub(crate) use crate::sandbox_filesystem::{FilesystemLimits, FilesystemSpace};
+use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::{
     FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
+pub(crate) use crate::storage_volume::FilesystemSpace;
+use crate::storage_volume::{AgentAccounting, FilesystemVolume, observe_space_blocking};
 #[cfg(unix)]
 pub(crate) use file_creation_mask::keep_owner_write_permission;
 use golem_common::model::OwnedAgentId;
@@ -38,9 +38,13 @@ thread_local! {
     };
 }
 
+mod executor_directories;
 #[cfg(unix)]
 mod file_creation_mask;
 mod lifecycle;
+#[cfg(test)]
+pub(crate) use executor_directories::make_executor_directories;
+pub(crate) use executor_directories::{ExecutorDirectories, provision_executor_directories};
 
 #[cfg(test)]
 pub(crate) use lifecycle::tests::{
@@ -90,7 +94,8 @@ fn validate_volume_capacity(
             ..
         } => settings
             .pressure
-            .validate_capacity(total_bytes, total_filesystem_objects),
+            .validate_capacity(total_bytes, total_filesystem_objects)
+            .map_err(Into::into),
         FilesystemSpace::Unlimited => Ok(()),
     }
 }
@@ -103,7 +108,7 @@ fn observe_space_at_binding(
         return Ok(observation);
     }
 
-    observe_space_blocking(volume)
+    observe_space_blocking(volume).map_err(Into::into)
 }
 
 impl FilesystemObjectLimitPolicyConfig {
@@ -138,13 +143,13 @@ pub(crate) struct AgentFilesystems {
     filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
     scratch: Arc<HostDirectory>,
     file_loader: Arc<FileLoader>,
+    running: Arc<tokio::sync::RwLock<bool>>,
 }
 
 impl AgentFilesystems {
-    /// Binds filesystem provisioning and pressure settings for an executor. The provisioning makes
-    /// the host directories `.scratch`, for captures and restores, and `.initial-files`, which goes
-    /// by value to the file loader of the service. The loader keeps the downloads of initial files
-    /// from `initial_files_service` there.
+    /// Binds sandbox storage and provisions the executor-owned `.scratch` and `.initial-files`
+    /// directories. The initial-files directory goes by value to the service's one file loader.
+    /// Sandbox creation and deletion do not own these directories.
     ///
     /// The service changes no state of the process. Making the host directories removes what an
     /// earlier process left under their names. Returns an error for invalid provisioning settings,
@@ -157,11 +162,11 @@ impl AgentFilesystems {
     ) -> Result<Self, FilesystemStorageError> {
         let (
             provisioning,
-            HostDirectories {
+            ExecutorDirectories {
                 scratch,
                 initial_files,
             },
-        ) = SandboxFilesystemProvisioning::provision(
+        ) = crate::services::agent_filesystem::provision_executor_directories(
             &settings.mode,
             settings.cleanup_retry.clone(),
         )
@@ -179,7 +184,7 @@ impl AgentFilesystems {
                 });
             return Err(error);
         }
-        if provisioning.agent_accounting() == AgentAccounting::Unaccounted {
+        if provisioning.volume().agent_accounting() == AgentAccounting::Unaccounted {
             tracing::info!(
                 "Per-agent disk limits are not enforced on storage without per-agent accounting"
             );
@@ -190,6 +195,7 @@ impl AgentFilesystems {
             filesystem_object_limit_policy: settings.filesystem_object_limit_policy.clone(),
             scratch: Arc::new(scratch),
             file_loader: Arc::new(FileLoader::new(initial_files_service, initial_files)),
+            running: Arc::new(tokio::sync::RwLock::new(true)),
         })
     }
 
@@ -199,6 +205,16 @@ impl AgentFilesystems {
     /// owns the only value of it.
     pub(crate) fn file_loader(&self) -> Arc<FileLoader> {
         Arc::clone(&self.file_loader)
+    }
+
+    /// Removes executor directories only after invocation and snapshot shutdown joined their
+    /// users. Both removals run even when one fails, and failed cleanup can be retried.
+    pub(crate) async fn shut_down(&self) -> Result<(), FilesystemStorageError> {
+        let mut running = self.running.write().await;
+        *running = false;
+        let (initial_files, scratch) =
+            futures::join!(self.file_loader.shut_down(), self.scratch.remove());
+        initial_files.and(scratch).map_err(Into::into)
     }
 
     /// Returns the pressure thresholds used to recover writes on the provisioned volume.
@@ -219,7 +235,7 @@ impl AgentFilesystems {
 
     /// How the storage of the agent filesystems accounts for the files of each agent.
     pub(crate) fn agent_accounting(&self) -> AgentAccounting {
-        self.provisioning.agent_accounting()
+        self.provisioning.volume().agent_accounting()
     }
 
     /// Resolves an agent's byte allocation into the limits installed on a new generation.
@@ -234,7 +250,7 @@ impl AgentFilesystems {
         resolve_storage_limits(
             &self.filesystem_object_limit_policy,
             allocated_bytes,
-            self.provisioning.agent_accounting(),
+            self.provisioning.volume().agent_accounting(),
         )
     }
 
@@ -249,6 +265,15 @@ impl AgentFilesystems {
         limits: ResolvedStorageLimits,
         pressure_recovery: FilesystemWriteRecovery,
     ) -> Result<CreatedFilesystem, CreateFailure> {
+        let running = self.running.read().await;
+        if !*running {
+            return Err(CreateFailure {
+                source: FilesystemStorageError::verification(
+                    "create sandbox after executor filesystem shutdown",
+                    Path::new("<executor-filesystems>"),
+                ),
+            });
+        }
         lifecycle::create_fresh_with_pressure_recovery(
             self.provisioning.clone(),
             Arc::clone(&self.scratch),

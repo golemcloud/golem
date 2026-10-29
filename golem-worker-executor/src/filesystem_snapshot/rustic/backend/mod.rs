@@ -90,7 +90,7 @@ impl StorageCall {
 /// Thus a thread that is not a thread of the runtime can call the backend, for example a thread of
 /// rustic. A call from a task of the runtime panics, because `Handle::block_on` panics in an async
 /// context. The executor builds with `panic = "abort"`, so that panic stops the executor. Thus the
-/// store runs rustic only through `execute_native`, which runs rustic on a blocking thread.
+/// store runs rustic only through `run_blocking`, which runs rustic on a blocking thread.
 ///
 /// A call that gets no answer from the blob storage within the deadline gives an error. The
 /// runtime must be a multi-thread runtime, because on a `current_thread` runtime `Handle::block_on`

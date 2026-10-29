@@ -2215,10 +2215,27 @@ retaining the underlying cause.
 
 ### Filesystem snapshots
 
+Executor startup creates `.scratch` and `.initial-files` through
+`services/agent_filesystem/executor_directories/mod.rs`. The generic `host_directories` module owns
+their filesystem operations and does not know about sandbox provisioning or filesystem-specific
+quotas. Executor setup first opens and validates `storage_volume::FilesystemVolume`, then creates
+the host directories and constructs sandbox provisioning on that shared volume.
+On executor shutdown, a tracked task joins invocation loops and snapshot-store shutdown before
+`AgentFilesystems::shut_down` removes both directories. The file loader stops new loads and drains
+entered downloads and outstanding source leases before removing its cache. `Drop` remains a
+best-effort cleanup safety net.
+
+`storage_volume` owns shared storage roots, capacity observations, native cloning and XFS project
+allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
+`sandbox_filesystem` owns one capability-confined tree, its handles, provisioning and verified
+deletion, and seed/copy orchestration. XFS quotas account and limit allocation; root capabilities
+confine path access. Physical pressure recovery observes the volume without accessing a sandbox.
+Volume errors retain their I/O cause and cleanup/task facts when converted to sandbox errors.
+
 `AgentFilesystemSnapshots::bind` requires a volume that makes copy-on-write copies. Production
 uses Linux 5.8 or later with XFS and reflink, through `ManagedXfs` or `ReflinkXfs`. Local development
 and tests on macOS use `Apfs`. Project quotas are not required for snapshots. `Temporary` and
-`Directory` make byte copies, so binding `Enabled` on them fails at startup. The sandbox reports
+`Directory` make byte copies, so binding `Enabled` on them fails at startup. The volume reports
 `copies_on_write`; the snapshot service owns this rule.
 
 `seed` and `copy_contents` make copy-on-write copies on XFS or `Apfs`, and byte copies on other

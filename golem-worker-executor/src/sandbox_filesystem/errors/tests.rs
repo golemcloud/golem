@@ -1,0 +1,175 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::*;
+use crate::blocking::BlockingTask;
+use crate::sandbox_filesystem::errors::FilesystemStorageError;
+use std::path::Path;
+use test_r::test;
+
+#[test]
+fn volume_error_conversion_preserves_io_and_cleanup_facts() {
+    let error = crate::storage_volume::StorageVolumeError::cleanup_io(
+        "probe volume",
+        Path::new("/volume"),
+        std::io::ErrorKind::ReadOnlyFilesystem.into(),
+    );
+    let message = error.to_string();
+    let error = FilesystemStorageError::from(error);
+    assert_eq!(error.to_string(), message);
+    assert_eq!(
+        error.io_kind(),
+        Some(std::io::ErrorKind::ReadOnlyFilesystem)
+    );
+    assert!(error.cleanup_failed());
+    assert!(error.is_terminal_failure());
+    assert!(!error.is_sandbox_escape());
+}
+
+#[test]
+async fn volume_task_failure_remains_terminal_after_conversion() {
+    let failure = BlockingTask::Spawn
+        .run(|| panic!("volume task"))
+        .await
+        .unwrap_err();
+    let error = crate::storage_volume::StorageVolumeError::task_failure(
+        "observe volume",
+        Path::new("/volume"),
+        failure,
+    );
+    let error = FilesystemStorageError::from(error);
+    assert!(error.is_terminal_failure());
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn unix_storage_errors_are_terminal_only_when_the_storage_is_unavailable() {
+    [libc::EIO, libc::ESTALE, libc::ENODEV]
+        .into_iter()
+        .for_each(|errno| {
+            assert!(is_terminal_storage_errno(
+                &std::io::Error::from_raw_os_error(errno)
+            ));
+        });
+    [libc::ENOSPC, libc::EAGAIN, libc::EINTR, libc::EXDEV]
+        .into_iter()
+        .for_each(|errno| {
+            assert!(!is_terminal_storage_errno(
+                &std::io::Error::from_raw_os_error(errno)
+            ));
+        });
+}
+
+#[test]
+fn an_error_about_another_path_keeps_its_operation_and_cause() {
+    let error = FilesystemStorageError::io(
+        "remove XFS reflink probe",
+        Path::new("/proc/self/fd/7/.golem-xfs-reflink-probe"),
+        std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    )
+    .about(Path::new("/var/lib/golem/agents/.golem-xfs-reflink-probe"));
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "failed to remove XFS reflink probe filesystem \
+             /var/lib/golem/agents/.golem-xfs-reflink-probe: {}",
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+        )
+    );
+    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
+}
+
+#[test]
+fn unsupported_allocation_classification_is_typed() {
+    let path = Path::new("<test>");
+    let unsupported = FilesystemStorageError::allocation_unsupported(path);
+    let same_message =
+        FilesystemStorageError::verification("observe allocation without quota authority", path);
+
+    assert!(unsupported.allocation_is_unsupported());
+    assert!(!same_message.allocation_is_unsupported());
+    assert_eq!(unsupported.to_string(), same_message.to_string());
+}
+
+#[test]
+fn native_task_panic_is_caught_and_classified_as_terminal() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let execution_error = runtime
+        .block_on(BlockingTask::InPlace.run(|| -> () { panic!("scripted native panic") }))
+        .unwrap_err();
+    let error = FilesystemStorageError::task_failure(
+        "run panicking native operation",
+        Path::new("<scripted>"),
+        execution_error,
+    );
+
+    assert!(error.is_terminal_failure());
+    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::Other));
+}
+
+#[test]
+fn storage_error_is_one_pointer_wide() {
+    assert_eq!(
+        std::mem::size_of::<FilesystemStorageError>(),
+        std::mem::size_of::<usize>()
+    );
+}
+
+#[test]
+fn storage_error_debug_output_names_each_fact() {
+    let error =
+        FilesystemStorageError::cleanup_verification("remove directory", Path::new("/root/a"));
+
+    assert_eq!(
+        format!("{error:?}"),
+        "FilesystemStorageError { operation: \"remove directory\", path: \"/root/a\", source: None, cleanup_failed: true, task_failed: false, kind: General }"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn namespace_operation_errors_preserve_raw_terminal_errno() {
+    for (operation, errno) in [
+        ("hard-link sandbox filesystem path", libc::EIO),
+        ("rename sandbox filesystem path", libc::ESTALE),
+        ("rename sandbox filesystem path", libc::ENODEV),
+    ] {
+        let error = FilesystemStorageError::io(
+            operation,
+            Path::new("<destination>"),
+            std::io::Error::from_raw_os_error(errno),
+        );
+        assert_eq!(
+            error.io_error().and_then(std::io::Error::raw_os_error),
+            Some(errno)
+        );
+        assert!(error.is_terminal_failure());
+    }
+
+    let cross_device = FilesystemStorageError::io(
+        "hard-link sandbox filesystem path",
+        Path::new("<destination>"),
+        std::io::Error::from_raw_os_error(libc::EXDEV),
+    );
+    assert_eq!(
+        cross_device
+            .io_error()
+            .and_then(std::io::Error::raw_os_error),
+        Some(libc::EXDEV)
+    );
+}

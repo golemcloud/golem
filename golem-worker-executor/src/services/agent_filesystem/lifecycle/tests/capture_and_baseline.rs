@@ -204,7 +204,7 @@ fn scratch_of<Stage: FilesystemStage>(
 /// Programs the listing of a root that holds a file of the agent. A capture of a filesystem
 /// without declarations lists the root, and this listing makes it copy the tree.
 fn push_root_with_an_agent_file(control: &ScriptedSandboxFilesystemControl) {
-    control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+    control.push_open(Ok(SandboxHandle::scripted_directory(1)));
     control.push_read_directory(Ok(vec![crate::sandbox_filesystem::SandboxDirectoryEntry {
         name: "agent.txt".into(),
         kind: SandboxObjectKind::File,
@@ -346,7 +346,7 @@ async fn a_check_gives_busy_at_the_deadline_and_reopens_admission() {
 #[timeout("10s")]
 async fn a_check_decides_as_a_capture_and_makes_no_host_directory_and_no_copy() {
     let (filesystem, control, window) = metered_resident().await;
-    control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+    control.push_open(Ok(SandboxHandle::scripted_directory(1)));
     control.push_read_directory(Ok(vec![]));
     control.push_close(Ok(()));
     let empty = check_initial_files(&filesystem, Duration::from_secs(5))
@@ -606,7 +606,7 @@ async fn capture_waits_for_a_dropped_call_that_still_runs() {
 #[timeout("10s")]
 async fn a_capture_against_the_mark_of_a_tree_of_initial_files_checks_nothing_until_a_change() {
     let (filesystem, control, window) = metered_resident().await;
-    control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+    control.push_open(Ok(SandboxHandle::scripted_directory(1)));
     control.push_read_directory(Ok(vec![]));
     control.push_close(Ok(()));
 
@@ -745,7 +745,7 @@ async fn capture_leaves_out_the_read_only_paths_that_hold_the_initial_file_with_
     ]
     .into_iter()
     .for_each(|(object, content)| {
-        control.push_open(Ok(SandboxOpened::scripted_file(object)));
+        control.push_open(Ok(SandboxHandle::scripted_file(object)));
         control.push_read(Ok(Bytes::from_static(content)));
         control.push_read(Ok(Bytes::new()));
         control.push_close(Ok(()));
@@ -1105,7 +1105,7 @@ async fn an_update_reads_only_what_the_initial_file_rule_needs() {
     control.push_get_attributes(Ok(object(SandboxObjectKind::Directory, old_directory.size)));
     control.push_get_attributes(Ok(object(SandboxObjectKind::File, old_same_size.size)));
     // Only the file with the declared size needs a read of its content. It holds other content.
-    control.push_open(Ok(SandboxOpened::scripted_file(5)));
+    control.push_open(Ok(SandboxHandle::scripted_file(5)));
     control.push_read(Ok(Bytes::from_static(b"agent")));
     control.push_read(Ok(Bytes::new()));
     control.push_close(Ok(()));
@@ -1569,14 +1569,14 @@ async fn a_retry_of_the_restored_tree_seed_removes_what_the_failed_attempt_made(
         std::io::ErrorKind::WouldBlock,
     )));
     // The root holds a file and a directory with a file from the failed attempt.
-    control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+    control.push_open(Ok(SandboxHandle::scripted_directory(1)));
     control.push_read_directory(Ok(vec![
         entry("kept.txt", SandboxObjectKind::File),
         entry("data", SandboxObjectKind::Directory),
     ]));
     control.push_close(Ok(()));
     control.push_unlink_file(Ok(()));
-    control.push_open(Ok(SandboxOpened::scripted_directory(2)));
+    control.push_open(Ok(SandboxHandle::scripted_directory(2)));
     control.push_read_directory(Ok(vec![entry("inner.txt", SandboxObjectKind::File)]));
     control.push_close(Ok(()));
     control.push_unlink_file(Ok(()));
@@ -1846,14 +1846,15 @@ struct UnmanagedAgents {
 impl UnmanagedAgents {
     async fn new() -> Self {
         let parent = tempfile::tempdir().unwrap();
-        let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            &FilesystemStorageMode::Directory {
-                root: parent.path().into(),
-            },
-            golem_common::model::RetryConfig::default(),
-        )
-        .await
-        .unwrap();
+        let (provisioning, directories) =
+            crate::services::agent_filesystem::provision_executor_directories(
+                &FilesystemStorageMode::Directory {
+                    root: parent.path().into(),
+                },
+                golem_common::model::RetryConfig::default(),
+            )
+            .await
+            .unwrap();
         let scratch = Arc::new(directories.scratch);
         Self {
             parent,
@@ -2183,14 +2184,15 @@ async fn apfs_capture_of_a_tree_with_hard_links_restores_the_link_groups() {
 #[cfg(target_os = "macos")]
 async fn apfs_agents() -> UnmanagedAgents {
     let parent = tempfile::tempdir().unwrap();
-    let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-        &FilesystemStorageMode::Apfs {
-            root: parent.path().into(),
-        },
-        golem_common::model::RetryConfig::default(),
-    )
-    .await
-    .unwrap();
+    let (provisioning, directories) =
+        crate::services::agent_filesystem::provision_executor_directories(
+            &FilesystemStorageMode::Apfs {
+                root: parent.path().into(),
+            },
+            golem_common::model::RetryConfig::default(),
+        )
+        .await
+        .unwrap();
     UnmanagedAgents {
         parent,
         provisioning,

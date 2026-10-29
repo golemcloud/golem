@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::sandbox_filesystem::{HostDirectory, HostPath};
+use crate::host_directories::{HostDirectory, HostPath};
 use anyhow::anyhow;
 use async_lock::Mutex;
 use futures::TryStreamExt;
@@ -33,7 +33,10 @@ use tracing::debug;
 // Make sure to not drop this token until you are done with the file.
 #[derive(Debug, Clone)]
 pub struct FileUseToken {
+    // Release the cached file before releasing the loader's shutdown read guard.
     _handle: Arc<CacheEntry>,
+    _loader: Arc<tokio::sync::OwnedRwLockReadGuard<bool>>,
+    _directory: Arc<HostDirectory>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,7 +127,8 @@ impl std::error::Error for InitialFileLoadError {}
 /// Interface for loading immutable, content-addressed initial-file sources.
 pub struct FileLoader {
     initial_agent_files_service: Arc<InitialAgentFilesService>,
-    cache_dir: HostDirectory,
+    cache_dir: Arc<HostDirectory>,
+    running: Arc<tokio::sync::RwLock<bool>>,
     // Note: The cache is shared between accounts. One account no accessing data from another account
     // is implicitly done by the key being a hash of the content.
     cache: Cache,
@@ -137,8 +141,8 @@ pub struct FileLoader {
 impl FileLoader {
     /// Makes a loader that keeps its sources in `cache_dir`.
     ///
-    /// The loader owns the directory, so the directory and the sources in it go away with the
-    /// loader.
+    /// Construction consumes the directory, so only this loader can own it. Outstanding source
+    /// leases keep the directory alive after the loader is dropped.
     pub(crate) fn new(
         initial_agent_files_service: Arc<InitialAgentFilesService>,
         cache_dir: HostDirectory,
@@ -146,7 +150,8 @@ impl FileLoader {
         Self {
             initial_agent_files_service,
             cache: Mutex::new(HashMap::new()),
-            cache_dir,
+            cache_dir: Arc::new(cache_dir),
+            running: Arc::new(tokio::sync::RwLock::new(true)),
             item_counter: AtomicU64::new(0),
         }
     }
@@ -159,6 +164,13 @@ impl FileLoader {
         key: AgentFileContentHash,
         file_size: u64,
     ) -> Result<InitialFileSource, InitialFileLoadError> {
+        let running = Arc::clone(&self.running).read_owned().await;
+        if !*running {
+            return Err(InitialFileLoadError::failed(
+                key,
+                "the file loader is shut down",
+            ));
+        }
         let cache_entry = self
             .get_or_add_cache_entry(environment_id, key, file_size)
             .await?;
@@ -178,8 +190,20 @@ impl FileLoader {
             size,
             _token: FileUseToken {
                 _handle: cache_entry,
+                _loader: Arc::new(running),
+                _directory: Arc::clone(&self.cache_dir),
             },
         })
+    }
+
+    /// Stops new loads, joins downloads and source leases, and removes the executor-owned cache.
+    /// Executor shutdown drains filesystem users before calling this.
+    pub(crate) async fn shut_down(
+        &self,
+    ) -> Result<(), crate::host_directories::HostDirectoryError> {
+        let mut running = self.running.write().await;
+        *running = false;
+        self.cache_dir.remove().await
     }
 
     async fn get_or_add_cache_entry(
@@ -271,8 +295,7 @@ impl FileLoader {
             tempfile::NamedTempFile::new_in(self.cache_dir.path().as_path()).map_err(failed)?;
         self.download_file(environment_id, &temporary, key, expected_size)
             .await?;
-        crate::sandbox_filesystem::set_file_permissions(temporary.as_file(), true)
-            .map_err(failed)?;
+        set_initial_file_read_only(temporary.as_file()).map_err(failed)?;
         temporary.as_file().sync_all().map_err(failed)?;
         temporary
             .persist_noclobber(path)
@@ -317,6 +340,18 @@ impl FileLoader {
         writer.get_ref().sync_all().await.map_err(failed_io)?;
         verify_download(&hasher.finalize(), &key, actual_size, expected_size).map_err(failed)
     }
+}
+
+fn set_initial_file_read_only(file: &std::fs::File) -> std::io::Result<()> {
+    let mut permissions = file.metadata()?.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(0o444);
+    }
+    #[cfg(not(unix))]
+    permissions.set_readonly(true);
+    file.set_permissions(permissions)
 }
 
 /// Gives the size of a download after a chunk of `chunk_bytes` bytes, from the size before it.
@@ -649,7 +684,6 @@ pub(crate) mod scripted_storage {
 mod tests {
     use super::scripted_storage::{ScriptedSourceStorage, SourceRead};
     use super::*;
-    use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
     use crate::services::golem_config::FilesystemStorageMode;
     use futures::StreamExt;
     use golem_common::model::RetryConfig;
@@ -664,7 +698,7 @@ mod tests {
 
     /// Makes the cache directory of a loader on unmanaged storage with a temporary root.
     async fn cache_directory() -> HostDirectory {
-        let (_, directories) = SandboxFilesystemProvisioning::provision(
+        let (_, directories) = crate::services::agent_filesystem::provision_executor_directories(
             &FilesystemStorageMode::Temporary,
             RetryConfig::default(),
         )
@@ -700,6 +734,40 @@ mod tests {
     }
 
     #[test]
+    async fn shutdown_joins_downloads_and_source_leases_before_removing_cache_and_refuses_later_loads()
+     {
+        let content = b"download held through shutdown";
+        let (loader, storage, hash, environment) = scripted_setup(content, []).await;
+        let path = loader.cache_dir.path().as_path().to_path_buf();
+        let loading = loader.get_source(environment, hash, content.len() as u64);
+        tokio::pin!(loading);
+        assert!(futures::poll!(&mut loading).is_pending());
+        let closing = loader.shut_down();
+        tokio::pin!(closing);
+        assert!(futures::poll!(&mut closing).is_pending());
+        assert!(path.is_dir());
+
+        let source = loading.await.unwrap();
+        assert!(source.path().as_path().is_file());
+        let other = source.clone();
+        assert!(futures::poll!(&mut closing).is_pending());
+        drop(source);
+        assert!(futures::poll!(&mut closing).is_pending());
+        assert!(path.is_dir());
+        drop(other);
+        closing.await.unwrap();
+        assert!(!path.exists());
+        let reads = storage.reads();
+        let error = loader
+            .get_source(environment, hash, content.len() as u64)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("shut down"));
+        assert_eq!(storage.reads(), reads);
+        loader.shut_down().await.unwrap();
+    }
+
+    #[test]
     async fn source_leases_keep_the_verified_cache_entry_alive() {
         let content = b"hello world";
         let (loader, hash, env_id) = setup(content).await;
@@ -716,6 +784,11 @@ mod tests {
         assert_eq!(source2.path().as_path(), path);
         drop(source1);
         assert!(path.exists());
+        drop(loader);
+        assert!(
+            path.is_file(),
+            "a source lease keeps its cache directory alive"
+        );
         drop(source2);
         assert!(!path.exists());
     }

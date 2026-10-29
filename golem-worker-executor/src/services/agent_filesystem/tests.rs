@@ -366,6 +366,26 @@ async fn agent_filesystems_make_the_scratch_and_initial_files_directories_at_bin
     });
 }
 
+#[test]
+async fn executor_filesystem_shutdown_removes_both_directories_while_their_owners_still_live() {
+    let root = tempfile::tempdir().unwrap();
+    let settings = FilesystemStorageConfig {
+        mode: FilesystemStorageMode::Directory {
+            root: root.path().into(),
+        },
+        ..FilesystemStorageConfig::default()
+    };
+    let filesystems = AgentFilesystems::new(&settings, initial_files_service())
+        .await
+        .unwrap();
+    let loader = filesystems.file_loader();
+    filesystems.shut_down().await.unwrap();
+    assert!(!root.path().join(".scratch").exists());
+    assert!(!root.path().join(".initial-files").exists());
+    assert!(Arc::ptr_eq(&loader, &filesystems.file_loader()));
+    filesystems.shut_down().await.unwrap();
+}
+
 /// The loader owns `.initial-files`: the directory stays while the loader lives, also after the
 /// service is dropped, and goes away with the loader.
 #[test]

@@ -44,7 +44,7 @@ pub(super) const STORAGE_CALL_DEADLINES: std::ops::RangeInclusive<Duration> =
 #[cfg(test)]
 mod tests;
 
-use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
+use crate::blocking::BlockingTask;
 use backend::BlobBackend;
 use rustic_core::jiff::Span;
 use rustic_core::repofile::{Chunker, MasterKey};
@@ -120,12 +120,7 @@ pub(super) struct PruneReport {
 async fn run_blocking<R: Send + 'static>(
     task: impl FnOnce() -> anyhow::Result<R> + Send + 'static,
 ) -> anyhow::Result<R> {
-    execute_native(
-        NativeStorageProfile::Unknown,
-        NativeOperation::TreeCopy,
-        task,
-    )
-    .await?
+    BlockingTask::Spawn.run(task).await?
 }
 
 /// Prunes the repository. It deletes the packs that an earlier prune marked and whose time to stay

@@ -66,6 +66,7 @@ use super::{
     PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, open_or_create,
     prune, run_blocking,
 };
+use crate::blocking::BlockingTask;
 use crate::filesystem_snapshot::agent_work::{
     AgentWorks, OperationWork, begin_operation, drain_agent,
 };
@@ -78,7 +79,6 @@ use crate::filesystem_snapshot::{
 use crate::metrics::filesystem_snapshots::{
     self, PruneOutcome, PruneSkip, RemovedSource, StoredSource,
 };
-use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -589,7 +589,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         if self.root.is_cancelled() {
             return Err(SaveError::Stopped(Withdrawal::Stopped));
         }
-        self.check_path(NativeOperation::Metadata, tree, tree_is_valid)
+        self.check_path(tree, tree_is_valid)
             .await
             .map_err(SaveError::Source)?;
         let parent = parent.map(|(parent, detection)| (parent.clone(), detection));
@@ -617,13 +617,9 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         if self.root.is_cancelled() {
             return Err(RestoreFailure::Stopped(Withdrawal::Stopped));
         }
-        self.check_path(
-            NativeOperation::DirectoryEnumeration,
-            into,
-            destination_is_valid,
-        )
-        .await
-        .map_err(RestoreFailure::Destination)?;
+        self.check_path(into, destination_is_valid)
+            .await
+            .map_err(RestoreFailure::Destination)?;
         self.shell(Kind::Restore, slots, None)
             .call(restore_answers(), |_| {
                 self.restore_run(work, scope, name, into)
@@ -737,18 +733,18 @@ impl RusticSnapshotStore {
     /// the operation drops first.
     async fn check_path(
         &self,
-        operation: NativeOperation,
         path: &Path,
         check: impl FnOnce(&Path) -> std::io::Result<()> + Send + 'static,
     ) -> std::io::Result<()> {
         let path: Box<Path> = path.into();
         let tracked = self.tracker.token();
-        execute_native(NativeStorageProfile::Unknown, operation, move || {
-            let _tracked = tracked;
-            check(&path)
-        })
-        .await
-        .map_err(std::io::Error::other)?
+        BlockingTask::Spawn
+            .run(move || {
+                let _tracked = tracked;
+                check(&path)
+            })
+            .await
+            .map_err(std::io::Error::other)?
     }
 }
 

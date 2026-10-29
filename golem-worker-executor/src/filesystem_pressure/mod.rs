@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use crate::metrics::agent_filesystem::{self, PressureRecovery, PressureUnload};
-use crate::sandbox_filesystem::{
-    FilesystemSpace, FilesystemStorageError, FilesystemVolume, observe_space,
-};
 use crate::services::active_agents::{
     ActiveAgents, FilesystemPressureVictim, eligible_loaded_idle_filesystem_pressure_victims,
     request_loaded_idle_filesystem_unload,
 };
 use crate::services::golem_config::FilesystemPressureConfig;
+use crate::storage_volume::StorageVolumeError;
+use crate::storage_volume::{FilesystemSpace, FilesystemVolume, observe_space};
 use crate::worker::{EvictionStopOutcome, UnloadReason, UnloadRequest};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -35,15 +34,15 @@ impl FilesystemPressureConfig {
         &self,
         total_bytes: u64,
         total_filesystem_objects: u64,
-    ) -> Result<(), FilesystemStorageError> {
+    ) -> Result<(), StorageVolumeError> {
         if self.target_available_bytes() > total_bytes {
-            return Err(FilesystemStorageError::verification(
+            return Err(StorageVolumeError::verification(
                 "fit filesystem pressure byte target within the volume capacity",
                 std::path::Path::new("<configuration>"),
             ));
         }
         if self.target_available_filesystem_objects() > total_filesystem_objects {
-            return Err(FilesystemStorageError::verification(
+            return Err(StorageVolumeError::verification(
                 "fit filesystem pressure object target within the volume capacity",
                 std::path::Path::new("<configuration>"),
             ));
@@ -214,7 +213,7 @@ impl FilesystemWriteRecovery {
 #[derive(Debug)]
 pub(crate) enum FilesystemPressureError {
     Deadline,
-    Observation(FilesystemStorageError),
+    Observation(StorageVolumeError),
     CleanupFailed,
 }
 

@@ -859,6 +859,11 @@ impl StoreCalls {
         self.jobs.wait().await;
     }
 
+    pub(super) async fn wait_for_shutdown(&self) {
+        self.store_stopped.cancelled().await;
+        self.jobs.wait().await;
+    }
+
     /// Closes the slots of the uploads, so each wait for one ends.
     #[cfg(test)]
     pub(super) fn close_slots(&self) {

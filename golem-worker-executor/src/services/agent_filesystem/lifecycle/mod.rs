@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
+use crate::host_directories::HostDirectory;
 use crate::metrics::agent_filesystem::{self, StorageRefusal};
 #[cfg(test)]
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::{
-    AgentAccounting, FilesystemLimits, FilesystemStorageError, HostDirectory, InstalledLimits,
-    LinkGroup, SandboxAccessMode, SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile,
-    SandboxFileDisposition, SandboxFilesystem, SandboxFilesystemAdapter, SandboxFilesystemName,
-    SandboxFilesystemProvisioning, SandboxFlushLevel, SandboxFollow,
-    SandboxNamespaceCoordinationKey, SandboxNode, SandboxObjectId, SandboxObjectKind,
-    SandboxOpenOptions, SandboxOpened, SandboxPath, SandboxReadRange,
-    SandboxResolvedNamespaceTarget, SandboxSymlinkTarget, SandboxTimeChange, SandboxTimeChanges,
+    FilesystemLimits, FilesystemStorageError, InstalledLimits, LinkGroup, SandboxAccessMode,
+    SandboxAttributes, SandboxDirectoryId, SandboxFile, SandboxFileDisposition, SandboxFilesystem,
+    SandboxFilesystemAdapter, SandboxFilesystemName, SandboxFilesystemProvisioning,
+    SandboxFlushLevel, SandboxFollow, SandboxHandle, SandboxNameComparisonKey, SandboxObjectId,
+    SandboxObjectKind, SandboxOpenOptions, SandboxPath, SandboxReadRange,
+    SandboxResolvedPathTarget, SandboxSymlinkTarget, SandboxTimeChange, SandboxTimeChanges,
     SandboxWriteAttempt, SandboxWritePlacement, SeedAccess, SeedEntry, SeedPlacement,
     TreeExclusions,
 };
@@ -36,6 +36,7 @@ use crate::services::resource_usage_metering::{
     ResourceUsageAccount, ResourceUsageMeter, ResourceUsageMeteringWindow, create_unbound_meter,
     install_filesystem_usage, open_window, stop_metering,
 };
+use crate::storage_volume::AgentAccounting;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use golem_common::model::OwnedAgentId;
@@ -99,7 +100,7 @@ use namespace::refuse_read_only_change;
 #[cfg(test)]
 use namespace::remove_postcondition_evidence;
 #[cfg(test)]
-use namespace::resolve_namespace_target;
+use namespace::resolve_path_target;
 use operations::agent_object_kind;
 pub(crate) use operations::attributes;
 use operations::execute_open;
@@ -529,6 +530,12 @@ impl From<FilesystemStorageError> for Error {
     }
 }
 
+impl From<crate::host_directories::HostDirectoryError> for Error {
+    fn from(source: crate::host_directories::HostDirectoryError) -> Self {
+        Self::Sandbox(source.into())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AccessError {
     Revoked,
@@ -758,8 +765,8 @@ struct ActiveNamespaceEdit {
 
 #[derive(Clone, Default)]
 struct NamespaceCoordinationKeys {
-    namespace: Vec<SandboxNamespaceCoordinationKey>,
-    directories: Vec<SandboxDirectoryCoordinationKey>,
+    namespace: Vec<SandboxNameComparisonKey>,
+    directories: Vec<SandboxDirectoryId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -818,16 +825,16 @@ pub(crate) struct Directory {
 }
 
 struct NodeOwnership {
-    sandbox: Option<SandboxNode>,
+    sandbox: Option<SandboxHandle>,
     generation_id: usize,
     access: AccessMode,
     node_lease: Option<NodeLease>,
     invocation: Option<InvocationLease>,
-    close: Option<Box<dyn FnOnce(SandboxNode, NodeLease) -> FilesystemClose + Send>>,
+    close: Option<Box<dyn FnOnce(SandboxHandle, NodeLease) -> FilesystemClose + Send>>,
 }
 
 impl NodeOwnership {
-    fn sandbox(&self) -> &SandboxNode {
+    fn sandbox(&self) -> &SandboxHandle {
         self.sandbox
             .as_ref()
             .expect("filesystem node already closed")
@@ -886,7 +893,7 @@ impl PathTarget {
         let generation_id = directory.ownership.generation_id;
         let access = directory.ownership.access;
         let path = path.into();
-        let SandboxNode::Directory(directory) = directory.ownership.sandbox() else {
+        let SandboxHandle::Directory(directory) = directory.ownership.sandbox() else {
             unreachable!("directory wrapper must contain a sandbox directory")
         };
         Self {
@@ -904,7 +911,7 @@ pub(crate) enum Target<'a> {
 
 #[derive(Clone)]
 enum AttributeTarget {
-    Open(SandboxNode),
+    Open(SandboxHandle),
     Path {
         target: SandboxPath,
         follow: SandboxFollow,
@@ -1071,24 +1078,24 @@ pub(crate) struct WriteResult {
 /// A namespace entry under coordination, with a resolution of the entry.
 struct CoordinatedTarget {
     coordination: NamespaceCoordination,
-    resolved: SandboxResolvedNamespaceTarget,
+    resolved: SandboxResolvedPathTarget,
 }
 
 enum ResolvedNamespaceEdit {
     Insert {
-        destination: SandboxResolvedNamespaceTarget,
+        destination: SandboxResolvedPathTarget,
         object: NewObject,
     },
     Link {
-        source: SandboxResolvedNamespaceTarget,
-        destination: SandboxResolvedNamespaceTarget,
+        source: SandboxResolvedPathTarget,
+        destination: SandboxResolvedPathTarget,
     },
     Move {
-        source: SandboxResolvedNamespaceTarget,
-        destination: SandboxResolvedNamespaceTarget,
+        source: SandboxResolvedPathTarget,
+        destination: SandboxResolvedPathTarget,
     },
     Remove {
-        target: SandboxResolvedNamespaceTarget,
+        target: SandboxResolvedPathTarget,
         expected: ObjectKind,
     },
 }

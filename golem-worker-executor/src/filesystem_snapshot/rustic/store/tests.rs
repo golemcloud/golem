@@ -5256,15 +5256,11 @@ async fn shut_down_waits_for_the_check_of_a_local_path() {
         let (store, path) = (store.clone(), tree.path().to_path_buf());
         async move {
             store
-                .check_path(
-                    crate::sandbox_filesystem::NativeOperation::Metadata,
-                    &path,
-                    move |_| {
-                        let _ = reached_sender.send(());
-                        let _ = opened.recv();
-                        Ok(())
-                    },
-                )
+                .check_path(&path, move |_| {
+                    let _ = reached_sender.send(());
+                    let _ = opened.recv();
+                    Ok(())
+                })
                 .await
         }
     }));

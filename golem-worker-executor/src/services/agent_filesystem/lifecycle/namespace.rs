@@ -28,7 +28,7 @@ impl NamespaceCoordinator {
     pub(super) async fn coordinate(
         self: &Arc<Self>,
         kind: NamespaceCoordinationKind,
-        namespace: Vec<SandboxNamespaceCoordinationKey>,
+        namespace: Vec<SandboxNameComparisonKey>,
     ) -> NamespaceCoordination {
         let namespace = deduplicate(namespace);
         loop {
@@ -70,7 +70,7 @@ impl NamespaceCoordinator {
 }
 
 impl NamespaceCoordination {
-    pub(super) fn extend(&mut self, directories: Vec<SandboxDirectoryCoordinationKey>) -> bool {
+    pub(super) fn extend(&mut self, directories: Vec<SandboxDirectoryId>) -> bool {
         let directories = deduplicate(directories);
         let mut state = self.coordinator.state.lock().unwrap();
         let index = state
@@ -175,14 +175,14 @@ pub(crate) fn edit_namespace<Adapter: SandboxFilesystemAdapter>(
     }))
 }
 
-pub(super) async fn resolve_namespace_target<Adapter: SandboxFilesystemAdapter>(
+pub(super) async fn resolve_path_target<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     target: SandboxPath,
-) -> Result<SandboxResolvedNamespaceTarget, Error> {
+) -> Result<SandboxResolvedPathTarget, Error> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
     sandbox
-        .resolve_namespace_target(target)
+        .resolve_path_target(target)
         .await
         .map_err(|source| classify_query_error(generation, source))
 }
@@ -201,8 +201,8 @@ pub(super) async fn coordinated_target<Adapter: SandboxFilesystemAdapter>(
     kind: NamespaceCoordinationKind,
     change: Option<SandboxFollow>,
 ) -> Result<Option<CoordinatedTarget>, Error> {
-    let resolved = resolve_namespace_target(generation, target.clone()).await?;
-    let key = resolved.coordination_key();
+    let resolved = resolve_path_target(generation, target.clone()).await?;
+    let key = resolved.name_comparison_key();
     let mut coordination = generation
         .namespace
         .coordinate(kind, vec![key.clone()])
@@ -216,8 +216,8 @@ pub(super) async fn coordinated_target<Adapter: SandboxFilesystemAdapter>(
             resolved,
         }));
     };
-    let resolved = resolve_namespace_target(generation, target.clone()).await?;
-    if resolved.coordination_key() != key {
+    let resolved = resolve_path_target(generation, target.clone()).await?;
+    if resolved.name_comparison_key() != key {
         return Ok(None);
     }
     authorize_writable_target(generation, &resolved, follow)?;
@@ -233,7 +233,7 @@ pub(super) async fn coordinated_target<Adapter: SandboxFilesystemAdapter>(
 /// rename, a hard link, or a move of a directory above it.
 fn authorize_writable_target<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
-    target: &SandboxResolvedNamespaceTarget,
+    target: &SandboxResolvedPathTarget,
     follow: SandboxFollow,
 ) -> Result<(), Error> {
     match target.is_read_only_file(follow) {
@@ -274,9 +274,9 @@ async fn execute_namespace_edit<Adapter: SandboxFilesystemAdapter>(
 }
 
 impl ResolvedNamespaceEdit {
-    pub(super) fn coordination_keys(&self) -> Vec<SandboxNamespaceCoordinationKey> {
+    pub(super) fn coordination_keys(&self) -> Vec<SandboxNameComparisonKey> {
         match self {
-            Self::Insert { destination, .. } => vec![destination.coordination_key()],
+            Self::Insert { destination, .. } => vec![destination.name_comparison_key()],
             Self::Link {
                 source,
                 destination,
@@ -284,8 +284,11 @@ impl ResolvedNamespaceEdit {
             | Self::Move {
                 source,
                 destination,
-            } => vec![source.coordination_key(), destination.coordination_key()],
-            Self::Remove { target, .. } => vec![target.coordination_key()],
+            } => vec![
+                source.name_comparison_key(),
+                destination.name_comparison_key(),
+            ],
+            Self::Remove { target, .. } => vec![target.name_comparison_key()],
         }
     }
 }
@@ -299,25 +302,25 @@ async fn resolve_namespace_edit<Adapter: SandboxFilesystemAdapter>(
             destination,
             object,
         } => ResolvedNamespaceEdit::Insert {
-            destination: resolve_namespace_target(generation, destination.sandbox.clone()).await?,
+            destination: resolve_path_target(generation, destination.sandbox.clone()).await?,
             object: object.clone(),
         },
         NamespaceEdit::Link {
             source,
             destination,
         } => ResolvedNamespaceEdit::Link {
-            source: resolve_namespace_target(generation, source.sandbox.clone()).await?,
-            destination: resolve_namespace_target(generation, destination.sandbox.clone()).await?,
+            source: resolve_path_target(generation, source.sandbox.clone()).await?,
+            destination: resolve_path_target(generation, destination.sandbox.clone()).await?,
         },
         NamespaceEdit::Move {
             source,
             destination,
         } => ResolvedNamespaceEdit::Move {
-            source: resolve_namespace_target(generation, source.sandbox.clone()).await?,
-            destination: resolve_namespace_target(generation, destination.sandbox.clone()).await?,
+            source: resolve_path_target(generation, source.sandbox.clone()).await?,
+            destination: resolve_path_target(generation, destination.sandbox.clone()).await?,
         },
         NamespaceEdit::Remove { target, expected } => ResolvedNamespaceEdit::Remove {
-            target: resolve_namespace_target(generation, target.sandbox.clone()).await?,
+            target: resolve_path_target(generation, target.sandbox.clone()).await?,
             expected: *expected,
         },
     })
@@ -326,7 +329,7 @@ async fn resolve_namespace_edit<Adapter: SandboxFilesystemAdapter>(
 async fn refresh_namespace_directory_keys<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     edit: &ResolvedNamespaceEdit,
-) -> Result<Vec<SandboxDirectoryCoordinationKey>, Error> {
+) -> Result<Vec<SandboxDirectoryId>, Error> {
     let targets = match edit {
         ResolvedNamespaceEdit::Move {
             source,
@@ -337,9 +340,9 @@ async fn refresh_namespace_directory_keys<Adapter: SandboxFilesystemAdapter>(
     };
     let mut keys = Vec::new();
     for target in targets {
-        if let Some(key) = resolve_namespace_target(generation, target.target())
+        if let Some(key) = resolve_path_target(generation, target.target())
             .await?
-            .final_directory_key()
+            .target_directory_id()
         {
             keys.push(key);
         }

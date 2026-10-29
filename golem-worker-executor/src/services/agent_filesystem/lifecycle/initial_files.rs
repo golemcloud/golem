@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::sandbox_filesystem::HostPath;
+use crate::host_directories::HostPath;
 use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
@@ -397,7 +397,7 @@ async fn apply<Adapter: SandboxFilesystemAdapter>(
         Step::Unlink { .. } | Step::RemoveDirectory { .. } => None,
     });
     futures::stream::iter(unlinks)
-        .map(Ok)
+        .map(Ok::<_, Error>)
         .try_for_each(|path| async move {
             sandbox
                 .unlink_file(SandboxPath::at_root(path))
@@ -587,7 +587,7 @@ async fn remove_contents<Adapter: SandboxFilesystemAdapter>(
                     .iter()
                     .filter(|entry| entry.kind != SandboxObjectKind::Directory),
             )
-            .map(Ok)
+            .map(Ok::<_, FilesystemStorageError>)
             .try_for_each(|entry| {
                 sandbox.unlink_file(SandboxPath::at_root(directory.join(&entry.name)))
             })
@@ -730,7 +730,7 @@ pub(super) async fn observe<'a, Adapter: SandboxFilesystemAdapter>(
         .collect::<BTreeSet<&'a Path>>();
     // The directories are collected by the fold that reads the paths, so they are a vector.
     let (_, states, directories) = futures::stream::iter(changed)
-        .map(Ok)
+        .map(Ok::<_, FilesystemStorageError>)
         .try_fold(
             (PathReader::default(), HashMap::new(), Vec::new()),
             |(reader, mut states, mut directories), path| async move {
@@ -851,11 +851,10 @@ pub(super) async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
                 follow: SandboxFollow::No,
             },
         )
-        .await?
-        .into_node();
+        .await?;
     let entries = match &node {
-        SandboxNode::Directory(directory) => sandbox.read_directory(directory).await,
-        SandboxNode::File(_) => Err(FilesystemStorageError::verification(
+        SandboxHandle::Directory(directory) => sandbox.read_directory(directory).await,
+        SandboxHandle::File(_) => Err(FilesystemStorageError::verification(
             "list the entries of an initial-file directory at",
             path,
         )),
@@ -936,10 +935,9 @@ pub(super) async fn content_hash<Adapter: SandboxFilesystemAdapter>(
                 follow: SandboxFollow::No,
             },
         )
-        .await?
-        .into_node();
+        .await?;
     let hashed = match &node {
-        SandboxNode::File(file) => futures::stream::try_unfold(0u64, |offset| async move {
+        SandboxHandle::File(file) => futures::stream::try_unfold(0u64, |offset| async move {
             let bytes = sandbox
                 .read(
                     file,
@@ -958,7 +956,7 @@ pub(super) async fn content_hash<Adapter: SandboxFilesystemAdapter>(
         })
         .await
         .map(|hasher| hasher.finalize()),
-        SandboxNode::Directory(_) => Err(FilesystemStorageError::verification(
+        SandboxHandle::Directory(_) => Err(FilesystemStorageError::verification(
             "hash the content of an initial file at",
             path,
         )),
@@ -999,7 +997,7 @@ impl PathReader {
             .filter(|ancestor| !ancestor.as_os_str().is_empty())
             .collect::<Box<[&Path]>>();
         let (reader, stopped) = futures::stream::iter(ancestors.iter().rev().copied())
-            .map(Ok)
+            .map(Ok::<_, FilesystemStorageError>)
             .try_fold((self, None), |(mut reader, stopped), ancestor| async move {
                 if stopped.is_some() || reader.directories.contains(ancestor) {
                     return Ok((reader, stopped));

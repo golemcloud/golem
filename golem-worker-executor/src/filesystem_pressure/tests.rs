@@ -94,7 +94,7 @@ impl CapacityRecoverySource for ScriptedRecovery {
         match self.observations.lock().unwrap().pop_front().unwrap() {
             Ok(observation) => Ok(observation),
             Err(message) => Err(FilesystemPressureError::Observation(
-                FilesystemStorageError::verification(
+                StorageVolumeError::verification(
                     message,
                     std::path::Path::new("<scripted-volume>"),
                 ),
@@ -737,7 +737,7 @@ async fn managed_xfs_reobserves_fresh_space_after_verified_deletion() {
     let root = PathBuf::from(std::env::var("GOLEM_MANAGED_XFS_TEST_ROOT").unwrap());
     let provisioning = SandboxFilesystemProvisioning::new(
         &FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+            xfs_quotad_socket: crate::storage_volume::in_process_xfs_quotad(&root),
             root: root.clone().into(),
         },
         golem_common::model::RetryConfig::default(),

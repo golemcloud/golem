@@ -1,7 +1,8 @@
 use super::super::tests::{native_resident, resident, sandbox_attributes, unsupported_allocation};
 use super::super::{delete, resident_generation_handle, seal};
 use super::*;
-use crate::sandbox_filesystem::{SandboxObjectKind, SandboxOpened};
+use crate::sandbox_filesystem::{SandboxHandle, SandboxObjectKind};
+
 use futures::StreamExt;
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
@@ -212,7 +213,7 @@ async fn dropping_body_releases_backpressured_producer_and_aborting_producer_dis
 #[timeout("30s")]
 async fn u64_suffix_cursor_handles_short_reads_without_allocating_total_size() {
     let (resident, control, _) = resident(Err(unsupported_allocation())).await;
-    control.push_open(Ok(SandboxOpened::scripted_file(12)));
+    control.push_open(Ok(SandboxHandle::scripted_file(12)));
     control.push_close(Ok(()));
     let mut attrs = sandbox_attributes(SandboxObjectKind::File);
     attrs.size = u64::MAX;
@@ -247,7 +248,7 @@ async fn u64_suffix_cursor_handles_short_reads_without_allocating_total_size() {
 #[timeout("30s")]
 async fn premature_storage_eof_is_an_error_not_a_short_success() {
     let (resident, control, _) = resident(Err(unsupported_allocation())).await;
-    control.push_open(Ok(SandboxOpened::scripted_file(12)));
+    control.push_open(Ok(SandboxHandle::scripted_file(12)));
     control.push_close(Ok(()));
     let mut attrs = sandbox_attributes(SandboxObjectKind::File);
     attrs.size = 5;

@@ -18,7 +18,7 @@ use super::initial_files::{
     sandbox_path, seed_with_retry, validate_compatible,
 };
 use super::*;
-use crate::sandbox_filesystem::HostPath;
+use crate::host_directories::HostPath;
 use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -168,7 +168,7 @@ impl FilesystemCapture {
 
     /// Removes the capture directory with all that is in it.
     pub(crate) async fn discard(self) -> Result<(), FilesystemStorageError> {
-        self.directory.discard().await
+        self.directory.discard().await.map_err(Into::into)
     }
 }
 
@@ -385,7 +385,7 @@ impl CaptureRecord {
     async fn read(directory: &HostPath) -> Result<Self, Error> {
         let path = directory
             .child(OsStr::new(RECORD_FILE))
-            .map_err(Error::Sandbox)?;
+            .map_err(|error| Error::Sandbox(error.into()))?;
         let bytes = tokio::fs::read(path.as_path()).await.map_err(|error| {
             record_error(anyhow::Error::new(error).context("read the filesystem capture record"))
         })?;
@@ -658,7 +658,7 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
         OsStr::new(&uuid::Uuid::new_v4().to_string()),
     )
     .await
-    .map_err(CaptureError::Sandbox)?;
+    .map_err(|error| CaptureError::Sandbox(error.into()))?;
     match write_capture(sandbox.as_ref(), &state, left_out, directory.path()).await {
         Ok(()) => Ok(Some(FilesystemCapture { directory })),
         Err(error) => {
@@ -807,9 +807,7 @@ impl PathSpellingReader {
                     .expect("a declared file component has a name");
                 if !reader.directories.contains_key(parent) {
                     // The target's fact belongs to its parent, not to the target directory.
-                    let resolved = sandbox
-                        .resolve_namespace_target(sandbox_path(component))
-                        .await?;
+                    let resolved = sandbox.resolve_path_target(sandbox_path(component)).await?;
                     let exact = resolved.has_byte_exact_lookup_proof();
                     drop(resolved);
                     let observed = if exact {
@@ -1109,7 +1107,7 @@ async fn restore_baseline<Adapter: SandboxFilesystemAdapter, Restore: RestoreTre
         OsStr::new(&uuid::Uuid::new_v4().to_string()),
     )
     .await
-    .map_err(Error::Sandbox)?;
+    .map_err(|error| Error::Sandbox(error.into()))?;
     let restored = restore_from(generation, sandbox, prepared, restore, directory.path()).await;
     if let Err(cleanup) = directory.discard().await {
         tracing::warn!(error = %cleanup, "Failed to discard a filesystem restore directory");
@@ -1167,7 +1165,7 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     )?;
     let tree = directory
         .child(OsStr::new(TREE_DIRECTORY))
-        .map_err(Error::Sandbox)?;
+        .map_err(|error| Error::Sandbox(error.into()))?;
     seed_with_retry(
         generation,
         sandbox,
@@ -1324,6 +1322,7 @@ async fn link_other_names<Adapter: SandboxFilesystemAdapter>(
 mod tests {
     use super::*;
     use crate::sandbox_filesystem::{SandboxDirectoryEntry, ScriptedSandboxFilesystemProvisioning};
+
     use test_r::test;
 
     #[test]
@@ -1351,8 +1350,8 @@ mod tests {
     #[test]
     async fn capture_spelling_reuses_listed_parents_and_keeps_siblings_distinct() {
         let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
-        control.push_namespace_resolution(11, "a", Some(12));
-        control.push_namespace_resolution(12, "f", None);
+        control.push_path_resolution(11, "a", Some(12));
+        control.push_path_resolution(12, "f", None);
         [
             (
                 1,
@@ -1377,7 +1376,7 @@ mod tests {
         ]
         .into_iter()
         .for_each(|(id, entries)| {
-            control.push_open(Ok(SandboxOpened::scripted_directory(id)));
+            control.push_open(Ok(SandboxHandle::scripted_directory(id)));
             control.push_read_directory(Ok(entries));
             control.push_close(Ok(()));
         });
@@ -1408,7 +1407,7 @@ mod tests {
         assert_eq!(
             calls
                 .iter()
-                .filter(|call| call.starts_with("resolve_namespace_target("))
+                .filter(|call| call.starts_with("resolve_path_target("))
                 .count(),
             2
         );
@@ -1428,12 +1427,12 @@ mod tests {
         );
         let resolved = calls
             .iter()
-            .filter(|call| call.starts_with("resolve_namespace_target("))
+            .filter(|call| call.starts_with("resolve_path_target("))
             .map(String::as_str)
             .collect::<Box<[_]>>();
         let expected = ["a", "a/f"].map(|path| {
             format!(
-                "resolve_namespace_target(target={:?})",
+                "resolve_path_target(target={:?})",
                 SandboxPath::at_root(path)
             )
             .into_boxed_str()
@@ -1444,7 +1443,7 @@ mod tests {
     #[test]
     async fn capture_spelling_propagates_resolution_errors_before_directory_reads() {
         let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
-        control.push_namespace_resolution_error(FilesystemStorageError::io(
+        control.push_path_resolution_error(FilesystemStorageError::io(
             "resolve stored spelling",
             Path::new("a"),
             std::io::ErrorKind::PermissionDenied.into(),
@@ -1478,8 +1477,8 @@ mod tests {
     #[test]
     async fn capture_spelling_closes_after_listing_failure_and_keeps_the_first_error() {
         let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
-        control.push_namespace_resolution(11, "a", Some(12));
-        control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+        control.push_path_resolution(11, "a", Some(12));
+        control.push_open(Ok(SandboxHandle::scripted_directory(1)));
         control.push_read_directory(Err(FilesystemStorageError::io(
             "read stored names",
             Path::new(""),

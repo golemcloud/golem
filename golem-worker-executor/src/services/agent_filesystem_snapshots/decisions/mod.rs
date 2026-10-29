@@ -20,10 +20,10 @@
 
 use super::transitions::{JobId, Refusal, RunningJob};
 use super::{ConfirmOutcome, JobDecision, SnapshotKind, SnapshotSkip};
-use crate::sandbox_filesystem::FilesystemSpace;
 use crate::services::golem_config::{
     FilesystemPressureConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
 };
+use crate::storage_volume::FilesystemSpace;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::agent::AgentMode;
 use std::time::Duration;

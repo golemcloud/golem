@@ -93,7 +93,7 @@ pub(crate) fn create_fresh(
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    let accounting = provisioning.agent_accounting();
+    let accounting = provisioning.volume().agent_accounting();
     create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits, accounting)
 }
 
@@ -109,7 +109,7 @@ pub fn create_fresh_with_pressure_recovery(
     limits: ResolvedStorageLimits,
     pressure_recovery: FilesystemWriteRecovery,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    let accounting = provisioning.agent_accounting();
+    let accounting = provisioning.volume().agent_accounting();
     create_fresh_with_recovery::<SandboxFilesystem>(
         provisioning,
         scratch,
