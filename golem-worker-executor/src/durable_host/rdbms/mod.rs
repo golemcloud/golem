@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::authorization::targets::{RdbmsEngine, rdbms_sql_targets, rdbms_target};
+use crate::durable_host::authorization::targets::{
+    RdbmsEngine, TargetError, rdbms_sql_targets, rdbms_target,
+};
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
 };
@@ -29,7 +31,9 @@ use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, R
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::card::RdbmsVerb;
+use golem_common::model::card::{
+    ClassPermissionTarget, PermissionTarget, RdbmsResourcePattern, RdbmsVerb,
+};
 use golem_common::model::oplog::{DeniablePair, HostPayloadPair};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRdbmsRequest, HostRequestNoInput,
@@ -38,6 +42,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::retry_policy::RetryProperties;
 use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, RetryContext, TransactionId};
+use sqlx::ConnectOptions;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -132,18 +137,36 @@ pub trait RdbmsDurabilityPairs {
 
 const RDBMS_PERMISSION_DENIED: &str = "RDBMS permission denied";
 
-fn database_and_schema(engine: RdbmsEngine, pool_key: &RdbmsPoolKey) -> (String, String) {
+async fn database_and_schema(
+    engine: RdbmsEngine,
+    pool_key: &RdbmsPoolKey,
+) -> Result<(String, String), String> {
     match engine {
         RdbmsEngine::Mysql => {
-            let database = pool_key.address.path().trim_start_matches('/').to_string();
-            (database.clone(), database)
+            let options = sqlx::mysql::MySqlConnectOptions::from_url(&pool_key.address)
+                .map_err(|error| error.to_string())?;
+            let database = options.get_database().unwrap_or_default().to_string();
+            Ok((database.clone(), database))
         }
-        RdbmsEngine::Postgres => (
-            pool_key.address.path().trim_start_matches('/').to_string(),
-            "public".to_string(),
-        ),
+        RdbmsEngine::Postgres => {
+            let address = pool_key.address.clone();
+            // SQLx also resolves query overrides, environment defaults and password files.
+            let database = tokio::task::spawn_blocking(move || {
+                let options = sqlx::postgres::PgConnectOptions::from_url(&address)
+                    .map_err(|error| error.to_string())?;
+                Ok::<_, String>(
+                    options
+                        .get_database()
+                        .unwrap_or_else(|| options.get_username())
+                        .to_string(),
+                )
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            Ok((database, "public".to_string()))
+        }
         // Ignite's thin-client URL has no database path. Its SQL namespace starts at PUBLIC.
-        RdbmsEngine::Ignite => ("default".to_string(), "PUBLIC".to_string()),
+        RdbmsEngine::Ignite => Ok(("default".to_string(), "PUBLIC".to_string())),
     }
 }
 
@@ -156,7 +179,14 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + RdbmsDurabilityPairs + 'static,
 {
-    let (database, schema) = database_and_schema(T::ENGINE, pool_key);
+    let (database, schema) = match database_and_schema(T::ENGINE, pool_key).await {
+        Ok(database_and_schema) => database_and_schema,
+        Err(error) => {
+            return Ok(Err(format!(
+                "{RDBMS_PERMISSION_DENIED}: cannot determine connection database: {error}"
+            )));
+        }
+    };
     let targets = match rdbms_sql_targets(
         environment_owner(ctx),
         T::ENGINE,
@@ -165,6 +195,25 @@ where
         statement,
     ) {
         Ok(targets) => targets,
+        Err(TargetError::SqlNotStaticallyExtractable(reason)) => {
+            let target = PermissionTarget::Rdbms(ClassPermissionTarget {
+                verb: Some(RdbmsVerb::Unanalyzed),
+                owner: environment_owner(ctx),
+                resource: RdbmsResourcePattern::Database {
+                    database: database.clone(),
+                },
+            });
+            return Ok(ctx
+                .authorize_live_permissions(&[target])
+                .await?
+                .map_err(|error| {
+                    format!(
+                        "{RDBMS_PERMISSION_DENIED}: cannot safely determine SQL targets: {reason}; \
+                         unsupported SQL requires an explicitly assigned rdbms unanalyzed grant \
+                         on database({database}): {error}"
+                    )
+                }));
+        }
         Err(error) => {
             return Ok(Err(format!(
                 "{RDBMS_PERMISSION_DENIED}: cannot safely determine SQL targets: {error}"
@@ -185,7 +234,14 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + RdbmsDurabilityPairs + 'static,
 {
-    let (database, _) = database_and_schema(T::ENGINE, pool_key);
+    let (database, _) = match database_and_schema(T::ENGINE, pool_key).await {
+        Ok(database_and_schema) => database_and_schema,
+        Err(error) => {
+            return Ok(Err(format!(
+                "{RDBMS_PERMISSION_DENIED}: cannot determine connection database: {error}"
+            )));
+        }
+    };
     let targets = [
         rdbms_target(
             environment_owner(ctx),

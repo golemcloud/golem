@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::super::*;
+use golem_common::model::card::RdbmsVerb;
 
 /// The ID of the runtime card that the durable call at `oplog_index` derives.
 pub(crate) fn derived_card_id(
@@ -340,7 +341,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         assert_live_authorization(self.state.is_live());
 
-        if self.operator_authorizes_current_invocation() {
+        if self.operator_authorizes_current_invocation()
+            && !targets.iter().any(|target| {
+                matches!(target, PermissionTarget::Rdbms(target) if target.verb == Some(RdbmsVerb::Unanalyzed))
+            })
+        {
             record_permission_decisions(targets, true);
             return Ok(Ok(LiveAuthorizationPermit { _private: () }));
         }

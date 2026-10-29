@@ -5779,6 +5779,258 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
 #[test]
 #[timeout("5m")]
 #[tracing::instrument]
+async fn rdbms_migrations_use_table_grants_and_unanalyzed_sql_requires_explicit_authority(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    permission_postgres: &DockerPostgresRdb,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let address = permission_postgres.public_connection_string();
+    let pool = sqlx::PgPool::connect(&address).await?;
+    let mut overridden_address = url::Url::parse(&address)?;
+    overridden_address.set_path("/other");
+    overridden_address
+        .query_pairs_mut()
+        .append_pair("dbname", "postgres");
+    let mut encoded_address = url::Url::parse(&address)?;
+    encoded_address.set_path("/post%67res");
+    let mut default_address = url::Url::parse(&address)?;
+    default_address.set_path("");
+    for (case, extra, expected, statement_address) in [
+        ("defaults", None, false, address.clone()),
+        (
+            "wildcard",
+            Some("rdbms(?env) @ * : * : *.*.*"),
+            false,
+            address.clone(),
+        ),
+        (
+            "wrong_database",
+            Some("rdbms(?env) @ * : unanalyzed : database(other)"),
+            false,
+            address.clone(),
+        ),
+        (
+            "explicit",
+            Some("rdbms(?env) @ * : unanalyzed : database(postgres)"),
+            true,
+            address.clone(),
+        ),
+        (
+            "override_denied",
+            Some("rdbms(?env) @ * : unanalyzed : database(other)"),
+            false,
+            overridden_address.to_string(),
+        ),
+        (
+            "override_allowed",
+            Some("rdbms(?env) @ * : unanalyzed : database(postgres)"),
+            true,
+            overridden_address.to_string(),
+        ),
+        (
+            "encoded",
+            Some("rdbms(?env) @ * : unanalyzed : database(postgres)"),
+            true,
+            encoded_address.to_string(),
+        ),
+        (
+            "default_database",
+            Some("rdbms(?env) @ * : unanalyzed : database(postgres)"),
+            true,
+            default_address.to_string(),
+        ),
+    ] {
+        let component =
+            executor
+                .component_dep(&context.default_environment_id, host_api_tests)
+                .name(&format!("rdbms-migrations-{case}"))
+                .try_update_agent_provision_config("RelationalDatabases", |config| {
+                    if let Some(extra) = extra {
+                        config
+                            .initial_permissions
+                            .lower_bound
+                            .positive
+                            .retain(|grant| {
+                                !matches!(grant, PolymorphicPermissionPattern::Rdbms(_))
+                            });
+                        for grant in ["rdbms(?env) @ * : * : postgres.*.*", extra] {
+                            config
+                                .initial_permissions
+                                .lower_bound
+                                .positive
+                                .push(parse_polymorphic_permission(grant)?);
+                        }
+                    }
+                    config.initial_permissions.lower_bound.negative.push(
+                        parse_polymorphic_permission(
+                            "rdbms(?env) @ * : query : postgres.public.forbidden",
+                        )?,
+                    );
+                    config.initial_permissions.lower_bound.negative.push(
+                        parse_polymorphic_permission(
+                            "rdbms(?env) @ * : mutate : postgres.public.read_only",
+                        )?,
+                    );
+                    Ok::<_, golem_common::model::card::CardParseError>(())
+                })?
+                .store()
+                .await?;
+        let agent = agent_id!("RelationalDatabases", case);
+        configure_scope_card_root(&authority, &component, &agent)?;
+        executor.start_agent(&component.id, agent.clone()).await?;
+        let table = format!(
+            "migration_{}_{}",
+            context.default_environment_id.0.simple(),
+            case
+        );
+        for (operation, sql, result) in [
+            (
+                "connection-execute",
+                format!("CREATE TABLE {table} (id INT PRIMARY KEY, email TEXT)"),
+                "execute",
+            ),
+            (
+                "connection-execute",
+                format!(
+                    "CREATE UNIQUE INDEX {table}_email ON {table}(email) WHERE email IS NOT NULL"
+                ),
+                "execute",
+            ),
+            (
+                "transaction-execute",
+                format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"),
+                "execute",
+            ),
+            (
+                "connection-execute",
+                format!(
+                    "INSERT INTO {table} VALUES (1, 'a') ON CONFLICT (email) WHERE email IS NOT NULL DO NOTHING"
+                ),
+                "execute",
+            ),
+            (
+                "transaction-query",
+                format!("SELECT * FROM {table} FOR UPDATE"),
+                "query",
+            ),
+            (
+                "connection-query",
+                format!(
+                    "WITH saved AS (INSERT INTO {table} VALUES (2, 'b') RETURNING *) SELECT * FROM saved"
+                ),
+                "query",
+            ),
+        ] {
+            let actual = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent,
+                    "postgres_operation_result",
+                    data_value!(operation, address.clone(), sql.clone()),
+                )
+                .await?
+                .into_typed::<Result<String, String>>()?;
+            assert_eq!(actual, Ok(result.to_string()), "{case}: {sql}");
+        }
+        let rows: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(rows, 2);
+
+        let schema = format!(
+            "unsupported_{}_{}",
+            context.default_environment_id.0.simple(),
+            case
+        );
+        let actual = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                "postgres_operation_result",
+                data_value!(
+                    "connection-execute",
+                    statement_address.clone(),
+                    format!("CREATE SCHEMA {schema}")
+                ),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        if expected {
+            assert_eq!(actual, Ok("execute".to_string()));
+        } else {
+            assert!(actual.is_err_and(|error| {
+                error.contains("unsupported SQL requires an explicitly assigned")
+            }));
+        }
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
+                .bind(&schema)
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(exists, expected);
+
+        for operation in ["connection-query", "transaction-query"] {
+            let actual = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent,
+                    "postgres_operation_result",
+                    data_value!(
+                        operation,
+                        statement_address.clone(),
+                        format!("SELECT * FROM {table}")
+                    ),
+                )
+                .await?
+                .into_typed::<Result<String, String>>()?;
+            assert_eq!(actual, Ok("query".to_string()), "{case}: {operation}");
+        }
+
+        for (operation, sql) in [
+            ("connection-query", "SELECT * FROM forbidden"),
+            (
+                "connection-execute",
+                "CREATE INDEX denied_index ON read_only(id)",
+            ),
+            ("transaction-execute", "LOCK TABLE read_only"),
+            ("transaction-query", "SELECT * FROM read_only FOR UPDATE"),
+            (
+                "connection-query",
+                "WITH saved AS (INSERT INTO read_only VALUES (3) RETURNING *) SELECT * FROM saved",
+            ),
+            (
+                "connection-execute",
+                "INSERT INTO read_only VALUES (3) ON CONFLICT (id) WHERE id > 0 DO NOTHING",
+            ),
+        ] {
+            let denied = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent,
+                    "postgres_operation_result",
+                    data_value!(operation, address.clone(), sql),
+                )
+                .await?
+                .into_typed::<Result<String, String>>()?;
+            assert!(
+                denied.is_err_and(|error| error.contains("RDBMS permission denied")
+                    && !error.contains("cannot safely determine SQL targets")),
+                "{case}: {sql} must fail ordinary table authorization"
+            );
+        }
+    }
+    pool.close().await;
+    Ok(())
+}
+
+#[test]
+#[timeout("5m")]
+#[tracing::instrument]
 async fn every_protected_rdbms_transaction_import_enforces_permissions(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

@@ -14,11 +14,11 @@ use golem_common::model::card::*;
 use sqlparser::ast::{
     AlterTableOperation, ColumnDef, ColumnOption, CreateTableLikeKind, FromTable, ObjectName,
     ObjectNamePart, ObjectType, Query, RenameTableNameKind, Select, SetExpr, Statement,
-    TableConstraint, TableFactor, TableObject, Visit, Visitor, visit_relations,
+    TableConstraint, TableFactor, TableObject, Visit, Visitor,
 };
 use sqlparser::dialect::{GenericDialect, MySqlDialect, PostgreSqlDialect};
 use sqlparser::keywords::Keyword;
-use sqlparser::parser::Parser;
+use sqlparser::parser::{IsOptional, Parser};
 use sqlparser::tokenizer::{Token, Tokenizer};
 use std::fmt::{Display, Formatter};
 use std::ops::ControlFlow;
@@ -370,9 +370,7 @@ pub fn rdbms_sql_targets(
     sql: &str,
 ) -> Result<Vec<PermissionTarget>, TargetError> {
     let statements = match engine {
-        RdbmsEngine::Postgres => {
-            Parser::parse_sql(&PostgreSqlDialect {}, sql).map_err(|error| error.to_string())
-        }
+        RdbmsEngine::Postgres => parse_postgres_sql(sql),
         RdbmsEngine::Mysql => {
             Parser::parse_sql(&MySqlDialect {}, sql).map_err(|error| error.to_string())
         }
@@ -384,7 +382,7 @@ pub fn rdbms_sql_targets(
         Err(error) => return sql_fallback(&error),
     };
     let statement = statements.pop().expect("one parsed statement");
-    let names = match extract_sql_relations(&statement) {
+    let names = match extract_sql_relations(&statement, engine) {
         Ok(names) => names,
         Err(reason) => return sql_fallback(&reason),
     };
@@ -417,6 +415,73 @@ pub fn rdbms_sql_targets(
         Ok(targets) => Ok(targets),
         Err(TargetError::SqlNotStaticallyExtractable(reason)) => sql_fallback(&reason),
         Err(error) => Err(error),
+    }
+}
+
+fn parse_postgres_sql(sql: &str) -> Result<Vec<Statement>, String> {
+    let dialect = PostgreSqlDialect {};
+    let original_error = match Parser::parse_sql(&dialect, sql) {
+        Ok(statements) => return Ok(statements),
+        Err(error) => error.to_string(),
+    };
+    let mut tokens = Tokenizer::new(&dialect, sql)
+        .tokenize()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|token| !matches!(token, Token::Whitespace(_)))
+        .collect::<Vec<_>>();
+    let is_keyword = |token: &Token, keyword| matches!(token, Token::Word(word) if word.quote_style.is_none() && word.keyword == keyword);
+    let mut extended = false;
+    let mut index = 0;
+    while index + 2 < tokens.len() {
+        if !is_keyword(&tokens[index], Keyword::ON)
+            || !is_keyword(&tokens[index + 1], Keyword::CONFLICT)
+            || tokens[index + 2] != Token::LParen
+        {
+            index += 1;
+            continue;
+        }
+        let start = index + 2;
+        let mut parser = Parser::new(&dialect).with_tokens(tokens[start..].to_vec());
+        parser
+            .parse_parenthesized_column_list(IsOptional::Mandatory, false)
+            .map_err(|error| error.to_string())?;
+        if !is_keyword(&parser.next_token().token, Keyword::WHERE) {
+            index += 1;
+            continue;
+        }
+        let predicate_start = start + parser.get_current_index();
+        let predicate = parser.parse_expr().map_err(|error| error.to_string())?;
+        if let ControlFlow::Break(reason) = predicate.visit(&mut ConflictPredicateValidator) {
+            return Err(reason.to_string());
+        }
+        if !is_keyword(&parser.next_token().token, Keyword::DO) {
+            return Err("conflict-target predicate must be followed by DO".to_string());
+        }
+        let predicate_end = start + parser.get_current_index();
+        // sqlparser's conflict-target AST has no predicate. Omit only the parsed
+        // scalar predicate for target analysis; execution still uses the original
+        // SQL. Subqueries are forbidden so this cannot hide table access or writes.
+        tokens.drain(predicate_start..predicate_end);
+        extended = true;
+        index += 1;
+    }
+    if !extended {
+        return Err(original_error);
+    }
+    Parser::new(&dialect)
+        .with_tokens(tokens)
+        .parse_statements()
+        .map_err(|error| error.to_string())
+}
+
+struct ConflictPredicateValidator;
+
+impl Visitor for ConflictPredicateValidator {
+    type Break = &'static str;
+
+    fn pre_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        ControlFlow::Break("subqueries in conflict-target predicates are unsupported")
     }
 }
 
@@ -481,9 +546,37 @@ fn parse_ignite_sql(sql: &str) -> Result<Vec<Statement>, String> {
     }
 }
 
-fn extract_sql_relations(statement: &Statement) -> Result<Vec<(ObjectName, RdbmsVerb)>, String> {
+fn extract_sql_relations(
+    statement: &Statement,
+    engine: RdbmsEngine,
+) -> Result<Vec<(ObjectName, RdbmsVerb)>, String> {
     validate_sql_ast(statement)?;
+    let mut collector = SqlRelationCollector {
+        engine,
+        mutations: Vec::new(),
+        queries: Vec::new(),
+        relations: Vec::new(),
+        ctes: Vec::new(),
+        destinations: Vec::new(),
+        suppressed_queries: 0,
+    };
+    match statement.visit(&mut collector) {
+        ControlFlow::Break(reason) => return Err(reason),
+        ControlFlow::Continue(()) => {}
+    }
+    let mut result = collector.mutations;
+    for name in collector.relations {
+        if !result.iter().any(|(mutation, _)| mutation == &name) {
+            push_unique_relation(&mut collector.queries, name, RdbmsVerb::Query);
+        }
+    }
+    for (name, verb) in collector.queries {
+        push_unique_relation(&mut result, name, verb);
+    }
+    Ok(result)
+}
 
+fn statement_sql_relations(statement: &Statement) -> Result<Vec<(ObjectName, RdbmsVerb)>, String> {
     let mut mutations = Vec::new();
     let mut queries = Vec::new();
     match statement {
@@ -493,28 +586,13 @@ fn extract_sql_relations(statement: &Statement) -> Result<Vec<(ObjectName, Rdbms
                 return Err("insert destination is not a concrete table".to_string());
             };
             push_unique(&mut mutations, name.clone());
-            if let Some(source) = &insert.source {
-                collect_relations(source.as_ref(), &mut queries);
-            }
-            if let Some(returning) = &insert.returning {
-                collect_relations(returning, &mut queries);
-            }
         }
         Statement::Update(update) => {
-            plain_table_factor_name(&update.table.relation)?;
-            collect_relations(&update.table, &mut mutations);
-            if mutations.is_empty() {
-                return Err("update destination is not a concrete table".to_string());
-            }
-            if let Some(from) = &update.from {
-                collect_relations(from, &mut queries);
-            }
-            collect_relations(&update.assignments, &mut queries);
-            if let Some(selection) = &update.selection {
-                collect_relations(selection, &mut queries);
-            }
-            if let Some(returning) = &update.returning {
-                collect_relations(returning, &mut queries);
+            // A joined UPDATE can write any concrete table in its destination.
+            for factor in std::iter::once(&update.table.relation)
+                .chain(update.table.joins.iter().map(|join| &join.relation))
+            {
+                push_unique(&mut mutations, plain_table_factor_name(factor)?.clone());
             }
         }
         Statement::Delete(delete) => {
@@ -534,28 +612,12 @@ fn extract_sql_relations(statement: &Statement) -> Result<Vec<(ObjectName, Rdbms
                 &mut mutations,
                 plain_table_factor_name(&table.relation)?.clone(),
             );
-            if let Some(using) = &delete.using {
-                collect_relations(using, &mut queries);
-            }
-            if let Some(selection) = &delete.selection {
-                collect_relations(selection, &mut queries);
-            }
-            if let Some(returning) = &delete.returning {
-                collect_relations(returning, &mut queries);
-            }
-            collect_relations(&delete.order_by, &mut queries);
-            if let Some(limit) = &delete.limit {
-                collect_relations(limit, &mut queries);
-            }
         }
         Statement::Merge(merge) => {
             push_unique(
                 &mut mutations,
                 plain_table_factor_name(&merge.table)?.clone(),
             );
-            collect_relations(&merge.source, &mut queries);
-            collect_relations(&merge.on, &mut queries);
-            collect_relations(&merge.clauses, &mut queries);
         }
         Statement::Truncate(truncate) => {
             for table in &truncate.table_names {
@@ -564,9 +626,6 @@ fn extract_sql_relations(statement: &Statement) -> Result<Vec<(ObjectName, Rdbms
         }
         Statement::CreateTable(create) => {
             push_unique(&mut mutations, create.name.clone());
-            if let Some(query) = &create.query {
-                collect_relations(query.as_ref(), &mut queries);
-            }
             if let Some(like) = &create.like {
                 let name = match like {
                     CreateTableLikeKind::Parenthesized(like) | CreateTableLikeKind::Plain(like) => {
@@ -588,6 +647,17 @@ fn extract_sql_relations(statement: &Statement) -> Result<Vec<(ObjectName, Rdbms
             }
             collect_column_foreign_tables(&create.columns, &mut queries);
             collect_constraint_foreign_tables(&create.constraints, &mut queries);
+        }
+        Statement::CreateIndex(create) => {
+            if !create.alter_options.is_empty() {
+                return Err("unsupported create-index alter options".to_string());
+            }
+            push_unique(&mut mutations, create.table_name.clone());
+        }
+        Statement::Lock(lock) => {
+            for table in &lock.tables {
+                push_unique(&mut mutations, table.name.clone());
+            }
         }
         Statement::AlterTable(alter) => {
             push_unique(&mut mutations, alter.name.clone());
@@ -643,14 +713,6 @@ fn extract_sql_relations(statement: &Statement) -> Result<Vec<(ObjectName, Rdbms
         _ => return Err("unsupported statement".to_string()),
     }
 
-    let mut all_relations = Vec::new();
-    collect_relations(statement, &mut all_relations);
-    for relation in all_relations {
-        if !mutations.contains(&relation) {
-            push_unique(&mut queries, relation);
-        }
-    }
-
     let mut result = Vec::new();
     for name in mutations {
         push_unique_relation(&mut result, name, RdbmsVerb::Mutate);
@@ -659,6 +721,218 @@ fn extract_sql_relations(statement: &Statement) -> Result<Vec<(ObjectName, Rdbms
         push_unique_relation(&mut result, name, RdbmsVerb::Query);
     }
     Ok(result)
+}
+
+struct SqlRelationCollector {
+    engine: RdbmsEngine,
+    mutations: Vec<(ObjectName, RdbmsVerb)>,
+    queries: Vec<(ObjectName, RdbmsVerb)>,
+    relations: Vec<ObjectName>,
+    ctes: Vec<String>,
+    // AST node identities distinguish a write destination from a separate read
+    // of the same table. The AST remains borrowed and unchanged during the walk.
+    destinations: Vec<usize>,
+    suppressed_queries: usize,
+}
+
+fn sql_identifier(identifier: &sqlparser::ast::Ident, engine: RdbmsEngine) -> String {
+    match engine {
+        // MySQL CTE names are case-insensitive, including quoted names.
+        RdbmsEngine::Mysql => identifier.value.to_lowercase(),
+        _ if identifier.quote_style.is_some() => identifier.value.clone(),
+        RdbmsEngine::Postgres => identifier.value.to_ascii_lowercase(),
+        RdbmsEngine::Ignite => identifier.value.to_uppercase(),
+    }
+}
+
+impl SqlRelationCollector {
+    fn is_cte(&self, name: &ObjectName) -> bool {
+        matches!(name.0.as_slice(), [ObjectNamePart::Identifier(id)] if self.ctes.contains(&sql_identifier(id, self.engine)))
+    }
+
+    fn query(&mut self, query: &Query) -> ControlFlow<String> {
+        let inherited = self.ctes.clone();
+        if let Some(with) = &query.with {
+            let mut aliases = Vec::new();
+            for cte in &with.cte_tables {
+                let alias = sql_identifier(&cte.alias.name, self.engine);
+                if cte.from.is_some() || aliases.contains(&alias) {
+                    return ControlFlow::Break("ambiguous CTE definition".to_string());
+                }
+                aliases.push(alias);
+            }
+            if with.recursive {
+                self.ctes.extend(aliases.clone());
+            }
+            for (cte, alias) in with.cte_tables.iter().zip(aliases) {
+                cte.query.visit(self)?;
+                if !with.recursive {
+                    self.ctes.push(alias);
+                }
+            }
+        }
+        self.row_locks(query)?;
+        query.body.visit(self)?;
+        query.order_by.visit(self)?;
+        query.limit_clause.visit(self)?;
+        query.fetch.visit(self)?;
+        self.ctes = inherited;
+        ControlFlow::Continue(())
+    }
+
+    fn row_locks(&mut self, query: &Query) -> ControlFlow<String> {
+        if query.locks.is_empty() {
+            return ControlFlow::Continue(());
+        }
+        let SetExpr::Select(select) = query.body.as_ref() else {
+            return ControlFlow::Break("row locks require a plain SELECT".to_string());
+        };
+        // Only direct, concrete FROM items can be resolved without propagating locks
+        // through derived tables or accidentally locking tables inside a CTE.
+        let alias_identifier = |id: &sqlparser::ast::Ident| {
+            if self.engine == RdbmsEngine::Mysql {
+                // MySQL table aliases can be case-sensitive, unlike CTE names.
+                // Require the exact spelling rather than depend on server settings.
+                id.value.clone()
+            } else {
+                sql_identifier(id, self.engine)
+            }
+        };
+        let mut bindings = Vec::new();
+        for table in &select.from {
+            for factor in std::iter::once(&table.relation)
+                .chain(table.joins.iter().map(|join| &join.relation))
+            {
+                let TableFactor::Table {
+                    name,
+                    alias,
+                    args: None,
+                    ..
+                } = factor
+                else {
+                    return ControlFlow::Break("ambiguous row-lock table expression".to_string());
+                };
+                let id = match alias {
+                    Some(alias) => &alias.name,
+                    None => match name.0.last() {
+                        Some(ObjectNamePart::Identifier(id)) => id,
+                        _ => return ControlFlow::Break("invalid row-lock table name".to_string()),
+                    },
+                };
+                bindings.push((alias_identifier(id), name));
+            }
+        }
+        for lock in &query.locks {
+            if let Some(of) = &lock.of {
+                let [ObjectNamePart::Identifier(id)] = of.0.as_slice() else {
+                    return ControlFlow::Break(
+                        "row-lock OF requires an unqualified alias".to_string(),
+                    );
+                };
+                let matches = bindings
+                    .iter()
+                    .filter(|(alias, _)| *alias == alias_identifier(id))
+                    .collect::<Vec<_>>();
+                let [(_, name)] = matches.as_slice() else {
+                    return ControlFlow::Break("unknown or ambiguous row-lock alias".to_string());
+                };
+                if self.is_cte(name) {
+                    return ControlFlow::Break("row-lock OF cannot target a CTE".to_string());
+                }
+                push_unique_relation(&mut self.mutations, (*name).clone(), RdbmsVerb::Mutate);
+            } else {
+                for (_, name) in &bindings {
+                    // PostgreSQL does not propagate an outer lock into a CTE.
+                    if !self.is_cte(name) {
+                        push_unique_relation(
+                            &mut self.mutations,
+                            (*name).clone(),
+                            RdbmsVerb::Mutate,
+                        );
+                    }
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl Visitor for SqlRelationCollector {
+    type Break = String;
+
+    fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+        if self.suppressed_queries == 0 {
+            self.query(query)?;
+        }
+        // Query children were visited explicitly to give each CTE the correct
+        // preceding definitions. Suppress the visitor's automatic second walk.
+        self.suppressed_queries += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.suppressed_queries -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<Self::Break> {
+        if self.suppressed_queries != 0 {
+            return ControlFlow::Continue(());
+        }
+        let relations = match statement_sql_relations(statement) {
+            Ok(relations) => relations,
+            Err(reason) => return ControlFlow::Break(reason),
+        };
+        for (name, verb) in relations {
+            let result = if verb == RdbmsVerb::Mutate {
+                &mut self.mutations
+            } else {
+                &mut self.queries
+            };
+            push_unique_relation(result, name, verb);
+        }
+        if let Statement::Update(update) = statement {
+            for factor in std::iter::once(&update.table.relation)
+                .chain(update.table.joins.iter().map(|join| &join.relation))
+            {
+                self.destinations.push(std::ptr::from_ref(factor) as usize);
+            }
+        }
+        let destination = match statement {
+            Statement::Delete(delete) => {
+                let (FromTable::WithFromKeyword(from) | FromTable::WithoutKeyword(from)) =
+                    &delete.from;
+                from.first().map(|table| &table.relation)
+            }
+            Statement::Merge(merge) => Some(&merge.table),
+            _ => None,
+        };
+        if let Some(destination) = destination {
+            self.destinations
+                .push(std::ptr::from_ref(destination) as usize);
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_relation(&mut self, name: &ObjectName) -> ControlFlow<Self::Break> {
+        if self.suppressed_queries == 0 && !self.is_cte(name) {
+            push_unique(&mut self.relations, name.clone());
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
+        if self.suppressed_queries == 0
+            && !self
+                .destinations
+                .contains(&(std::ptr::from_ref(factor) as usize))
+            && let TableFactor::Table { name, .. } = factor
+            && !self.is_cte(name)
+        {
+            push_unique_relation(&mut self.queries, name.clone(), RdbmsVerb::Query);
+        }
+        ControlFlow::Continue(())
+    }
 }
 
 fn validate_sql_ast(statement: &Statement) -> Result<(), String> {
@@ -675,13 +949,11 @@ impl Visitor for SqlAstValidator {
     type Break = &'static str;
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
-        if query.with.is_some()
-            || !query.locks.is_empty()
-            || query.for_clause.is_some()
+        if query.for_clause.is_some()
             || query.settings.is_some()
             || query.format_clause.is_some()
             || !query.pipe_operators.is_empty()
-            || !read_only_set_expr(&query.body)
+            || !supported_set_expr(&query.body)
         {
             ControlFlow::Break("unsupported or effectful query form")
         } else {
@@ -712,18 +984,15 @@ impl Visitor for SqlAstValidator {
     }
 }
 
-fn read_only_set_expr(expr: &SetExpr) -> bool {
+fn supported_set_expr(expr: &SetExpr) -> bool {
     match expr {
         SetExpr::Select(_) | SetExpr::Values(_) => true,
-        SetExpr::Query(query) => read_only_set_expr(&query.body),
+        SetExpr::Query(query) => supported_set_expr(&query.body),
         SetExpr::SetOperation { left, right, .. } => {
-            read_only_set_expr(left) && read_only_set_expr(right)
+            supported_set_expr(left) && supported_set_expr(right)
         }
-        SetExpr::Insert(_)
-        | SetExpr::Update(_)
-        | SetExpr::Delete(_)
-        | SetExpr::Merge(_)
-        | SetExpr::Table(_) => false,
+        SetExpr::Insert(_) | SetExpr::Update(_) | SetExpr::Delete(_) | SetExpr::Merge(_) => true,
+        SetExpr::Table(_) => false,
     }
 }
 
@@ -734,13 +1003,6 @@ fn plain_table_factor_name(factor: &TableFactor) -> Result<&ObjectName, String> 
         } => Ok(name),
         _ => Err("destination is not a concrete table".to_string()),
     }
-}
-
-fn collect_relations<T: Visit>(value: &T, result: &mut Vec<ObjectName>) {
-    let _: ControlFlow<()> = visit_relations(value, |name| {
-        push_unique(result, name.clone());
-        ControlFlow::Continue(())
-    });
 }
 
 fn collect_column_foreign_tables(columns: &[ColumnDef], result: &mut Vec<ObjectName>) {
@@ -1592,21 +1854,418 @@ mod tests {
     #[test]
     fn sql_wrappers_with_ambiguous_effects_fail_closed() {
         for sql in [
-            "WITH moved AS (DELETE FROM source RETURNING *) SELECT * FROM moved",
-            "WITH visible AS (SELECT * FROM source) SELECT * FROM visible",
             "EXPLAIN DROP TABLE protected",
             "SELECT * INTO copied FROM source",
-            "SELECT * FROM accounts FOR UPDATE",
             "SELECT * FROM dynamic_table(?)",
             "CREATE VIEW exposed AS SELECT * FROM protected",
-            "CREATE INDEX idx ON protected(id)",
             "DROP TABLE first,",
             "SELECT * FROM catalog.schema.table.extra",
+            "WITH x AS (SELECT 1), x AS (SELECT * FROM protected) SELECT * FROM x",
+            "WITH x AS (SELECT * FROM dynamic_table(?)) SELECT * FROM x",
+            "SELECT * FROM accounts a FOR UPDATE OF accounts",
+            "SELECT * FROM accounts a FOR UPDATE OF missing",
+            "SELECT * FROM accounts a, protected a FOR UPDATE OF a",
+            "SELECT * FROM (SELECT * FROM protected) a FOR UPDATE",
+            "WITH x AS (SELECT * FROM protected) SELECT * FROM x FOR UPDATE OF x",
+            "SELECT * FROM accounts FOR UPDATE OF public.accounts",
+            "SELECT * FROM accounts UNION SELECT * FROM protected FOR UPDATE",
         ] {
             assert!(
                 rdbms_sql_targets(env("prod"), RdbmsEngine::Postgres, "db", "public", sql,)
                     .is_err(),
                 "accepted ambiguous SQL: {sql}"
+            );
+        }
+    }
+
+    fn assert_sql_tables(sql: &str, expected: &[(RdbmsVerb, &str)]) {
+        let actual = tables(sql);
+        assert_eq!(
+            actual
+                .iter()
+                .map(|target| (target.0, target.3.as_str()))
+                .collect::<Vec<_>>(),
+            expected,
+            "SQL: {sql}"
+        );
+    }
+
+    #[test]
+    fn sql_row_locks_require_mutate_only_on_locked_tables() {
+        use RdbmsVerb::{Mutate, Query};
+        for suffix in ["FOR UPDATE", "FOR SHARE NOWAIT", "FOR UPDATE SKIP LOCKED"] {
+            assert_sql_tables(
+                &format!("SELECT * FROM accounts a JOIN audit b ON true {suffix}"),
+                &[
+                    (Mutate, "accounts"),
+                    (Mutate, "audit"),
+                    (Query, "accounts"),
+                    (Query, "audit"),
+                ],
+            );
+        }
+        assert_sql_tables(
+            "SELECT * FROM accounts a JOIN audit b ON true WHERE EXISTS (SELECT 1 FROM protected) FOR UPDATE OF a",
+            &[
+                (Mutate, "accounts"),
+                (Query, "accounts"),
+                (Query, "audit"),
+                (Query, "protected"),
+            ],
+        );
+        assert_sql_tables(
+            "SELECT * FROM accounts a, audit b FOR UPDATE OF a FOR SHARE OF b",
+            &[
+                (Mutate, "accounts"),
+                (Mutate, "audit"),
+                (Query, "accounts"),
+                (Query, "audit"),
+            ],
+        );
+        assert_sql_tables(
+            "SELECT * FROM accounts AS \"A\" FOR UPDATE OF \"A\"",
+            &[(Mutate, "accounts"), (Query, "accounts")],
+        );
+        assert_sql_tables(
+            "SELECT * FROM accounts a WHERE EXISTS (SELECT 1 FROM protected a FOR SHARE OF a)",
+            &[
+                (Mutate, "protected"),
+                (Query, "accounts"),
+                (Query, "protected"),
+            ],
+        );
+    }
+
+    #[test]
+    fn sql_indexes_and_table_locks_target_tables_not_index_names() {
+        use RdbmsVerb::Mutate;
+        assert_sql_tables(
+            "CREATE INDEX idx ON protected(id)",
+            &[(Mutate, "protected")],
+        );
+        assert_sql_tables(
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx ON protected(id) INCLUDE (value) WHERE active = true",
+            &[(Mutate, "protected")],
+        );
+        assert_sql_tables(
+            "LOCK TABLE ONLY accounts, audit.events IN ACCESS SHARE MODE NOWAIT",
+            &[(Mutate, "accounts"), (Mutate, "events")],
+        );
+    }
+
+    #[test]
+    fn sql_cte_aliases_are_scoped_and_never_hide_physical_qualified_tables() {
+        use RdbmsVerb::Query;
+        assert_sql_tables(
+            "WITH visible AS (SELECT * FROM source), next AS (SELECT * FROM visible) SELECT * FROM next JOIN public.visible ON true",
+            &[(Query, "source"), (Query, "visible")],
+        );
+        assert_sql_tables(
+            "WITH visible AS (SELECT * FROM visible) SELECT * FROM visible",
+            &[(Query, "visible")],
+        );
+        assert_sql_tables(
+            "WITH first AS (SELECT * FROM later), later AS (SELECT * FROM protected) SELECT * FROM first",
+            &[(Query, "later"), (Query, "protected")],
+        );
+        assert_sql_tables(
+            "SELECT * FROM (WITH hidden AS (SELECT * FROM source) SELECT * FROM hidden) d JOIN hidden ON true",
+            &[(Query, "source"), (Query, "hidden")],
+        );
+        assert_sql_tables(
+            "WITH x AS (SELECT * FROM source) SELECT * FROM (WITH x AS (SELECT * FROM x) SELECT * FROM x) d",
+            &[(Query, "source")],
+        );
+        assert_sql_tables(
+            "WITH RECURSIVE tree AS (SELECT * FROM source UNION ALL SELECT s.* FROM source s JOIN tree t ON true) SELECT * FROM tree",
+            &[(Query, "source")],
+        );
+        assert_sql_tables(
+            "WITH \"Visible\" AS (SELECT * FROM source) SELECT * FROM \"Visible\" JOIN visible ON true",
+            &[(Query, "source"), (Query, "visible")],
+        );
+    }
+
+    #[test]
+    fn sql_cte_identifier_equivalence_depends_on_the_engine() {
+        use RdbmsEngine::{Ignite, Mysql, Postgres};
+        for (engine, sql, physical) in [
+            (
+                Ignite,
+                "WITH \"visible\" AS (SELECT 1) SELECT * FROM visible",
+                Some("visible"),
+            ),
+            (
+                Ignite,
+                "WITH \"VISIBLE\" AS (SELECT 1) SELECT * FROM visible",
+                None,
+            ),
+            (
+                Ignite,
+                "WITH visible AS (SELECT 1) SELECT * FROM \"visible\"",
+                Some("visible"),
+            ),
+            (
+                Ignite,
+                "WITH visible AS (SELECT 1) SELECT * FROM \"VISIBLE\"",
+                None,
+            ),
+            (
+                Postgres,
+                "WITH \"visible\" AS (SELECT 1) SELECT * FROM VISIBLE",
+                None,
+            ),
+            (
+                Postgres,
+                "WITH \"VISIBLE\" AS (SELECT 1) SELECT * FROM visible",
+                Some("visible"),
+            ),
+            (
+                Postgres,
+                "WITH \"ä\" AS (SELECT 1) SELECT * FROM Ä",
+                Some("Ä"),
+            ),
+            (
+                Postgres,
+                "WITH Ä AS (SELECT 1) SELECT * FROM \"ä\"",
+                Some("ä"),
+            ),
+            (Postgres, "WITH Ä AS (SELECT 1) SELECT * FROM \"Ä\"", None),
+            (
+                Mysql,
+                "WITH `VISIBLE` AS (SELECT 1) SELECT * FROM visible",
+                None,
+            ),
+            (
+                Mysql,
+                "WITH visible AS (SELECT 1) SELECT * FROM `VISIBLE`",
+                None,
+            ),
+        ] {
+            let expected = physical
+                .map(|table| {
+                    rdbms_target(env("prod"), RdbmsVerb::Query, "db", "public", table).unwrap()
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rdbms_sql_targets(env("prod"), engine, "db", "public", sql).unwrap(),
+                expected,
+                "{engine:?}: {sql}"
+            );
+        }
+        for (engine, sql, duplicate) in [
+            (
+                Ignite,
+                "WITH \"visible\" AS (SELECT 1), visible AS (SELECT 2) SELECT 1",
+                false,
+            ),
+            (
+                Ignite,
+                "WITH \"VISIBLE\" AS (SELECT 1), visible AS (SELECT 2) SELECT 1",
+                true,
+            ),
+            (
+                Postgres,
+                "WITH \"VISIBLE\" AS (SELECT 1), visible AS (SELECT 2) SELECT 1",
+                false,
+            ),
+            (
+                Postgres,
+                "WITH \"visible\" AS (SELECT 1), VISIBLE AS (SELECT 2) SELECT 1",
+                true,
+            ),
+            (
+                Mysql,
+                "WITH `VISIBLE` AS (SELECT 1), visible AS (SELECT 2) SELECT 1",
+                true,
+            ),
+        ] {
+            assert_eq!(
+                rdbms_sql_targets(env("prod"), engine, "db", "public", sql).is_err(),
+                duplicate,
+                "{engine:?}: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn sql_row_lock_alias_equivalence_depends_on_the_engine() {
+        use RdbmsEngine::{Ignite, Mysql, Postgres};
+        use RdbmsVerb::{Mutate, Query};
+        for (engine, sql, locked) in [
+            (
+                Ignite,
+                "SELECT * FROM accounts AS \"a\", audit AS \"A\" FOR UPDATE OF a",
+                "audit",
+            ),
+            (
+                Postgres,
+                "SELECT * FROM accounts AS \"a\", audit AS \"A\" FOR UPDATE OF A",
+                "accounts",
+            ),
+            (
+                Postgres,
+                "SELECT * FROM accounts AS \"Ä\", audit AS \"ä\" FOR UPDATE OF Ä",
+                "accounts",
+            ),
+            (
+                Mysql,
+                "SELECT * FROM accounts AS `a`, audit AS `A` FOR UPDATE OF A",
+                "audit",
+            ),
+        ] {
+            let expected = [(Mutate, locked), (Query, "accounts"), (Query, "audit")]
+                .into_iter()
+                .map(|(verb, table)| {
+                    rdbms_target(env("prod"), verb, "db", "public", table).unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rdbms_sql_targets(env("prod"), engine, "db", "public", sql).unwrap(),
+                expected,
+                "{engine:?}: {sql}"
+            );
+        }
+        for (engine, sql) in [
+            (Ignite, "SELECT * FROM accounts AS \"a\" FOR UPDATE OF a"),
+            (Postgres, "SELECT * FROM accounts AS \"A\" FOR UPDATE OF a"),
+            (Mysql, "SELECT * FROM accounts AS `A` FOR UPDATE OF a"),
+        ] {
+            assert!(
+                rdbms_sql_targets(env("prod"), engine, "db", "public", sql).is_err(),
+                "{engine:?}: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn mysql_joined_updates_require_concrete_mutations_and_nested_reads() {
+        use RdbmsVerb::{Mutate, Query};
+        for (sql, reads) in [
+            (
+                "UPDATE accounts a JOIN audit b ON a.id=b.id SET a.value=b.value",
+                vec![],
+            ),
+            (
+                "UPDATE accounts a JOIN audit b ON a.id=b.id AND EXISTS (SELECT 1 FROM join_source) SET a.value=(SELECT value FROM value_source) WHERE a.id IN (SELECT id FROM filter_source)",
+                vec!["join_source", "value_source", "filter_source"],
+            ),
+            (
+                "UPDATE accounts a JOIN audit b ON a.id=b.id SET b.value=(SELECT value FROM accounts)",
+                vec!["accounts"],
+            ),
+        ] {
+            let expected = [(Mutate, "accounts"), (Mutate, "audit")]
+                .into_iter()
+                .chain(reads.into_iter().map(|table| (Query, table)))
+                .map(|(verb, table)| rdbms_target(env("prod"), verb, "db", "db", table).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rdbms_sql_targets(env("prod"), RdbmsEngine::Mysql, "db", "db", sql).unwrap(),
+                expected,
+                "SQL: {sql}"
+            );
+        }
+        let sql = "UPDATE accounts a JOIN (SELECT * FROM audit) b ON a.id=b.id SET a.value=b.value";
+        assert!(rdbms_sql_targets(env("prod"), RdbmsEngine::Mysql, "db", "db", sql).is_err());
+    }
+
+    #[test]
+    fn sql_cte_writes_and_nested_locks_keep_their_own_verbs() {
+        use RdbmsVerb::{Mutate, Query};
+        assert_sql_tables(
+            "WITH moved AS (DELETE FROM source RETURNING *) SELECT * FROM moved",
+            &[(Mutate, "source")],
+        );
+        assert_sql_tables(
+            "WITH moved AS (DELETE FROM source RETURNING *), saved AS (INSERT INTO destination SELECT * FROM moved RETURNING *) SELECT * FROM saved JOIN audit ON true",
+            &[
+                (Mutate, "source"),
+                (Mutate, "destination"),
+                (Query, "audit"),
+            ],
+        );
+        assert_sql_tables(
+            "WITH changed AS (UPDATE destination SET value = (SELECT value FROM protected) RETURNING *) SELECT * FROM changed",
+            &[(Mutate, "destination"), (Query, "protected")],
+        );
+        assert_sql_tables(
+            "WITH changed AS (DELETE FROM source RETURNING *) INSERT INTO destination SELECT * FROM changed",
+            &[(Mutate, "source"), (Mutate, "destination")],
+        );
+        assert_sql_tables(
+            "WITH visible AS (SELECT * FROM protected) SELECT * FROM visible, accounts FOR UPDATE",
+            &[
+                (Mutate, "accounts"),
+                (Query, "protected"),
+                (Query, "accounts"),
+            ],
+        );
+        assert_sql_tables(
+            "WITH visible AS (SELECT * FROM protected FOR SHARE) SELECT * FROM visible",
+            &[(Mutate, "protected"), (Query, "protected")],
+        );
+        assert_sql_tables(
+            "WITH moved AS (DELETE FROM source RETURNING *) SELECT * FROM source",
+            &[(Mutate, "source"), (Query, "source")],
+        );
+    }
+
+    #[test]
+    fn sql_partial_index_conflict_predicates_preserve_sources_and_update_predicates() {
+        use RdbmsVerb::{Mutate, Query};
+        assert_sql_tables(
+            "INSERT INTO accounts(email) VALUES ('a@example.com') ON CONFLICT (email) WHERE email IS NOT NULL DO NOTHING",
+            &[(Mutate, "accounts")],
+        );
+        assert_sql_tables(
+            "INSERT INTO accounts(id) VALUES (1) ON /* target */ CONFLICT (id) WHERE (active AND label = 'DO NOTHING') DO NOTHING",
+            &[(Mutate, "accounts")],
+        );
+        assert_sql_tables(
+            "INSERT INTO accounts(id) SELECT id FROM source WHERE true ON CONFLICT (id) WHERE active DO UPDATE SET id = (SELECT id FROM protected) WHERE EXISTS (SELECT 1 FROM audit)",
+            &[
+                (Mutate, "accounts"),
+                (Query, "source"),
+                (Query, "protected"),
+                (Query, "audit"),
+            ],
+        );
+        assert_sql_tables(
+            "WITH changed AS (INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE active DO NOTHING RETURNING *) INSERT INTO destination SELECT * FROM changed ON CONFLICT (id) WHERE enabled DO NOTHING",
+            &[(Mutate, "accounts"), (Mutate, "destination")],
+        );
+    }
+
+    #[test]
+    fn sql_partial_index_conflict_predicates_reject_subqueries_and_malformed_sql() {
+        for sql in [
+            "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE EXISTS (SELECT 1 FROM protected) DO NOTHING",
+            "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE id IN (SELECT id FROM protected) DO NOTHING",
+            "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE (SELECT true) DO NOTHING",
+            "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE active = DO NOTHING",
+            "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE DO NOTHING",
+            "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE active NOTHING",
+            "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE active DO UPDATE SET",
+            "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE active DO NOTHING; DELETE FROM protected",
+            "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE active; DELETE FROM protected; DO NOTHING",
+        ] {
+            assert!(
+                rdbms_sql_targets(env("prod"), RdbmsEngine::Postgres, "db", "public", sql).is_err(),
+                "accepted unsupported conflict predicate: {sql}",
+            );
+        }
+        for engine in [RdbmsEngine::Mysql, RdbmsEngine::Ignite] {
+            assert!(
+                rdbms_sql_targets(
+                    env("prod"),
+                    engine,
+                    "db",
+                    "public",
+                    "INSERT INTO accounts(id) VALUES (1) ON CONFLICT (id) WHERE active DO NOTHING",
+                )
+                .is_err()
             );
         }
     }

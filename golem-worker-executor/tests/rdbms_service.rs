@@ -212,6 +212,60 @@ impl<T: RdbmsType> RdbmsTest<T> {
 }
 
 #[test]
+async fn postgres_regclass_results_use_oid_values(
+    postgres: &DockerPostgresRdb,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    use postgres_types::{DbColumn, DbColumnType, DbValue};
+
+    let columns = [
+        ("relation", DbColumnType::Oid, "REGCLASS"),
+        ("relations", DbColumnType::Oid.into_array(), "REGCLASS[]"),
+        ("oid", DbColumnType::Oid, "OID"),
+        ("oids", DbColumnType::Oid.into_array(), "OID[]"),
+        ("absent", DbColumnType::Oid, "REGCLASS"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(ordinal, (name, db_type, db_type_name))| DbColumn {
+        ordinal: ordinal as u64,
+        name: name.to_string(),
+        db_type,
+        db_type_name: db_type_name.to_string(),
+    })
+    .collect::<Vec<_>>();
+    let rows = vec![DbRow {
+        values: vec![
+            DbValue::Oid(4_000_000_001),
+            DbValue::Array(vec![DbValue::Oid(17), DbValue::Oid(71_029)]),
+            DbValue::Oid(90_001),
+            DbValue::Array(vec![DbValue::Oid(53), DbValue::Oid(107)]),
+            DbValue::Null,
+        ],
+    }];
+    let query = StatementTest::query_test(
+        "SELECT 4000000001::oid::regclass AS relation,
+                ARRAY[17::oid::regclass, 71029::oid::regclass] AS relations,
+                90001::oid AS oid, ARRAY[53::oid, 107::oid] AS oids, NULL::regclass AS absent",
+        vec![],
+        Some(columns.clone()),
+        Some(rows.clone()),
+    );
+    rdbms_test(
+        rdbms_service.postgres(),
+        &postgres.public_connection_string(),
+        RdbmsTest::new(
+            vec![
+                query.clone(),
+                query.with_query_stream_expected(Some(columns), Some(rows)),
+            ],
+            None,
+        ),
+    )
+    .await;
+}
+
+#[test]
 async fn postgres_transaction_tests(
     postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,

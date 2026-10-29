@@ -2500,6 +2500,10 @@ checks the policy before appending its `Start`. P3 imports that await before the
 RDBMS connection query-stream and transaction query, execute and query-stream authorize through
 `start_with_options_and_authorize`, after replay and protocol readiness resolve but before `Start`.
 Their denial builders record the same query-execution failure for all database engines.
+SQL authorization analyzes the statement first and checks every extracted table target. A denied
+table check never falls back. Only unsupported analysis checks the explicit `rdbms` verb
+`unanalyzed` on `database(name)`. Default agent cards, table wildcards and wildcard verbs do not
+grant this capability; the operator-authorized oplog-processor path does not bypass this check.
 `replay_or_persist_failure` restores a recorded denial before considering resource loss: an
 incomplete denied call remains denied; an admitted incomplete call still reports transaction or
 stream loss without repeating its database effect.
