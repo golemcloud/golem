@@ -32,9 +32,42 @@ const SLUG_DEFINITION: &str = indoc! { r#"
     }
 "# };
 
+/// Turns golem-rust's `regex` feature on or off in a generated Rust component.
+/// A component that defines a tool with a regex refinement validates its own
+/// descriptor, so it needs the feature. A tool client only decodes the
+/// descriptor and leaves validation to the host, so it does not.
+pub(crate) fn set_golem_rust_regex_feature(ctx: &TestContext, component_dir: &str, enabled: bool) {
+    let manifest = ctx.cwd_path_join(format!("{component_dir}/Cargo.toml"));
+    let source = fs::read_to_string(&manifest).unwrap();
+    let plain = r#"features = ["export_golem_agentic"]"#;
+    let with_regex = r#"features = ["export_golem_agentic", "regex"]"#;
+    let updated = if enabled {
+        assert!(
+            source.contains(plain),
+            "unexpected golem-rust dependency:\n{source}"
+        );
+        source.replace(plain, with_regex)
+    } else {
+        source
+    };
+    let golem_rust = updated
+        .lines()
+        .find(|line| line.starts_with("golem-rust "))
+        .unwrap_or_else(|| panic!("no golem-rust dependency in:\n{updated}"));
+    assert_eq!(
+        golem_rust.contains(r#""regex""#),
+        enabled,
+        "the golem-rust `regex` feature of `{component_dir}` must be {}: {golem_rust}",
+        if enabled { "on" } else { "off" }
+    );
+    fs::write_str(manifest, updated).unwrap();
+}
+
 /// A Rust caller sends a `String` argument through the same-language tool
-/// client to a Rust tool whose parameter carries text refinements. The tool
-/// publishes that parameter as `text`, so the client must send a `text` value.
+/// client to a Rust tool whose parameter carries text refinements. The caller
+/// builds without golem-rust's `regex` feature, so its client must not
+/// validate the regex refinement of the descriptor. The tool publishes that
+/// parameter as `text`, so the client must send a `text` value.
 /// A value that breaks the refinement must fail with a validation error that
 /// names the broken restriction. A numeric refinement follows the same rule.
 #[test]
@@ -62,6 +95,9 @@ async fn rust_tool_client_sends_text_refined_string_argument() {
             .await;
         assert!(outputs.success_or_dump());
     }
+
+    set_golem_rust_regex_feature(&ctx, "provider", true);
+    set_golem_rust_regex_feature(&ctx, "consumer", false);
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
