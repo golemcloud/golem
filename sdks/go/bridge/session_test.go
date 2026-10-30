@@ -2144,6 +2144,32 @@ func TestRetryableRejectionsPastTheWindowAreUnreachable(t *testing.T) {
 	}
 }
 
+// A server that keeps the connection up and answers pings, but never answers
+// the start, ends the call once the window passes.
+func TestAStartTheServerNeverAnswersIsUnreachable(t *testing.T) {
+	interval, timeout := pingInterval, pingTimeout
+	pingInterval, pingTimeout = 20*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { pingInterval, pingTimeout = interval, timeout })
+	server := newFakeServer(t, func(c *fakeConn) {
+		c.expect("invocationStart")
+		c.waitClose()
+	})
+	started := time.Now()
+	_, err := CallStreaming(ctxT(t), server.agentWithin(t, 400*time.Millisecond), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	elapsed := time.Since(started)
+	var unreachable *UnreachableError
+	if !errors.As(err, &unreachable) || !errors.Is(err, ErrNotAnswered) || unreachable.Window != 400*time.Millisecond {
+		t.Fatalf("got %v", err)
+	}
+	if elapsed < 400*time.Millisecond || elapsed > 3*time.Second {
+		t.Fatalf("gave up after %v", elapsed)
+	}
+	if n := server.connections(); n != 1 {
+		t.Fatalf("connected %d times", n)
+	}
+}
+
 // stableAfter sets how long an accepted connection must stay up to count as
 // progress for the rest of the test.
 func stableAfter(t *testing.T, d time.Duration) {

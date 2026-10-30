@@ -479,7 +479,31 @@ func (s *session) connect(delay time.Duration) {
 		go s.write(c)
 		go s.read(c)
 		go s.ping(c)
+		if window > 0 {
+			go s.awaitAnswer(c, progress.Add(window), window)
+		}
 		return
+	}
+}
+
+// awaitAnswer fails the session once the reconnect window ends while the
+// server has answered neither the start nor the resume sent on c. An
+// accepted operation waits without a deadline.
+func (s *session) awaitAnswer(c *sessionConn, deadline time.Time, window time.Duration) {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-c.closed:
+		return
+	case <-s.life.Done():
+		return
+	case <-timer.C:
+	}
+	s.mu.Lock()
+	unanswered := s.conn == c && c.acceptedAt.IsZero() && !s.over
+	s.mu.Unlock()
+	if unanswered {
+		s.fail(&UnreachableError{Endpoint: s.url(), Window: window, Cause: ErrNotAnswered})
 	}
 }
 

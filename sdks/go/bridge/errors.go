@@ -15,6 +15,7 @@
 package bridge
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -58,7 +59,7 @@ func (e *StreamItemError) Unwrap() error { return e.Err }
 // its reconnect window: the server accepted neither the start nor a resume. Endpoint
 // is the WebSocket URL; Cause is the last failure, such as an *Error with the
 // HTTP status of a refused upgrade, a *SessionError with a retryable
-// rejection, or a connection error.
+// rejection, a connection error, or ErrNotAnswered.
 type UnreachableError struct {
 	Endpoint string
 	Window   time.Duration
@@ -70,3 +71,8 @@ func (e *UnreachableError) Error() string {
 }
 
 func (e *UnreachableError) Unwrap() error { return e.Cause }
+
+// ErrNotAnswered is the cause of an *UnreachableError when the connection was
+// up but the server answered neither the start nor the resume within the
+// reconnect window.
+var ErrNotAnswered = errors.New("golem: the server answered neither the start nor the resume")
