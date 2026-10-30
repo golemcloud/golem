@@ -5337,13 +5337,45 @@ async fn refused_shared_target_readmits_the_next_queued_target(
         .store()
         .await?;
     let agent_id = agent_id!("SnapshotUpdateTest");
+    let mut http_server = TestHttpServer::start().await;
     let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
         .await?;
+    // An idle agent ignores an interrupt and restarts for an automatic update even with
+    // `disable_wakeup`. Interrupt it while it runs, so both updates stay queued.
+    let mut control = http_server.f1_control(903).await;
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let invocation = spawn(async move {
+        executor_clone
+            .invoke_and_await_agent(
+                &component_clone,
+                &agent_id_clone,
+                "blocking_stable",
+                data_value!(903u64),
+            )
+            .await
+    });
+    control.await_reached().await;
     executor.interrupt(&worker_id).await?;
+    control.resume();
+    let _ = invocation.await?;
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
     let shared = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
@@ -5394,6 +5426,7 @@ async fn refused_shared_target_readmits_the_next_queued_target(
     );
     executor.interrupt(&worker_id).await?;
     let _ = resume.await?;
+    http_server.abort();
     Ok(())
 }
 
