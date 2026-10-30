@@ -52,12 +52,12 @@ GOLEM__TRACING__OTLP__PORT=4318 \
 GOLEM__TRACING__OTLP__SERVICE_NAME=worker-executor-tests \
 GOLEM_OTLP_FILTER=info \
 RUST_LOG=info,h2=warn,hyper=warn \
-cargo test -p golem-worker-executor --test integration -- <test_name> --report-time --nocapture
+cargo test -p golem-worker-executor-tests --test integration -- <test_name> --report-time --nocapture
 ```
 
 ### How it works
 
-The test `lib.rs` at `golem-worker-executor/tests/lib.rs` initializes tracing via:
+The test `lib.rs` at `golem-worker-executor-tests/tests/lib.rs` initializes tracing via:
 ```rust
 TracingConfig::test_pretty_without_time("worker-executor-tests").with_env_overrides()
 ```

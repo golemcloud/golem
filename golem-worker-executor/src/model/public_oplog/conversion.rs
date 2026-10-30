@@ -668,6 +668,16 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     filesystem_snapshot: filesystem_snapshot.into(),
                 },
             )),
+            OplogEntry::SpanClosed {
+                timestamp,
+                resource_start_index,
+                span_finished,
+                ..
+            } => Ok(PublicOplogEntry::SpanClosed(SpanClosedParams {
+                timestamp,
+                resource_start_index,
+                span_finished: public_span_finished(span_finished),
+            })),
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp,
                 plugin_grant_id,

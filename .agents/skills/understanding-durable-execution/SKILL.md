@@ -6,10 +6,10 @@ description: "Explains how the Golem worker executor implements durable executio
 # Understanding Durable Execution
 
 The worker executor runs WASM agents whose progress survives the loss of the process running
-them. Read this guide alongside `golem-worker-executor/src/` and `tests/`; when code
+them. Read this guide alongside `golem-worker-executor/src/` and `golem-worker-executor-tests/tests/`; when code
 and guide disagree, the code wins and the guide needs a fix. Combined verification of
 the instrumentation removal and adapted tests is pending. The scoped `AGENTS.md` files under
-`golem-worker-executor/` state the mandatory rules; this skill explains the mechanisms.
+`golem-worker-executor/` and `golem-worker-executor-tests/` state the mandatory rules; this skill explains the mechanisms.
 
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong
@@ -223,7 +223,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 
 ```diagram
 ┌─────────────────────────────────────────────────────────────────────┐
-│ outer loop (one iteration = one resident instance)                  │
+│ outer loop (one iteration = one instance attempt)                   │
 │  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ replay       │
 │    ephemeral:      constructor-only replay, append Restart          │
@@ -232,6 +232,17 @@ run loop (`worker/invocation_loop.rs::run`) is:
 │  ──▶ RetryDecision: Immediate | Delayed | ReacquirePermits | None | TryStop │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+Only `prepare_instance` returning `Ok(None)` completes filesystem replay and reconstruction,
+activates the resident generation, and enters the inner loop. `Ok(Some(decision))` is an aborted
+preparation, including `Some(RetryDecision::None)`. `PreparedAgent::finish` seals that reconstructing
+filesystem without drainage and retains the runtime for the ordinary teardown and retry tail.
+The unload continuation drops the Store before it drains the sealed filesystem, closes the execution
+window, releases the permit, and deletes the filesystem. A P2 output stream can retain a pending
+`FilesystemCall` after interruption cancels only its borrowed readiness future; draining replay
+with that Store still alive would wait on a call that only Store destruction can detach.
+The original retry decision, later interrupt arbitration, ephemeral fail-stop conversion, and
+cleanup-failure handling remain in the common tail.
 
 `DurableWorkerCtx::replay` (`durable_host/recovery.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
 each recorded invocation in `InvocationMode::Replay`, and when there is no further
@@ -1242,6 +1253,18 @@ filesystem generation. Durable storage and cache authority remain fenced until v
 succeeds; old attempt handles retain their original error. Cleanup with no verifiable
 owning-component repair remains a failure: successful filesystem deletion cannot erase an
 unverified metering settlement, including `ObserverLost` during startup rollback.
+
+For a resident owner, retained module-owned unload destroys the primary runtime, drains the
+filesystem, settles final metering and releases the scheduler permit, then waits for the current
+`OwnerToolOperations` registry to become empty before deleting the filesystem and reporting
+successful unload. `wait_owner_settled` observes registry settlement; it does not join every
+supervisor. Entity Store destruction and lane drainage remain separate, necessary barriers.
+`begin_generation` still rejects active operations rather than clearing them. Do not put this wait
+in `EntityFence::drain`: its caller can hold an operation and would wait on itself. The existing
+unload deadline observer may report `CleanupFailed` while retained final cleanup keeps waiting;
+an early metering error can also report before this wait. Neither error permits successful
+reconstruction. Startup cleanup without a resident owner skips the registry barrier.
+
 Before awaiting startup filesystem cleanup, drop any filesystem context, worker context or Store
 that owns open nodes. Cleanup drains those nodes; retaining one across the drain waits on itself.
 
@@ -1456,8 +1479,60 @@ claims the operation by its invocation id, function name and owner, then the own
 restores `SpanStarted` and applies `SpanFinished` or successful attribute updates. Span ids,
 timestamps, parents, and links never select a claim, and the generic cursor performs no
 span-specific terminal-tail consumption. Long-lived resource and guest spans therefore open on
-one operation and close through a later short local operation; a span lifetime never keeps the
-opening durable call open.
+one operation and close later; a span lifetime never keeps the opening durable call open. An
+explicit `span.finish` closes through a short local operation. Releasing a host resource whose
+only durable content is its span (`wasm-rpc`, `span`, and HTTP response drops) or an in-memory reservation
+(`cache::vacancy` drop) is not a durable call: a garbage-collected guest, or a heap restored from
+a snapshot, releases handles at points that differ between runs, so such a release must not take
+an invocation id or a replay position. It deletes the table entry and finishes the span in
+memory; a live Store with a recorded opening also appends a `SpanClosed` hint naming the opening
+`Start`. Replay never claims the hint. HTTP closure also checks whether the send terminal already
+closed the span. A drop that terminates a real durable call (an un-awaited RPC/cache future, a
+cache fill, an open transaction) keeps its recorded terminal. A replayed drop must not await that
+terminal on the guest thread: the guest may drop the handle earlier than recorded, before an
+entry only the guest can consume, or in an earlier invocation. A runtime-owned task awaits the
+resolution without holding the guest. Only passive sibling-history waits release tail activity;
+queued and running cursor work remains active through invocation settlement. It validates the operation's
+terminal kind; a cancellation cannot consume a successful result. If the recorded run never
+terminated it, continuation waits for the natural replay tail, then performs the live disposal
+under the original call. Durable input cancellation likewise waits outside cleanup drains and
+producer drop polling. An exact source terminal also satisfies input disposal, including a
+terminal supplied by session finalization without a consumer cancellation intent. Inspection
+consumes no guest read. Missing cancellation requires the normal published-live transition and
+attachment admission; producer mutation admission alone does not authorize replay continuation.
+The Store applies pending replay events before forwarding cancellation. Admission failures return
+through the cleanup queue with their original trap context. Completed entity replay still rejects
+an unrecorded effect.
+
+Disposal admission refusal identifies the persisted session, binding and cancellation role, or
+the tool attachment. It overrides a terminal supplied by later owner finalization. Since GC need
+not run again, reconstruction also restores the refusal at the recorded owner boundary after
+earlier real calls and guest observations have replayed. It neither requires another destructor
+callback nor permits a different read or call to satisfy retained history.
+
+Refusal readiness uses `AgentStatusRecord.entity_replay_progress`, folded incrementally with
+the status. Completed entity boundaries freeze the terminal and last required entry; open scopes
+retain the routes needed to continue a later fold. Replay installs horizon-covering evidence
+through the FIFO repaired-status path before exposing its generation or an extended target.
+Readiness checks read no oplog entries or payloads: they require the matching boundary, cursor
+progress through its watermark, no retained Start in the entity subtree, and acknowledged guest
+delivery without a latched failure. Missing evidence is not readiness.
+
+GC timing does not permit a different sequence of consumed reads. An idle stream endpoint may
+disappear before or after another host call; an awaited JS read retains its native handle until
+that read settles. Do not weaken completion validation to accommodate a test that replaces a
+recorded read with an explicit cancellation.
+
+Invocation finalization attempts cleanup before closing the parent, but a cleanup failure does
+not skip parent closure or child settlement. Failure election and settlement run inside the Store
+driver, retaining their futures across secondary Store-task errors. Settlement waits for election;
+the Store still drives terminal continuations that a pending election needs. An already committed
+entity terminal is published before retained-resource cleanup, so cleanup cannot wait for its own
+terminal selection. Its filesystem lane stays held until cleanup succeeds or owner-failure cleanup
+drains it. Classify retained error chains before transport conversion; preserve the original body
+failure and its retry metadata over secondary cleanup errors. Shard loss remains authoritative
+over later cancellation and an earlier ordinary owner failure. A typed snapshot divergence must
+remain recognizable after the old generation's deferred admissions have settled.
 
 `AgentInvocationStarted` records the executing context, including the invocation span added by
 the invocation loop, for every invocation kind. The live hook passes that context explicitly to
@@ -1542,9 +1617,15 @@ resolve its terminal through `ConcurrentReplayResolver`, then classify with
 |---|---|---|
 | `End` + `CompletionDelivered` | `Delivered`, `AtMarker` | released exactly at the recorded marker boundary (`ReplayDeliveryBarrier` holds the cursor gate) |
 | `End`, no marker (guest-facing accessor) | `Delivered`, `AtReplayTail` | crash after host completion, before observation: withheld until the cursor drains (`await_natural_tail_end`, `replay_state/resolution.rs`), then delivered live-armed; the effect is **not** re-run |
-| `Cancelled { partial: Some }` | `Delivered`, `Immediate` | guest-initiated, deterministic drop point; no gating |
-| `Cancelled { partial: None }` or `End` + `CompletionDiscarded` | `Undelivered` | the guest never saw a value; the future is parked for the guest's deterministic drop |
+| `Cancelled { partial: Some }` | `Delivered`, `Immediate` | recorded partial response available without a delivery-marker gate; this is not permission to change guest observations |
+| `Cancelled { partial: None }` or `End` + `CompletionDiscarded` | `Undelivered` | no value reached the guest; accessor delivery stays pending, while resource disposal may resolve the recorded terminal in a runtime-owned task without blocking guest progress |
 | `Start` without terminal | `Incomplete` | see below |
+
+These classifications describe completion delivery, not deterministic resource-release timing.
+GC and snapshot restoration can move an unobserved handle's drop. Deferred cancellation must
+preserve its original call identity and terminal kind; a missing terminal permits live disposal
+only after the natural replay-to-live transition. A recorded partial response is distinct from
+an unread cancellation, and actual guest observations must still be reproduced.
 
 **Custom durable invocations** (`golem:durability/durability.begin-custom-durable-invocation`,
 `durability.rs::begin_custom_durable_invocation`) wrap a whole guest block as one logical durable
@@ -1724,8 +1805,8 @@ would capture host-task context too early for the per-poll switch.
   (`direct_call_invocation_id`, `entity_context.rs`). Store-holding host code that runs between
   guest calls takes the next ordinal under the root.
 - A call recorded inside an open durable scope records the id of the call that opened the scope,
-  and a host-internal child records the id of its owner. Records the host adds for a call, such
-  as the span cleanup of a P3 HTTP send, carry the id of that call.
+  and a host-internal child records the id of its owner. Span-only resource cleanup is a hint
+  referencing its opening Start, not another call carrying an invocation id.
 - A tool invocation records the id of the guest import that dispatched it, on both the accepted
   entity invocation `Start` and the rejection `Start`.
 - Calls observed by a custom invocation, calls while snapshotting, and calls outside an
@@ -1821,9 +1902,17 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   against the entry the cursor stops at: the replay target is `ReplayEnded`, and anything else
   (including the call of a settled body, or a foreign id under an ordinary call) is
   divergence. An unclaimed `Start` with the claim's own invocation id was recorded by the
-  claiming guest call itself and is divergence before the cursor moves. Tests:
+  claiming guest call itself and is divergence before the cursor moves. This identity check
+  also precedes `ReplayEnded` and `StoreAlreadyLive`: cursor exhaustion can leave unclaimed
+  retained calls, and neither exhaustion nor Store liveness permits replacing their function,
+  type, parent, or observational owner. Tests:
+  `replay_state/tests.rs::retained_invocation_identity_is_checked_before_live_continuation`,
   `replay_state/tests.rs::missing_start_claim_*`,
   `tests/websocket.rs::websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start`.
+- RPC connection reconstruction also validates the requested remote agent against the recorded
+  constructor request before restoring its span or resource. Matching a call's invocation id
+  and function does not authorize a different RPC target. The snapshot negative controls in
+  `tests/rpc/gc_timed_cleanup.rs` require rejection and full replay without duplicate effects.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
@@ -2578,14 +2667,19 @@ is not — the properties replay relies on), `replay_state` unit tests
 
 For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
 cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's
-span-only cleanup is a short local durable operation: live drop submits its complete pair to the
-oplog actor, and replay cleanup is retained as one shared future so cancelling a waiter cannot
-re-submit or lose ownership. Failure terminals and response/body owners claim the same close once.
-This machinery changes only span ownership; network execution, call drop policy, terminals, and
-the existing non-span cancellation behavior stay with their original owners.
+span-only cleanup appends a live `SpanClosed` hint when the send terminal did not already close
+the span. Replay performs resident cleanup without claiming or waiting for a cleanup operation.
+Network execution, call drop policy, terminals, and non-span cancellation retain their own
+owners; collecting a response does not create a second durable call.
 
-Spawned tasks may park across invocation settlement at guest-driven waits or passive markerless replay-tail waits after durable finalization.
-Cursor operations and recorded-marker waits stay active; durable `Start`/`End` work must precede `AgentInvocationFinished` (`tail_work.rs`).
+Spawned tasks may park across invocation settlement at guest-driven waits, passive markerless
+replay-tail waits after durable finalization, or a destructor's passive wait for sibling history.
+Cursor operations and recorded-marker waits stay active (`tail_work.rs`). A missing destructor
+terminal can repair only after the natural replay-to-live transition. Recovery can return before
+the parked Store task resumes; a subsequent invocation then drives the repair after its own
+`AgentInvocationStarted`. The task restores activity before effects or terminal recording, so
+that invocation's settlement waits for the repair. The original Start retains the effect's identity.
+Test: `completed_invocation_cache_drops_repair_inside_next_invocation`.
 
 A replayed websocket handle is reconstructed per handle while concurrent accessor calls race to
 use it. `connect` on replay installs `WebSocketConnectionEntry::Replay(Arc<Mutex<()>>)` — the

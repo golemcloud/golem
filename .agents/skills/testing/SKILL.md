@@ -50,7 +50,7 @@ runtime. The `worker-executor-tests*` cargo-make tasks set `RUST_MIN_STACK=33554
 launching the process:
 
 ```shell
-RUST_MIN_STACK=33554432 cargo test -p golem-worker-executor --test integration -- <test_name> --report-time
+RUST_MIN_STACK=33554432 cargo test -p golem-worker-executor-tests --test integration -- <test_name> --report-time
 ```
 
 Without this setting, the invocation stack guard can allocate and release a temporary stack on

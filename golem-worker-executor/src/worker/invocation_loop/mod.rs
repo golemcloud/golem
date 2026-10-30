@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::tool::operation::OwnerFailureWinner;
+use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
 use crate::filesystem_snapshot::AgentSnapshots;
 use crate::model::{LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
@@ -47,9 +47,9 @@ use crate::worker::monthly_limits::ExecutionWindow;
 use crate::worker::status_checkpointer;
 use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation, InvocationFailureDecision,
-    PendingLiveInvocationDisposition, PendingWorkerInterrupt, QueuedWorkerInvocation,
-    RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest,
-    Worker, WorkerCommand, WorkerRunningAgent, WorkerTrace,
+    PendingLiveInvocationDisposition, PendingWorkerInterrupt, PreparedAgent,
+    QueuedWorkerInvocation, RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker,
+    UnloadReason, UnloadRequest, Worker, WorkerCommand, WorkerDeletionHook, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
@@ -157,6 +157,7 @@ use unload::publish_unload_outcome;
 pub(super) use unload::run_invocation_loop_task;
 #[cfg(test)]
 use unload::spawn_module_owned_unload;
+use unload::unload_prepared_agent;
 #[cfg(test)]
 use unload::unload_resident_agent_ownership;
 use unload::unload_sealed_agent_ownership;
@@ -200,7 +201,7 @@ impl<Ctx: WorkerCtx> Drop for InvocationLoop<Ctx> {
 /// Outcome of creating the worker instance for one iteration of the invocation loop.
 enum CreateInstanceResult<Ctx: WorkerCtx> {
     Created {
-        agent: Box<WorkerRunningAgent<Ctx>>,
+        agent: Box<PreparedAgent<RunningAgentRuntime<Ctx>>>,
         window: ExecutionWindow,
         recovery_decision: Option<RetryDecision>,
     },
@@ -274,14 +275,17 @@ pub(super) fn monthly_resource_exhausted_invocation_error(
     }
 }
 
+#[cfg(test)]
 struct ResidentAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
     runtime: Runtime,
     filesystem: ResidentFilesystem<Adapter>,
+    operations: Arc<OwnerToolOperations>,
 }
 
 struct SealedAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
     runtime: Runtime,
     filesystem: SealedFilesystem<Adapter>,
+    operations: Option<Arc<OwnerToolOperations>>,
 }
 
 enum FilesystemLimitUpdateOutcome {
@@ -492,7 +496,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .permit_state
                 .take_permit()
                 .expect("startup must hold a concurrent-agent permit");
-            let (mut agent, window, recovery_decision) = match self.create_instance(permit).await {
+            let (mut prepared, window, recovery_decision) = match self.create_instance(permit).await
+            {
                 CreateInstanceResult::Created {
                     agent,
                     window,
@@ -593,8 +598,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             };
             self.permit_state.install_window(window);
-            *self.filesystem_activity.lock().unwrap() =
-                Some(filesystem_activity(&agent.filesystem));
+            if let PreparedAgent::Resident(agent) = &prepared {
+                *self.filesystem_activity.lock().unwrap() =
+                    Some(filesystem_activity(&agent.filesystem));
+            }
             let mut final_decision = recovery_decision;
             let mut recovery_failure = None;
             let mut cleanup_failure = None;
@@ -619,6 +626,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             if final_decision.is_none() {
+                let PreparedAgent::Resident(mut agent) = prepared else {
+                    unreachable!("aborted preparation must retain its retry decision");
+                };
                 'resident: loop {
                     if !self.active.read().await.is_empty() {
                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
@@ -726,6 +736,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     SealedAgentOwnership {
                                         runtime: RunningAgentRuntime { instance, store },
                                         filesystem,
+                                        operations: Some(
+                                            self.parent.owner_execution().tool_operations(),
+                                        ),
                                     },
                                     UnloadReason::FilesystemLimit,
                                     resource_usage_close_deadline(),
@@ -798,9 +811,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
                     break 'resident;
                 }
+                prepared = PreparedAgent::Resident(agent);
             }
 
-            agent.runtime.store.mark_primary_execution_stopped();
+            prepared.runtime().store.mark_primary_execution_stopped();
             let delayed_retry_commands = matches!(final_decision, Some(RetryDecision::Delayed(_)))
                 .then(|| {
                     let prefix_len = self.receiver.len();
@@ -842,17 +856,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             retry_was_live = {
-                let store = agent.runtime.store.lock().await;
+                let store = prepared.runtime().store.lock().await;
                 store.data().durable_ctx().begin_stream_runtime_teardown();
                 store.data().is_live()
             };
-            self.suspend_worker(&agent.runtime.store).await;
+            self.suspend_worker(&prepared.runtime().store).await;
 
             if let Some(kind) = final_interrupt
                 && (unloaded_interrupt.is_none() || cleanup_ephemeral_worker)
                 && !self.parent.state_actor.lifecycle_is_closed()
             {
-                self.record_retry_interrupt_failure(&agent.runtime.store, kind)
+                self.record_retry_interrupt_failure(&prepared.runtime().store, kind)
                     .await;
             }
 
@@ -908,10 +922,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             let deadline = hook.as_ref().map_or(unload_request.deadline, |hook| {
                 hook.unload_deadline(&self.owned_agent_id, unload_request.deadline)
             });
-            let before_delete = hook.map(|hook| {
-                let owned_agent_id = self.owned_agent_id.clone();
-                async move { hook.before_filesystem_cleanup(&owned_agent_id).await }.boxed()
-            });
+            let unload_hook = hook.map(|hook| (self.owned_agent_id.clone(), hook));
             // An automatic update that restarts the agent in place selects its record when this
             // generation ends; the newest record counts only once its upload confirmed it. The
             // unload deadline moves by the time of the wait, so the wait does not use it up.
@@ -933,13 +944,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 None => deadline,
             };
             self.end_snapshot_generation();
-            let unloading = Self::unload_running_agent(
-                agent,
+            let unloading = unload_prepared_agent(
+                prepared,
+                self.parent.owner_execution().tool_operations(),
                 unload_request.reason,
                 deadline,
                 &mut self.permit_state,
                 &self.filesystem_activity,
-                before_delete,
+                unload_hook,
             );
             // Save final completion before awaiting the bounded result: a timeout below does
             // not stop cleanup, and a later delete must wait for or retry that same cleanup.

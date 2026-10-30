@@ -452,6 +452,26 @@ pub(crate) async fn resident_for_unload_test() -> (
     (filesystem, control)
 }
 
+pub(crate) async fn reconstructing_with_open_file_for_unload_test() -> (
+    ReconstructingFilesystem<ScriptedSandboxFilesystem>,
+    ScriptedSandboxFilesystemControl,
+    FilesystemGenerationHandle<ScriptedSandboxFilesystem>,
+    File,
+) {
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
+    let generation = reconstruction_generation_handle(&filesystem).unwrap();
+    let file = open_file(&generation, &control, 10_002).await;
+    (filesystem, control, generation, file)
+}
+
 pub(crate) async fn metered_resident_with_open_node_for_unload_test() -> (
     ResidentFilesystem<ScriptedSandboxFilesystem>,
     ScriptedSandboxFilesystemControl,
@@ -465,7 +485,9 @@ pub(crate) async fn metered_resident_with_open_node_for_unload_test() -> (
     (filesystem, control, window, generation_handle, node)
 }
 
-pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() -> (
+pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test(
+    clock: Option<Arc<crate::services::resource_usage_metering::TestClock>>,
+) -> (
     ResidentFilesystem<ScriptedSandboxFilesystem>,
     ScriptedSandboxFilesystemControl,
     ResourceUsageMeteringWindow,
@@ -484,7 +506,19 @@ pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() ->
     .await
     .unwrap();
     let (account, entry) = account();
-    let reconstructing = bind_resource_usage_metering(created, account).unwrap();
+    let reconstructing = match clock {
+        Some(clock) => transitions::bind_configured_resource_usage_metering_with(
+            created,
+            ResourceUsageMeteringConfig::all_enabled(),
+            |config| {
+                crate::services::resource_usage_metering::create_unbound_meter_with_clock(
+                    config, account, clock,
+                )
+            },
+        ),
+        None => bind_resource_usage_metering(created, account),
+    }
+    .unwrap();
     let reconstructing = materialize_baseline(
         reconstructing,
         no_initial_files().await,

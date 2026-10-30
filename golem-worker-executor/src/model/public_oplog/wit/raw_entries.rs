@@ -502,6 +502,12 @@ before (value) {}
         timestamp: timestamp_from_datetime(params.timestamp),
         filesystem_snapshot: params.filesystem_snapshot.parse()?,
     } }
+    SpanClosed { record (params) {
+        timestamp: timestamp_from_datetime(params.timestamp),
+        entity_parent_start_index: params.entity_parent_start_index.map(golem_common::base_model::OplogIndex::from_u64),
+        resource_start_index: params.resource_start_index.map(golem_common::base_model::OplogIndex::from_u64),
+        span_finished: raw_span_finished_from_wit(params.span_finished)?,
+    } }
 });
 
 golem_common::oplog_entry_metadata!(generate_entry_conversion;
@@ -900,5 +906,11 @@ before (value) {}
     SnapshotConfirmed { record () => SnapshotConfirmedParameters {
         timestamp: timestamp.into(),
         filesystem_snapshot: filesystem_snapshot.into(),
+    } }
+    SpanClosed { record () => RawSpanClosedParameters {
+        timestamp: timestamp.into(),
+        entity_parent_start_index: entity_parent_start_index.map(Into::into),
+        resource_start_index: resource_start_index.map(Into::into),
+        span_finished: raw_span_finished_to_wit(span_finished),
     } }
 });

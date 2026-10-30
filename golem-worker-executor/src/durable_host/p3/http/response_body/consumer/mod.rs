@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::durability::find_durable_call_trap_context;
 
 fn body_span_outcome(
     cancelled: bool,
@@ -327,14 +328,17 @@ where
         .await
         {
             Ok(stream) => stream,
-            // No parent handle exists yet, so there is nothing to abandon; the
-            // `WorkerExecutorError` carries no call context but there is no scope
-            // to group against either.
+            // No parent handle exists yet, so there is nothing to abandon.
             Err(error) => {
                 if let Some(error) = recording_recovery.error() {
                     return Err(error.into());
                 }
-                return fail_consume_body_task(trailers_tx, wasmtime::Error::from(error), None);
+                let trap_context = find_durable_call_trap_context(&error);
+                return fail_consume_body_task(
+                    trailers_tx,
+                    wasmtime::Error::from_anyhow(error),
+                    trap_context,
+                );
             }
         };
         let parent_begin = stream.start_index();
@@ -376,13 +380,19 @@ where
                 .await
             {
                 Ok(item) => item,
-                Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
-                    return Err(error.into());
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<WorkerExecutorError>(),
+                        Some(WorkerExecutorError::RecoveryRequired { .. })
+                    ) =>
+                {
+                    return Err(wasmtime::Error::from_anyhow(error));
                 }
                 Err(error) => {
                     // Durable-machinery failure (not an HTTP body error): surface
                     // it to the in-flight guest read and leave the parent incomplete.
-                    let trap_context = stream.trap_context();
+                    let trap_context = find_durable_call_trap_context(&error)
+                        .unwrap_or_else(|| stream.trap_context());
                     let _ = demand.send(HttpBodyChunkReply::Failed {
                         message: error.to_string(),
                         trap_context,
