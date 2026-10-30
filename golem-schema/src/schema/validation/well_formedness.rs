@@ -565,8 +565,10 @@ fn check_text_restrictions(restrictions: &TextRestrictions, errors: &mut Vec<Sch
     {
         errors.push(SchemaError::TextLengthRangeInverted);
     }
-    // Without the `regex` feature the pattern is opaque text: it is not
-    // compiled here, and value validation does not check it.
+    #[cfg(not(feature = "regex"))]
+    if restrictions.regex.is_some() {
+        errors.push(SchemaError::UnsupportedFeature("regex"));
+    }
     #[cfg(feature = "regex")]
     if let Some(regex) = &restrictions.regex
         && let Err(e) = regex::Regex::new(regex.as_str())

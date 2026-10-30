@@ -75,17 +75,23 @@ fn invalid_text_regex_is_ill_formed_with_the_regex_feature() {
 
 #[cfg(not(feature = "regex"))]
 #[test]
-fn text_regex_is_opaque_without_the_regex_feature() {
+fn text_regex_is_an_unsupported_feature_without_the_regex_feature() {
     for pattern in [r"\p{Greek}+", "["] {
         let graph = text_regex_graph(pattern);
-        validate_graph(&graph).unwrap();
-        validate_value(&graph, &graph.root, &text_value("prefix αβ suffix")).unwrap();
-        validate_value(&graph, &graph.root, &text_value("abc")).unwrap();
-        let errors = validate_value(&graph, &graph.root, &text_value("a")).unwrap_err();
         assert!(matches!(
-            errors.as_slice(),
-            [validation::ValueError::TextTooShort { .. }]
+            validate_graph(&graph).unwrap_err().as_slice(),
+            [validation::SchemaError::UnsupportedFeature("regex")]
         ));
+        for text in ["prefix αβ suffix", "abc"] {
+            let errors = validate_value(&graph, &graph.root, &text_value(text)).unwrap_err();
+            assert!(matches!(
+                errors.as_slice(),
+                [validation::ValueError::UnsupportedFeature {
+                    feature: "regex",
+                    ..
+                }]
+            ));
+        }
     }
 }
 

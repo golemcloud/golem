@@ -629,6 +629,70 @@ mod tests {
         assert!(unknown.contains("matches no field"), "{unknown}");
     }
 
+    #[tool_definition]
+    trait UncheckedRegexClientArgs {
+        #[arg(name = "positional", regex = "[")]
+        fn run(&self, name: String) -> String;
+    }
+
+    #[test]
+    async fn client_input_carries_a_regex_refinement_without_checking_the_pattern() {
+        use golem_rust::agentic::DirectInputValue;
+        let descriptor: golem_rust::agentic::WireToolDescriptorFn =
+            __golem_standalone_wire_tool_descriptor_for_UncheckedRegexClientArgs;
+        let command_path = vec!["run".to_string()];
+
+        let schema = golem_rust::agentic::WireToolSchema::default();
+        let tool = descriptor(&schema)
+            .and_then(|tool| tool.into_wire(schema))
+            .expect("wire descriptor builds");
+        let tool = golem_rust::schema::tool::wit::decode_tool(tool).expect("wire tool decodes");
+        let index = tool
+            .command_index_by_path(&command_path)
+            .expect("command path resolves");
+        assert!(
+            tool.canonical_input_record_schema(index).is_err(),
+            "schema validation must reject the `[` pattern"
+        );
+
+        let input = encode_with_descriptor(
+            &[DirectInputValue::new(
+                "name",
+                vec![],
+                None,
+                "golem".to_string(),
+            )],
+            descriptor,
+            &command_path,
+        )
+        .await
+        .expect("the client encodes against the unvalidated descriptor");
+        let golem_rust::schema::schema_type::SchemaType::Record { fields, .. } =
+            &input.graph().root
+        else {
+            panic!("tool input schema must be a record");
+        };
+        let mut body = &fields[0].body;
+        while let golem_rust::schema::schema_type::SchemaType::Ref { id, .. } = body {
+            body = &input
+                .graph()
+                .defs
+                .iter()
+                .find(|def| &def.id == id)
+                .expect("reference resolves")
+                .body;
+        }
+        assert!(
+            matches!(
+                body,
+                golem_rust::schema::schema_type::SchemaType::Text { restrictions, .. }
+                    if restrictions.regex.as_deref() == Some("[")
+            ),
+            "the encoded field must carry the descriptor's regex restriction, got {body:?}"
+        );
+        assert_eq!(text_value(&record_fields(&input)[0]), Some("golem"));
+    }
+
     fn generated_subtree_wrapper_carries_the_root_descriptor_typechecks() {
         let wrapper = RefinedClientParentClient::default().child("europe".to_string());
         let _: Option<golem_rust::agentic::WireToolDescriptorFn> = wrapper.root_descriptor;

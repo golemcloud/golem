@@ -364,7 +364,7 @@ fn build_descriptor_input_model(
         )
     })?;
     let record_schema = tool
-        .canonical_input_record_schema(command_index)
+        .canonical_input_record_schema_unvalidated(command_index)
         .map_err(|error| error.to_string())?;
     let graph =
         crate::schema::wit::encode_graph(&record_schema).map_err(|error| error.to_string())?;
