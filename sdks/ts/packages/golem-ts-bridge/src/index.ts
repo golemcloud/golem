@@ -38,7 +38,18 @@ export type Configuration = {
   application: ApplicationName;
   environment: EnvironmentName;
   aroundInvokeHook?: AroundInvokeHook;
+  /**
+   * How long a streaming call keeps reconnecting, in milliseconds, without progress: a
+   * connection that stays up for 5 seconds after the server accepted its start or a resume.
+   * After the window the call fails with a
+   * `StreamingUnreachableError`. Defaults to `DEFAULT_RECONNECT_WINDOW_MS`; `'unlimited'`
+   * reconnects until the call's `AbortSignal` aborts.
+   */
+  reconnectWindowMs?: number | 'unlimited';
 };
+
+/** The reconnect window of a configuration that does not set one: 5 minutes. */
+export const DEFAULT_RECONNECT_WINDOW_MS = 5 * 60 * 1000;
 
 export type ApplicationName = string;
 export type EnvironmentName = string;
@@ -1452,7 +1463,84 @@ export class StreamingProtocolError extends Error {
   }
 }
 
-class RetryableStreamingConnectionError extends Error {}
+/**
+ * A streaming call that could not reach the server within its reconnect window. `lastCause` is
+ * the last failure: a `StreamingProtocolError` for a refused upgrade (`handshake-failed`) or a
+ * retryable rejection, or an `Error` for a connection failure or a start or resume the server
+ * never answered.
+ */
+export class StreamingUnreachableError extends Error {
+  constructor(
+    readonly endpoint: string,
+    readonly reconnectWindowMs: number,
+    readonly lastCause: Error,
+  ) {
+    super(`${endpoint} was unreachable for ${reconnectWindowMs} ms: ${lastCause.message}`);
+    this.name = 'StreamingUnreachableError';
+  }
+}
+
+class RetryableStreamingConnectionError extends Error {
+  constructor(
+    readonly failure: Error,
+    readonly timedOut = false,
+  ) {
+    super(failure.message);
+  }
+}
+
+/** Waits `ms` milliseconds, or less when `signal` aborts first. */
+function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+const FIRST_RECONNECT_DELAY_MS = 50;
+const MAX_RECONNECT_DELAY_MS = 3000;
+/** Bounds one connection attempt: TCP connect, TLS handshake and WebSocket upgrade together. */
+const CONNECT_ATTEMPT_TIMEOUT_MS = 10_000;
+/**
+ * How long a connection must stay up after the server accepted its operation for its loss to count
+ * as progress.
+ */
+const STABLE_CONNECTION_MS = 5_000;
+
+function reconnectWindowOf(configuration: Configuration): number | undefined {
+  const window = configuration.reconnectWindowMs ?? DEFAULT_RECONNECT_WINDOW_MS;
+  if (window === 'unlimited') return undefined;
+  if (typeof window !== 'number' || !Number.isFinite(window) || window <= 0)
+    throw new StreamingProtocolError(
+      'validation-error',
+      "reconnectWindowMs must be a positive number of milliseconds or 'unlimited'",
+    );
+  return window;
+}
+
+/** Replaces each provisional stream reference in `value` that `renamed` maps with its new one. */
+function renewProvisionalRefs(value: unknown, renamed: ReadonlyMap<string, string>): unknown {
+  if (Array.isArray(value)) return value.map((item) => renewProvisionalRefs(item, renamed));
+  if (!isRecord(value)) return value;
+  if (
+    value.kind === 'stream' &&
+    isRecord(value.value) &&
+    typeof value.value.provisionalRef === 'string'
+  ) {
+    const fresh = renamed.get(value.value.provisionalRef);
+    return fresh === undefined
+      ? value
+      : { ...value, value: { ...value.value, provisionalRef: fresh } };
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, nested]) => [key, renewProvisionalRefs(nested, renamed)]),
+  );
+}
 
 export type PublicStreamReferencePolicy = 'none' | 'provisional' | 'stable';
 
@@ -2918,13 +3006,13 @@ type InputRegistrar = (
  * stream-bearing methods. Stream-free methods continue to use the REST runtime.
  */
 export function createStreamingRemoteMethod<Args extends any[], R>(
-  getServer: () => GolemServer,
+  getConfiguration: () => Configuration,
   getDescriptor: () => StreamingInvocationDescriptor,
   encode: (args: Args, stream: InputRegistrar) => PublicValue,
   decode: (value: unknown, stream: OutputResolver) => R,
 ): StreamingRemoteMethod<Args, R> {
   const invoke = (signal: AbortSignal | undefined, args: Args) =>
-    new StreamingSession(getServer(), getDescriptor(), signal).start(
+    new StreamingSession(getConfiguration(), getDescriptor(), signal).start(
       (register) => encode(args, register),
       (value, resolve) => decode(value, resolve),
     );
@@ -3433,12 +3521,24 @@ class StreamingSession {
   private queuedOutputBytes = 0;
   private pendingInputBytes = 0;
   private outputCancelReasons = new Map<string, 'consumer-drop'>();
+  private startParameters?: PublicValue;
+  private readonly server: GolemServer;
+  private reconnectWindowMs?: number;
+  /** When the session last made progress: its start, or when it lost a stable connection. */
+  private progressAt = Date.now();
+  /** When the server accepted the operation of the current connection. */
+  private acceptedAt?: number;
+  private reconnectDelayMs = 0;
+  private lastFailure?: Error;
+  private answerTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
-    private readonly server: GolemServer,
+    private readonly configuration: Configuration,
     private readonly descriptor: StreamingInvocationDescriptor,
     private readonly signal?: AbortSignal,
-  ) {}
+  ) {
+    this.server = configuration.server;
+  }
 
   async start<R>(
     encode: (register: InputRegistrar) => PublicValue,
@@ -3447,6 +3547,7 @@ class StreamingSession {
     throwIfAborted(this.signal);
     let parameters: PublicValue;
     try {
+      this.reconnectWindowMs = reconnectWindowOf(this.configuration);
       parameters = encode((source, itemEncode, wireKind = 'json') => {
         if (typeof source !== 'object' || source === null || this.inputSources.has(source))
           throw new StreamingProtocolError(
@@ -3505,6 +3606,34 @@ class StreamingSession {
       this.releaseInputs();
       throw error;
     }
+    this.startParameters = parameters;
+    this.freezeStart();
+    const result = new Promise<unknown>((resolve, reject) => {
+      this.resultResolve = resolve;
+      this.resultReject = reject;
+    });
+    // The session can fail while the start is still connecting; the rejection is read below.
+    result.catch(() => undefined);
+    this.signal?.addEventListener('abort', () => this.cancelAll(), { once: true });
+    try {
+      await this.connectRetry();
+    } catch (error) {
+      this.fail(error);
+      throw error;
+    }
+    try {
+      return decode(await result, (token, itemDecode, schemaIdentity, wireKind) =>
+        this.output(token, itemDecode, schemaIdentity, wireKind),
+      ) as R;
+    } catch (error) {
+      this.fail(error);
+      this.socket?.close(1002);
+      throw error;
+    }
+  }
+
+  /** Freezes the start operation with the current attempt ID and provisional references. */
+  private freezeStart(): void {
     this.pendingOperation = canonicalJson({
       version: 1,
       type: 'invocationStart',
@@ -3520,30 +3649,24 @@ class StreamingSession {
           : { phantomId: this.descriptor.phantomId }),
       },
       config: this.descriptor.config,
-      methodParameters: parameters,
+      methodParameters: this.startParameters,
       idempotencyKey: this.idempotencyKey,
     });
-    const result = new Promise<unknown>((resolve, reject) => {
-      this.resultResolve = resolve;
-      this.resultReject = reject;
-    });
-    this.signal?.addEventListener('abort', () => this.cancelAll(), { once: true });
-    try {
-      await this.connectRetry();
-    } catch (error) {
-      this.fail(error);
-      await result.catch(() => undefined);
-      throw error;
-    }
-    try {
-      return decode(await result, (token, itemDecode, schemaIdentity, wireKind) =>
-        this.output(token, itemDecode, schemaIdentity, wireKind),
-      ) as R;
-    } catch (error) {
-      this.fail(error);
-      this.socket?.close(1002);
-      throw error;
-    }
+  }
+
+  /**
+   * Replaces a rejected start with a new attempt: a new attempt ID and new provisional
+   * references, as only an exact retry may reuse them.
+   */
+  private renewStart(): void {
+    const renamed = new Map<string, string>();
+    for (const reference of this.inputs.keys()) renamed.set(reference, crypto.randomUUID());
+    this.startParameters = renewProvisionalRefs(this.startParameters, renamed) as PublicValue;
+    this.inputs = new Map(
+      [...this.inputs].map(([reference, input]) => [renamed.get(reference) ?? reference, input]),
+    );
+    this.attemptId = crypto.randomUUID();
+    this.freezeStart();
   }
 
   private endpoint(): { url: string; token: string } {
@@ -3559,7 +3682,7 @@ class StreamingSession {
     return { url: url.toString(), token };
   }
 
-  private connect(): Promise<void> {
+  private connect(timeoutMs: number): Promise<void> {
     const { url, token } = this.endpoint();
     return new Promise((resolve, reject) => {
       let operationSent = false;
@@ -3568,6 +3691,7 @@ class StreamingSession {
       const resolveOnce = () => {
         if (!settled) {
           settled = true;
+          clearTimeout(timeout);
           operationSent = true;
           resolve();
         }
@@ -3575,6 +3699,7 @@ class StreamingSession {
       const rejectOnce = (error: unknown) => {
         if (!settled) {
           settled = true;
+          clearTimeout(timeout);
           reject(error);
         }
       };
@@ -3583,6 +3708,15 @@ class StreamingSession {
         perMessageDeflate: false,
         maxPayload: 32 * 1024 * 1024,
       });
+      const timeout = setTimeout(() => {
+        rejectOnce(
+          new RetryableStreamingConnectionError(
+            new Error(`no WebSocket connection within ${timeoutMs} ms`),
+            true,
+          ),
+        );
+        socket.terminate();
+      }, timeoutMs);
       this.socket = socket;
       socket.binaryType = 'nodebuffer';
       socket.once('open', () => {
@@ -3600,12 +3734,13 @@ class StreamingSession {
         try {
           operationSent = true;
           socket.send(this.pendingOperation);
+          this.awaitAnswer(socket);
           resolveOnce();
         } catch (error) {
           operationSent = false;
           rejectOnce(
             new RetryableStreamingConnectionError(
-              error instanceof Error ? error.message : 'failed to send attachment',
+              error instanceof Error ? error : new Error('failed to send attachment'),
             ),
           );
         }
@@ -3614,21 +3749,29 @@ class StreamingSession {
       socket.once('unexpected-response', (_request, response) => {
         definitiveFailure = true;
         response.resume();
-        rejectOnce(
-          new StreamingProtocolError(
-            'handshake-failed',
-            `WebSocket upgrade failed with HTTP ${response.statusCode ?? 'error'}`,
-          ),
+        const status = response.statusCode;
+        const failure = new StreamingProtocolError(
+          'handshake-failed',
+          `WebSocket upgrade failed with HTTP ${status ?? 'error'}`,
         );
+        rejectOnce(
+          status !== undefined && (status === 429 || status >= 500)
+            ? new RetryableStreamingConnectionError(failure)
+            : failure,
+        );
+        socket.terminate();
       });
       socket.on('error', (error) => {
         if (!operationSent && !definitiveFailure)
-          rejectOnce(new RetryableStreamingConnectionError(error.message));
+          rejectOnce(new RetryableStreamingConnectionError(error));
       });
       socket.on('close', () => {
+        clearTimeout(this.answerTimer);
         if (!operationSent) {
           if (!definitiveFailure)
-            rejectOnce(new RetryableStreamingConnectionError('connection closed before attach'));
+            rejectOnce(
+              new RetryableStreamingConnectionError(new Error('connection closed before attach')),
+            );
           return;
         }
         if (this.socket !== socket || this.signal?.aborted || this.finished) return;
@@ -3637,17 +3780,97 @@ class StreamingSession {
     });
   }
 
+  /**
+   * Connects and sends the pending operation, backing off between attempts. Fails with a
+   * `StreamingUnreachableError` once the reconnect window has passed without progress.
+   */
   private async connectRetry(): Promise<void> {
     for (;;) {
+      if (this.reconnectDelayMs > 0) {
+        const left = this.windowLeft();
+        await sleepUnlessAborted(
+          left === undefined
+            ? this.reconnectDelayMs
+            : Math.max(0, Math.min(this.reconnectDelayMs, left)),
+          this.signal,
+        );
+      }
+      throwIfAborted(this.signal);
+      if (this.finished) throw new StreamingProtocolError('protocol-error', 'session ended');
+      const left = this.windowLeft();
+      if (left !== undefined && left <= 0)
+        throw new StreamingUnreachableError(
+          this.endpoint().url,
+          this.reconnectWindowMs!,
+          this.lastFailure ?? new Error('connection closed'),
+        );
+      const timeoutMs = Math.min(left ?? CONNECT_ATTEMPT_TIMEOUT_MS, CONNECT_ATTEMPT_TIMEOUT_MS);
       try {
-        await this.connect();
+        await this.connect(timeoutMs);
         return;
       } catch (error) {
         if (!(error instanceof RetryableStreamingConnectionError) || this.signal?.aborted)
           throw error;
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        // An attempt cut short by the end of the window keeps the earlier cause.
+        const cutShort = timeoutMs < CONNECT_ATTEMPT_TIMEOUT_MS && error.timedOut;
+        this.attemptFailed(cutShort ? (this.lastFailure ?? error.failure) : error.failure);
       }
     }
+  }
+
+  /**
+   * Fails the call once the reconnect window ends while the server has answered neither the start
+   * nor the resume sent on `socket`. An accepted operation waits without a deadline.
+   */
+  private awaitAnswer(socket: WebSocket): void {
+    const left = this.windowLeft();
+    if (left === undefined) return;
+    clearTimeout(this.answerTimer);
+    this.answerTimer = setTimeout(
+      () => {
+        if (this.socket !== socket || this.accepted || this.finished) return;
+        this.fail(
+          new StreamingUnreachableError(
+            this.endpoint().url,
+            this.reconnectWindowMs!,
+            new Error('the server answered neither the start nor the resume'),
+          ),
+        );
+        socket.terminate();
+      },
+      Math.max(0, left),
+    );
+  }
+
+  private windowLeft(): number | undefined {
+    return this.reconnectWindowMs === undefined
+      ? undefined
+      : this.reconnectWindowMs - (Date.now() - this.progressAt);
+  }
+
+  /** Records a failed attempt; the next one waits longer. */
+  private attemptFailed(failure: Error): void {
+    this.lastFailure = failure;
+    this.reconnectDelayMs =
+      this.reconnectDelayMs === 0
+        ? FIRST_RECONNECT_DELAY_MS
+        : Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
+  }
+
+  /**
+   * Leaves the current connection, and reports whether it was stable: up for the stable time after
+   * the server accepted its operation. Losing a stable connection is progress: it restarts the
+   * reconnect window and makes the next attempt at once.
+   */
+  private leftConnection(): boolean {
+    const stable =
+      this.acceptedAt !== undefined && Date.now() - this.acceptedAt >= STABLE_CONNECTION_MS;
+    this.acceptedAt = undefined;
+    if (stable) {
+      this.progressAt = Date.now();
+      this.reconnectDelayMs = 0;
+    }
+    return stable;
   }
 
   private message(data: RawData, binary: boolean): void {
@@ -3702,6 +3925,7 @@ class StreamingSession {
         this.accepted = true;
         this.everAccepted = true;
         this.pendingResume = false;
+        this.acceptedAt = Date.now();
         break;
       }
       case 'invocationRejected': {
@@ -3717,17 +3941,23 @@ class StreamingSession {
           typeof message.retryable !== 'boolean'
         )
           throw new StreamingProtocolError('malformed-message', 'invalid invocation rejection');
+        const rejection = new StreamingProtocolError(message.code, message.message);
         if (message.code === 'invalid-attachment-state') {
           if (
             this.everAccepted &&
             this.pendingResume &&
             !this.accepted &&
             this.resumeOperation === 'resume'
-          )
-            void this.reconnect(true, 'takeover');
-          else this.fail(new StreamingProtocolError(message.code, message.message));
-        } else if (this.everAccepted && message.retryable) void this.reconnect(true);
-        else this.fail(new StreamingProtocolError(message.code, message.message));
+          ) {
+            void this.reconnect(true, 'takeover', rejection);
+          } else this.fail(rejection);
+        } else if (message.retryable) {
+          if (this.everAccepted) void this.reconnect(true, undefined, rejection);
+          else {
+            this.renewStart();
+            void this.reconnect(false, undefined, rejection);
+          }
+        } else this.fail(rejection);
         break;
       }
       case 'invocationResult':
@@ -4488,10 +4718,21 @@ class StreamingSession {
     return { token: mapping.token, stream };
   }
 
-  private async reconnect(forceFreshResume = false, operation?: 'takeover'): Promise<void> {
+  /**
+   * Leaves the current connection for a new one. Losing a stable connection restarts the reconnect
+   * window; a `rejection`, or the loss of any other connection, counts as a failed attempt.
+   */
+  private async reconnect(
+    forceFreshResume = false,
+    operation?: 'takeover',
+    rejection?: Error,
+  ): Promise<void> {
     if (this.reconnecting || this.signal?.aborted) return;
     this.reconnecting = true;
     try {
+      const stable = this.leftConnection();
+      if (rejection) this.attemptFailed(rejection);
+      else if (!stable) this.attemptFailed(new Error('connection closed'));
       const freshResume = forceFreshResume || this.accepted;
       const previous = this.socket;
       this.socket = undefined;

@@ -12,6 +12,7 @@ import java.util.UUID
 import java.util.concurrent.{CompletableFuture, CompletionException, CompletionStage, ConcurrentHashMap, ExecutionException, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong, AtomicReference}
 import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.concurrent.duration.FiniteDuration
 import scala.jdk.CollectionConverters._
 import scala.util.{Failure, Success}
 
@@ -23,6 +24,13 @@ private[runtime] trait StreamBinding {
 object StreamSession {
   private val LivenessPingDelayMillis = 250L
   private val LivenessPingTimeoutMillis = 1000L
+  private val FirstReconnectDelayMillis = 50L
+  private val MaxReconnectDelayMillis = 3000L
+  // Bounds one connection attempt: TCP connect, TLS handshake and WebSocket upgrade together.
+  private val ConnectAttemptTimeoutMillis = 10000L
+  // How long a connection must stay up after the server accepted its operation for its loss to
+  // count as progress. Tests shorten it.
+  @volatile private[runtime] var stableConnectionMillis = 5000L
 
   private final class Input(
     val consumer: Future[AgentStream.Consumer[Any]],
@@ -222,7 +230,7 @@ object StreamSession {
     inputCodec: PublicValueCodec.Codec,
     outputCodec: Option[PublicValueCodec.Codec],
     configCodecs: List[(List[String], PublicValueCodec.Codec)]
-  ): Future[AgentInvocationResult] = {
+  ): (Future[AgentInvocationResult], CancellationToken) = {
     implicit val ec: ExecutionContext = resolved.configuration.executionContext
     val session = new Session(resolved)
     val encodedParameters = scoped(session)(parameters())
@@ -243,8 +251,45 @@ object StreamSession {
     val reconnecting = new AtomicBoolean(false)
     val reconnectRequested = new AtomicBoolean(false)
     val reconnectAction = new AtomicReference[() => Unit](() => ())
+    val renewStartAction = new AtomicReference[() => Unit](() => ())
     val pingSequence = new AtomicLong(0L)
     val pongSequence = new AtomicLong(0L)
+    val cancelled = new AtomicBoolean(false)
+    val reconnectWindow: Option[FiniteDuration] = resolved.configuration.reconnectWindow match {
+      case finite: FiniteDuration => Some(finite)
+      case _ => None
+    }
+    // When the session last made progress: its start, or when it lost a stable connection.
+    @volatile var progressAt = System.nanoTime()
+    // When the server accepted the operation of the current connection.
+    @volatile var acceptedAt: Option[Long] = None
+    @volatile var reconnectDelayMillis = 0L
+    @volatile var lastFailure: Throwable = null
+    // Set when the handler that leaves the current connection has already accounted for it in the
+    // reconnect clock, so the reconnect does not count the departure again.
+    @volatile var departureRecorded = false
+    def windowLeftMillis: Option[Long] =
+      reconnectWindow.map(window => window.toMillis - (System.nanoTime() - progressAt) / 1000000L)
+    def attemptFailed(failure: Throwable): Unit = {
+      lastFailure = failure
+      attemptFailedAgain()
+    }
+    def attemptFailedAgain(): Unit =
+      reconnectDelayMillis =
+        if (reconnectDelayMillis == 0L) FirstReconnectDelayMillis
+        else math.min(reconnectDelayMillis * 2, MaxReconnectDelayMillis)
+    // Leaves the current connection, and reports whether it was stable: up for the stable time after
+    // the server accepted its operation. Losing a stable connection is progress: it restarts the
+    // reconnect window and makes the next attempt at once.
+    def leftConnection(): Boolean = {
+      val stable = acceptedAt.exists(at => (System.nanoTime() - at) / 1000000L >= stableConnectionMillis)
+      acceptedAt = None
+      if (stable) {
+        progressAt = System.nanoTime()
+        reconnectDelayMillis = 0L
+      }
+      stable
+    }
 
     // `java.net.http.WebSocket` rejects a text or binary send while another one is still pending, so
     // every data frame goes through one FIFO chain. Each send is bound to the socket that was current
@@ -538,6 +583,7 @@ object StreamSession {
             sessionToken = token
             accepted = true
             everAccepted = true
+            acceptedAt = Some(System.nanoTime())
           case "invocationRejected" =>
             val attempt = Json.field(json, "attemptId").map(value => Json.asString(value).fold(e => throw BridgeException(e), identity))
             if (attempt.exists(_ != pendingAttempt) || (everAccepted && attempt.isEmpty))
@@ -548,8 +594,19 @@ object StreamSession {
             val error = BridgeException(s"$code: $message")
             val pendingAttach = everAccepted && pendingResume && !accepted
             val takeover = pendingAttach && pendingAttachOperation == "resume" && code == "invalid-attachment-state"
-            if (takeover || (everAccepted && retryable && code != "invalid-attachment-state")) {
+            val retry = retryable && code != "invalid-attachment-state"
+            if (takeover || (everAccepted && retry)) {
+              leftConnection()
+              attemptFailed(error)
+              departureRecorded = true
               try prepareResumeDescriptor(if (takeover) "takeover" else if (accepted) "resume" else pendingAttachOperation)
+              catch { case problem: Throwable => fatal(problem); return }
+              Option(socket).foreach(_.abort())
+              reconnectAction.get()()
+            } else if (retry) {
+              attemptFailed(error)
+              departureRecorded = true
+              try renewStartAction.get()()
               catch { case problem: Throwable => fatal(problem); return }
               Option(socket).foreach(_.abort())
               reconnectAction.get()()
@@ -668,6 +725,8 @@ object StreamSession {
           case "attachmentRevoked" =>
             if (Json.requireField(json, "reason").flatMap(Json.asString).toOption.get != "replaced")
               throw BridgeException("invalid attachment revocation reason")
+            if (!leftConnection()) attemptFailed(BridgeException("the attachment was replaced"))
+            departureRecorded = true
             try prepareResumeDescriptor()
             catch { case error: Throwable => fatal(error); return }
             reconnectAction.get()()
@@ -765,22 +824,55 @@ object StreamSession {
       codecsByPath.getOrElse(e.path, throw BridgeException(s"missing public config codec for ${e.path.mkString(".")}"))
       Json.obj("path" -> Json.arr(e.path.map(Json.string).toVector), "value" -> e.value)
     }.toVector)
-    pendingAttempt = UUID.randomUUID.toString
-    pendingDescriptor = StreamSessionProtocol.message("invocationStart", Vector("attemptId" -> Json.string(pendingAttempt), "config" -> config, "idempotencyKey" -> Json.string(idempotencyKey), "methodParameters" -> inputCodec.encode(encodedParameters), "selector" -> selector))
+    var startParameters = inputCodec.encode(encodedParameters)
+    def freezeStart(): Unit = {
+      pendingAttempt = UUID.randomUUID.toString
+      pendingDescriptor = StreamSessionProtocol.message("invocationStart", Vector("attemptId" -> Json.string(pendingAttempt), "config" -> config, "idempotencyKey" -> Json.string(idempotencyKey), "methodParameters" -> startParameters, "selector" -> selector))
+    }
+    // Replaces a rejected start with a new attempt: a new attempt ID and new provisional references,
+    // as only an exact retry may reuse them.
+    def renewStart(): Unit = {
+      var rendered = startParameters.render
+      session.inputs.keySet().asScala.toList.foreach { previous =>
+        val renewed = UUID.randomUUID().toString
+        rendered = rendered.replace(s"\"provisionalRef\":\"$previous\"", s"\"provisionalRef\":\"$renewed\"")
+        session.inputs.put(renewed, session.inputs.remove(previous))
+      }
+      startParameters = Json.parse(rendered).fold(e => throw BridgeException(e), identity)
+      freezeStart()
+    }
+    renewStartAction.set(() => renewStart())
+    freezeStart()
+    val endpoint = s"$base/v1/agents/${StreamSessionProtocol.Endpoint}"
 
-    def connect(): Future[Unit] =
+    def connect(timeoutMillis: Long): Future[Unit] =
       try {
-        val builder = HttpClient.newHttpClient().newWebSocketBuilder().subprotocols(StreamSessionProtocol.Subprotocol).header("Authorization", s"Bearer ${resolved.configuration.server.token}")
-        Bridge.toScala(builder.buildAsync(URI.create(s"$base/v1/agents/${StreamSessionProtocol.Endpoint}"), listener)).flatMap { ws =>
+        val builder = HttpClient.newHttpClient().newWebSocketBuilder()
+          .subprotocols(StreamSessionProtocol.Subprotocol)
+          .header("Authorization", s"Bearer ${resolved.configuration.server.token}")
+          .connectTimeout(java.time.Duration.ofMillis(timeoutMillis))
+        Bridge.toScala(builder.buildAsync(URI.create(endpoint), listener)).flatMap { ws =>
           if (ws.getSubprotocol != StreamSessionProtocol.Subprotocol) Future.failed(BridgeException("server did not select golem.agent-invocation.v1"))
-          else { socket = ws; send(pendingDescriptor) }
+          else if (cancelled.get()) { ws.sendClose(WebSocket.NORMAL_CLOSURE, "cancelled"); Future.failed(new BridgeCancelledException) }
+          else { socket = ws; send(pendingDescriptor).map(_ => awaitAnswer(ws)) }
         }
       } catch {
         case error: Throwable => Future.failed(error)
       }
+    // Fails the call once the reconnect window ends while the server has answered neither the
+    // start nor the resume sent on `ws`. An accepted operation waits without a deadline.
+    def awaitAnswer(ws: WebSocket): Unit =
+      windowLeftMillis.foreach { left =>
+        CompletableFuture.delayedExecutor(math.max(0L, left), TimeUnit.MILLISECONDS).execute(() =>
+          if ((ws eq socket) && !accepted && !finished.isCompleted)
+            fatal(new BridgeUnreachableException(endpoint, reconnectWindow.get,
+              new java.util.concurrent.TimeoutException("the server answered neither the start nor the resume")))
+        )
+      }
     def delayReconnect(): Future[Unit] = {
       val delayed = Promise[Unit]()
-      CompletableFuture.delayedExecutor(50, TimeUnit.MILLISECONDS).execute(() => delayed.success(()))
+      val delay = windowLeftMillis.fold(reconnectDelayMillis)(left => math.max(0L, math.min(reconnectDelayMillis, left)))
+      CompletableFuture.delayedExecutor(delay, TimeUnit.MILLISECONDS).execute(() => delayed.success(()))
       delayed.future
     }
     def connectionCause(error: Throwable): Throwable = error match {
@@ -789,15 +881,40 @@ object StreamSession {
       case other => other
     }
     def retryableConnectionFailure(error: Throwable): Boolean = connectionCause(error) match {
-      case _: WebSocketHandshakeException => false
+      case handshake: WebSocketHandshakeException =>
+        val status = handshake.getResponse.statusCode()
+        status == 429 || status >= 500
       case _: IOException => true
       case _: java.util.concurrent.TimeoutException => true
       case _ => false
     }
-    def connectRetry(): Future[Unit] = connect().recoverWith {
-      case error if retryableConnectionFailure(error) => delayReconnect().flatMap(_ => connectRetry())
-      case error => Future.failed(connectionCause(error))
+    def timedOut(error: Throwable): Boolean = error match {
+      case _: java.net.http.HttpTimeoutException | _: java.util.concurrent.TimeoutException => true
+      case _ => false
     }
+    // Connects and sends the pending operation, backing off between attempts. Fails with a
+    // BridgeUnreachableException once the reconnect window has passed without progress.
+    def connectRetry(): Future[Unit] =
+      (if (reconnectDelayMillis > 0) delayReconnect() else Future.unit).flatMap { _ =>
+        val left = windowLeftMillis
+        if (cancelled.get()) Future.failed(new BridgeCancelledException)
+        else if (finished.isCompleted) Future.failed(BridgeException("the invocation session has ended"))
+        else if (left.exists(_ <= 0))
+          Future.failed(new BridgeUnreachableException(endpoint, reconnectWindow.get,
+            Option(lastFailure).getOrElse(new IOException("connection closed"))))
+        else {
+          val timeout = left.fold(ConnectAttemptTimeoutMillis)(math.min(_, ConnectAttemptTimeoutMillis))
+          connect(timeout).recoverWith {
+            case error if retryableConnectionFailure(error) && !cancelled.get() =>
+              val cause = connectionCause(error)
+              // An attempt cut short by the end of the window keeps the earlier cause.
+              if (timeout < ConnectAttemptTimeoutMillis && timedOut(cause) && lastFailure != null) attemptFailedAgain()
+              else attemptFailed(cause)
+              connectRetry()
+            case error => Future.failed(connectionCause(error))
+          }
+        }
+      }
     def reconnectSucceeded(): Unit = {
       reconnecting.set(false)
       if (reconnectRequested.get()) reconnectAction.get()()
@@ -815,7 +932,11 @@ object StreamSession {
         session.inputs.values().asScala.foreach(_.state.detach())
         session.outputs.values().asScala.foreach(_.prepareResume())
         val ready = try {
-          if (accepted) prepareResumeDescriptor()
+          if (accepted) {
+            if (!leftConnection()) attemptFailed(new IOException("connection closed"))
+            prepareResumeDescriptor()
+          } else if (!departureRecorded) attemptFailed(new IOException("connection closed"))
+          departureRecorded = false
           true
         } catch {
           case error: Throwable => fatal(error); false
@@ -830,11 +951,24 @@ object StreamSession {
         }
       }
     })
+    // Cancelling fails the call and closes the session normally, so no reconnect follows.
+    val cancellation = new CancellationToken(() =>
+      if (!finished.isCompleted && cancelled.compareAndSet(false, true)) {
+        val error = new BridgeCancelledException
+        result.tryFailure(error)
+        finished.tryFailure(error)
+        session.outputs.values().asScala.foreach { output =>
+          if (!output.isTerminal) output.fail(error)
+        }
+        session.inputs.values().asScala.foreach(_.consumer.foreach(_.cancel()))
+        Option(socket).foreach(_.sendClose(WebSocket.NORMAL_CLOSURE, "cancelled"))
+      }
+    )
     reconnecting.set(true)
     connectRetry().onComplete {
       case scala.util.Success(_) => reconnectSucceeded()
       case scala.util.Failure(error) => reconnecting.set(false); fatal(error)
     }
-    result.future
+    (result.future, cancellation)
   }
 }

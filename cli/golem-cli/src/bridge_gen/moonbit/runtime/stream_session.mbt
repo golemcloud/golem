@@ -46,7 +46,7 @@ pub(all) struct PendingInput {
 
 ///|
 pub(all) struct InputRegistration {
-  id : String
+  mut id : String
   next : async () -> SchemaValue?
   try_next : () -> SchemaValue?? raise
   cancel : async () -> Unit
@@ -117,6 +117,7 @@ priv struct LiveStreamSession {
   mut result_seen : Bool
   mut finished : Bool
   mut actor_owner : @io.MemoryReader?
+  clock : ReconnectClock
 }
 
 ///|
@@ -132,22 +133,271 @@ async fn connect_socket(
 }
 
 ///|
-async fn connect_start_exact_retry(
+const FIRST_RECONNECT_DELAY_MS : Int = 50
+
+///|
+const MAX_RECONNECT_DELAY_MS : Int = 3000
+
+///|
+/// Bounds one connection attempt: the TCP connect, the TLS handshake and the
+/// WebSocket upgrade together.
+let connect_attempt_timeout_ms : Ref[Int] = { val: 10000 }
+
+///|
+/// How long a connection must stay up after the server accepted its operation
+/// for its loss to count as progress.
+let stable_connection_ms : Ref[Int] = { val: 5000 }
+
+///|
+/// Paces reconnects and ends them once the reconnect window passes without
+/// progress.
+priv struct ReconnectClock {
+  policy : ReconnectPolicy
+  endpoint : String
+  /// When the call last made progress: its start, or when it lost a stable
+  /// connection.
+  mut progress_at : Int64
+  /// When the server accepted the operation of the current connection.
+  mut accepted_at : Int64?
+  /// The delay before the next attempt; zero makes the next attempt at once.
+  mut delay_ms : Int
+  mut last_cause : String
+}
+
+///|
+fn ReconnectClock::new(
+  policy : ReconnectPolicy,
+  endpoint : String,
+) -> ReconnectClock {
+  {
+    policy,
+    endpoint,
+    progress_at: @async.now(),
+    accepted_at: None,
+    delay_ms: 0,
+    last_cause: "connection closed",
+  }
+}
+
+///|
+/// Records that the server accepted the operation of the current connection.
+fn ReconnectClock::accepted(self : ReconnectClock) -> Unit {
+  self.accepted_at = Some(@async.now())
+}
+
+///|
+/// Leaves the current connection, and reports whether it was stable: up for
+/// the stable time after the server accepted its operation. Losing a stable
+/// connection is progress: it restarts the window and makes the next attempt
+/// at once.
+fn ReconnectClock::left_connection(self : ReconnectClock) -> Bool {
+  let stable = match self.accepted_at {
+    Some(at) => (@async.now() - at).to_int() >= stable_connection_ms.val
+    None => false
+  }
+  self.accepted_at = None
+  if stable {
+    self.progress_at = @async.now()
+    self.delay_ms = 0
+  }
+  stable
+}
+
+///|
+/// Records a failed attempt; the next one waits longer.
+fn ReconnectClock::failed(self : ReconnectClock, cause : String) -> Unit {
+  self.last_cause = cause
+  self.delay_ms = if self.delay_ms == 0 {
+    FIRST_RECONNECT_DELAY_MS
+  } else if self.delay_ms * 2 > MAX_RECONNECT_DELAY_MS {
+    MAX_RECONNECT_DELAY_MS
+  } else {
+    self.delay_ms * 2
+  }
+}
+
+///|
+fn ReconnectClock::remaining(self : ReconnectClock) -> Int? {
+  match self.policy {
+    Unlimited => None
+    Within(window_ms) =>
+      Some(window_ms - (@async.now() - self.progress_at).to_int())
+  }
+}
+
+///|
+/// Waits for the next attempt and returns how long that attempt may take;
+/// raises [BridgeError::Unreachable] once the window has passed.
+async fn ReconnectClock::next_attempt(self : ReconnectClock) -> Int {
+  if self.delay_ms > 0 {
+    let delay = match self.remaining() {
+      None => self.delay_ms
+      Some(left) if left < self.delay_ms => left
+      Some(_) => self.delay_ms
+    }
+    if delay > 0 {
+      @async.sleep(delay)
+    }
+  }
+  match (self.policy, self.remaining()) {
+    (Within(window_ms), Some(left)) if left <= 0 =>
+      raise Unreachable(
+        endpoint=self.endpoint,
+        window_ms~,
+        last_cause=self.last_cause,
+      )
+    (_, Some(left)) if left < connect_attempt_timeout_ms.val => left
+    _ => connect_attempt_timeout_ms.val
+  }
+}
+
+///|
+/// One attempt to attach with `descriptor`: connect within `timeout_ms`, send
+/// the descriptor and read the server's answer until the reconnect window of
+/// `clock` ends. `Err` is a failure worth another attempt with the same
+/// descriptor: a lost connection, an upgrade refused with HTTP 429 or 5xx, or
+/// an answer that did not come within the window. Any other failure is raised.
+async fn attach_attempt(
+  clock : ReconnectClock,
   url : String,
   headers : @http.Headers,
-  frozen_start : String,
-) -> (@websocket.Conn, Map[String, Json]) {
+  descriptor : String,
+  timeout_ms : Int,
+) -> Result[(@websocket.Conn, Map[String, Json]), String] {
+  try {
+    guard @async.with_timeout_opt(timeout_ms, () => connect_socket(url, headers))
+      is Some(socket) else {
+      return Err("no WebSocket connection within \{timeout_ms} ms")
+    }
+    socket.send_text(descriptor)
+    let answer = match clock.remaining() {
+      None => Some(read_text(socket))
+      Some(left) =>
+        @async.with_timeout_opt(if left > 0 { left } else { 1 }, () => {
+          read_text(socket)
+        })
+    }
+    guard answer is Some(answer) else {
+      socket.close()
+      return Err("the server answered neither the start nor the resume")
+    }
+    Ok((socket, expect_object(answer)))
+  } catch {
+    @websocket.HandshakeRejected(message, response) =>
+      if response.code == 429 || response.code >= 500 {
+        Err(message)
+      } else {
+        raise BridgeError(message)
+      }
+    @websocket.ConnectionClosed(_, _) => Err("connection closed")
+    @io.ReaderClosed => Err("connection closed")
+    @os_error.OSError(_) as error => Err("connection failed: \{error}")
+    error => raise error
+  }
+}
+
+///|
+/// Replaces each provisional stream reference in `value` that `renamed` maps.
+fn replace_provisional_refs(value : Json, renamed : Map[String, String]) -> Json {
+  match value {
+    Array(items) => Json::array(items.map(item => replace_provisional_refs(item, renamed)))
+    Object(fields) => {
+      if fields.get("kind") is Some(String("stream")) &&
+        fields.get("value") is Some(Object(reference)) &&
+        reference.get("provisionalRef") is Some(String(previous)) &&
+        renamed.get(previous) is Some(renewed) {
+        let renewed_reference : Map[String, Json] = Map([])
+        reference.each((name, field) => {
+          renewed_reference[name] = if name == "provisionalRef" {
+            Json::string(renewed)
+          } else {
+            field
+          }
+        })
+        let renewed_stream : Map[String, Json] = Map([])
+        fields.each((name, field) => {
+          renewed_stream[name] = if name == "value" {
+            Json::object(renewed_reference)
+          } else {
+            field
+          }
+        })
+        return Json::object(renewed_stream)
+      }
+      let copy : Map[String, Json] = Map([])
+      fields.each((name, field) => {
+        copy[name] = replace_provisional_refs(field, renamed)
+      })
+      Json::object(copy)
+    }
+    other => other
+  }
+}
+
+///|
+/// Gives every stream argument a new provisional reference, in `inputs` and in
+/// the start's method `parameters`: only an exact retry may reuse one.
+fn renew_provisional_refs(
+  parameters : Json,
+  inputs : Array[InputRegistration],
+) -> Json {
+  let renamed : Map[String, String] = Map([])
+  for input in inputs {
+    let renewed = fresh_id()
+    renamed[input.id] = renewed
+    input.id = renewed
+  }
+  replace_provisional_refs(parameters, renamed)
+}
+
+///|
+/// Sends the start until the server answers it: the same frozen start again
+/// after a lost connection, and a new attempt with new provisional references
+/// after a retryable rejection. Returns the socket, the acceptance and the
+/// accepted attempt.
+async fn start_invocation(
+  clock : ReconnectClock,
+  url : String,
+  headers : @http.Headers,
+  inputs : Array[InputRegistration],
+  method_parameters : Json,
+  freeze : (String, Json) -> String,
+) -> (@websocket.Conn, Map[String, Json], String) {
+  let mut attempt_id = fresh_id()
+  let mut parameters = method_parameters
+  let mut frozen_start = freeze(attempt_id, parameters)
   for ;; {
-    try {
-      let socket = connect_socket(url, headers)
-      socket.send_text(frozen_start)
-      return (socket, expect_object(read_text(socket)))
-    } catch {
-      @websocket.HandshakeRejected(message, _) => raise BridgeError(message)
-      @websocket.ConnectionClosed(_, _) => @async.sleep(50)
-      @io.ReaderClosed => @async.sleep(50)
-      @os_error.OSError(_) => @async.sleep(50)
-      error => raise error
+    let timeout_ms = clock.next_attempt()
+    match attach_attempt(clock, url, headers, frozen_start, timeout_ms) {
+      Err(cause) => clock.failed(cause)
+      Ok((socket, response)) =>
+        match expect_string(get_field(response, "type")) {
+          "invocationAccepted" => {
+            clock.accepted()
+            return (socket, response, attempt_id)
+          }
+          "invocationRejected" => {
+            socket.close()
+            match field_opt(response, "attemptId") {
+              Some(value) if expect_string(value) != attempt_id =>
+                raise BridgeError(
+                  "attempt-conflict: rejection attempt does not match",
+                )
+              _ => ()
+            }
+            let code = expect_string(get_field(response, "code"))
+            let message = expect_string(get_field(response, "message"))
+            if !expect_bool(get_field(response, "retryable")) ||
+              code == "invalid-attachment-state" {
+              raise BridgeError(message)
+            }
+            clock.failed("\{code}: \{message}")
+            attempt_id = fresh_id()
+            parameters = renew_provisional_refs(parameters, inputs)
+            frozen_start = freeze(attempt_id, parameters)
+          }
+          _ => raise BridgeError("protocol-error: invalid start response")
+        }
     }
   }
 }
@@ -170,7 +420,19 @@ async fn send_session_binary(
 }
 
 ///|
-async fn resume_session(session : LiveStreamSession) -> Unit {
+/// Resumes a call the server had accepted, after its connection was lost, its
+/// attachment revoked, or its attempt rejected with the retryable `rejection`.
+/// Losing a stable connection restarts the reconnect window; losing it sooner
+/// counts as a failed attempt.
+async fn resume_session(session : LiveStreamSession, rejection? : String) -> Unit {
+  let stable = session.clock.left_connection()
+  match rejection {
+    Some(cause) => session.clock.failed(cause)
+    None =>
+      if !stable {
+        session.clock.failed("connection closed")
+      }
+  }
   guard session.session_token is Some(token) else {
     raise BridgeError("invalid-attachment-state: accepted session has no token")
   }
@@ -186,28 +448,42 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
   ])
   let mut accepted : Map[String, Json]? = None
   let mut socket : @websocket.Conn? = None
-  for ;; {
-    try {
-      let candidate = connect_socket(session.url, session.headers)
-      candidate.send_text(frozen_resume)
-      let response = expect_object(read_text(candidate))
-      match expect_string(get_field(response, "type")) {
-        "invocationAccepted" => {
-          accepted = Some(response)
-          socket = Some(candidate)
-          break
-        }
-        "invocationRejected" => {
-          candidate.close()
-          if expect_string(get_field(response, "attemptId")) != attempt_id {
-            raise BridgeError(
-              "attempt-conflict: rejection attempt does not match",
-            )
+  while accepted is None {
+    let timeout_ms = session.clock.next_attempt()
+    match attach_attempt(
+      session.clock,
+      session.url,
+      session.headers,
+      frozen_resume,
+      timeout_ms,
+    ) {
+      Err(cause) => session.clock.failed(cause)
+      Ok((candidate, response)) =>
+        match expect_string(get_field(response, "type")) {
+          "invocationAccepted" => {
+            accepted = Some(response)
+            socket = Some(candidate)
           }
-          let code = expect_string(get_field(response, "code"))
-          let retryable = expect_bool(get_field(response, "retryable"))
-          if (!takeover && code == "invalid-attachment-state") ||
-            (retryable && code != "invalid-attachment-state") {
+          "invocationRejected" => {
+            candidate.close()
+            if expect_string(get_field(response, "attemptId")) != attempt_id {
+              raise BridgeError(
+                "attempt-conflict: rejection attempt does not match",
+              )
+            }
+            let code = expect_string(get_field(response, "code"))
+            let message = expect_string(get_field(response, "message"))
+            let retryable = expect_bool(get_field(response, "retryable"))
+            // A resume refused because the old attachment is still live is
+            // retried once as a takeover; other retryable rejections are
+            // retried as they are.
+            if !(
+                (!takeover && code == "invalid-attachment-state") ||
+                (retryable && code != "invalid-attachment-state")
+              ) {
+              raise BridgeError(message)
+            }
+            session.clock.failed("\{code}: \{message}")
             takeover = takeover || code == "invalid-attachment-state"
             attempt_id = fresh_id()
             frozen_resume = protocol_message("resumeAttach", [
@@ -219,29 +495,16 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
               ("outputCursors", Json::array(cursors)),
               ("sessionToken", Json::string(token)),
             ])
-            continue
           }
-          raise BridgeError(expect_string(get_field(response, "message")))
+          _ =>
+            raise BridgeError("invalid-attachment-state: invalid resume response")
         }
-        _ =>
-          raise BridgeError("invalid-attachment-state: invalid resume response")
-      }
-    } catch {
-      @websocket.ConnectionClosed(_, _) => @async.sleep(50)
-      @io.ReaderClosed => @async.sleep(50)
-      @os_error.OSError(_) => @async.sleep(50)
-      error => raise error
-    }
-    if accepted is None && socket is None {
-      @async.sleep(50)
-    }
-    if accepted is Some(_) {
-      break
     }
   }
   let accepted = accepted.unwrap()
   let socket = socket.unwrap()
   validate_acceptance_identity(accepted, attempt_id, session.idempotency_key)
+  session.clock.accepted()
   session.socket_write.acquire()
   session.socket = socket
   session.socket_write.release()
@@ -1534,7 +1797,14 @@ async fn dispatch_server_message(
           )
         _ => ()
       }
-      raise BridgeError(expect_string(get_field(message, "message")))
+      let code = expect_string(get_field(message, "code"))
+      let text = expect_string(get_field(message, "message"))
+      if !expect_bool(get_field(message, "retryable")) ||
+        code == "invalid-attachment-state" {
+        raise BridgeError(text)
+      }
+      session.socket.close()
+      resume_session(session, rejection="\{code}: \{text}")
     }
     "invocationFinished" => {
       let outcome = expect_object(get_field(message, "outcome"))
@@ -1685,7 +1955,6 @@ pub async fn invoke_streaming_agent(
     "Authorization": "Bearer " + server.token(),
     "Sec-WebSocket-Protocol": STREAM_SUBPROTOCOL,
   }
-  let attempt_id = fresh_id()
   let inputs = context.inputs
   let idempotency_key = fresh_id()
   let selector : Array[(String, Json)] = [
@@ -1699,38 +1968,31 @@ pub async fn invoke_streaming_agent(
     Some(id) => selector.push(("phantomId", Json::string(id.to_string())))
     None => ()
   }
-  let frozen_start = protocol_message("invocationStart", [
-    ("attemptId", Json::string(attempt_id)),
-    (
-      "config",
-      Json::array(
-        resolved.config.map(entry => {
-          obj([
-            ("path", Json::array(entry.path.map(Json::string))),
-            ("value", entry.value),
-          ])
-        }),
-      ),
-    ),
-    ("idempotencyKey", Json::string(idempotency_key)),
-    ("methodParameters", input_codec.encode(method_parameters)),
-    ("selector", obj(selector)),
-  ])
-  let (socket, accepted) = connect_start_exact_retry(url, headers, frozen_start)
-  match expect_string(get_field(accepted, "type")) {
-    "invocationRejected" => {
-      match field_opt(accepted, "attemptId") {
-        Some(value) if expect_string(value) != attempt_id =>
-          raise BridgeError(
-            "attempt-conflict: rejection attempt does not match",
-          )
-        _ => ()
-      }
-      raise BridgeError(expect_string(get_field(accepted, "message")))
-    }
-    "invocationAccepted" => ()
-    _ => raise BridgeError("protocol-error: invalid start response")
-  }
+  let config = Json::array(
+    resolved.config.map(entry => {
+      obj([
+        ("path", Json::array(entry.path.map(Json::string))),
+        ("value", entry.value),
+      ])
+    }),
+  )
+  let clock = ReconnectClock::new(resolved.configuration.reconnect, url)
+  let (socket, accepted, attempt_id) = start_invocation(
+    clock,
+    url,
+    headers,
+    inputs,
+    input_codec.encode(method_parameters),
+    (attempt_id, parameters) => {
+      protocol_message("invocationStart", [
+        ("attemptId", Json::string(attempt_id)),
+        ("config", config),
+        ("idempotencyKey", Json::string(idempotency_key)),
+        ("methodParameters", parameters),
+        ("selector", obj(selector)),
+      ])
+    },
+  )
   validate_acceptance_identity(accepted, attempt_id, idempotency_key)
   let session = {
     socket,
@@ -1765,6 +2027,7 @@ pub async fn invoke_streaming_agent(
     result_seen: false,
     finished: false,
     actor_owner: None,
+    clock,
   }
   session.session_token = Some(
     expect_string(get_field(accepted, "sessionToken")),

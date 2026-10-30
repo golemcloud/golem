@@ -2399,9 +2399,9 @@ fn generates_client_surface(#[tagged_as("multi_agent_1")] pkg: &GeneratedPackage
 
     // Configuration + identity accessors delegating to the runtime.
     assert!(client.contains(
-        "pub fn Agent1::configure(server : @runtime.GolemServer, app_name : String, env_name : String) -> Unit {"
+        "pub fn Agent1::configure(server : @runtime.GolemServer, app_name : String, env_name : String, reconnect? : @runtime.ReconnectPolicy = @runtime.default_reconnect_policy) -> Unit {"
     ));
-    assert!(client.contains("@runtime.configure(server, app_name, env_name)"));
+    assert!(client.contains("@runtime.configure(server, app_name, env_name, reconnect~)"));
     assert!(client.contains("pub fn Agent1::agent_id(self : Agent1) -> @runtime.AgentId {"));
 
     // Durable constructors.
@@ -3280,7 +3280,7 @@ test "text codec directly consumes frozen canonical and malformed fixtures" {
 }
 
 #[test]
-#[test_r::timeout("120s")]
+#[test_r::timeout("300s")]
 async fn accepted_streaming_invocation_recovers_with_takeover() {
     use std::io::BufRead;
     let pkg = GeneratedPackage::new(agent(
@@ -3295,21 +3295,38 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         vec![],
         AgentMode::Durable,
     ));
-    for (mode, expected_error) in [
-        ("success", ""),
-        ("resume-retryable", ""),
-        ("initial", "terminal rejection"),
-        ("other", "terminal rejection"),
+    let window = "Within(10000)";
+    const STABLE: &str = "5000";
+    for (mode, expected_error, reconnect, stable) in [
+        ("success", "", window, STABLE),
+        ("resume-retryable", "", window, STABLE),
+        ("initial", "terminal rejection", window, STABLE),
+        ("other", "terminal rejection", window, STABLE),
         (
             "mismatch",
             "attempt-conflict: rejection attempt does not match",
+            window,
+            STABLE,
         ),
-        ("second", "terminal rejection"),
-        ("second-retryable", "terminal rejection"),
+        ("second", "terminal rejection", window, STABLE),
+        ("second-retryable", "terminal rejection", window, STABLE),
         (
             "takeover-mismatch",
             "attempt-conflict: rejection attempt does not match",
+            window,
+            STABLE,
         ),
+        ("start-closed", "unreachable", "Within(500)", STABLE),
+        ("start-blackhole", "unreachable", "Within(1500)", STABLE),
+        ("start-unanswered", "unreachable", "Within(500)", STABLE),
+        ("start-503", "", window, STABLE),
+        ("start-no-limit", "", "Unlimited", STABLE),
+        ("start-retryable", "", window, STABLE),
+        ("window-reset", "", "Within(1000)", "1000"),
+        ("resume-unreachable", "unreachable", "Within(500)", STABLE),
+        ("resume-routing-miss", "", window, STABLE),
+        ("accept-drop", "unreachable", "Within(800)", "400"),
+        ("stable-reset", "", "Within(1000)", "300"),
     ] {
         let mut server = std::process::Command::new("python3")
             .arg("-u")
@@ -3330,7 +3347,9 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
             pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
             include_str!("moonbit_recovery.mbt")
                 .replace("__PORT__", port.trim())
-                .replace("__ERROR__", expected_error),
+                .replace("__ERROR__", expected_error)
+                .replace("__RECONNECT__", reconnect)
+                .replace("__STABLE__", stable),
         )
         .unwrap();
         let result = std::panic::catch_unwind(|| pkg.test_native());

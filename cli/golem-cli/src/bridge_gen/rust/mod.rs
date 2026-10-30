@@ -97,6 +97,7 @@ struct GuestMethodNames {
 struct RustRuntimeConfig {
     mode: RustBridgeMode,
     reexport_golem_server_at_root: bool,
+    reexport_reconnect_policy_at_root: bool,
 }
 
 impl RustRuntimeConfig {
@@ -104,6 +105,7 @@ impl RustRuntimeConfig {
         Self {
             mode,
             reexport_golem_server_at_root: false,
+            reexport_reconnect_policy_at_root: false,
         }
     }
 
@@ -134,6 +136,11 @@ impl RustRuntimeConfig {
         }
     }
 
+    fn with_root_reconnect_policy_reexport(mut self, reexport: bool) -> Self {
+        self.reexport_reconnect_policy_at_root = reexport;
+        self
+    }
+
     fn generated_prelude(&self) -> TokenStream {
         let scalar_checks = Self::scalar_checks();
         match self.mode {
@@ -141,13 +148,18 @@ impl RustRuntimeConfig {
                 let root_golem_server_reexport = self
                     .reexport_golem_server_at_root
                     .then(|| quote! { pub use golem_client::bridge::GolemServer; });
+                let root_reconnect_policy_reexport = self
+                    .reexport_reconnect_policy_at_root
+                    .then(|| quote! { pub use golem_client::bridge::ReconnectPolicy; });
 
                 quote! {
                     #root_golem_server_reexport
+                    #root_reconnect_policy_reexport
 
                     pub mod __golem_bridge_runtime {
                     pub use golem_client::bridge::ClientError;
                     pub use golem_client::bridge::GolemServer;
+                    pub use golem_client::bridge::ReconnectPolicy;
 
                     #scalar_checks
 
@@ -682,6 +694,7 @@ impl RustBridgeGenerator {
         let helper_codecs = self.external_helper_codecs();
         let runtime_prelude = RustRuntimeConfig::new(self.mode)
             .with_root_golem_server_reexport(!self.root_type_name_conflicts("GolemServer"))
+            .with_root_reconnect_policy_reexport(!self.root_type_name_conflicts("ReconnectPolicy"))
             .generated_prelude();
 
         let tokens = quote! {
@@ -1240,12 +1253,29 @@ impl RustBridgeGenerator {
         quote! {
             static CONFIG: std::sync::OnceLock<golem_client::bridge::Configuration> = std::sync::OnceLock::new();
 
+            /// Configures the client with the default reconnect window for streaming calls.
             pub fn configure(server: golem_client::bridge::GolemServer, app_name: &str, env_name: &str) {
+                configure_with_reconnect(
+                    server,
+                    app_name,
+                    env_name,
+                    golem_client::bridge::ReconnectPolicy::Within(golem_client::bridge::DEFAULT_RECONNECT_WINDOW),
+                );
+            }
+
+            /// Configures the client with the reconnect policy of its streaming calls.
+            pub fn configure_with_reconnect(
+                server: golem_client::bridge::GolemServer,
+                app_name: &str,
+                env_name: &str,
+                reconnect: golem_client::bridge::ReconnectPolicy,
+            ) {
                 CONFIG
                     .set(golem_client::bridge::Configuration {
                         app_name: app_name.to_string(),
                         env_name: env_name.to_string(),
                         server,
+                        reconnect,
                     })
                     .map_err(|_| ())
                     .expect("Configuration has already been set");
@@ -1805,15 +1835,14 @@ impl RustBridgeGenerator {
                     idempotency_key: uuid::Uuid::new_v4().to_string(),
                     input_graph: __input_graph,
                     output_graph: #output_graph,
+                    reconnect: config.reconnect,
                 };
                 golem_client::invocation_session::invoke_generated(
                     request,
                     method_parameters,
                     __stream_context,
                     #decode,
-                ).await.map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
-                    message: __error.to_string(),
-                })
+                ).await.map_err(crate::__golem_bridge_runtime::ClientError::from)
             }
         })
     }
