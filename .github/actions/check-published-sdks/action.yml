@@ -3,7 +3,7 @@ description: 'Build, deploy, and invoke the six streaming templates with pinned 
 inputs:
   wasm-rquickjs-version:
     description: 'wasm-rquickjs version used to build JavaScript components'
-    default: '8d02961ccccc1fe6572d979fd10f836e5c37b43b'
+    default: '61928b2bbf79450adc2c9668c43eba6277f33320'
   moonbit-version:
     description: 'MoonBit compiler and core version'
     default: '0.10.18+6c83a7f62'
