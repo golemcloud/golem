@@ -19,7 +19,7 @@
 //! are required.
 //!
 //! Run:
-//!   cargo test -p golem-worker-executor --test integration ignite_service \
+//!   cargo test -p golem-worker-executor-tests --test integration ignite_service \
 //!     -- --nocapture
 
 use golem_common::model::AgentId;

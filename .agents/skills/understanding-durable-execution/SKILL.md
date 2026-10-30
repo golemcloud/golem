@@ -6,10 +6,10 @@ description: "Explains how the Golem worker executor implements durable executio
 # Understanding Durable Execution
 
 The worker executor runs WASM agents whose progress survives the loss of the process running
-them. Read this guide alongside `golem-worker-executor/src/` and `tests/`; when code
+them. Read this guide alongside `golem-worker-executor/src/` and `golem-worker-executor-tests/tests/`; when code
 and guide disagree, the code wins and the guide needs a fix. Combined verification of
 the instrumentation removal and adapted tests is pending. The scoped `AGENTS.md` files under
-`golem-worker-executor/` state the mandatory rules; this skill explains the mechanisms.
+`golem-worker-executor/` and `golem-worker-executor-tests/` state the mandatory rules; this skill explains the mechanisms.
 
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong

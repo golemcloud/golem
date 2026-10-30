@@ -7,7 +7,7 @@ import sys
 
 TARGETS = {
     "lib": ("golem_worker_executor", ["lib"], "golem-worker-executor/src/lib.rs"),
-    "integration": ("integration", ["test"], "golem-worker-executor/tests/lib.rs"),
+    "integration": ("integration", ["test"], "golem-worker-executor-tests/tests/lib.rs"),
 }
 
 

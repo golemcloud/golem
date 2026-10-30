@@ -18,7 +18,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Stops this worker through this handle, whichever generation it is. Nothing public reaches
     /// the stop through an arbitrary handle, and a handle kept past its generation is exactly what
     /// the tests using this need.
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub async fn test_stop(&self) {
         self.stop_internal(
@@ -470,7 +470,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
     }
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub async fn test_fail_pending_invocations(&self) {
         self.fail_pending_invocations(WorkerExecutorError::runtime("test stop failure"))

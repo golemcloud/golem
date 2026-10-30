@@ -42,7 +42,7 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 
 ```shell
 # From the repository root, after building the test components needed by <affected-test>:
-cargo test -p golem-worker-executor --test integration -- <affected-test> --report-time
+cargo test -p golem-worker-executor-tests --test integration -- <affected-test> --report-time
 ```
 
 Use the `modifying-test-components` skill to build the selected test's WASM prerequisite. Run a
