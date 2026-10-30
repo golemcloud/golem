@@ -537,6 +537,7 @@ build_test_binaries() {
     timeout --kill-after=30s 20m cargo test
     "${cargo_profile_args[@]}"
     -p golem-worker-executor
+    -p golem-worker-executor-tests
     --lib
     --test integration
     --no-run
@@ -634,14 +635,14 @@ run_selected_test() {
   if [[ ${reuse_test_binaries} == 1 ]]; then
     local target_args=()
     if [[ ${target} == integration ]]; then
-      target_args=(--test integration)
+      target_args=(--package golem-worker-executor-tests --test integration)
     else
-      target_args=(--lib)
+      target_args=(--package golem-worker-executor --lib)
     fi
     run_and_verify_privileged_test "${result_file}" "${filter}" \
       timeout --kill-after=30s 5m \
       "${runner[@]}" \
-      "${cargo_test_r}" run --package golem-worker-executor "${target_args[@]}" \
+      "${cargo_test_r}" run "${target_args[@]}" \
       "${filter}" -- --exact --include-ignored --nocapture --report-time
     return
   fi
@@ -651,7 +652,7 @@ run_selected_test() {
   chmod 0755 "${capable_binary}"
   if [[ ${target} == integration ]]; then
     (
-      cd "${repo_root}/golem-worker-executor"
+      cd "${repo_root}/golem-worker-executor-tests"
       run_and_verify_privileged_test "${result_file}" "${filter}" \
         timeout --kill-after=30s 5m \
         "${runner[@]}" \
@@ -678,7 +679,7 @@ run_filesystem_benchmark() {
   cp "${selected}" "${capable_binary}"
   chmod 0755 "${capable_binary}"
   (
-    cd "${repo_root}/golem-worker-executor"
+    cd "${repo_root}/golem-worker-executor-tests"
     run_and_verify_privileged_test "${result_file}" "${filter}" \
       env GOLEM_FILESYSTEM_BENCH_MODE="${mode}" \
       timeout --kill-after=30s 30m \
@@ -693,7 +694,7 @@ run_filesystem_benchmark() {
 
   if command -v strace >/dev/null 2>&1; then
     (
-      cd "${repo_root}/golem-worker-executor"
+      cd "${repo_root}/golem-worker-executor-tests"
       run_and_verify_privileged_test "${strace_result}" "${filter}" \
         env GOLEM_FILESYSTEM_BENCH_MODE="${mode}" GOLEM_FILESYSTEM_BENCH_QUICK=1 \
         timeout --kill-after=30s 10m \

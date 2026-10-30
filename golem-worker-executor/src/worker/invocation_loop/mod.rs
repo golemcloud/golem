@@ -618,6 +618,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     ?decision,
                     "Invocation queue loop interrupted after recovery"
                 );
+                // A completed recovery leaves no invocation running, so no invocation outcome
+                // records this stop. Like an idle demand of the resident loop, the unloaded path
+                // records its lifecycle marker after disposal.
+                if final_decision.is_none()
+                    && matches!(
+                        kind,
+                        InterruptKind::Suspend(_) | InterruptKind::Interrupt(_)
+                    )
+                {
+                    unloaded_interrupt = Some(interrupt.clone());
+                }
                 if !matches!(kind, InterruptKind::Restart) {
                     final_interrupt = Some(kind);
                 }

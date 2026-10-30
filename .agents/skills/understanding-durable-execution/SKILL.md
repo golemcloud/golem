@@ -6,10 +6,10 @@ description: "Explains how the Golem worker executor implements durable executio
 # Understanding Durable Execution
 
 The worker executor runs WASM agents whose progress survives the loss of the process running
-them. Read this guide alongside `golem-worker-executor/src/` and `tests/`; when code
+them. Read this guide alongside `golem-worker-executor/src/` and `golem-worker-executor-tests/tests/`; when code
 and guide disagree, the code wins and the guide needs a fix. Combined verification of
 the instrumentation removal and adapted tests is pending. The scoped `AGENTS.md` files under
-`golem-worker-executor/` state the mandatory rules; this skill explains the mechanisms.
+`golem-worker-executor/` and `golem-worker-executor-tests/` state the mandatory rules; this skill explains the mechanisms.
 
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong
@@ -276,7 +276,9 @@ reconstructing, that generation is retired — stopped without writing its statu
 this executor and never restarted — and the executor that now holds the shard reconstructs it.
 
 Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a
-worker that is executing or holds non-durable in-memory work. Ephemeral agents are fail-stop:
+worker that is executing or holds non-durable in-memory work. A `WarmRunnable` eviction starts the
+worker again in a spawned task (`stop_if_evictable_with_outcome`): the callers of its pending
+invocations already started it and only wait, and the start waits for memory admission. Ephemeral agents are fail-stop:
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
@@ -1187,7 +1189,9 @@ even the empty status baseline are corrupt history; they do not mean the worker 
 status can still name an invocation whose completion was committed and published as current, so
 the hydrated result cache keeps the keys of committed completions that the status has not folded
 yet, apart from the evictable payloads, and the terminal stop (`fail_pending_invocations`) does not
-fail those keys. When
+fail those keys. For a key that it fails, it caches the typed agent error and stderr of an
+`InvocationFailed` (any other error as `AgentError::Unknown`), so a later lookup of the key returns
+the same error as its waiters. When
 `on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
 classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
 that failed for good fails the invocation with its cause. A storage that did not answer returns
@@ -1306,9 +1310,12 @@ captured oplog generations, then cancels executor-owned invocation and entity ta
 above, and joins their destruction before closing those generations.
 Already-spawned metadata loads and attachment queries finish independently, so a suspended Store
 cannot retain their locks; registration occurs once per spawned task, never on cached no-spawn
-queries. Attachment queries may spawn every time. Worker-state actors register once at construction
-and drain lifecycle jobs before status jobs and the status flusher, including on ordinary worker
-drop. Final retirement also joins oplog actors, payload uploads, archive transfers, and monitors.
+queries. A replay claim that such a task runs (`owned_access_claim`) and that waits for cursor
+progress or an active body ends with `Interrupted(Jump)` once the owner's tasks are stopped: no
+Store remains to move the cursor, so the wait must not keep retirement pending. Attachment queries
+may spawn every time. Worker-state actors register once at construction and drain lifecycle jobs
+before status jobs and the status flusher, including on ordinary worker drop. Final retirement
+also joins oplog actors, payload uploads, archive transfers, and monitors.
 An error is reported only after all owned work finishes. Deletion records that completion separately
 so an explicit retry can remove storage without reusing a retained stop error; the original attempt
 keeps its error. A later cold acquisition reloads persisted state rather than inheriting a stopped

@@ -57,6 +57,7 @@ impl InvocationLoops {
             owner_oplogs,
             construction_admission,
             drain: Arc::default(),
+            exit_stage: Arc::default(),
             _watcher_lifetime: watcher_lifetime,
         }
     }
@@ -74,6 +75,7 @@ impl InvocationLoops {
             }
             owner_oplogs.push(RegisteredOwnerOplog {
                 oplog: Arc::downgrade(&oplog),
+                label: format!("{oplog:?}"),
                 tasks: oplog.task_owner().cloned(),
                 shutdown,
             });
@@ -160,6 +162,7 @@ impl InvocationLoops {
     /// Concurrent callers serialize drainage. A failed drain keeps its registrations for retry.
     pub async fn wait_for_exit(&self) -> Result<(), String> {
         let _drain = self.drain.lock().await;
+        self.set_exit_stage("worker roots");
         *self.construction_admission.lock().unwrap() = false;
         {
             let owner_oplogs = self.owner_oplogs.lock().unwrap();
@@ -177,15 +180,19 @@ impl InvocationLoops {
                 .map(crate::worker::tasks::WorkerTasks::stop_roots_and_wait),
         )
         .await;
+        self.set_exit_stage("executor tasks");
         self.tracker.wait().await;
         let owner_oplogs = self.owner_oplogs.lock().unwrap().clone();
         let mut result = Ok(());
         for registration in &owner_oplogs {
             if let Some(tasks) = &registration.tasks {
+                self.set_exit_stage(format!("worker tasks of {}", registration.label));
                 result = result.and(tasks.stop_and_wait().await);
             }
+            self.set_exit_stage(format!("oplog close of {}", registration.label));
             result = result.and(registration.shutdown.close_and_wait().await);
         }
+        self.set_exit_stage("exited");
         if result.is_ok() {
             let mut registered = self.owner_oplogs.lock().unwrap();
             registered.retain(|oplog| {
@@ -195,6 +202,30 @@ impl InvocationLoops {
             });
         }
         result
+    }
+
+    fn set_exit_stage(&self, stage: impl Into<String>) {
+        *self.exit_stage.lock().unwrap() = stage.into();
+    }
+
+    /// Describes what a pending [`Self::wait_for_exit`] still waits for: its current stage, the
+    /// executor tasks that are still running, and every owner oplog with unfinished worker tasks.
+    pub fn describe_pending_exit(&self) -> String {
+        let mut description = format!(
+            "stage: {}; executor tasks: {}",
+            self.exit_stage.lock().unwrap(),
+            self.tracker.len()
+        );
+        for registration in self.owner_oplogs.lock().unwrap().iter() {
+            if let Some(pending) = registration
+                .tasks
+                .as_ref()
+                .and_then(crate::worker::tasks::WorkerTasks::describe_pending)
+            {
+                description.push_str(&format!("; {}: {pending}", registration.label));
+            }
+        }
+        description
     }
 }
 

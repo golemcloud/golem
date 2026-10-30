@@ -55,6 +55,28 @@ pub(super) async fn persisted_invocation_result(
     }
 }
 
+/// Reads the committed invocation result and session terminal together.
+///
+/// The session commits its result before its successful terminal, so the terminal is read first:
+/// a successful terminal seen by the first read guarantees that the second read sees the result.
+pub(super) async fn persisted_result_and_finished(
+    streams: &StreamSession,
+    native_tool: bool,
+) -> Result<
+    (
+        Option<(
+            invocation_session_result::Result,
+            Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
+        )>,
+        Option<Result<(), Vec<u8>>>,
+    ),
+    SessionError,
+> {
+    let finished = streams.persisted_finished().await?;
+    let result = persisted_invocation_result(streams, native_tool).await?;
+    Ok((result, finished))
+}
+
 pub(super) async fn send_attachment_revocation(
     responses: &mpsc::Sender<InvocationResponse>,
     revocation: Result<(), SessionError>,

@@ -1,0 +1,65 @@
+name: 'Build and Publish Native Binaries'
+description: 'Build dev-ci targets, archive them with cargo-nextest, and publish the archive on a sticky disk'
+inputs:
+  name:
+    description: 'Publication name; it makes the sticky disk key unique within the run'
+    required: true
+  cargo-args:
+    description: >-
+      Package and target selection passed to both cargo build and cargo nextest archive. Both
+      commands must get the same selection so that they resolve the same features.
+    required: true
+outputs:
+  disk-key:
+    description: 'Exact sticky disk key of this publication'
+    value: ${{ steps.key.outputs.key }}
+runs:
+  using: 'composite'
+  steps:
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest
+    - name: Build
+      shell: bash
+      env:
+        QUIET: 'true'
+        CARGO_ARGS: ${{ inputs.cargo-args }}
+      run: |
+        cargo make --profile ci wit
+        # Word splitting of CARGO_ARGS is intended.
+        cargo build --profile dev-ci $CARGO_ARGS
+    - name: Identify publication disk
+      id: key
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+      run: echo "key=${GITHUB_REPOSITORY}-${NAME}-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+    # Preserve snapshots for partial consumer reruns; inactive disks expire after seven days.
+    - name: Mount publication disk
+      uses: useblacksmith/stickydisk@v1
+      with:
+        key: ${{ steps.key.outputs.key }}
+        path: tmp/native-binaries
+        commit: 'true'
+    - name: Archive binaries with cargo-nextest
+      shell: bash
+      env:
+        CARGO_ARGS: ${{ inputs.cargo-args }}
+      run: |
+        mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
+        rm -f tmp/native-binaries/PUBLICATION
+        cargo nextest -v archive --archive-file tmp/native-binaries/golem-binaries.tar.zst --zstd-level 1 --cargo-profile dev-ci $CARGO_ARGS
+    - name: Publish archive
+      shell: bash
+      env:
+        DISK_KEY: ${{ steps.key.outputs.key }}
+        SOURCE_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
+        cd tmp/native-binaries
+        test -s golem-binaries.tar.zst
+        sha256sum golem-binaries.tar.zst > SHA256SUMS
+        sha256sum --check --strict SHA256SUMS
+        stat -c 'Native archive bytes=%s' golem-binaries.tar.zst
+        printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
