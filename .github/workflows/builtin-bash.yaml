@@ -94,10 +94,10 @@ jobs:
           cache-prefix-key: "v1-builtin-bash"
           cache-shared-key: "pipelines"
 
-      - name: Install Wasmtime 46.0.1
+      - name: Install Wasmtime 50.0.1
         uses: bytecodealliance/actions/wasmtime/setup@v1
         with:
-          version: "46.0.1"
+          version: "50.0.1"
 
       # The workspace job only type-checks the WASM target; this runs the unit tests there, so
       # WASM-only code paths are tested directly. The component itself needs Golem's host and
@@ -123,10 +123,10 @@ jobs:
           rust-targets: "wasm32-wasip2"
           cache-prefix-key: "v1-builtin-bash"
           cache-shared-key: "sweep"
-      - name: Install Wasmtime 46.0.1
+      - name: Install Wasmtime 50.0.1
         uses: bytecodealliance/actions/wasmtime/setup@v1
         with:
-          version: "46.0.1"
+          version: "50.0.1"
 
       # Brush's suite runs in a Linux image with bash 5 and the GNU tools, and fails on a case
       # outside conformance/compat/baseline.txt or one in it that now passes; then every matrix
