@@ -854,10 +854,20 @@ object StreamSession {
         Bridge.toScala(builder.buildAsync(URI.create(endpoint), listener)).flatMap { ws =>
           if (ws.getSubprotocol != StreamSessionProtocol.Subprotocol) Future.failed(BridgeException("server did not select golem.agent-invocation.v1"))
           else if (cancelled.get()) { ws.sendClose(WebSocket.NORMAL_CLOSURE, "cancelled"); Future.failed(new BridgeCancelledException) }
-          else { socket = ws; send(pendingDescriptor) }
+          else { socket = ws; send(pendingDescriptor).map(_ => awaitAnswer(ws)) }
         }
       } catch {
         case error: Throwable => Future.failed(error)
+      }
+    // Fails the call once the reconnect window ends while the server has answered neither the
+    // start nor the resume sent on `ws`. An accepted operation waits without a deadline.
+    def awaitAnswer(ws: WebSocket): Unit =
+      windowLeftMillis.foreach { left =>
+        CompletableFuture.delayedExecutor(math.max(0L, left), TimeUnit.MILLISECONDS).execute(() =>
+          if ((ws eq socket) && !accepted && !finished.isCompleted)
+            fatal(new BridgeUnreachableException(endpoint, reconnectWindow.get,
+              new java.util.concurrent.TimeoutException("the server answered neither the start nor the resume")))
+        )
       }
     def delayReconnect(): Future[Unit] = {
       val delayed = Promise[Unit]()

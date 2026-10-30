@@ -28,8 +28,9 @@ class BridgeException(message: String, cause: Throwable)
 /**
  * A streaming call that could not reach the server within its reconnect
  * window. `lastCause` is the last failure: a `WebSocketHandshakeException` for
- * a refused upgrade, a [[BridgeException]] for a retryable rejection, or the
- * connection error.
+ * a refused upgrade, a [[BridgeException]] for a retryable rejection, the
+ * connection error, or a `TimeoutException` for a start or resume the server
+ * never answered.
  */
 final class BridgeUnreachableException(
   val endpoint: String,

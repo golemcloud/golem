@@ -212,6 +212,29 @@ class StreamRuntimeTest extends munit.FunSuite {
     } finally server.close()
   }
 
+  test("a start the server never answers is unreachable after the window") {
+    val server = new ServerSocket(0)
+    val connections = new AtomicInteger(0)
+    val acceptor = new Thread(() => try while (true) {
+      val p = new Peer(server.accept())
+      connections.incrementAndGet()
+      p.receive()
+      // Answers pings and nothing else.
+      while (true) p.receive()
+    } catch { case _: Throwable => () })
+    acceptor.setDaemon(true)
+    acceptor.start()
+    try {
+      val started = System.nanoTime()
+      val error = intercept[BridgeUnreachableException](Await.result(call(server.getLocalPort, 600.millis)._1, 10.seconds))
+      val elapsed = (System.nanoTime() - started).nanos
+      assertEquals(error.reconnectWindow, 600.millis)
+      assert(error.lastCause.getMessage.contains("answered neither the start nor the resume"), String.valueOf(error.lastCause))
+      assert(elapsed >= 600.millis && elapsed < 5.seconds, elapsed.toString)
+      assertEquals(connections.get(), 1)
+    } finally server.close()
+  }
+
   test("the window starts again when an accepted connection is lost") {
     val server = new ServerSocket(0)
     val peer = Future {
