@@ -10,17 +10,17 @@ import {
 }
 
 // Values
-pub fn byte_reader(String, offset? : String, cursor? : String, transport? : @durable-streams.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int, idle_delay_ms? : UInt64) -> Reader[Byte] raise
+pub fn byte_reader(String, offset? : String, cursor? : String, transport? : @durable-streams.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int32, idle_delay_ms? : UInt64) -> Reader[Byte] raise
 
-pub fn byte_writer(String, content_type? : String, producer_id? : String, epoch? : UInt64, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int) -> Writer[Byte] raise
+pub fn byte_writer(String, content_type? : String, producer_id? : String, epoch? : UInt64, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int32) -> Writer[Byte] raise
 
-pub fn[T : @json.FromJson] json_reader(String, offset? : String, cursor? : String, transport? : @durable-streams.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int, idle_delay_ms? : UInt64) -> Reader[T] raise
+pub fn[T : @json.FromJson] json_reader(String, offset? : String, cursor? : String, transport? : @durable-streams.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int32, idle_delay_ms? : UInt64) -> Reader[T] raise
 
-pub fn[T] json_reader_with_codec(String, (String) -> T raise, offset? : String, cursor? : String, transport? : @durable-streams.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int, idle_delay_ms? : UInt64) -> Reader[T] raise
+pub fn[T] json_reader_with_codec(String, (String) -> T raise, offset? : String, cursor? : String, transport? : @durable-streams.DurableStreamTransport, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int32, idle_delay_ms? : UInt64) -> Reader[T] raise
 
-pub fn[T : ToJson] json_writer(String, producer_id? : String, epoch? : UInt64, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int) -> Writer[T] raise
+pub fn[T : ToJson] json_writer(String, producer_id? : String, epoch? : UInt64, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int32) -> Writer[T] raise
 
-pub fn[T] json_writer_with_codec(String, (T) -> String raise, producer_id? : String, epoch? : UInt64, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int) -> Writer[T] raise
+pub fn[T] json_writer_with_codec(String, (T) -> String raise, producer_id? : String, epoch? : UInt64, auth? : @types.Secret, timeout_ms? : UInt64, max_retries? : Int32) -> Writer[T] raise
 
 // Errors
 pub suberror DurableStreamError {

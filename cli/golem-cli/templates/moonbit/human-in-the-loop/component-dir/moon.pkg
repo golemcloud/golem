@@ -11,8 +11,9 @@ import {
   "moonbitlang/core/encoding/utf8" @utf8,
 }
 
+pkgtype(kind: "foreign_library")
+
 options(
-  "is-main": true,
   link: {
     "wasm": {
       "export-memory-name": "memory",

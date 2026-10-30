@@ -277,7 +277,6 @@ pub fn[T] AgentStream::drop(self : AgentStream[T]) -> Unit {
 pub async fn[T] AgentStream::read(self : AgentStream[T]) -> T? {
   for ;; {
     let chunk = self.handle.read_native() catch {
-      @async-core.Cancelled::Cancelled as err => raise err
       @model.SchemaValueStreamReadError::Ownership(message) =>
         raise AgentStreamReadError::Ownership(message)
       @model.SchemaValueStreamReadError::Transport(message) =>

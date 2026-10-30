@@ -177,9 +177,9 @@ fn rename_scope_card_param(
 /// Generates typed RPC client stubs for all agents.
 pub fn generate_client_code(
   agents : Array[AgentInfo],
-  value_types? : Array[ValueTypeInfo] = [],
-  config_types? : Array[ConfigTypeInfo] = [],
-  agent_package? : String = "",
+  value_types~ : Array[ValueTypeInfo] = [],
+  config_types~ : Array[ConfigTypeInfo] = [],
+  agent_package~ : String = "",
 ) -> @list.List[@syntax.Impl] raise AgentParseError {
   let value_types_by_name : Map[String, ValueTypeInfo] = Map([])
   for value_type in value_types {

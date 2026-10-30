@@ -4,8 +4,8 @@ version = "0.5.1"
 
 import {
   "moonbitlang/x@0.5.1",
-  "moonbitlang/parser@0.3.18",
-  "moonbitlang/lexer@0.3.15",
+  "moonbitlang/parser@0.4.6",
+  "moonbitlang/lexer@0.4.4",
 }
 
 readme = "README.mbt.md"

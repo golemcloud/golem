@@ -13,23 +13,23 @@ import {
 // Values
 pub async fn construct_and_set_instance(String, @types.SchemaValueTree, @common.Principal) -> Result[Unit, @common.AgentError]
 
-pub async fn decode_invocation_input(@types.SchemaValueTree, Int, String) -> Array[@schema_model.SchemaValue] raise @common.AgentError
+pub async fn decode_invocation_input(@types.SchemaValueTree, Int32, String) -> Array[@schema_model.SchemaValue] raise @common.AgentError
 
 pub fn decode_multipart_snapshot(Bytes, String) -> Result[(@common.Principal, MultipartSnapshot), String]
 
 pub async fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
 
-pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @common.AgentError
+pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int32, String) -> T raise @common.AgentError
 
 pub fn decode_snapshot_identity(@types.SchemaValueTree) -> SnapshotIdentity raise @common.AgentError
 
-pub fn[T : @schema.FromWire] decode_snapshot_identity_field(SnapshotIdentity, Int) -> T raise @common.AgentError
+pub fn[T : @schema.FromWire] decode_snapshot_identity_field(SnapshotIdentity, Int32) -> T raise @common.AgentError
 
-pub fn decode_wire_input(@types.SchemaValueTree, Int, String) -> WireInput raise @common.AgentError
+pub fn decode_wire_input(@types.SchemaValueTree, Int32, String) -> WireInput raise @common.AgentError
 
 pub fn[T : @schema.FromWire] decode_wire_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
 
-pub fn[T : @schema.FromWire] decode_wire_param(WireInput, Int, String) -> T raise @common.AgentError
+pub fn[T : @schema.FromWire] decode_wire_param(WireInput, Int32, String) -> T raise @common.AgentError
 
 pub fn discard_optional_wire_value(@types.SchemaValueTree?) -> Unit
 
@@ -170,7 +170,7 @@ pub(all) enum SnapshotFormat {
 
 pub struct SnapshotIdentity {
   reader : @schema.WireReader
-  fields : Array[Int]
+  fields : Array[Int32]
 }
 
 pub(all) struct SnapshotPart {
@@ -185,11 +185,11 @@ pub(all) struct SnapshotRestoreContext {
   phantom_id : @types.Uuid?
   principal : @common.Principal
 }
-pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(Self, Int) -> T raise @common.AgentError
+pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(Self, Int32) -> T raise @common.AgentError
 
 pub struct WireInput {
   reader : @schema.WireReader
-  fields : Array[Int]
+  fields : Array[Int32]
 }
 pub fn WireInput::abort(Self) -> Unit
 pub fn WireInput::finish(Self) -> Unit raise @common.AgentError

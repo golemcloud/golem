@@ -194,8 +194,3 @@ pub async fn StreamingAgent::read_external(
     }
   }
 }
-
-///|
-fn main {
-
-}

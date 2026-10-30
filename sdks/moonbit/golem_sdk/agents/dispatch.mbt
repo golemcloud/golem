@@ -5,14 +5,14 @@
 ///|
 pub struct WireInput {
   reader : @schema.WireReader
-  fields : Array[Int]
+  fields : Array[Int32]
 }
 
 ///|
 /// Validates the direct wire record envelope used by generated dispatch.
 pub fn decode_wire_input(
   input : @types.SchemaValueTree,
-  arity : Int,
+  arity : Int32,
   context : String,
 ) -> WireInput raise @common.AgentError {
   let reader = @schema.WireReader::new(input)
@@ -39,7 +39,7 @@ pub fn WireInput::finish(self : WireInput) -> Unit raise @common.AgentError {
 ///|
 pub fn[T : @schema.FromWire] decode_wire_param(
   input : WireInput,
-  index : Int,
+  index : Int32,
   context : String,
 ) -> T raise @common.AgentError {
   errdefer input.abort()
@@ -64,7 +64,6 @@ pub async fn[T : @schema.IntoWire] encode_wire_output(
 ) -> @types.SchemaValueTree {
   errdefer @schema.release_wire(value)
   @schema.into_wire_async(value) catch {
-    @async-core.Cancelled::Cancelled as error => raise error
     error =>
       raise @common.AgentError::InvalidType(
         "failed serializing return value: \{repr(error)}",
@@ -86,7 +85,6 @@ pub async fn encode_wire_input_async(
   values : Array[&@schema.IntoWire],
 ) -> @types.SchemaValueTree {
   @schema.into_wire_record_async(values) catch {
-    @async-core.Cancelled::Cancelled as error => raise error
     error => raise @common.AgentError::InvalidInput(repr(error))
   }
 }
@@ -132,7 +130,7 @@ fn decode_input_record(
 #warnings("-unused_async")
 pub async fn decode_invocation_input(
   input : @types.SchemaValueTree,
-  arity : Int,
+  arity : Int32,
   context : String,
 ) -> Array[@model.SchemaValue] raise @common.AgentError {
   let fields = decode_input_record(input, context)
@@ -151,7 +149,7 @@ pub async fn decode_invocation_input(
 /// Owns the direct wire identity record throughout snapshot restoration.
 pub struct SnapshotIdentity {
   reader : @schema.WireReader
-  fields : Array[Int]
+  fields : Array[Int32]
 }
 
 ///|
@@ -180,7 +178,7 @@ pub fn decode_snapshot_identity(
 ///|
 pub fn[T : @schema.FromWire] decode_snapshot_identity_field(
   identity : SnapshotIdentity,
-  index : Int,
+  index : Int32,
 ) -> T raise @common.AgentError {
   match identity.fields.get(index) {
     None =>
@@ -214,7 +212,7 @@ fn SnapshotIdentity::abort(self : SnapshotIdentity) -> Unit {
 /// Decode errors are mapped to `AgentError::InvalidInput`.
 pub fn[T : @schema.FromSchema] decode_param(
   fields : Array[@model.SchemaValue],
-  index : Int,
+  index : Int32,
   context : String,
 ) -> T raise @common.AgentError {
   decode_param_with_resource_drops(
@@ -228,7 +226,7 @@ pub fn[T : @schema.FromSchema] decode_param(
 ///|
 fn[T : @schema.FromSchema] decode_param_with_resource_drops(
   fields : Array[@model.SchemaValue],
-  index : Int,
+  index : Int32,
   context : String,
   drops : @model.SchemaValueResourceDrops,
 ) -> T raise @common.AgentError {
@@ -258,17 +256,12 @@ pub async fn[T : @schema.IntoSchema] encode_output(
   value : T,
 ) -> @types.SchemaValueTree {
   let model_value = @schema.to_value_as(value)
+  errdefer model_value.release_resources(@model_host.resource_drops())
   @model.schema_value_to_wit_async(model_value) catch {
-    @async-core.Cancelled::Cancelled as error => {
-      model_value.release_resources(@model_host.resource_drops())
-      raise error
-    }
-    e => {
-      model_value.release_resources(@model_host.resource_drops())
+    e =>
       raise @common.AgentError::InvalidType(
         "failed serializing return value: \{repr(e)}",
       )
-    }
   }
 }
 
@@ -297,17 +290,12 @@ pub async fn encode_invocation_input_async(
   values : Array[@model.SchemaValue],
 ) -> @types.SchemaValueTree {
   let model_value = @model.SchemaValue::Record(values)
+  errdefer model_value.rollback_input_resources(@model_host.resource_drops())
   @model.schema_value_to_wit_async(model_value) catch {
-    @async-core.Cancelled::Cancelled as error => {
-      model_value.rollback_input_resources(@model_host.resource_drops())
-      raise error
-    }
-    e => {
-      model_value.rollback_input_resources(@model_host.resource_drops())
+    e =>
       raise @common.AgentError::InvalidInput(
         "failed encoding invocation input: \{repr(e)}",
       )
-    }
   }
 }
 

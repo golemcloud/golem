@@ -157,20 +157,27 @@ sdks/moonbit/
 All code under `async-core/`, `interface/`, `world/`, and `gen/` (except the
 hand-maintained `moon.pkg`, `stub.mbt`, test, and `stream_transfer.mbt` files) is generated on demand
 by `wit-bindgen moonbit` and is not tracked by Git. Do NOT edit generated files. Install the
-generator from the Golem fork's `wit-bindgen-golem-1.6` branch:
+generator from the pinned revision of Golem's `wit-bindgen-golem-2.0` fork branch:
 
 ```sh
 cd golem_sdk
 ./scripts/install-wit-bindgen.sh
 ```
 
-The branch incorporates Bytecode Alliance's draft
-[MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
+The branch builds on released wit-bindgen 0.63.0's MoonBit component-model async runtime
 and Golem's additional outline-lift, named-memory-lowering, export-disambiguation, and deterministic
 emission changes, 64 KiB component byte-stream batching, and shared export ABI lifting and lowering
 for types used across exported interfaces.
-Released wit-bindgen and upstream `main` do not yet generate the async MoonBit
-exports required by this SDK.
+The SDK requires these Golem-specific generator changes, not the stock release.
+The installer pins the same Git revision as Golem's Rust consumers.
+Use MoonBit 0.10.18 or newer. Current-task cancellation is a signal that bypasses
+ordinary `catch` clauses; put resource cleanup in `defer` or `errdefer`. A waiter
+observes another task's cancellation as the ordinary `TaskCancelled` error.
+`protect_from_cancel` shields cleanup but does not deliver pending cancellation
+when it returns; use `check_cancellation` after a shield when normal execution resumes.
+
+`CARGO_INSTALL_ROOT` can isolate the installation;
+add its `bin` directory to `PATH` for installation and regeneration.
 
 ```sh
 cd golem_sdk
@@ -179,7 +186,7 @@ cd golem_sdk
 
 The script (`scripts/regen-bindings.sh`):
 1. Refuses to run unless the generator version matches the Golem fork build recorded by
-   `scripts/install-wit-bindgen.sh` from the `wit-bindgen-golem-1.6` branch.
+   `scripts/install-wit-bindgen.sh` from the pinned fork revision.
 2. Runs `wit-bindgen moonbit ./wit --derive-debug --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
 3. Fixes an `s8`/`s16` double sign-extension bug (the generated code does a signed
    load *and* subtracts `0x100`/`0x10000`; the spurious subtraction is stripped).
@@ -461,8 +468,11 @@ pub(all) struct TaskInfo {
 }
 ```
 
-An empty `fn main {}` must exist in the main package. Multiple agents can coexist in one package —
-each is registered in the single generated `fn init {}`.
+Component packages use `pkgtype(kind: "foreign_library")` and must not contain `fn main`.
+The compiler runs generated `fn init` registration through the Wasm start section at
+instantiation. There is no `_start` export to call. This matches wit-bindgen's MoonBit
+link target and avoids the executable target's Preview1 imports. Multiple agents can
+coexist in one package; each is registered in the single generated `fn init {}`.
 
 ### Permission cards (`permissions`)
 
@@ -655,17 +665,17 @@ published to mooncakes.io for the release template to work.
 
 ## Dependencies & Tools
 
-- **wit-bindgen** — Golem's fork on the `wit-bindgen-golem-1.6` branch. It combines draft upstream PR #1659's MoonBit
+- **wit-bindgen** — Golem's `wit-bindgen-golem-2.0` branch. It combines released 0.63.0's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
   disambiguation changes, 64 KiB component byte-stream batching, shared cross-interface export ABI
   lifting and lowering, and
   deterministic bindings. Bindings are regenerated via
   `scripts/regen-bindings.sh`, which checks the expected release line and applies the s8/s16
-  sign-extension fix in post-processing. Use `scripts/install-wit-bindgen.sh` to install it from the
-  branch used by Golem's Cargo dependencies.
+  sign-extension fix in post-processing. Use `scripts/install-wit-bindgen.sh` to install
+  the pinned Git revision.
 - **wasm-tools** — `component embed` (adds WIT type info) and `component new` (creates the Component
   Model WASM).
 - **moon** — MoonBit build tool.
-- **moonbitlang/parser** (0.3.18) — source parsing, AST construction, and formatting for `golem_sdk_tools`.
-- **moonbitlang/lexer** (0.3.15) — lexer primitives used by the parser integration.
+- **moonbitlang/parser** (0.4.6) — source parsing, AST construction, and formatting for `golem_sdk_tools`.
+- **moonbitlang/lexer** (0.4.4) — lexer primitives used by the parser integration.
 - **moonbitlang/x** (0.5.1) — filesystem + env args for `golem_sdk_tools`.

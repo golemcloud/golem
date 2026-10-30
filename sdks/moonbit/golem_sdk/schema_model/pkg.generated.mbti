@@ -98,7 +98,7 @@ pub(all) struct DecodedSchemaGraph {
 
 pub(all) struct EncodedAgentGraph {
   graph : @types.SchemaGraph
-  root_indices : Array[Int]
+  root_indices : Array[Int32]
 }
 
 pub struct GraphDecoder {
@@ -108,16 +108,16 @@ pub struct GraphDecoder {
   decoded : Array[SchemaType?]
 }
 pub fn GraphDecoder::decode_defs(Self) -> Array[SchemaTypeDef] raise SchemaModelError
-pub fn GraphDecoder::decode_type_at(Self, Int) -> SchemaType raise SchemaModelError
+pub fn GraphDecoder::decode_type_at(Self, Int32) -> SchemaType raise SchemaModelError
 pub fn GraphDecoder::new(@types.SchemaGraph) -> Self raise SchemaModelError
 
 pub struct GraphEncoder {
   type_nodes : Array[@types.SchemaTypeNode]
-  def_index_by_id : Map[String, Int]
+  def_index_by_id : Map[String, Int32]
   wit_defs : Array[@types.SchemaTypeDef]
 }
 pub fn GraphEncoder::encode_graph_root(Self, SchemaType) -> @types.SchemaGraph raise SchemaModelError
-pub fn GraphEncoder::encode_type(Self, SchemaType) -> Int raise SchemaModelError
+pub fn GraphEncoder::encode_type(Self, SchemaType) -> Int32 raise SchemaModelError
 pub fn GraphEncoder::finish(Self) -> @types.SchemaGraph raise SchemaModelError
 pub fn GraphEncoder::new(Array[SchemaTypeDef]) -> Self raise SchemaModelError
 
@@ -214,7 +214,7 @@ pub(all) enum SchemaTypeBody {
   Flags(Array[String])
   Tuple(Array[SchemaType])
   List(SchemaType)
-  FixedList(SchemaType, UInt)
+  FixedList(SchemaType, UInt32)
   Map(SchemaType, SchemaType)
   Option(SchemaType)
   Result(SchemaType?, SchemaType?)
@@ -242,21 +242,21 @@ pub(all) struct SchemaTypeDef {
 
 pub(all) enum SchemaValue {
   Bool(Bool)
-  S8(Int)
-  S16(Int)
-  S32(Int)
+  S8(Int32)
+  S16(Int32)
+  S32(Int32)
   S64(Int64)
   U8(Byte)
-  U16(UInt)
-  U32(UInt)
+  U16(UInt32)
+  U32(UInt32)
   U64(UInt64)
   F32(Float)
   F64(Double)
   Char(Char)
   String(String)
   Record(Array[SchemaValue])
-  Variant(UInt, SchemaValue?)
-  Enum(UInt)
+  Variant(UInt32, SchemaValue?)
+  Enum(UInt32)
   Flags(Array[Bool])
   Tuple(Array[SchemaValue])
   List(Array[SchemaValue])

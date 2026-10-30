@@ -243,7 +243,7 @@ fn emit_char_lit(ch : Char) -> String {
 }
 
 ///|
-fn parse_u32_metadata(value : String) -> UInt? {
+fn parse_u32_metadata(value : String) -> UInt32? {
   if value.is_empty() || value.length() > 10 {
     return None
   }
@@ -426,7 +426,7 @@ fn require_u32_metadata(
   value : String,
   attr : String,
   source : String,
-) -> UInt raise ToolEmitError {
+) -> UInt32 raise ToolEmitError {
   match parse_u32_metadata(value) {
     Some(value) => value
     None => {
@@ -823,7 +823,7 @@ fn root_global_args(
 }
 
 ///|
-fn graph(pt : ParamType, wire? : Bool = false) -> String {
+fn graph(pt : ParamType, wire~ : Bool = false) -> String {
   (if wire {
     "@tool.wire_tool_type(__golem_schema, "
   } else {
@@ -835,7 +835,7 @@ fn graph(pt : ParamType, wire? : Bool = false) -> String {
 }
 
 ///|
-fn refined_graph(arg : ProjectedToolArg, wire? : Bool = false) -> String {
+fn refined_graph(arg : ProjectedToolArg, wire~ : Bool = false) -> String {
   let mut result = graph(arg.value_type.unwrap(), wire~)
   let prefix = if wire { "@tool.wire_refine_" } else { "@tool.refine_" }
   guard arg.info is Some(info) else { return result }
@@ -929,7 +929,7 @@ fn refined_graph(arg : ProjectedToolArg, wire? : Bool = false) -> String {
 }
 
 ///|
-fn emit_default(arg : ProjectedToolArg, wire? : Bool = false) -> String {
+fn emit_default(arg : ProjectedToolArg, wire~ : Bool = false) -> String {
   guard arg.info is Some(info) && info.defaults.length() > 0 else {
     return "None"
   }
@@ -1001,7 +1001,7 @@ fn emit_arg_doc(arg : ProjectedToolArg) -> String {
 }
 
 ///|
-fn emit_option(arg : ProjectedToolArg, wire? : Bool = false) -> String {
+fn emit_option(arg : ProjectedToolArg, wire~ : Bool = false) -> String {
   let base = arg.value_type.unwrap()
   let prefix = if wire {
     "@toolCommon.OptionShape::"
@@ -1110,7 +1110,7 @@ fn emit_flag(arg : ProjectedToolArg) -> String {
 }
 
 ///|
-fn emit_positional(arg : ProjectedToolArg, wire? : Bool = false) -> String {
+fn emit_positional(arg : ProjectedToolArg, wire~ : Bool = false) -> String {
   let schema = refined_graph(arg, wire~)
   "{ name: \"" +
   escape_string_lit(arg.canonical) +
@@ -1130,7 +1130,7 @@ fn emit_positional(arg : ProjectedToolArg, wire? : Bool = false) -> String {
 }
 
 ///|
-fn emit_tail(arg : ProjectedToolArg, wire? : Bool = false) -> String {
+fn emit_tail(arg : ProjectedToolArg, wire~ : Bool = false) -> String {
   let maximum = match arg.info.flat_map(i => i.max) {
     Some(v) => "Some(" + parse_u32_metadata(v).unwrap().to_string() + "U)"
     None => "None"
@@ -1258,7 +1258,7 @@ fn is_unit(pt : ParamType?) -> Bool {
 }
 
 ///|
-fn emit_result(command : ToolCommandInfo, wire? : Bool = false) -> String {
+fn emit_result(command : ToolCommandInfo, wire~ : Bool = false) -> String {
   if is_unit(command.success_type) {
     return "None"
   }
@@ -1305,7 +1305,7 @@ fn emit_result(command : ToolCommandInfo, wire? : Bool = false) -> String {
 ///|
 fn emit_error_cases(
   errors : Array[ToolErrorCaseInfo],
-  wire? : Bool = false,
+  wire~ : Bool = false,
 ) -> String {
   "[" +
   errors
@@ -1881,7 +1881,7 @@ fn emit_descriptor(
   let globals_flags = root_args
     .filter(a => a.placement is GlobalFlag)
     .map(emit_flag)
-  let leaves : Array[Int] = []
+  let leaves : Array[Int32] = []
   for i in 0..<tool.commands.length() {
     if Some(i) != root && tool.commands[i].subtree is None {
       leaves.push(i)
@@ -2053,7 +2053,7 @@ fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
   ignore(command)
   "Ok(@tool.invocation_result_wire(" +
   value +
-  ") catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error })"
+  ") catch { @types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error })"
 }
 
 ///|
@@ -2063,7 +2063,7 @@ fn emit_empty_invocation(command : ToolCommandInfo) -> String {
 }
 
 ///|
-fn error_payload_binding_name(index : Int) -> String {
+fn error_payload_binding_name(index : Int32) -> String {
   "__golem_error_payload_" + index.to_string()
 }
 
@@ -2134,7 +2134,7 @@ fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String 
     pattern +
     " => { let payload = " +
     payload +
-    " catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@types.ToolError::CustomError({ name: \"" +
+    " catch { @types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@types.ToolError::CustomError({ name: \"" +
     escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
     "\", payload })) }"
   })
@@ -2275,7 +2275,7 @@ fn direct_input_args(
 fn direct_field_index(
   arg : ProjectedToolArg,
   fields : Array[ProjectedToolArg],
-) -> Int {
+) -> Int32 {
   let identities = projected_arg_identity_names(arg)
   for index, field in fields {
     if projected_arg_identity_names(field).any(name => identities.contains(name)) {
@@ -2317,7 +2317,7 @@ fn emit_invoker(
   tool : ToolInfo,
   tools : Array[ToolInfo],
   plans : Array[Array[ProjectedToolArg]],
-  leaves : Array[Int],
+  leaves : Array[Int32],
   symbol_scope : String,
 ) -> Unit raise ToolEmitError {
   ignore(symbol_scope)
@@ -2338,7 +2338,7 @@ fn emit_context_invoker(
   tool : ToolInfo,
   tools : Array[ToolInfo],
   plans : Array[Array[ProjectedToolArg]],
-  leaves : Array[Int],
+  leaves : Array[Int32],
   name : String,
   ancestor_globals : Array[ProjectedToolArg],
 ) -> Unit raise ToolEmitError {
@@ -2376,7 +2376,7 @@ fn emit_context_invoker(
       )
     }
   }
-  let commands : Array[(Int, Int)] = []
+  let commands : Array[(Int32, Int32)] = []
   if tool.root_command is Some(root) {
     commands.push((0, root))
   }
@@ -2453,7 +2453,7 @@ fn emit_context_invoker(
         "    if __golem_stderr is Some(_) {\n      __golem_reader.abort()\n      return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"command does not accept a stderr stream\"))\n    }\n",
       )
     }
-    let used_fields : Array[Int] = []
+    let used_fields : Array[Int32] = []
     for arg in args {
       match arg.placement {
         Hidden(_) => ()
@@ -2587,7 +2587,7 @@ fn emit_context_invoker(
       let child_plans = child.commands.map(command => {
         project_command(command, command.subtree is Some(_))
       })
-      let child_leaves : Array[Int] = []
+      let child_leaves : Array[Int32] = []
       for i, child_command in child.commands {
         if Some(i) != child.root_command && child_command.subtree is None {
           child_leaves.push(i)

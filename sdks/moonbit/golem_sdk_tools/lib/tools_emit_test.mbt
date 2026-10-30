@@ -163,7 +163,7 @@ test "stdout parameter is not shadowed by a generated result binding" {
   )
   assert_true(
     compact.contains(
-      "try{@tool.invocation_result_wire(__golem_value)}catch{@asyncCore.Cancelled::Cancelledaserror=>raiseerror",
+      "try{@tool.invocation_result_wire(__golem_value)}catch{@types.ToolError::InvalidResult(message)",
     ),
   )
 }
@@ -636,15 +636,13 @@ test "custom tool errors encode the declared case payload" {
     @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
   )
   assert_true(generated.contains("impl @tool.ToolErrorSchema for RunError"))
-  assert_true(generated.contains("with to_error_payload_value"))
+  assert_true(generated.contains("with fn to_error_payload_value"))
   assert_true(
     generated.contains("try_into_typed_schema_value(__golem_payload)"),
   )
   assert_false(generated.contains("RunError::to_error_payload_value(error)"))
   assert_true(generated.contains("@tool.encode_wire_result(__golem_payload)"))
-  assert_true(
-    generated.split("@asyncCore.Cancelled::Cancelled as error").count() - 1 >= 2,
-  )
+  assert_false(generated.contains("@asyncCore.Cancelled"))
   assert_true(
     generated.split("@types.ToolError::InvalidResult(message)").count() - 1 >= 2,
   )
@@ -692,11 +690,11 @@ test "tool error schemas are reusable across descriptors and typed clients" {
     registration.split("impl @tool.ToolErrorSchema for RunError").count() - 1,
     3,
   )
-  assert_true(registration.contains("with error_cases"))
+  assert_true(registration.contains("with fn error_cases"))
   assert_true(registration.contains("payload: None"))
   assert_true(registration.contains("exit_code: 4"))
   assert_true(registration.contains("try_into_typed_schema_value(())"))
-  assert_true(registration.contains("with from_error_payload_value"))
+  assert_true(registration.contains("with fn from_error_payload_value"))
   let clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(tools),
   )
@@ -2117,6 +2115,8 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   let profile = render_client.find("__golem_values.push(profile)").unwrap()
   let request = render_client.find("__golem_values.push(request)").unwrap()
   assert_true(profile < request)
+  assert_true(render_client.contains("errdefer"))
+  assert_false(render_client.contains("@asyncCore.Cancelled"))
   assert_true(
     render_client.contains(
       "match stdin {\n        Some(__golem_stdin) => __golem_stdin.drop_sync()\n        None => ()",

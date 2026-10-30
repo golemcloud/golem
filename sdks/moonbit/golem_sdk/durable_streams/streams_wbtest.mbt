@@ -16,9 +16,9 @@ fn run_async(body : async () -> Unit) -> Unit raise {
 fn batch(
   payload : Bytes,
   offset : String,
-  closed? : Bool = false,
-  up_to_date? : Bool = true,
-  content_type? : String = "application/json",
+  closed~ : Bool = false,
+  up_to_date~ : Bool = true,
+  content_type~ : String = "application/json",
 ) -> @durable-streams.DurableStreamBatch {
   {
     payload: FixedArray::from_array(payload.to_array()),
@@ -43,8 +43,8 @@ fn error(kind : ErrorKind, after? : UInt64) -> HostError {
 ///|
 fn receipt(
   sequence : UInt64,
-  epoch? : UInt64 = 4,
-  closed? : Bool = false,
+  epoch~ : UInt64 = 4,
+  closed~ : Bool = false,
 ) -> Receipt {
   { next_offset: Some("opaque:next"), epoch, sequence, closed, }
 }
@@ -53,7 +53,7 @@ fn receipt(
 test "reader drains final nested JSON batch before EOF and checkpoint promotion" {
   run_async(async fn() {
     let calls = Ref(0)
-    let base : Reader[Array[Int]] = json_reader("https://example.test/stream")
+    let base : Reader[Array[Int32]] = json_reader("https://example.test/stream")
     let reader = {
       ..base,
       read_batch: (request, resource) => {
@@ -79,7 +79,7 @@ test "now resolves once via catchup then pins content type cursor and SSE" {
   run_async(async fn() {
     let requests : Array[@durable-streams.DurableStreamReadRequest] = []
     let waits : Array[UInt64] = []
-    let base : Reader[Int] = json_reader(
+    let base : Reader[Int32] = json_reader(
       "https://example.test/stream",
       offset="now",
       transport=SSE,
@@ -150,7 +150,7 @@ test "retry kinds retry after and exhausted budget persist across another read" 
     let calls = Ref(0)
     let recovered = Ref(false)
     let waits : Array[UInt64] = []
-    let base : Reader[Int] = json_reader(
+    let base : Reader[Int32] = json_reader(
       "https://example.test/stream",
       max_retries=2,
     )
@@ -223,7 +223,7 @@ test "retry kinds retry after and exhausted budget persist across another read" 
 test "malformed JSON is a sticky failure and item decode retains its index" {
   run_async(async fn() {
     let calls = Ref(0)
-    let base : Reader[Int] = json_reader("https://example.test/stream")
+    let base : Reader[Int32] = json_reader("https://example.test/stream")
     let reader = {
       ..base,
       read_batch: (_, _) => {
@@ -240,7 +240,7 @@ test "malformed JSON is a sticky failure and item decode retains its index" {
     }
     assert_eq(calls.val, 1)
     assert_eq(reader.checkpoint().offset, "-1")
-    let other : Reader[Int] = json_reader("https://example.test/stream")
+    let other : Reader[Int32] = json_reader("https://example.test/stream")
     other.install(batch(b"[3,\"bad\",9]", "never", closed=true))
     assert_eq(other.read(), Some(3))
     for _ in 0..<2 {
@@ -285,7 +285,7 @@ test "raw JSON codecs preserve large numeric lexemes and nested arrays" {
         "18446744073709551615", "9007199254740993",
       ]),
     )
-    let arrays : Writer[Array[Int]] = json_writer(
+    let arrays : Writer[Array[Int32]] = json_writer(
       "https://example.test/stream",
       producer_id="array",
     )
@@ -300,7 +300,7 @@ test "raw JSON codecs preserve large numeric lexemes and nested arrays" {
 ///|
 test "AgentStream source is lazy affine and emits the pending remainder" {
   run_async(async fn() {
-    let reader : Reader[Int] = json_reader("https://example.test/stream")
+    let reader : Reader[Int32] = json_reader("https://example.test/stream")
     reader.install(batch(b"[8,3,11]", "end", closed=true))
     assert_eq(reader.read(), Some(8))
     let stream = reader.into_stream()
@@ -357,7 +357,7 @@ test "writer cancellation retains exact body tuple and close before ack" {
       assert_true(writer.has_pending())
       pending.cancel()
       try pending.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         e => raise e
       } noraise {
         _ => fail("cancelled append succeeded")
@@ -392,7 +392,7 @@ test "writer retry loop keeps exact request and only ack advances sequence" {
   run_async(async fn() {
     let calls : Array[@durable-streams.DurableStreamAppendRequest] = []
     let waits : Array[UInt64] = []
-    let base : Writer[Int] = json_writer(
+    let base : Writer[Int32] = json_writer(
       "https://example.test/stream",
       producer_id="p",
       epoch=4,

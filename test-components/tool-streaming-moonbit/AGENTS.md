@@ -69,6 +69,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-config-moonbit` | Adding typed configuration to a MoonBit Golem agent |
 | `golem-add-secret-moonbit` | Adding secrets to MoonBit Golem agents |
 | `golem-quota-moonbit` | Adding resource quotas (rate limiting, capacity, concurrency) to MoonBit Golem agents using QuotaToken and reservations |
+| `golem-permission-card-moonbit` | Deriving, inspecting, revoking, and installing permission cards, and attaching scope cards to RPC calls |
 | `golem-retry-policies-moonbit` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `with_named_policy!`, and live CLI management |
 | `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
@@ -132,7 +133,7 @@ golem.yaml                        # Root application manifest
 moon.mod.json                     # Module definition (deps, preferred-target: wasm)
 moon.pkg                          # Root package config
 <component>/                      # Component package (each becomes a WASM component)
-  moon.pkg                        # Package config (imports, is-main, link exports)
+  moon.pkg                        # Package config (imports, foreign_library, link exports)
   counter.mbt                     # Agent definition
   golem_reexports.mbt             # Generated — re-exports WASM entry points from SDK
   golem_agents.mbt                # Generated — agent registration and RawAgent dispatch
@@ -165,7 +166,8 @@ All MoonBit identifiers are used **as-is** (matching the source code) when used 
 - Do NOT manually edit generated files (`golem_reexports.mbt`, `golem_agents.mbt`, `golem_derive.mbt`, `golem_clients.mbt`)
 - Do NOT manually edit files in `wit/` directories — they are managed by the SDK
 - `golem-temp/` and `_build/` are gitignored build artifacts
-- The `fn main {}` block must exist in the main package (can be empty)
+- Component packages use `pkgtype(kind: "foreign_library")` and must not contain `fn main`
+- Generated `fn init` registration runs at instantiation through the Wasm start section; there is no `_start` export
 - Multiple agents can coexist in the same package
 
 ## Coding Convention

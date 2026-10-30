@@ -69,8 +69,3 @@ pub fn TaskAgent::complete_task(self : Self, id : Int) -> Task? {
   }
   None
 }
-
-///|
-fn main {
-
-}

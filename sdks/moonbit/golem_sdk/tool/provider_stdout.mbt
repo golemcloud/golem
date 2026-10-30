@@ -146,7 +146,7 @@ pub fn provider_output(
 pub async fn ProviderOutput::write(
   self : ProviderOutput,
   data : ArrayView[Byte],
-) -> Int {
+) -> Int32 {
   if !self.is_open() {
     return 0
   }
@@ -159,7 +159,7 @@ pub async fn ProviderOutput::write(
 pub async fn ProviderOutput::write_bytes(
   self : ProviderOutput,
   data : BytesView,
-) -> Int {
+) -> Int32 {
   if !self.is_open() {
     return 0
   }
@@ -273,19 +273,39 @@ pub async fn invoke_with_output(
   invoke : async () -> Result[@toolCommon.InvocationResult, @types.ToolError],
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   defer output.drop()
-  let result = invoke() catch {
-    error => {
-      let reason = match error {
-        @async-core.Cancelled::Cancelled => ToolStreamError::Cancelled
-        _ => ToolStreamError::Failed(error.to_string())
+  let result = {
+    let mut reason = ToolStreamError::Cancelled
+    errdefer @async-core.protect_from_cancel(() => {
+      output.complete(Some(reason)) catch {
+        _ => ()
       }
-      @async-core.protect_from_cancel(
-        () => output.complete(Some(reason)) catch { _ => () },
-        resume_on_cancel=true,
-      )
-      raise error
+    })
+    invoke() catch {
+      error => {
+        reason = ToolStreamError::Failed(error.to_string())
+        raise error
+      }
     }
   }
+  errdefer (match result {
+    Ok(value) => {
+      match value.result {
+        Some(payload) => @model.drop_wit_capabilities(payload.value)
+        None => ()
+      }
+      match value.stdout {
+        Some(stream) => stream.drop_sync()
+        None => ()
+      }
+      match value.stderr {
+        Some(stream) => stream.drop_sync()
+        None => ()
+      }
+    }
+    Err(@types.ToolError::CustomError(payload)) =>
+      @model.drop_wit_capabilities(payload.payload.value)
+    Err(_) => ()
+  })
   @async-core.protect_from_cancel(() => {
     let failure = match result {
       Err(@types.ToolError::InvalidInput(message)) =>
@@ -293,35 +313,9 @@ pub async fn invoke_with_output(
       _ => None
     }
     output.complete(failure) catch {
-      @async-core.Cancelled::Cancelled as error => raise error
       _ => ()
     }
-  }) catch {
-    error =>
-      match result {
-        Ok(value) if error is @async-core.Cancelled::Cancelled => {
-          match value.result {
-            Some(payload) => @model.drop_wit_capabilities(payload.value)
-            None => ()
-          }
-          match value.stdout {
-            Some(stream) => stream.drop_sync()
-            None => ()
-          }
-          match value.stderr {
-            Some(stream) => stream.drop_sync()
-            None => ()
-          }
-          raise error
-        }
-        Err(@types.ToolError::CustomError(payload)) if error
-          is @async-core.Cancelled::Cancelled => {
-          @model.drop_wit_capabilities(payload.payload.value)
-          raise error
-        }
-        Err(_) if error is @async-core.Cancelled::Cancelled => raise error
-        _ => ()
-      }
-  }
+  })
+  @async-core.check_cancellation()
   result
 }

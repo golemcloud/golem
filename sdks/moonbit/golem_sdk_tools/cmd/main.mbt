@@ -102,7 +102,7 @@ fn GeneratedFilePlan::preflight(self : GeneratedFilePlan) -> Unit raise {
 ///
 /// Must be called after `preflight`; without it every write is applied, which
 /// is the previous behaviour rather than a wrong result.
-fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Int raise {
+fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Int32 raise {
   let mut written = 0
   for write in self.writes {
     let unchanged = match write.existing {
@@ -487,8 +487,8 @@ fn generate_derive_file(
   value_types : Array[@lib.ValueTypeInfo],
   multimodal_enums : Array[@lib.MultimodalEnumInfo],
   config_types : Array[@lib.ConfigTypeInfo],
-  all_config_types? : Array[@lib.ConfigTypeInfo] = [],
-  type_id_prefix? : String = "",
+  all_config_types~ : Array[@lib.ConfigTypeInfo] = [],
+  type_id_prefix~ : String = "",
 ) -> String {
   let all_impls : Array[@syntax.Impl] = []
   if value_types.length() > 0 {

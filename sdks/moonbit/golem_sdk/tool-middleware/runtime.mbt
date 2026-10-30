@@ -109,11 +109,13 @@ pub async fn[T, E] UnderlyingInvocation::get(
   if self.cached_result.val is Some(result) {
     return result
   }
-  @async-core.protect_from_cancel(async fn() {
+  let result = @async-core.protect_from_cancel(async fn() {
     let result = (self.get_result)()
     self.cached_result.val = Some(result)
     result
   })
+  @async-core.check_cancellation()
+  result
 }
 
 ///|

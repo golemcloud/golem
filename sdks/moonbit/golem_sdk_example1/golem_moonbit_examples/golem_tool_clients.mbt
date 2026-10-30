@@ -34,25 +34,21 @@ pub fn MoonbitStreamingClient::stream(
   @tool.TypedToolInvocation[UInt64, @tool.NoToolError],
   @tool.ToolError[@tool.NoToolError],
 ] {
-  let __golem_values :Array[&@schema.IntoWire] = []
+  let __golem_values : Array[&@schema.IntoWire] = []
   __golem_values.push(mode)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "mode",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "mode",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       stdin.drop_sync()
@@ -60,14 +56,12 @@ pub fn MoonbitStreamingClient::stream(
     }
   }
   let __golem_value = try {
+    errdefer stdin.drop_sync()
     @schema.into_wire_record(__golem_values)
-  } catch{
-    error => {
-      stdin.drop_sync()
-      return Err(@tool.tool_protocol_error(repr(error)))
-    }
+  } catch {
+    error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -75,20 +69,18 @@ pub fn MoonbitStreamingClient::stream(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .start(
-      ["stream"], __golem_input, Some(stdin), true, false, fn(_, _) { None }
+  match
+    self.client.start(["stream"], __golem_input, Some(stdin), true, false, fn(
+      _,
+      _,
     ) {
+      None
+    }) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_invocation) => {
+    Ok(__golem_invocation) =>
       @tool.typed_invocation(
-        __golem_invocation,
-        true,
-        false,
-        @tool.decode_wire_result_value,
+        __golem_invocation, true, false, @tool.decode_wire_result_value,
       )
-    }
   }
 }
 
@@ -124,14 +116,14 @@ pub fn CanonicalGrepClient::canonical_grep(
   color : CanonicalGrepColorMode,
   pattern : String,
   extra_patterns : Array[String],
-  max_count : UInt?,
+  max_count : UInt32?,
   files : Array[@schema.Path],
   stdin : @asyncCore.Stream[Byte],
 ) -> Result[
   @tool.TypedToolInvocation[Array[CanonicalGrepHit], CanonicalGrepError],
   @tool.ToolError[CanonicalGrepError],
 ] {
-  let __golem_values :Array[&@schema.IntoWire] = []
+  let __golem_values : Array[&@schema.IntoWire] = []
   __golem_values.push(color)
   __golem_values.push(case_sensitive)
   __golem_values.push(pattern)
@@ -139,89 +131,86 @@ pub fn CanonicalGrepClient::canonical_grep(
   __golem_values.push(extra_patterns)
   __golem_values.push(max_count)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "color",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[CanonicalGrepColorMode]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "case-sensitive",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "pattern",
-            body: @tool.wire_refine_text(
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "color",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[CanonicalGrepColorMode]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "case-sensitive",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "pattern",
+        body: @tool.wire_refine_text(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+          ),
+          Some("^.+$"),
+          None,
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "files",
+        body: __golem_schema.push(
+          @types.ListType(
+            @tool.wire_refine_path(
               @tool.wire_tool_type(
                 __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
               ),
-              Some("^.+$"),
+              Some(@types.PathDirection::INPUT),
+              Some(@types.PathKind::FILE),
+              None,
+              extensions=None,
+            ).index,
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "extra-patterns",
+        body: __golem_schema.push(
+          @types.ListType(
+            @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+            ).index,
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "max-count",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_refine_numeric(
+              @tool.wire_tool_type(
+                __golem_schema,
+                (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
+              ),
+              Some("1"),
               None,
               None,
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "files",
-            body: __golem_schema.push(
-              @types.ListType(
-                @tool.wire_refine_path(
-                  @tool.wire_tool_type(
-                    __golem_schema,
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
-                  ),
-                  Some(@types.PathDirection::INPUT),
-                  Some(@types.PathKind::FILE),
-                  None,
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "extra-patterns",
-            body: __golem_schema.push(
-              @types.ListType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "max-count",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_refine_numeric(
-                  @tool.wire_tool_type(
-                    __golem_schema,
-                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-                  ),
-                  Some("1"),
-                  None,
-                  None,
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       stdin.drop_sync()
@@ -229,15 +218,13 @@ pub fn CanonicalGrepClient::canonical_grep(
     }
   }
   let __golem_value = try {
+    errdefer stdin.drop_sync()
     @schema.into_wire_record(__golem_values)
-  } catch{
-    error => {
-      stdin.drop_sync()
-      return Err(@tool.tool_protocol_error(repr(error)))
-    }
+  } catch {
+    error => return Err(@tool.tool_protocol_error(repr(error)))
   }
   @tool.wire_text_input_field(__golem_value, 2)
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -245,43 +232,32 @@ pub fn CanonicalGrepClient::canonical_grep(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .start(
-      [], __golem_input, Some(stdin), true, false, fn(
-        __golem_name,
-        __golem_value,
-      ) {
-        match __golem_name {
-          "invalid-pattern" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(InvalidPattern(reason=__golem_payload)))
-          }
-          "no-match" => {
-            let __golem_payload :Unit = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(NoMatch))
-          }
-          _ => None
-        }
-      },
+  match
+    self.client.start([], __golem_input, Some(stdin), true, false, fn(
+      __golem_name,
+      __golem_value,
     ) {
+      match __golem_name {
+        "invalid-pattern" => {
+          let __golem_payload : String = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(InvalidPattern(reason=__golem_payload)))
+        }
+        "no-match" => {
+          let __golem_payload : Unit = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(NoMatch))
+        }
+        _ => None
+      }
+    }) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_invocation) => {
+    Ok(__golem_invocation) =>
       @tool.typed_invocation(
-        __golem_invocation,
-        true,
-        false,
-        @tool.decode_wire_result_value,
+        __golem_invocation, true, false, @tool.decode_wire_result_value,
       )
-    }
   }
 }
 
@@ -295,82 +271,76 @@ pub async fn CanonicalGrepClient::replace(
   replacement : String,
   files : Array[@schema.Path],
 ) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]] {
-  let __golem_values :Array[&@schema.IntoWire] = []
+  let __golem_values : Array[&@schema.IntoWire] = []
   __golem_values.push(color)
   __golem_values.push(case_sensitive)
   __golem_values.push(pattern)
   __golem_values.push(replacement)
   __golem_values.push(files)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "color",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[CanonicalGrepColorMode]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "case-sensitive",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "pattern",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "replacement",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "files",
-            body: __golem_schema.push(
-              @types.ListType(
-                @tool.wire_refine_path(
-                  @tool.wire_tool_type(
-                    __golem_schema,
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
-                  ),
-                  Some(@types.PathDirection::IN_OUT),
-                  Some(@types.PathKind::FILE),
-                  None,
-                ).index,
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "color",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[CanonicalGrepColorMode]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "case-sensitive",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "pattern",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "replacement",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "files",
+        body: __golem_schema.push(
+          @types.ListType(
+            @tool.wire_refine_path(
+              @tool.wire_tool_type(
+                __golem_schema,
+                (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
               ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+              Some(@types.PathDirection::IN_OUT),
+              Some(@types.PathKind::FILE),
+              None,
+              extensions=None,
+            ).index,
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -378,31 +348,27 @@ pub async fn CanonicalGrepClient::replace(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["replace"], __golem_input, None, fn(__golem_name, __golem_value) {
-        match __golem_name {
-          "invalid-pattern" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(InvalidPattern(reason=__golem_payload)))
-          }
-          "no-match" => {
-            let __golem_payload :Unit = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(NoMatch))
-          }
-          _ => None
-        }
-      },
+  match
+    self.client.invoke_and_await_wire(["replace"], __golem_input, None, fn(
+      __golem_name,
+      __golem_value,
     ) {
+      match __golem_name {
+        "invalid-pattern" => {
+          let __golem_payload : String = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(InvalidPattern(reason=__golem_payload)))
+        }
+        "no-match" => {
+          let __golem_payload : Unit = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(NoMatch))
+        }
+        _ => None
+      }
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
@@ -436,7 +402,7 @@ pub fn CanonicalGitClient::drop(self : CanonicalGitClient) -> Unit {
 ///
 pub async fn CanonicalGitClient::commit(
   self : CanonicalGitClient,
-  verbose : UInt,
+  verbose : UInt32,
   git_dir : @schema.Path,
   paginate : Bool,
   config : Map[String, String],
@@ -447,7 +413,7 @@ pub async fn CanonicalGitClient::commit(
   reset_author : Bool,
   output : CanonicalGitOutputMode,
 ) -> Result[CanonicalCommitResult, @tool.ToolError[CanonicalCommitError]] {
-  let __golem_values :Array[&@schema.IntoWire] = []
+  let __golem_values : Array[&@schema.IntoWire] = []
   __golem_values.push(git_dir)
   __golem_values.push(config)
   __golem_values.push(verbose)
@@ -459,126 +425,120 @@ pub async fn CanonicalGitClient::commit(
   __golem_values.push(signoff)
   __golem_values.push(reset_author)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "git-dir",
-            body: @tool.wire_refine_path(
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "git-dir",
+        body: @tool.wire_refine_path(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+          ),
+          None,
+          Some(@types.PathKind::DIRECTORY),
+          None,
+          extensions=None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "config",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "verbose",
+        body: @tool.wire_refine_numeric(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
+          ),
+          None,
+          Some("3"),
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "paginate",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "message",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "author",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_refine_text(
               @tool.wire_tool_type(
                 __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
               ),
+              Some("^.+ <.+@.+>$"),
               None,
-              Some(@types.PathKind::DIRECTORY),
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "config",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Map[String, String]]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "verbose",
-            body: @tool.wire_refine_numeric(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-              ),
-              None,
-              Some("3"),
               None,
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "paginate",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "message",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "author",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_refine_text(
-                  @tool.wire_tool_type(
-                    __golem_schema,
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                  ),
-                  Some("^.+ <.+@.+>$"),
-                  None,
-                  None,
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "output",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[CanonicalGitOutputMode]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "amend",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "signoff",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "reset-author",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "output",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[CanonicalGitOutputMode]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "amend",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "signoff",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "reset-author",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
   @tool.wire_text_input_field(__golem_value, 5)
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -586,39 +546,33 @@ pub async fn CanonicalGitClient::commit(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["commit"], __golem_input, None, fn(__golem_name, __golem_value) {
-        match __golem_name {
-          "nothing-staged" => {
-            let __golem_payload :Unit = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(NothingStaged))
-          }
-          "dirty-merge" => {
-            let __golem_payload :Unit = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(DirtyMerge))
-          }
-          "bad-author-format" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(BadAuthorFormat(author=__golem_payload)))
-          }
-          _ => None
-        }
-      },
+  match
+    self.client.invoke_and_await_wire(["commit"], __golem_input, None, fn(
+      __golem_name,
+      __golem_value,
     ) {
+      match __golem_name {
+        "nothing-staged" => {
+          let __golem_payload : Unit = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(NothingStaged))
+        }
+        "dirty-merge" => {
+          let __golem_payload : Unit = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(DirtyMerge))
+        }
+        "bad-author-format" => {
+          let __golem_payload : String = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(BadAuthorFormat(author=__golem_payload)))
+        }
+        _ => None
+      }
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
@@ -641,17 +595,17 @@ pub fn CanonicalGitRemoteClient::drop(self : CanonicalGitRemoteClient) -> Unit {
 ///
 pub fn CanonicalGitClient::remote(
   self : CanonicalGitClient,
-  verbose : UInt,
+  verbose : UInt32,
   git_dir : @schema.Path,
   paginate : Bool,
   config : Map[String, String],
 ) -> CanonicalGitRemoteClient {
-  let __golem_prefix :Array[&@schema.IntoWire] = []
+  let __golem_prefix : Array[&@schema.IntoWire] = []
   __golem_prefix.push(git_dir)
   __golem_prefix.push(config)
   __golem_prefix.push(verbose)
   __golem_prefix.push(paginate)
-  { client: self.client, prefix: __golem_prefix }
+  { client: self.client, prefix: __golem_prefix, }
 }
 
 ///|
@@ -665,7 +619,7 @@ pub async fn CanonicalGitRemoteClient::add(
   tags : Bool,
   fetch : Bool,
 ) -> Result[Unit, @tool.ToolError[CanonicalRemoteError]] {
-  let __golem_values :Array[&@schema.IntoWire] = self.prefix.copy()
+  let __golem_values : Array[&@schema.IntoWire] = self.prefix.copy()
   __golem_values.push(name)
   __golem_values.push(url)
   __golem_values.push(track)
@@ -673,133 +627,127 @@ pub async fn CanonicalGitRemoteClient::add(
   __golem_values.push(tags)
   __golem_values.push(fetch)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "git-dir",
-            body: @tool.wire_refine_path(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
-              ),
-              None,
-              Some(@types.PathKind::DIRECTORY),
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "config",
-            body: @tool.wire_tool_type(
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "git-dir",
+        body: @tool.wire_refine_path(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+          ),
+          None,
+          Some(@types.PathKind::DIRECTORY),
+          None,
+          extensions=None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "config",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "verbose",
+        body: @tool.wire_refine_numeric(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
+          ),
+          None,
+          Some("3"),
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "paginate",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "name",
+        body: @tool.wire_refine_text(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+          ),
+          Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
+          None,
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "url",
+        body: @tool.wire_refine_url(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Url]),
+          ),
+          Some(["https"]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "track",
+        body: __golem_schema.push(
+          @types.ListType(
+            @tool.wire_tool_type(
               __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Map[String, String]]),
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "verbose",
-            body: @tool.wire_refine_numeric(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-              ),
-              None,
-              Some("3"),
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "paginate",
-            body: @tool.wire_tool_type(
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "master",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_tool_type(
               __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "name",
-            body: @tool.wire_refine_text(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-              ),
-              Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
-              None,
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "url",
-            body: @tool.wire_refine_url(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
-              ),
-              Some(["https"]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "track",
-            body: __golem_schema.push(
-              @types.ListType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "master",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "tags",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "fetch",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "tags",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "fetch",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
   @tool.wire_text_input_field(__golem_value, 4)
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -807,23 +755,21 @@ pub async fn CanonicalGitRemoteClient::add(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["remote", "add"], __golem_input, None, fn(__golem_name, __golem_value) {
-        match __golem_name {
-          "no-such-remote" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(NoSuchRemote(name=__golem_payload)))
-          }
-          _ => None
-        }
-      },
+  match
+    self.client.invoke_and_await_wire(["remote", "add"], __golem_input, None, fn(
+      __golem_name,
+      __golem_value,
     ) {
+      match __golem_name {
+        "no-such-remote" => {
+          let __golem_payload : String = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(NoSuchRemote(name=__golem_payload)))
+        }
+        _ => None
+      }
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_empty(__golem_result)
   }
@@ -835,85 +781,79 @@ pub async fn CanonicalGitRemoteClient::remove(
   self : CanonicalGitRemoteClient,
   name : String,
 ) -> Result[Unit, @tool.ToolError[CanonicalRemoteError]] {
-  let __golem_values :Array[&@schema.IntoWire] = self.prefix.copy()
+  let __golem_values : Array[&@schema.IntoWire] = self.prefix.copy()
   __golem_values.push(name)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "git-dir",
-            body: @tool.wire_refine_path(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
-              ),
-              None,
-              Some(@types.PathKind::DIRECTORY),
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "config",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Map[String, String]]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "verbose",
-            body: @tool.wire_refine_numeric(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-              ),
-              None,
-              Some("3"),
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "paginate",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "name",
-            body: @tool.wire_refine_text(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-              ),
-              Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
-              None,
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "git-dir",
+        body: @tool.wire_refine_path(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+          ),
+          None,
+          Some(@types.PathKind::DIRECTORY),
+          None,
+          extensions=None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "config",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "verbose",
+        body: @tool.wire_refine_numeric(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
+          ),
+          None,
+          Some("3"),
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "paginate",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "name",
+        body: @tool.wire_refine_text(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+          ),
+          Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
+          None,
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
   @tool.wire_text_input_field(__golem_value, 4)
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -921,15 +861,17 @@ pub async fn CanonicalGitRemoteClient::remove(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["remote", "remove"], __golem_input, None, fn(__golem_name, __golem_value) {
+  match
+    self.client.invoke_and_await_wire(
+      ["remote", "remove"],
+      __golem_input,
+      None,
+      fn(__golem_name, __golem_value) {
         match __golem_name {
           "no-such-remote" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
+            let __golem_payload : String = @schema.from_wire(
+              __golem_value.value,
+            ) catch {
               error => return Some(Err(repr(error)))
             }
             Some(Ok(NoSuchRemote(name=__golem_payload)))
@@ -954,7 +896,7 @@ pub async fn CanonicalGitRemoteClient::set_url(
   add : Bool,
   delete : Bool,
 ) -> Result[Unit, @tool.ToolError[CanonicalSetUrlError]] {
-  let __golem_values :Array[&@schema.IntoWire] = self.prefix.copy()
+  let __golem_values : Array[&@schema.IntoWire] = self.prefix.copy()
   __golem_values.push(name)
   __golem_values.push(newurl)
   __golem_values.push(oldurl)
@@ -962,126 +904,120 @@ pub async fn CanonicalGitRemoteClient::set_url(
   __golem_values.push(add)
   __golem_values.push(delete)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "git-dir",
-            body: @tool.wire_refine_path(
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "git-dir",
+        body: @tool.wire_refine_path(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+          ),
+          None,
+          Some(@types.PathKind::DIRECTORY),
+          None,
+          extensions=None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "config",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "verbose",
+        body: @tool.wire_refine_numeric(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
+          ),
+          None,
+          Some("3"),
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "paginate",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "name",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "newurl",
+        body: @tool.wire_refine_url(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Url]),
+          ),
+          Some(["https"]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "oldurl",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_refine_url(
               @tool.wire_tool_type(
                 __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
-              ),
-              None,
-              Some(@types.PathKind::DIRECTORY),
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "config",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Map[String, String]]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "verbose",
-            body: @tool.wire_refine_numeric(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-              ),
-              None,
-              Some("3"),
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "paginate",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "name",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "newurl",
-            body: @tool.wire_refine_url(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Url]),
               ),
               Some(["https"]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "oldurl",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_refine_url(
-                  @tool.wire_tool_type(
-                    __golem_schema,
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
-                  ),
-                  Some(["https"]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "push",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "add",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "delete",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "push",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "add",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "delete",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -1089,18 +1025,17 @@ pub async fn CanonicalGitRemoteClient::set_url(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["remote", "set-url"], __golem_input, None, fn(
-        __golem_name,
-        __golem_value,
-      ) {
+  match
+    self.client.invoke_and_await_wire(
+      ["remote", "set-url"],
+      __golem_input,
+      None,
+      fn(__golem_name, __golem_value) {
         match __golem_name {
           "failed" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
+            let __golem_payload : String = @schema.from_wire(
+              __golem_value.value,
+            ) catch {
               error => return Some(Err(repr(error)))
             }
             Some(Ok(Failed(__golem_payload)))
@@ -1131,13 +1066,13 @@ pub fn CanonicalGitStashClient::drop(self : CanonicalGitStashClient) -> Unit {
 ///
 pub fn CanonicalGitClient::stash(
   self : CanonicalGitClient,
-  verbose : UInt,
+  verbose : UInt32,
   git_dir : @schema.Path,
 ) -> CanonicalGitStashClient {
-  let __golem_prefix :Array[&@schema.IntoWire] = []
+  let __golem_prefix : Array[&@schema.IntoWire] = []
   __golem_prefix.push(git_dir)
   __golem_prefix.push(verbose)
-  { client: self.client, prefix: __golem_prefix }
+  { client: self.client, prefix: __golem_prefix, }
 }
 
 ///|
@@ -1147,72 +1082,66 @@ pub async fn CanonicalGitStashClient::stash(
   message : String,
   keep_index : Bool,
 ) -> Result[Unit, @tool.ToolError[CanonicalStashError]] {
-  let __golem_values :Array[&@schema.IntoWire] = self.prefix.copy()
+  let __golem_values : Array[&@schema.IntoWire] = self.prefix.copy()
   __golem_values.push(message)
   __golem_values.push(keep_index)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "git-dir",
-            body: @tool.wire_refine_path(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
-              ),
-              None,
-              Some(@types.PathKind::DIRECTORY),
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "verbose",
-            body: @tool.wire_refine_numeric(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-              ),
-              None,
-              Some("3"),
-              None,
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "message",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "keep-index",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "git-dir",
+        body: @tool.wire_refine_path(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+          ),
+          None,
+          Some(@types.PathKind::DIRECTORY),
+          None,
+          extensions=None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "verbose",
+        body: @tool.wire_refine_numeric(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
+          ),
+          None,
+          Some("3"),
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "message",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "keep-index",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -1220,23 +1149,21 @@ pub async fn CanonicalGitStashClient::stash(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["stash"], __golem_input, None, fn(__golem_name, __golem_value) {
-        match __golem_name {
-          "no-such-stash" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(NoSuchStash(name=__golem_payload)))
-          }
-          _ => None
-        }
-      },
+  match
+    self.client.invoke_and_await_wire(["stash"], __golem_input, None, fn(
+      __golem_name,
+      __golem_value,
     ) {
+      match __golem_name {
+        "no-such-stash" => {
+          let __golem_payload : String = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(NoSuchStash(name=__golem_payload)))
+        }
+        _ => None
+      }
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_empty(__golem_result)
   }
@@ -1247,82 +1174,76 @@ pub async fn CanonicalGitStashClient::stash(
 pub async fn CanonicalGitStashClient::pop(
   self : CanonicalGitStashClient,
   name : String?,
-  index : UInt?,
+  index : UInt32?,
 ) -> Result[Unit, @tool.ToolError[CanonicalStashError]] {
-  let __golem_values :Array[&@schema.IntoWire] = self.prefix.copy()
+  let __golem_values : Array[&@schema.IntoWire] = self.prefix.copy()
   __golem_values.push(name)
   __golem_values.push(index)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "git-dir",
-            body: @tool.wire_refine_path(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
-              ),
-              None,
-              Some(@types.PathKind::DIRECTORY),
-              None,
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "git-dir",
+        body: @tool.wire_refine_path(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+          ),
+          None,
+          Some(@types.PathKind::DIRECTORY),
+          None,
+          extensions=None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "verbose",
+        body: @tool.wire_refine_numeric(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
+          ),
+          None,
+          Some("3"),
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "name",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "verbose",
-            body: @tool.wire_refine_numeric(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-              ),
-              None,
-              Some("3"),
-              None,
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "index",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "name",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "index",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -1330,23 +1251,21 @@ pub async fn CanonicalGitStashClient::pop(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["stash", "pop"], __golem_input, None, fn(__golem_name, __golem_value) {
-        match __golem_name {
-          "no-such-stash" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(NoSuchStash(name=__golem_payload)))
-          }
-          _ => None
-        }
-      },
+  match
+    self.client.invoke_and_await_wire(["stash", "pop"], __golem_input, None, fn(
+      __golem_name,
+      __golem_value,
     ) {
+      match __golem_name {
+        "no-such-stash" => {
+          let __golem_payload : String = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(NoSuchStash(name=__golem_payload)))
+        }
+        _ => None
+      }
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_empty(__golem_result)
   }
@@ -1357,82 +1276,76 @@ pub async fn CanonicalGitStashClient::pop(
 pub async fn CanonicalGitStashClient::apply(
   self : CanonicalGitStashClient,
   name : String?,
-  index : UInt?,
+  index : UInt32?,
 ) -> Result[Unit, @tool.ToolError[CanonicalStashError]] {
-  let __golem_values :Array[&@schema.IntoWire] = self.prefix.copy()
+  let __golem_values : Array[&@schema.IntoWire] = self.prefix.copy()
   __golem_values.push(name)
   __golem_values.push(index)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "git-dir",
-            body: @tool.wire_refine_path(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
-              ),
-              None,
-              Some(@types.PathKind::DIRECTORY),
-              None,
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "git-dir",
+        body: @tool.wire_refine_path(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+          ),
+          None,
+          Some(@types.PathKind::DIRECTORY),
+          None,
+          extensions=None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "verbose",
+        body: @tool.wire_refine_numeric(
+          @tool.wire_tool_type(
+            __golem_schema,
+            (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
+          ),
+          None,
+          Some("3"),
+          None,
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "name",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "verbose",
-            body: @tool.wire_refine_numeric(
-              @tool.wire_tool_type(
-                __golem_schema,
-                (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-              ),
-              None,
-              Some("3"),
-              None,
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "index",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "name",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "index",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -1440,23 +1353,21 @@ pub async fn CanonicalGitStashClient::apply(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["stash", "apply"], __golem_input, None, fn(__golem_name, __golem_value) {
-        match __golem_name {
-          "no-such-stash" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(NoSuchStash(name=__golem_payload)))
-          }
-          _ => None
-        }
-      },
+  match
+    self.client.invoke_and_await_wire(["stash", "apply"], __golem_input, None, fn(
+      __golem_name,
+      __golem_value,
     ) {
+      match __golem_name {
+        "no-such-stash" => {
+          let __golem_payload : String = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(NoSuchStash(name=__golem_payload)))
+        }
+        _ => None
+      }
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_empty(__golem_result)
   }
@@ -1477,7 +1388,7 @@ pub async fn CanonicalGitClient::log(
   graph : Bool,
   paths : Array[@schema.Path],
 ) -> Result[Array[CanonicalLogEntry], @tool.ToolError[CanonicalLogError]] {
-  let __golem_values :Array[&@schema.IntoWire] = []
+  let __golem_values : Array[&@schema.IntoWire] = []
   __golem_values.push(paths)
   __golem_values.push(max_count)
   __golem_values.push(since)
@@ -1489,140 +1400,134 @@ pub async fn CanonicalGitClient::log(
   __golem_values.push(oneline)
   __golem_values.push(graph)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "paths",
-            body: __golem_schema.push(
-              @types.ListType(
-                @tool.wire_refine_path(
-                  @tool.wire_tool_type(
-                    __golem_schema,
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
-                  ),
-                  Some(@types.PathDirection::INPUT),
-                  Some(@types.PathKind::FILE),
-                  None,
-                ).index,
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "paths",
+        body: __golem_schema.push(
+          @types.ListType(
+            @tool.wire_refine_path(
+              @tool.wire_tool_type(
+                __golem_schema,
+                (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
               ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "max-count",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_refine_numeric(
-                  @tool.wire_tool_type(
-                    __golem_schema,
-                    (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
-                  ),
-                  Some("0"),
-                  Some("9223372036854775807"),
-                  None,
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "since",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "until",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "author",
-            body: __golem_schema.push(
-              @types.ListType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "grep",
-            body: __golem_schema.push(
-              @types.ListType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "all-match",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+              Some(@types.PathDirection::INPUT),
+              Some(@types.PathKind::FILE),
+              None,
+              extensions=None,
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "invert-grep",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "max-count",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_refine_numeric(
+              @tool.wire_tool_type(
+                __golem_schema,
+                (@schema.TypeTag::{ } : @schema.TypeTag[Int64]),
+              ),
+              Some("0"),
+              Some("9223372036854775807"),
+              None,
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "oneline",
-            body: @tool.wire_tool_type(
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "since",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_tool_type(
               __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+              (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "graph",
-            body: @tool.wire_tool_type(
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "until",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_tool_type(
               __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+              (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "author",
+        body: __golem_schema.push(
+          @types.ListType(
+            @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+            ).index,
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "grep",
+        body: __golem_schema.push(
+          @types.ListType(
+            @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+            ).index,
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "all-match",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "invert-grep",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "oneline",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "graph",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -1630,31 +1535,27 @@ pub async fn CanonicalGitClient::log(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["log"], __golem_input, None, fn(__golem_name, __golem_value) {
-        match __golem_name {
-          "bad-revision" => {
-            let __golem_payload :Unit = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(BadRevision))
-          }
-          "not-a-repository" => {
-            let __golem_payload :Unit = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(NotARepository))
-          }
-          _ => None
-        }
-      },
+  match
+    self.client.invoke_and_await_wire(["log"], __golem_input, None, fn(
+      __golem_name,
+      __golem_value,
     ) {
+      match __golem_name {
+        "bad-revision" => {
+          let __golem_payload : Unit = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(BadRevision))
+        }
+        "not-a-repository" => {
+          let __golem_payload : Unit = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(NotARepository))
+        }
+        _ => None
+      }
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
@@ -1674,7 +1575,9 @@ pub fn CanonicalBigBoundClient::new() -> CanonicalBigBoundClient {
 
 ///|
 ///
-pub fn CanonicalBigBoundClient::new_for(name : String) -> CanonicalBigBoundClient {
+pub fn CanonicalBigBoundClient::new_for(
+  name : String,
+) -> CanonicalBigBoundClient {
   { client: @tool.ToolClient::new(name), }
 }
 
@@ -1690,46 +1593,39 @@ pub async fn CanonicalBigBoundClient::canonical_big_bound(
   self : CanonicalBigBoundClient,
   count : UInt64?,
 ) -> Result[Unit, @tool.ToolError[CanonicalGrepError]] {
-  let __golem_values :Array[&@schema.IntoWire] = []
+  let __golem_values : Array[&@schema.IntoWire] = []
   __golem_values.push(count)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "count",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_refine_numeric(
-                  @tool.wire_tool_type(
-                    __golem_schema,
-                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-                  ),
-                  Some("0"),
-                  Some("18446744073709551615"),
-                  None,
-                ).index,
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "count",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_refine_numeric(
+              @tool.wire_tool_type(
+                __golem_schema,
+                (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
               ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+              Some("0"),
+              Some("18446744073709551615"),
+              None,
+            ).index,
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -1737,31 +1633,27 @@ pub async fn CanonicalBigBoundClient::canonical_big_bound(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      [], __golem_input, None, fn(__golem_name, __golem_value) {
-        match __golem_name {
-          "invalid-pattern" => {
-            let __golem_payload :String = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(InvalidPattern(reason=__golem_payload)))
-          }
-          "no-match" => {
-            let __golem_payload :Unit = try {
-              @schema.from_wire(__golem_value.value)
-            } catch{
-              error => return Some(Err(repr(error)))
-            }
-            Some(Ok(NoMatch))
-          }
-          _ => None
-        }
-      },
+  match
+    self.client.invoke_and_await_wire([], __golem_input, None, fn(
+      __golem_name,
+      __golem_value,
     ) {
+      match __golem_name {
+        "invalid-pattern" => {
+          let __golem_payload : String = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(InvalidPattern(reason=__golem_payload)))
+        }
+        "no-match" => {
+          let __golem_payload : Unit = @schema.from_wire(__golem_value.value) catch {
+            error => return Some(Err(repr(error)))
+          }
+          Some(Ok(NoMatch))
+        }
+        _ => None
+      }
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_empty(__golem_result)
   }
@@ -1781,13 +1673,17 @@ pub fn MoonbitReflectionTestClient::new() -> MoonbitReflectionTestClient {
 
 ///|
 ///
-pub fn MoonbitReflectionTestClient::new_for(name : String) -> MoonbitReflectionTestClient {
+pub fn MoonbitReflectionTestClient::new_for(
+  name : String,
+) -> MoonbitReflectionTestClient {
   { client: @tool.ToolClient::new(name), }
 }
 
 ///|
 ///
-pub fn MoonbitReflectionTestClient::drop(self : MoonbitReflectionTestClient) -> Unit {
+pub fn MoonbitReflectionTestClient::drop(
+  self : MoonbitReflectionTestClient,
+) -> Unit {
   self.client.drop()
 }
 
@@ -1797,37 +1693,30 @@ pub async fn MoonbitReflectionTestClient::echo(
   self : MoonbitReflectionTestClient,
   label : String,
 ) -> Result[String, @tool.ToolError[@tool.NoToolError]] {
-  let __golem_values :Array[&@schema.IntoWire] = []
+  let __golem_values : Array[&@schema.IntoWire] = []
   __golem_values.push(label)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "label",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "label",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -1835,9 +1724,10 @@ pub async fn MoonbitReflectionTestClient::echo(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(["echo"], __golem_input, None, fn(_, _) { None }) {
+  match
+    self.client.invoke_and_await_wire(["echo"], __golem_input, None, fn(_, _) {
+      None
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
@@ -1849,41 +1739,34 @@ pub async fn MoonbitReflectionTestClient::optional(
   self : MoonbitReflectionTestClient,
   maybe : String?,
 ) -> Result[String, @tool.ToolError[@tool.NoToolError]] {
-  let __golem_values :Array[&@schema.IntoWire] = []
+  let __golem_values : Array[&@schema.IntoWire] = []
   __golem_values.push(maybe)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "maybe",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "maybe",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+            ).index,
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -1891,9 +1774,13 @@ pub async fn MoonbitReflectionTestClient::optional(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(["optional"], __golem_input, None, fn(_, _) { None }) {
+  match
+    self.client.invoke_and_await_wire(["optional"], __golem_input, None, fn(
+      _,
+      _,
+    ) {
+      None
+    }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
@@ -1909,80 +1796,72 @@ pub async fn MoonbitReflectionTestClient::canonical_values(
   quantity : @schema.Quantity[ReflectionMeters],
   maybe : String?,
 ) -> Result[String, @tool.ToolError[@tool.NoToolError]] {
-  let __golem_values :Array[&@schema.IntoWire] = []
+  let __golem_values : Array[&@schema.IntoWire] = []
   __golem_values.push(signed)
   __golem_values.push(unsigned)
   __golem_values.push(duration)
   __golem_values.push(quantity)
   __golem_values.push(maybe)
   let __golem_schema = @schema.WireTypeEncoder::new()
-  let __golem_root = try {
-    __golem_schema.push(
-      @types.RecordType(
-        [
-          {
-            name: "signed",
-            body: @tool.wire_tool_type(
+  let __golem_root = __golem_schema.push(
+    @types.RecordType([
+      {
+        name: "signed",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[Int64]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "unsigned",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "duration",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Duration]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "quantity",
+        body: @tool.wire_tool_type(
+          __golem_schema,
+          (
+            @schema.TypeTag::{ } :
+            @schema.TypeTag[@schema.Quantity[ReflectionMeters]]),
+        ).index,
+        metadata: @schema.empty_wire_metadata(),
+      },
+      {
+        name: "maybe",
+        body: __golem_schema.push(
+          @types.OptionType(
+            @tool.wire_tool_type(
               __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
             ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "unsigned",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "duration",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Duration]),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "quantity",
-            body: @tool.wire_tool_type(
-              __golem_schema,
-              (
-                @schema.TypeTag::{  }
-                : @schema.TypeTag[@schema.Quantity[ReflectionMeters]]
-              ),
-            ).index,
-            metadata: @schema.empty_wire_metadata(),
-          },
-          {
-            name: "maybe",
-            body: __golem_schema.push(
-              @types.OptionType(
-                @tool.wire_tool_type(
-                  __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                ).index,
-              ),
-            ),
-            metadata: @schema.empty_wire_metadata(),
-          },
-        ],
-      ),
-    )
-  } catch{
+          ),
+        ),
+        metadata: @schema.empty_wire_metadata(),
+      },
+    ]),
+  ) catch {
     error => {
       @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
-  let __golem_value = try {
-    @schema.into_wire_record_async(__golem_values)
-  } catch{
-    @asyncCore.Cancelled::Cancelled as error => raise  error
+  let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_input :@types.TypedSchemaValue = {
+  let __golem_input : @types.TypedSchemaValue = {
     graph: {
       type_nodes: __golem_schema.nodes,
       defs: __golem_schema.defs,
@@ -1990,10 +1869,12 @@ pub async fn MoonbitReflectionTestClient::canonical_values(
     },
     value: __golem_value,
   }
-  match self
-    .client
-    .invoke_and_await_wire(
-      ["canonical-values"], __golem_input, None, fn(_, _) { None }
+  match
+    self.client.invoke_and_await_wire(
+      ["canonical-values"],
+      __golem_input,
+      None,
+      fn(_, _) { None },
     ) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)

@@ -115,6 +115,7 @@ async fn[E] ToolInvocationObserver::observe(
       self.cached_result.val = Some(self.future.get())
     })
   }
+  @async-core.check_cancellation()
 }
 
 ///|
@@ -320,7 +321,6 @@ async fn collect_tool_output(
     }
     Ok(collected)
   } catch {
-    @async-core.Cancelled::Cancelled as error => raise error
     ToolStreamError::Cancelled => Err(ToolStreamError::Cancelled)
     ToolStreamError::Abandoned => Err(ToolStreamError::Abandoned)
     ToolStreamError::ResourceExhausted =>
@@ -335,7 +335,6 @@ async fn[T, E] collect_tool_result(
   get : async () -> Result[T, ToolError[E]],
 ) -> Result[T, ToolError[E]] {
   get() catch {
-    @async-core.Cancelled::Cancelled as error => raise error
     error =>
       Err(tool_protocol_error("failed to observe tool result: \{repr(error)}"))
   }
@@ -544,23 +543,18 @@ pub async fn[E] invoke_and_await(
   stdin : @async-core.Stream[Byte]?,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> Result[InvocationResult, ToolError[E]] {
-  let wire_input = @model.typed_schema_value_to_wit_async(input) catch {
-    @async-core.Cancelled::Cancelled as error => {
+  let wire_input = try {
+    errdefer {
       release_failed_tool_input(input, @model_host.resource_drops())
       match stdin {
         Some(stdin) => stdin.drop_sync()
         None => ()
       }
-      raise error
     }
-    e => {
-      release_failed_tool_input(input, @model_host.resource_drops())
-      match stdin {
-        Some(stdin) => stdin.drop_sync()
-        None => ()
-      }
+    @model.typed_schema_value_to_wit_async(input)
+  } catch {
+    e =>
       return Err(tool_protocol_error("failed to encode tool input: \{Repr(e)}"))
-    }
   }
   let wire_stdin = prepare_stdin(stdin)
   let wire_result = rpc.invoke_and_await(

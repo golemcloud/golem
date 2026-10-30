@@ -1,5 +1,5 @@
 ///|
-extern "wasm" fn set_schema_value_stream_host_mode(mode : Int) = "golem:test" "set-schema-value-stream-host-mode"
+extern "wasm" fn set_schema_value_stream_host_mode(mode : Int32) = "golem:test" "set-schema-value-stream-host-mode"
 
 ///|
 test "parameter failure rolls back an earlier decoded stream" {
@@ -20,7 +20,7 @@ test "parameter failure rolls back an earlier decoded stream" {
     drop_stream: fn(_) { dropped[0] += 1 },
     drop_native_stream: fn(_) {  },
   }
-  let first : @schema.AgentStream[Int] = decode_param_with_resource_drops(
+  let first : @schema.AgentStream[Int32] = decode_param_with_resource_drops(
     fields, 0, "partial transfer", drops,
   )
   guard @schema.to_value_as(first) is @model.SchemaValue::Stream(first_owned) else {
@@ -28,7 +28,7 @@ test "parameter failure rolls back an earlier decoded stream" {
   }
   assert_true(first_source.is_present())
   assert_true(first_owned.is_present())
-  let result : Result[Int, _] = try
+  let result : Result[Int32, _] = try
     decode_param_with_resource_drops(fields, 1, "partial transfer", drops) |> Ok
   catch {
     e => Err(e)
@@ -53,7 +53,7 @@ test "output encoding preserves wrap cancellation and cleanup" {
     set_schema_value_stream_host_mode(3)
     defer set_schema_value_stream_host_mode(0)
     let captured = @types.Secret::Secret(40)
-    let output : @schema.AgentStream[Int] = @schema.AgentStream::produce(
+    let output : @schema.AgentStream[Int32] = @schema.AgentStream::produce(
       async fn(writer) {
         producer_started[0] = true
         captured.drop()
@@ -73,7 +73,7 @@ test "output encoding preserves wrap cancellation and cleanup" {
       started.get()
       encode.cancel()
       try encode.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         error => fail("dispatch changed cancellation category: \{Repr(error)}")
       } noraise {
         _ => fail("cancelled dispatch encoding unexpectedly completed")
@@ -94,7 +94,7 @@ test "input encoding preserves wrap cancellation and cleanup" {
     set_schema_value_stream_host_mode(3)
     defer set_schema_value_stream_host_mode(0)
     let captured = @types.Secret::Secret(41)
-    let input : @schema.AgentStream[Int] = @schema.AgentStream::produce(
+    let input : @schema.AgentStream[Int32] = @schema.AgentStream::produce(
       async fn(writer) {
         producer_started[0] = true
         captured.drop()
@@ -114,7 +114,7 @@ test "input encoding preserves wrap cancellation and cleanup" {
       started.get()
       encode.cancel()
       try encode.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         error => fail("dispatch changed cancellation category: \{Repr(error)}")
       } noraise {
         _ => fail("cancelled dispatch input encoding unexpectedly completed")
@@ -130,9 +130,11 @@ test "input encoding preserves wrap cancellation and cleanup" {
 test "a failed input encode keeps argument permission cards" {
   @test_support.reset_resource_drop_counts()
   let card_a = @card.adopt(@types.PermissionCard::PermissionCard(613))
-  let result = try? encode_invocation_input(
-    @test_support.failing_card_input(card_a, 612),
-  )
+  let result = Ok(
+    encode_invocation_input(@test_support.failing_card_input(card_a, 612)),
+  ) catch {
+    error => Err(error)
+  }
   assert_true(result is Err(_))
   assert_true(card_a.is_present())
   assert_eq(
@@ -145,9 +147,13 @@ test "a failed input encode keeps argument permission cards" {
   )
   let card_b = @card.adopt(@types.PermissionCard::PermissionCard(614))
   @test_support.run_async(async fn() {
-    let result = try? encode_invocation_input_async(
-      @test_support.failing_card_input(card_b, 615),
-    )
+    let result = Ok(
+      encode_invocation_input_async(
+        @test_support.failing_card_input(card_b, 615),
+      ),
+    ) catch {
+      error => Err(error)
+    }
     assert_true(result is Err(_))
   })
   assert_true(card_b.is_present())

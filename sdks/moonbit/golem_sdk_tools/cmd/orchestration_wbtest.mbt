@@ -21,7 +21,7 @@ test "default generation supports agents tools and middleware together" {
   @fs.create_dir(root + "/component")
   @fs.write_string_to_file(
     root + "/component/moon.pkg",
-    "options(\n  \"is-main\": true,\n)\n",
+    "pkgtype(kind: \"foreign_library\")\noptions(\n)\n",
   )
   @fs.write_string_to_file(
     root + "/component/source.mbt",
