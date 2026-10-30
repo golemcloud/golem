@@ -12,29 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod blocking;
 pub mod bootstrap;
-pub(crate) mod cleanup_failure;
 pub mod config;
 pub mod durable_host;
-mod epoch_ticker;
+pub(crate) mod filesystem;
 pub(crate) mod filesystem_pressure;
 pub(crate) mod filesystem_snapshot;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod filesystem_snapshot_testing;
 pub mod grpc;
-pub(crate) mod host_directories;
 pub mod identity;
 pub mod metrics;
 pub mod model;
 pub mod native_tool;
-pub(crate) mod operation_failure;
-pub(crate) mod path_removal;
 pub mod preview2;
-pub(crate) mod sandbox_filesystem;
 pub mod services;
 pub mod storage;
-pub(crate) mod storage_volume;
 pub(crate) mod wasi_filesystem;
 pub mod wasi_host;
 pub mod worker;
@@ -73,6 +66,7 @@ use self::services::resource_limits::ResourceLimits;
 use self::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
+use crate::bootstrap::epoch_ticker::EpochTicker;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_agents::{ActiveAgents, InvocationLoops};
 use crate::services::agent_filesystem_snapshots::{
@@ -134,7 +128,6 @@ use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use epoch_ticker::EpochTicker;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;

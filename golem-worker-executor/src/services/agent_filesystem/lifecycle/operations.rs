@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
 
 /// Opens the target according to the expected kind, access mode, symlink policy, and disposition.
 ///

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
 
 impl NamespaceCoordinator {
     pub(super) fn new() -> Self {

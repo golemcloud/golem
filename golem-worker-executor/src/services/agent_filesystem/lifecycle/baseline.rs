@@ -18,9 +18,9 @@ use super::initial_files::{
     sandbox_path, seed_with_retry, validate_compatible,
 };
 use super::*;
-use crate::host_directories::HostPath;
 #[cfg(test)]
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::host_directories::HostPath;
 use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -1327,7 +1327,9 @@ async fn link_other_names<Adapter: SandboxFilesystemAdapter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox_filesystem::{SandboxDirectoryEntry, ScriptedSandboxFilesystemProvisioning};
+    use crate::filesystem::sandbox::{
+        SandboxDirectoryEntry, ScriptedSandboxFilesystemProvisioning,
+    };
 
     use test_r::test;
 

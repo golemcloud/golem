@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
 use crate::services::agent_filesystem::{
     AccessError, FilesystemStorageError, InitialFileConflict, RestoreError,
 };

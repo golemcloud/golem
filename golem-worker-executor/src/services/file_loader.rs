@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::host_directories::{HostDirectory, HostDirectoryError, HostPath};
+use crate::filesystem::host_directories::{HostDirectory, HostDirectoryError, HostPath};
 use crate::services::work_admission::WorkAdmission;
 use anyhow::anyhow;
 use async_lock::Mutex;

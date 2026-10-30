@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::*;
-use crate::host_directories::HostPath;
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::host_directories::HostPath;
 use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
@@ -846,7 +846,7 @@ fn dropped_initial_file(
 pub(super) async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     path: &Path,
-) -> Result<Vec<crate::sandbox_filesystem::SandboxDirectoryEntry>, FilesystemStorageError> {
+) -> Result<Vec<crate::filesystem::sandbox::SandboxDirectoryEntry>, FilesystemStorageError> {
     let node = sandbox
         .open(
             sandbox_path(path),

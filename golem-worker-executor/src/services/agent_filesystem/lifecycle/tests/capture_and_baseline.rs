@@ -205,10 +205,12 @@ fn scratch_of<Stage: FilesystemStage>(
 /// without declarations lists the root, and this listing makes it copy the tree.
 fn push_root_with_an_agent_file(control: &ScriptedSandboxFilesystemControl) {
     control.push_open(Ok(SandboxHandle::scripted_directory(1)));
-    control.push_read_directory(Ok(vec![crate::sandbox_filesystem::SandboxDirectoryEntry {
-        name: "agent.txt".into(),
-        kind: SandboxObjectKind::File,
-    }]));
+    control.push_read_directory(Ok(vec![
+        crate::filesystem::sandbox::SandboxDirectoryEntry {
+            name: "agent.txt".into(),
+            kind: SandboxObjectKind::File,
+        },
+    ]));
     control.push_close(Ok(()));
 }
 
@@ -1560,7 +1562,7 @@ async fn a_retry_of_the_restored_tree_seed_removes_what_the_failed_attempt_made(
     let capture_record = record(&[], serde_json::json!([]), serde_json::json!([]));
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-    let entry = |name: &str, kind| crate::sandbox_filesystem::SandboxDirectoryEntry {
+    let entry = |name: &str, kind| crate::filesystem::sandbox::SandboxDirectoryEntry {
         name: name.into(),
         kind,
     };

@@ -66,7 +66,7 @@ use super::{
     PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, open_or_create,
     prune, run_blocking,
 };
-use crate::blocking::BlockingTask;
+use crate::filesystem::blocking::BlockingTask;
 use crate::filesystem_snapshot::agent_work::{
     AgentWorks, OperationWork, begin_operation, drain_agent,
 };

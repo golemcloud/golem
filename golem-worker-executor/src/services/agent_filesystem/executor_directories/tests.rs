@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::sandbox_filesystem::SandboxFilesystemName;
+use crate::filesystem::sandbox::SandboxFilesystemName;
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 #[cfg(unix)]
@@ -486,7 +486,7 @@ fn discards_dropped_while_queued_keep_their_root_until_their_native_work_ends() 
 #[cfg(target_os = "linux")]
 mod xfs_directory_checks {
     use super::*;
-    use crate::storage_volume::{get_fsxattr, set_fsxattr};
+    use crate::filesystem::volume::{get_fsxattr, set_fsxattr};
     use test_r::{test, timeout};
 
     fn reflink_test_root() -> PathBuf {

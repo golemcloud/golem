@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::blocking::BlockingTask;
-use crate::host_directories::{HostDirectory, TemporaryRoot};
-use crate::operation_failure::OperationContext;
-use crate::sandbox_filesystem::{FilesystemStorageError, SandboxFilesystemProvisioning};
+use crate::filesystem::blocking::BlockingTask;
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::host_directories::{HostDirectory, TemporaryRoot};
+use crate::filesystem::sandbox::{FilesystemStorageError, SandboxFilesystemProvisioning};
 
+use crate::filesystem::volume::FilesystemVolume;
 use crate::services::golem_config::FilesystemStorageMode;
-use crate::storage_volume::FilesystemVolume;
 use golem_common::model::RetryConfig;
 use std::sync::Arc;
 

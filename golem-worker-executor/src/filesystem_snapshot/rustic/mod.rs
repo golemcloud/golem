@@ -44,7 +44,7 @@ pub(super) const STORAGE_CALL_DEADLINES: std::ops::RangeInclusive<Duration> =
 #[cfg(test)]
 mod tests;
 
-use crate::blocking::BlockingTask;
+use crate::filesystem::blocking::BlockingTask;
 use backend::BlobBackend;
 use rustic_core::jiff::Span;
 use rustic_core::repofile::{Chunker, MasterKey};

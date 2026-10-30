@@ -16,7 +16,7 @@
 //! tree of initial files, or a copy with its change detection.
 
 use super::*;
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
 use crate::services::agent_filesystem::lifecycle::baseline::{
     GenerationFacts, TIMESTAMP_SETTLE, detection, every_declaration_left_out,
     may_hold_only_initial_files, settle_delay, unchanged,

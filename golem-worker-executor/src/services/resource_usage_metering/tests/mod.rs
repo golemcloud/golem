@@ -1,5 +1,5 @@
 use super::*;
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use chrono::TimeZone;
 use golem_common::model::AgentId;

@@ -1,7 +1,7 @@
 use super::super::tests::{native_resident, resident, sandbox_attributes, unsupported_allocation};
 use super::super::{delete, resident_generation_handle, seal};
 use super::*;
-use crate::sandbox_filesystem::{SandboxHandle, SandboxObjectKind};
+use crate::filesystem::sandbox::{SandboxHandle, SandboxObjectKind};
 
 use futures::StreamExt;
 use golem_common::model::filesystem::{

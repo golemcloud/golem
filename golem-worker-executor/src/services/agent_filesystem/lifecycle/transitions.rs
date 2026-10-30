@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
 
 impl<Adapter: SandboxFilesystemAdapter> FilesystemGenerationHandle<Adapter> {
     /// Gives one body its own admission and drainage boundary without sealing its siblings.
@@ -543,7 +543,7 @@ async fn complete_limit_transition<Adapter: SandboxFilesystemAdapter>(
 }
 
 pub(super) fn decide_limit_transition(
-    allocation: crate::storage_volume::FilesystemAllocation,
+    allocation: crate::filesystem::volume::FilesystemAllocation,
     limits: FilesystemLimits,
 ) -> LimitDecision {
     if allocation.allocated_bytes > limits.allocated_bytes
@@ -728,7 +728,7 @@ pub(super) fn spawn_module_task(task: impl Future<Output = ()> + Send + 'static)
     }
 }
 
-impl<Reader: crate::sandbox_filesystem::SandboxFilesystemAllocationReader> FilesystemUsageReader
+impl<Reader: crate::filesystem::sandbox::SandboxFilesystemAllocationReader> FilesystemUsageReader
     for GenerationUsageReader<Reader>
 {
     fn observe(

@@ -2320,10 +2320,14 @@ retaining the underlying cause.
 
 ### Filesystem snapshots
 
+`filesystem` groups the low-level volume, sandbox and host-directory modules as siblings. Their
+shared helpers are `filesystem::errors`, `filesystem::blocking` and the private `path_removal` module.
+Agent lifecycle, pressure recovery and snapshot policy remain outside this group.
+
 Executor startup creates `.scratch` and `.initial-files` through
-`services/agent_filesystem/executor_directories/mod.rs`. The generic `host_directories` module owns
+`services/agent_filesystem/executor_directories/mod.rs`. The generic `filesystem::host_directories` module owns
 their filesystem operations and does not know about sandbox provisioning or filesystem-specific
-quotas. Executor setup first opens and validates `storage_volume::FilesystemVolume`, then creates
+quotas. Executor setup first opens and validates `filesystem::volume::FilesystemVolume`, then creates
 the host directories and constructs sandbox provisioning on that shared volume.
 On executor shutdown, `AgentFilesystems::track_shutdown` joins invocation loops and snapshot-store shutdown before
 `AgentFilesystems::shut_down` removes both directories. The file loader stops new loads and drains
@@ -2342,7 +2346,7 @@ not drop the service graph or release its root lock. A fixed-root replacement
 must not start while old cleanup still owns the XFS lock or can remove its directories. A failed
 invocation drain disables fallback removal of both host directories and retains their temporary
 parent on disk. Production drain and cleanup share the existing shutdown grace, not a new budget.
-Bootstrap owns a cancellation guard until it returns `RunDetails`. `epoch_ticker::EpochTicker`
+Bootstrap owns a cancellation guard until it returns `RunDetails`. `bootstrap::epoch_ticker::EpochTicker`
 owns its thread from creation, before snapshot binding or service construction can fail. Every
 drop stops and joins that thread. An ordinary bootstrap error cancels only this executor's token
 and waits up to `SHUTDOWN_GRACE` for tracked cleanup. It never shuts down the caller's join set,
@@ -2353,12 +2357,12 @@ signal before awaiting their bounded cleanup.
 Both failed bootstrap and process termination use `Shutdown::cancel_and_wait_for_tracked` for
 the cancel, bounded wait and warning. The caller still owns termination of its server join set.
 
-`storage_volume` owns shared storage roots, capacity observations, native cloning and XFS project
+`filesystem::volume` owns shared storage roots, capacity observations, native cloning and XFS project
 allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
-`sandbox_filesystem` owns one capability-confined tree, its handles, provisioning and verified
+`filesystem::sandbox` owns one capability-confined tree, its handles, provisioning and verified
 deletion, and seed/copy orchestration. XFS quotas account and limit allocation; root capabilities
 confine path access. Physical pressure recovery observes the volume without accessing a sandbox.
-Sandbox, volume and host-directory errors embed `operation_failure::OperationContext`. It owns
+Sandbox, volume and host-directory errors embed `filesystem::errors::OperationContext`. It owns
 the operation, optional path and typed `OperationFailure`, plus their construction, formatting
 and cause access. It carries no domain classification, cleanup flag or error-selection policy.
 The domains own those decisions. Pressure validation returns its own configuration error. At service binding,
@@ -2374,7 +2378,7 @@ lower-level error was unflagged. Worker startup then retains its cleanup obligat
 treating the result only as a creation error. Task failures have no I/O kind and remain terminal.
 
 Plain construction uses `OperationContext` and `From` rather than domain constructor forwarders.
-The sandbox I/O factory remains because it classifies capability escapes. `cleanup_failure::CleanupFailure<E>`
+The sandbox I/O factory remains because it classifies capability escapes. `filesystem::errors::CleanupFailure<E>`
 shares the flag, original-error chain and formatting without choosing when a domain marks cleanup.
 Its type parameter preserves original error types. Conversions consume the chain and map its
 original errors; they do not detach them through a mutator. Debug output uses the stored context

@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::host_directories::HostDirectory;
+pub use crate::filesystem::sandbox::FilesystemStorageError;
+use crate::filesystem::sandbox::SandboxFilesystemProvisioning;
+use crate::filesystem::volume::{
+    AgentAccounting, FilesystemLimits, FilesystemSpace, FilesystemVolume, observe_space_blocking,
+};
 use crate::filesystem_pressure::FilesystemWriteRecovery;
-use crate::host_directories::HostDirectory;
-use crate::operation_failure::OperationContext;
-pub use crate::sandbox_filesystem::FilesystemStorageError;
-use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
 use crate::services::active_agents::InvocationLoops;
 use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use crate::services::file_loader::FileLoader;
@@ -26,9 +29,6 @@ use crate::services::golem_config::{
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::shutdown::Shutdown;
 use crate::services::work_admission::WorkAdmission;
-use crate::storage_volume::{
-    AgentAccounting, FilesystemLimits, FilesystemSpace, FilesystemVolume, observe_space_blocking,
-};
 #[cfg(unix)]
 pub(crate) use file_creation_mask::keep_owner_write_permission;
 use golem_common::model::OwnedAgentId;

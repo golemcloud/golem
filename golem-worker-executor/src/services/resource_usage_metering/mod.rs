@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::operation_failure::OperationContext;
-use crate::sandbox_filesystem::FilesystemStorageError;
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::sandbox::FilesystemStorageError;
+use crate::filesystem::volume::AgentAccounting;
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::byte_time_accumulator::{
@@ -22,7 +23,6 @@ use crate::services::byte_time_accumulator::{
 use crate::services::golem_config::ResourceUsageMeteringConfig;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceUsageFlusher};
-use crate::storage_volume::AgentAccounting;
 use chrono::{DateTime, Utc};
 use golem_common::model::account_usage::AccountUsagePeriod;
 use golem_common::model::agent::AgentMode;
