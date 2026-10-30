@@ -163,8 +163,12 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
     where
         E: Executor<'c, Database = sqlx::Postgres>,
     {
+        // SQLx caches statements by SQL text, not parameter types. Guest statements
+        // must not seed that cache: a later call can bind a different source type.
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement).bind_params(params)?;
+            sqlx::query(statement)
+                .persistent(false)
+                .bind_params(params)?;
 
         let result = query
             .execute(executor)
@@ -182,7 +186,9 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         E: Executor<'c, Database = sqlx::Postgres>,
     {
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement).bind_params(params)?;
+            sqlx::query(statement)
+                .persistent(false)
+                .bind_params(params)?;
         let result = query
             .fetch_all(executor)
             .await
@@ -200,7 +206,9 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         E: Executor<'c, Database = sqlx::Postgres>,
     {
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement.to_string().leak()).bind_params(params)?;
+            sqlx::query(statement.to_string().leak())
+                .persistent(false)
+                .bind_params(params)?;
 
         let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(executor);
 
@@ -1534,6 +1542,13 @@ fn get_db_column_type_attributes(
 }
 
 fn get_db_type_name(type_info: &sqlx::postgres::PgTypeInfo) -> String {
+    // PostgreSQL qualifies a catalog type's name when the session shadows it.
+    // Its OID, unlike that display name, still identifies the built-in type.
+    match type_info.oid() {
+        Some(Oid(2205)) => return pg_type_name::REGCLASS.to_string(),
+        Some(Oid(2210)) => return pg_type_name::REGCLASS_ARRAY.to_string(),
+        _ => {}
+    }
     match type_info.kind() {
         PgTypeKind::Enum(_)
         | PgTypeKind::Composite(_)

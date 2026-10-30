@@ -79,16 +79,45 @@ This agent may run `bash`, read anything under `/workspace`, delete files direct
 
 For relational databases, ordinary `query` and `mutate` grants name tables as
 `database.schema.table`, with `*` allowed in each component. Golem analyzes SQL first and checks
-every table it reads, changes, or locks. A missing table grant denies the statement.
+the directly referenced relations that it can identify. A missing table grant denies the statement.
+Explicit executable expressions must also belong to the supported analysis subset; an unknown
+function, custom operator, or unsupported cast requires explicit unanalyzed authority.
+Bare built-in PostgreSQL `DEFAULT CURRENT_TIMESTAMP` and supported `now()` work with ordinary
+grants; this does not authorize every timestamp routine or form. Unquoted relation-modifier `ONLY`
+in PostgreSQL `SELECT`, `UPDATE`, or `DELETE` requires explicit `unanalyzed` authority;
+supported `LOCK TABLE ONLY` still uses ordinary grants.
+
+Analyzed PostgreSQL statements resolve unqualified physical relations to `public`, not the
+session's `search_path`, for both permission checks and execution. This includes reads, writes,
+created tables, index target tables, and foreign-key references. Explicit schemas stay explicit;
+a `RENAME` destination stays in the source schema. CTE references, aliases, columns, and comments
+remain unchanged. Approved literal or built-in text parameter `regclass` casts also resolve
+one-part relation names to `public`, preserving quoted case and explicit schemas. String literals
+stay constant to preserve PostgreSQL early OID binding; only text placeholders use runtime
+normalization. Both forms identify schema boundaries by dots outside double quotes, preserving
+PostgreSQL's leading-quote rule: a double quote starts quoting only at the beginning of a name part.
+Both preserve
+native `regclass` spelling such as unquoted `migration-log` rather than enforcing SQL identifier
+grammar. Explicit multi-part input remains unchanged. Golem leaves
+bound parameters and durable SQL unchanged and does not issue session `SET` commands.
+Literal and built-in text parameter normalization recognize only the PostgreSQL scanner's six
+ASCII whitespace characters: space, tab, LF, CR, vertical tab, and form feed. Unicode whitespace
+remains part of an unquoted name.
 
 SQL that Golem cannot analyze requires a separate explicit grant, for example
 `rdbms(?env) @ ?agent : unanalyzed : database(mydb)`. The default agent card, wildcard table
 grants, and wildcard verbs do not include this capability. It cannot override a missing table
 grant when analysis succeeds. Use it only for trusted code that needs unsupported statements;
-normal table migrations should use ordinary grants.
+normal table migrations should use ordinary grants. PostgreSQL temporary `CREATE TABLE` is
+unsupported analysis. The fallback executes original SQL without deterministic namespace rewriting.
 
 This grant selects the connection database. It does not guarantee that arbitrary SQL affects only
-that database, and the database role still needs appropriate privileges. See
+that database, and the database role still needs appropriate privileges. Ordinary table grants do
+not enumerate the indirect effects of authorized database objects, such as view definitions,
+triggers, or cascades. Database administrators must control those objects and use least-privilege
+roles. They must also control the session namespace, including `search_path`, and prevent
+untrusted objects from shadowing built-in types or routines. Driver metadata queries do not
+pass through the SQL analyzer; permission cards do not protect against a hostile namespace. See
 [SQL permissions and analysis](/v1.6/develop/rdbms#sql-permissions-and-analysis) for supported SQL,
 transaction requirements, and migration guidance.
 
