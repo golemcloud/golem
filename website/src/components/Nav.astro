@@ -11,7 +11,13 @@ const stars = await getGitHubStars();
 <header class="nav">
   <div class="container nav-inner">
     <a href="/" class="brand" aria-label={`${site.brand.name} home`}>
-      <Image src={brandLogo} alt={site.brand.name} class="brand-logo" widths={[120, 240]} sizes="120px" />
+      <Image
+        src={brandLogo}
+        alt={site.brand.name}
+        class="brand-logo"
+        widths={[120, 240]}
+        sizes="120px"
+      />
     </a>
     <nav class="nav-links" aria-label="Primary">
       {navItems.map((item) => <a href={item.href}>{item.label}</a>)}
@@ -134,6 +140,11 @@ const stars = await getGitHubStars();
       display: none;
     }
     .star-count {
+      display: none;
+    }
+  }
+  @media (max-width: 380px) {
+    .nav-cta .icon-btn {
       display: none;
     }
   }

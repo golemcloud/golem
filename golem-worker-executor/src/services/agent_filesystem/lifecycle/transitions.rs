@@ -191,6 +191,18 @@ pub(crate) fn bind_configured_resource_usage_metering<Adapter: SandboxFilesystem
     account: ResourceUsageAccount,
     config: crate::services::golem_config::ResourceUsageMeteringConfig,
 ) -> Result<ReconstructingFilesystem<Adapter>, MeteringBindFailure<Adapter>> {
+    bind_configured_resource_usage_metering_with(filesystem, config, |config| {
+        create_unbound_meter(config, account)
+    })
+}
+
+pub(super) fn bind_configured_resource_usage_metering_with<Adapter: SandboxFilesystemAdapter>(
+    filesystem: CreatedFilesystem<Adapter>,
+    config: crate::services::golem_config::ResourceUsageMeteringConfig,
+    create_meter: impl FnOnce(
+        crate::services::golem_config::ResourceUsageMeteringConfig,
+    ) -> ResourceUsageMeter,
+) -> Result<ReconstructingFilesystem<Adapter>, MeteringBindFailure<Adapter>> {
     let (generation, _) = filesystem.into_parts();
     let mut generation = match Arc::try_unwrap(generation) {
         Ok(generation) => generation,
@@ -205,7 +217,7 @@ pub(crate) fn bind_configured_resource_usage_metering<Adapter: SandboxFilesystem
             });
         }
     };
-    let meter = create_unbound_meter(config, account);
+    let meter = create_meter(config);
     generation.usage_activation = meter.live_activation();
     let generation = Arc::new(generation);
     if config.filesystem {

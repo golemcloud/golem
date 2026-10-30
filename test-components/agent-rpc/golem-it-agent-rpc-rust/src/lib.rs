@@ -12,7 +12,9 @@ use golem_rust::{
 use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod gc_timing;
 mod http_router;
+mod input_gc;
 
 fn encode_single_parameter<T: IntoSchema>(
     value: T,
@@ -906,6 +908,7 @@ pub trait StreamingRpcCaller {
     fn new(name: String) -> Self;
 
     async fn run(&self) -> StreamingRpcReport;
+    async fn run_ephemeral(&self, synchronous: bool) -> Vec<u32>;
     async fn benchmark_producer(
         &self,
         chunk_count: u32,
@@ -956,6 +959,37 @@ struct StreamingRpcCallerImpl {
 impl StreamingRpcCaller for StreamingRpcCallerImpl {
     fn new(name: String) -> Self {
         Self { name }
+    }
+
+    async fn run_ephemeral(&self, synchronous: bool) -> Vec<u32> {
+        let input = agent_stream(vec![2, 7, 13]);
+        let output = if synchronous {
+            let rpc = WasmRpc::new(
+                "EphemeralStreamingRpcTarget",
+                encode_single_parameter(self.name.clone()),
+                None,
+                Vec::new(),
+            );
+            let input = golem_rust::encode_schema_value_async(&SchemaValue::Record {
+                fields: vec![input.to_value()],
+            })
+            .await
+            .unwrap();
+            let result = rpc.invoke_and_await("transform", input, None).unwrap();
+            AgentStream::<u32>::from_value(
+                &golem_rust::decode_schema_value(result.result.unwrap()).unwrap(),
+            )
+            .unwrap()
+        } else {
+            EphemeralStreamingRpcTargetClient::new_phantom(self.name.clone())
+                .transform(input)
+                .await
+                .value
+        };
+        output
+            .collect()
+            .await
+            .expect("failed to collect ephemeral RPC stream")
     }
 
     async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)> {
@@ -1665,6 +1699,11 @@ pub trait CancelTester {
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String);
 
+    /// Activates the RPC target with `get_value`, writes to stdout, then increments the
+    /// counter by 1 with `mode` (`await` or `invoke`), so a hint entry directly
+    /// precedes the increment's `Start`.
+    fn inc_after_stdout(&self, counter_name: String, mode: String);
+
     async fn await_counter(
         &self,
         counter_name: String,
@@ -1908,6 +1947,29 @@ impl CancelTester for CancelTesterImpl {
         let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
         assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
         rpc.invoke_and_await("inc_by", input, None).unwrap();
+    }
+
+    fn inc_after_stdout(&self, counter_name: String, mode: String) {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let no_input = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
+            .expect("failed to encode empty RPC input");
+        rpc.invoke_and_await("get_value", no_input, None).unwrap();
+        println!("incrementing with {mode}");
+        let input = encode_single_parameter(1u64);
+        match mode.as_str() {
+            "await" => {
+                rpc.invoke_and_await("inc_by", input, None).unwrap();
+            }
+            "invoke" => {
+                rpc.invoke("inc_by", input, None).unwrap();
+            }
+            _ => panic!("unknown RPC mode: {mode}"),
+        }
     }
 
     async fn await_counter(

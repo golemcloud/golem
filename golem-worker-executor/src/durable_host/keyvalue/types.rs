@@ -29,10 +29,10 @@ use golem_common::model::oplog::{
 };
 
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, InvocationIdSource,
-    reserve_import_invocation_id, resolve_current_observational_owner,
+    AccessClaimOptions, AccessorContext, CallReplayOutcome, Cancellable, DurableCallSession,
+    InvocationIdSource, import_invocation_id, resolve_current_observational_owner,
 };
-use crate::durable_host::durability::CustomInvocationContext;
+use crate::durable_host::durability::{CustomInvocationContext, TerminalCallError};
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, LiveAuthorizationPermit};
 use crate::preview2::wasi::keyvalue::types::{
@@ -182,8 +182,7 @@ where
                 },
                 HostRequestNoInput {},
             )
-            .await
-            .map_err(wasmtime::Error::from)?;
+            .await?;
 
             if !handle.is_live() {
                 match handle
@@ -321,46 +320,89 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostOutgoingValueWithStore<U>
         accessor: &Accessor<U, Self>,
         rep: Resource<OutgoingValueEntry>,
     ) -> anyhow::Result<()> {
-        let (mut entry, key_value_service) = accessor.with(|mut access| {
+        let mut entry = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::types::outgoing_value", "drop");
-            Ok::<_, anyhow::Error>((
+            Ok::<_, anyhow::Error>(
                 ctx.as_wasi_view()
                     .table()
                     .delete::<OutgoingValueEntry>(rep)?,
-                ctx.state.key_value_service.clone(),
-            ))
+            )
         })?;
 
         if let Some(mut fill) = entry.cache_fill.take()
-            && let Some(mut handle) = fill.handle.take()
+            && let Some(handle) = fill.handle.take()
         {
             let value = entry.body.read().unwrap().clone();
-            let response = 'resp: {
-                if !handle.is_live() {
-                    match handle.replay_access(accessor, accessor.getter()).await? {
-                        CallReplayOutcome::Replayed(response) => break 'resp response,
-                        CallReplayOutcome::Incomplete(live) => handle = live,
-                    }
-                }
-
-                let result = key_value_service
-                    .set(
-                        fill.environment_id,
-                        CACHE_BUCKET.to_string(),
-                        fill.key,
-                        value,
-                    )
-                    .await
-                    .map_err(|err| err.to_string());
-                handle
-                    .complete_access(accessor, accessor.getter(), HostResponseKVUnit { result })
-                    .await?
+            let live = handle.is_live();
+            let activity = accessor.with(|mut access| access.get().tail_work_tracker().activity());
+            let task = CacheFillTask::<Ctx> {
+                handle,
+                fill,
+                value,
+                activity,
+                _phantom: PhantomData,
             };
-
-            if let Err(error) = response.result {
-                tracing::debug!(error, "keyvalue::cache vacancy fill failed");
+            if live {
+                task.run(accessor).await?;
+            } else {
+                accessor.spawn(task);
             }
+        }
+        Ok(())
+    }
+}
+
+struct CacheFillTask<Ctx> {
+    handle: DurableCallSession<P3KeyvalueCacheVacancyFill, Cancellable>,
+    fill: CacheFillState,
+    value: Vec<u8>,
+    activity: TailActivity,
+    _phantom: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx: WorkerCtx, T: 'static> AccessorTask<T, HasSelf<DurableWorkerCtx<Ctx>>>
+    for CacheFillTask<Ctx>
+{
+    async fn run(
+        self,
+        accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> wasmtime::Result<()> {
+        let mut handle = self.handle;
+        let response = 'response: {
+            if !handle.is_live() {
+                match handle
+                    .replay_drop_access(accessor, accessor.getter(), &self.activity)
+                    .await?
+                {
+                    CallReplayOutcome::Replayed(response) => break 'response response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+            let service = accessor.with(|mut access| access.get().state.key_value_service.clone());
+            let result = service
+                .set(
+                    self.fill.environment_id,
+                    CACHE_BUCKET.to_string(),
+                    self.fill.key,
+                    self.value,
+                )
+                .await
+                .map_err(|err| err.to_string());
+            let context = handle.trap_context();
+            handle
+                .complete_context(
+                    &mut AccessorContext::new(accessor, accessor.getter()),
+                    HostResponseKVUnit { result },
+                    None,
+                    None,
+                    false,
+                )
+                .await
+                .map_err(|source| TerminalCallError::new(source, context))?
+        };
+        if let Err(error) = response.result {
+            tracing::debug!(error, "keyvalue::cache vacancy fill failed");
         }
         Ok(())
     }
@@ -432,7 +474,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
             body.write().unwrap().drain(..).collect::<Vec<u8>>()
         };
 
-        let invocation_id = reserve_import_invocation_id(host.get(), observational_owner)?;
+        let invocation_id = import_invocation_id(host.get(), observational_owner)?;
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let activity = host.get().tail_work_tracker().activity();
         host.spawn(IncomingValueConsumeTask::<Ctx>::new(

@@ -418,6 +418,16 @@ The native host adapter still reports that trap to the operation owner. A previo
 lifecycle failure wins instead; a later lifecycle candidate cannot overwrite the selected trap.
 Closing admission during ordinary unload alone elects neither candidate.
 
+Resident unload waits for the current `OwnerToolOperations` registry to become empty only after
+primary runtime destruction, filesystem drainage, final metering and scheduler-permit release,
+and before filesystem deletion and successful unload. This is registry settlement, not a join of
+every supervisor; entity and lane barriers still own physical drainage. `begin_generation` remains
+strict and rejects active operations. `EntityFence::drain` must not wait for the registry because
+its caller can itself hold an operation. The unload deadline observer can report `CleanupFailed`
+while module-owned cleanup continues, and early metering errors can report before the registry
+wait; neither permits successful reconstruction. Startup cleanup without a resident owner has no
+registry barrier.
+
 ### Native bodies
 
 Native tools use the same owner-oplog entity boundary with a retained worker context instead of
@@ -647,6 +657,9 @@ capable call after its caller resumes.
 Owner failure selection is a runtime teardown boundary, like executor loss: unfinished durable
 calls remain incomplete rather than applying guest cancellation or non-cancellable-drop policies.
 This also prevents a pending producer from recording a false EOF while its Store is discarded.
+An attachment write or terminal that the owner fence rejects abandons its call
+(`abandon_if_owner_fenced` in `durable_host/tool/durability.rs`): the fence's `Cancelled` is not
+the call's outcome, so the next generation repairs the `Start` in place.
 
 Typed stream projection requests read admission from its owning Store before receiving durable
 items. Recorded observations replay from the consumer journal; opening a source waits for the

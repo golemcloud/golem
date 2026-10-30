@@ -55,6 +55,28 @@ pub(crate) fn native_host_failure<Ctx: WorkerCtx>(
     context: &DurableWorkerCtx<Ctx>,
     error: anyhow::Error,
 ) -> impl Future<Output = WorkerExecutorError> + Send + 'static + use<Ctx> {
+    native_host_failure_ref(context, &error)
+}
+
+pub(crate) fn native_host_failure_ref<Ctx: WorkerCtx>(
+    context: &DurableWorkerCtx<Ctx>,
+    error: &anyhow::Error,
+) -> impl Future<Output = WorkerExecutorError> + Send + 'static + use<Ctx> {
+    context.entity_body_finalization.begin();
+    native_host_failure_for_operation::<Ctx>(
+        context.entity_tool_operation(),
+        error,
+        InFunctionRetryHost::current_retry_point(context),
+        context.agent_mode(),
+    )
+}
+
+pub(super) fn native_host_failure_for_operation<Ctx: WorkerCtx>(
+    operation: Option<super::operation::OwnerToolOperation>,
+    error: &anyhow::Error,
+    retry_from: golem_common::model::OplogIndex,
+    agent_mode: golem_common::model::agent::AgentMode,
+) -> impl Future<Output = WorkerExecutorError> + Send + 'static + use<Ctx> {
     let infrastructure = error.chain().find_map(|cause| {
         let error = cause.downcast_ref::<WorkerExecutorError>()?;
         (matches!(
@@ -64,14 +86,8 @@ pub(crate) fn native_host_failure<Ctx: WorkerCtx>(
         ) || crate::durable_host::is_tool_attachment_live_admission_rejection(error))
         .then(|| error.clone())
     });
-    let trap = crate::model::TrapType::from_error::<Ctx>(
-        &error,
-        InFunctionRetryHost::current_retry_point(context),
-        context.agent_mode(),
-    );
-    let operation = context.entity_tool_operation();
-    let locally_cancelled = is_entity_cancellation(&error);
-    context.entity_body_finalization.begin();
+    let trap = crate::model::TrapType::from_error::<Ctx>(error, retry_from, agent_mode);
+    let locally_cancelled = is_entity_cancellation(error);
     async move {
         if let Some(error) = infrastructure {
             return error;
@@ -88,9 +104,62 @@ pub(crate) fn native_host_failure<Ctx: WorkerCtx>(
                 kind: InterruptKind::EntityCancellation,
             };
         }
+        if let crate::model::TrapType::Interrupt(kind) = trap {
+            return WorkerExecutorError::Interrupted { kind };
+        }
         trap.as_golem_error("")
             .unwrap_or_else(|| WorkerExecutorError::runtime("native tool invocation interrupted"))
     }
+}
+
+pub(crate) fn native_finalization_failures<Ctx: WorkerCtx>(
+    context: &DurableWorkerCtx<Ctx>,
+    errors: Vec<anyhow::Error>,
+) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send + 'static + use<Ctx> {
+    if !errors.is_empty() {
+        context.entity_body_finalization.begin();
+    }
+    native_finalization_failures_for_operation::<Ctx>(
+        context.entity_tool_operation(),
+        errors,
+        InFunctionRetryHost::current_retry_point(context),
+        context.agent_mode(),
+    )
+}
+
+pub(super) async fn native_finalization_failures_for_operation<Ctx: WorkerCtx>(
+    operation: Option<super::operation::OwnerToolOperation>,
+    errors: Vec<anyhow::Error>,
+    retry_from: golem_common::model::OplogIndex,
+    agent_mode: golem_common::model::agent::AgentMode,
+) -> Result<(), WorkerExecutorError> {
+    let mut result = Ok(());
+    for error in errors {
+        let error = native_host_failure_for_operation::<Ctx>(
+            operation.clone(),
+            &error,
+            retry_from,
+            agent_mode,
+        )
+        .await;
+        let shard_lost = matches!(
+            &result,
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost
+            } | WorkerExecutorError::OplogFenced { .. })
+        );
+        if !shard_lost
+            && (result.is_ok()
+                || matches!(
+                    &error,
+                    WorkerExecutorError::Interrupted { .. }
+                        | WorkerExecutorError::OplogFenced { .. }
+                ))
+        {
+            result = Err(error);
+        }
+    }
+    result
 }
 
 struct HistoricalAttachmentWriteJob<
@@ -223,7 +292,7 @@ impl HistoricalAttachmentRestore {
     async fn finish<Pair, Ctx: WorkerCtx>(
         self,
         context: &mut impl DurableContext<Ctx>,
-        call: Result<DurableCallSession<Pair, Cancellable>, WorkerExecutorError>,
+        call: anyhow::Result<DurableCallSession<Pair, Cancellable>>,
     ) -> Result<(), WorkerExecutorError>
     where
         Pair: golem_common::model::oplog::HostPayloadPair<
@@ -231,6 +300,12 @@ impl HistoricalAttachmentRestore {
                 Resp = HostResponseToolAttachmentWrite,
             >,
     {
+        let call = match call {
+            Ok(call) => Ok(call),
+            Err(error) => Err(context
+                .with_ctx(|ctx| native_host_failure(ctx, error))
+                .await),
+        };
         let result = async {
             let call = call?;
             if call.start_index() != self.descriptor.start || call.is_live() {
@@ -579,6 +654,9 @@ where
         Ok(Some(prepared)) => prepared,
         result => {
             let result = result.map(|_| ());
+            if result.is_err() {
+                abandon_if_owner_fenced(&mut call, &controller)?;
+            }
             let outcome = outcome_for_result(&result, request.length == 0);
             let (_, delivery) = call
                 .complete_deferred(context, HostResponseToolAttachmentWrite { outcome })
@@ -628,7 +706,10 @@ where
                 return complete_resource_exhaustion(context, call, prepared, controller).await;
             }
             Ok(AttachmentWriteAcceptance::Discarded) => Ok(()),
-            Err(error) => Err(error),
+            Err(error) => {
+                abandon_if_owner_fenced(&mut call, &controller)?;
+                Err(error)
+            }
             Ok(AttachmentWriteAcceptance::Accepted(())) => {
                 unreachable!("accepted write owns its End")
             }
@@ -653,7 +734,7 @@ where
             Resp = HostResponseToolAttachmentWrite,
         >,
 {
-    let failed = publication_failure(context, controller, Pair::FQFN);
+    let failed = publication_failure(context, controller.clone(), Pair::FQFN);
     let mut selection = None;
     let interrupt = context.with_ctx(|ctx| ctx.create_interrupt_signal());
     let completing = call.complete_deferred_with_effect(
@@ -680,7 +761,10 @@ where
     }
     let error = match selection.expect("exhaustion acceptance must select an outcome") {
         Ok(None) => exhausted,
-        Err(error) => error,
+        Err(error) => {
+            abandon_if_owner_fenced(&mut call, &controller)?;
+            error
+        }
         Ok(Some(())) => unreachable!("selected exhaustion owns its End"),
     };
     let (_, delivery) = call
@@ -914,7 +998,7 @@ where
     let prepared = writer.prepare_terminal(cause);
     let outcome = match prepared {
         Ok(Ok(prepared)) if call.is_persisted() => {
-            let failed = publication_failure(context, controller, Pair::FQFN);
+            let failed = publication_failure(context, controller.clone(), Pair::FQFN);
             let mut selection = None;
             let interrupt = context.with_ctx(|ctx| ctx.create_interrupt_signal());
             let completing = call.complete_deferred_with_effect(
@@ -954,6 +1038,9 @@ where
         Ok(Err(())) => ToolAttachmentTerminalOutcome::Unchanged,
         Err(error) => ToolAttachmentTerminalOutcome::Rejected(error_to_model(&error)),
     };
+    if matches!(outcome, ToolAttachmentTerminalOutcome::Rejected(_)) {
+        abandon_if_owner_fenced(&mut call, &controller)?;
+    }
     let result = outcome.result().map_err(write_error_from_model);
     let (_, delivery) = call
         .complete_deferred(
@@ -1262,10 +1349,10 @@ pub(super) fn dispose_producer<Ctx: WorkerCtx>(
                         operation.reject_missing_replay_admission(&boundary).await?;
                     }
                     if rejected {
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "tool producer disposal",
-                            "no recorded terminal during completed entity replay",
-                        ));
+                        // Collection need not occur before the original body completes.
+                        // Retire only the resident endpoint; completed replay cannot add a
+                        // terminal, and a recorded refusal must still win above.
+                        return Ok(false);
                     }
                     replay.await_natural_tail_end(None).await?;
                     if replay.has_restorable_tool_attachment_terminal(identity) {
@@ -1548,6 +1635,19 @@ impl<Ctx: WorkerCtx> PublicationFailureContext<Ctx> {
                 let _ = cleanup.await;
             }
         })
+    }
+}
+
+/// An owner fence ends the generation that issued this call, so a rejection it causes is not
+/// the call's outcome. The `Start` stays incomplete and the next generation repairs it in place.
+fn abandon_if_owner_fenced<Pair: golem_common::model::oplog::HostPayloadPair>(
+    call: &mut DurableCallSession<Pair, Cancellable>,
+    controller: &AttachmentController,
+) -> anyhow::Result<()> {
+    if controller.owner_fenced() {
+        Err(call.trap(anyhow::anyhow!("owner generation fenced tool attachment")))
+    } else {
+        Ok(())
     }
 }
 

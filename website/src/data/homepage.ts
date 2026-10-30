@@ -7,9 +7,9 @@
 //   - Fields ending in `Html` are rendered via `set:html`. Use <strong>, <em>, and <code>.
 
 export const meta = {
-  title: "Golem: the durable runtime for AI agents",
+  title: "Golem: the durable runtime for your AI agents",
   description:
-    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Run your agents and their tools on Golem, and serve their artifacts—files, pages, and simple apps—to users. Each agent runs in a lightweight WebAssembly VM. After a crash, node restart, rescaling or long wait, the whole VM resumes mid\u2011function with its memory and files. Tools running entirely on Golem execute exactly once, under permissions agents can't bypass.",
 };
 
 // =============================================================================
@@ -24,11 +24,11 @@ export const hero = {
     label: "Golem 1.6 is out: see what's new",
     href: "/blog/golem-1-6-agents-tools-and-artifacts",
   },
-  heading: "The durable runtime for AI agents",
+  heading: "The durable runtime for your AI agents",
   subhead:
-    "Golem runs AI agents, their tools and their artifacts. Each agent runs in a lightweight WebAssembly VM that resumes mid-function after node restarts, rescaling, long waits and crashes. Tool calls run exactly once, under permissions agents can't bypass.",
+    "Run your agents and their tools on Golem, and serve their artifacts—files, pages, and simple apps—to users. Each agent runs in a lightweight WebAssembly VM. After a crash, node restart, rescaling or long wait, the whole VM resumes mid\u2011function with its memory and files. Tools running entirely on Golem execute exactly once, under permissions agents can't bypass.",
   ctas: {
-    primary: { label: "Start building →", href: "https://learn.golem.cloud/quickstart" },
+    primary: { label: "Get started →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
   },
   artAlt: "",
@@ -66,7 +66,7 @@ export const customerLogos = {
 export const coreVm = {
   eyebrow: "The core of Golem",
   heading: "A lightweight, durable VM with permissions agents can't bypass",
-  lead: "Golem runs every agent and every tool call in its own WebAssembly VM. Every call out of a VM goes through Golem, which enforces your permissions and records external interactions so the VM can resume anywhere.",
+  lead: "Golem runs every agent and each Golem tool call in its own WebAssembly VM. Every call out of a VM goes through Golem, which enforces your permissions and records external interactions so the VM can resume anywhere.",
   alt: "An agent runs on node 1 in its own WebAssembly VM. Its only way out is Golem, which checks every call against your permissions: it allows the call to the Orders API and denies the call to the Admin API. The Orders API result is recorded in the agent's oplog, a log of external interactions stored off the node. After a restart, a crash or an idle wait, Golem restores the agent on node 2. It resumes where it left off, with its memory, call stack, files and environment restored, and the Orders API is not called again: the recorded result is used.",
   vm: { name: "Agent", where: "node 1", sub: "in its own WebAssembly VM" },
   golem: { name: "Golem", sub: "the VM's only way out" },
@@ -92,15 +92,15 @@ export const coreVm = {
   explanations: [
     {
       title: "Lightweight",
-      body: "WebAssembly, not Linux: each VM has its own memory, file system and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in under 1 ms in the best case scenario.",
+      body: "WebAssembly, not Linux: each VM has its own memory, file system and environment, with no guest OS. Code can be tens of kilobytes; a VM starts in as little as 2 ms.",
     },
     {
       title: "Durable",
-      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it's restored where it left off, with its files, without repeating completed calls.",
+      body: "A waiting VM is suspended, using no CPU or memory, for minutes or months. After a crash or node restart it resumes with its memory and files, without repeating completed calls.",
     },
     {
       title: "Secure",
-      body: "A VM reaches its own files, the network, secrets and other VMs only through Golem's permission checks, which no code, including AI-generated code, can bypass.",
+      body: "A VM reaches its own files, the network, secrets and other VMs only through Golem's permission checks, which apply to AI-generated code just as to yours.",
     },
   ],
 };
@@ -173,8 +173,9 @@ function snippets(chapter: string): ChapterSnippets {
 }
 
 export const agentsChapter = {
-  eyebrow: "Agents",
-  heading: "Agents are your own typed code, not prompts",
+  eyebrow: "Run your agents",
+  heading: "Bring an agent or build your own",
+  lead: "Golem runs your agent’s harness—the code that manages model calls, context, and tools—durably. Existing agents in supported languages can run unchanged; Pi is one example.",
   snippets: snippets("agents"),
   // Shown instead of a snippet in languages that lack the feature.
   missing: {
@@ -184,13 +185,13 @@ export const agentsChapter = {
   items: [
     {
       id: "overview",
-      title: "Same guarantees and primitives",
-      body: "Code in TypeScript, Effect, Rust, Scala, MoonBit or Go resumes mid-function with memory and files after a crash.",
+      title: "Whole-VM recovery",
+      body: "After a crash or suspension, the whole VM resumes mid\u2011function: memory, call stack and file system restored.",
     },
     {
       id: "sqlite",
       title: "Per-agent databases",
-      body: "Each agent's durable file system can hold an embedded database such as SQLite: no server to run or connect to.",
+      body: "TypeScript, Effect and Rust agents can keep SQLite in their durable file system: no database server to run or connect to.",
     },
     {
       id: "models",
@@ -200,12 +201,12 @@ export const agentsChapter = {
     {
       id: "team",
       title: "Agents working together",
-      body: "Agents make typed cross-language calls, wait or move on, and discover what other agents and tools offer.",
+      body: "Agents make typed cross-language calls, awaited or not, and discover what other agents and tools offer.",
     },
     {
       id: "waits",
       title: "Awaitable webhooks, timers, schedules",
-      body: "Approval and payment webhooks are promises. Sleeps and scheduled calls fire on time across restarts, at no idle cost.",
+      body: "Agents await approval and payment webhooks. Sleeps and scheduled calls fire on time across restarts, at no idle cost.",
     },
     {
       id: "stream",
@@ -215,68 +216,69 @@ export const agentsChapter = {
     {
       id: "readonly",
       title: "Cached read-only methods",
-      body: "Repeat calls skip loading the agent until a regular method succeeds. Outgoing HTTP and agent calls fail.",
+      body: "Repeat read-only calls are served from a cache, without loading the agent, until a state-changing call succeeds.",
     },
   ] as ChapterItem[],
 };
 
 export const toolsChapter = {
-  eyebrow: "Tools",
-  heading: "Every tool call in its own VM, executed exactly once",
+  eyebrow: "Run their tools",
+  heading: "Tools running on Golem execute exactly once",
+  lead: "Tool functions in your harness run durably with the agent. First-class Golem tools run in separate VMs.",
   snippets: snippets("tools"),
   items: [
     {
       id: "overview",
-      title: "Overview",
+      title: "A fresh VM per Golem tool call",
       body: "Each call's fresh VM can't read agent memory. Recovery reuses recorded results rather than repeating those calls.",
     },
     {
       id: "custom",
-      title: "Tools without a sandbox service",
-      body: "Shell, Git, Node.js, npm and TypeScript are bundled and can use the agent's files. Custom tools use any Golem SDK.",
+      title: "Isolated tools, no sandbox service",
+      body: "Build tools with any Golem SDK. Bundled Shell, Git, Node.js, npm and TypeScript tools use the agent's files.",
     },
     {
       id: "requests",
-      title: "HTTP retries from agents and tools",
+      title: "HTTP and MCP retries from agents and tools",
       body: "Golem retries interrupted requests with an idempotency key it adds; APIs that honor it, like Stripe, act once.",
     },
     {
       id: "permissions",
       title: "Delegated, revocable permissions",
-      body: "One agent lends another and its tools only the orders API for an hour. Revoking it revokes every derived copy.",
+      body: "One agent lends another and its tools only the orders API for an hour. Revoking it revokes all access passed on.",
     },
     {
       id: "middleware",
-      title: "Middleware agent code can't bypass",
-      body: "Hooks can wrap every tool call to reject by argument, hold refunds for human approval, redact, audit and rate-limit.",
+      title: "Middleware that agent code can't bypass",
+      body: "Hooks on every tool call can block bad arguments, hold refunds for human approval, redact, audit and rate-limit.",
     },
     {
       id: "secrets",
       title: "Secrets",
-      body: "Agents pass API keys to tools as opaque handles. Reveals need a grant and are recorded; bindings can forbid them.",
+      body: "Agents pass API keys to tools as opaque handles. Revealing one is permission-checked and recorded.",
     },
     {
       id: "publish",
-      title: "Serve agents and tools over MCP",
-      body: "Typed MCP clients get tool-call guarantees. Grant opt-in immutable releases across environments and accounts.",
+      title: "Serve over MCP, share tool releases",
+      body: "MCP clients can call your agents and tools. Share immutable tool releases with other environments and accounts.",
     },
   ] as ChapterItem[],
 };
 
 export const artifactsChapter = {
-  eyebrow: "Artifacts",
+  eyebrow: "Serve their artifacts",
   heading: "Charts, pages and apps your agents make on request",
   snippets: snippets("artifacts"),
   items: [
     {
       id: "overview",
-      title: "Overview",
-      body: "Asked for a sales graph, a tool writes a PNG and HTML page in agent files. Golem serves both, never half-written.",
+      title: "Charts served from the agent's files",
+      body: "Asked for a sales graph, the agent writes a PNG and HTML page to its files. Golem serves both only when fully written.",
     },
     {
       id: "routes",
       title: "Apps for one user's request, no deploy",
-      body: "A tool saves the model's small app in agent files. Buttons call endpoints running durable code in the agent's own VM.",
+      body: "A tool saves the model's app to the agent's files. Buttons call endpoints running durable code in the agent's own VM.",
     },
     {
       id: "peruser",
@@ -286,12 +288,12 @@ export const artifactsChapter = {
     {
       id: "files",
       title: "Images and PDFs as the reply",
-      body: "An agent can reply with a PNG or PDF it just made: bytes with their MIME type over HTTP, binary content over MCP.",
+      body: "An agent can reply with a PNG or PDF it just made, to a browser over HTTP or a chat assistant over MCP.",
     },
     {
       id: "routers",
       title: "CSV downloads through a router",
-      body: "A router matches path and method, sets status, content type and download headers, and streams the agent's CSV.",
+      body: "A router matches the request's path and method, then streams a CSV from the agent's files as a download.",
     },
     {
       id: "signin",
@@ -301,7 +303,7 @@ export const artifactsChapter = {
     {
       id: "login",
       title: "Only for the person who asked",
-      body: "Sign-in says who asks, not what they may see. The agent records who asked for each chart; others get a 404.",
+      body: "The agent records who requested each chart and checks that identity. Other users, even signed in, get a 404.",
     },
   ] as ChapterItem[],
 };
@@ -387,7 +389,7 @@ export const deployment = {
     {
       visual: "local",
       title: "Local",
-      body: "One binary runs the whole platform on your laptop. Restart it, and your agents are still there.",
+      body: "One binary runs the full platform on your laptop. Restart the server, and your agents are still there.",
     },
     {
       visual: "selfhost",
@@ -397,18 +399,18 @@ export const deployment = {
     {
       visual: "cloud",
       title: "Golem Cloud",
-      body: "Deploy to the managed service and let us run it, with no servers of your own. Free during the Developer Preview.",
+      body: "Managed hosting, free for Preview prototypes. Paid availability and pricing are not yet announced.",
     },
   ],
   sharedLabel: "In every deployment",
   shared: [
     {
       title: "Observability and audit",
-      body: "OpenTelemetry traces and metrics. Each agent's oplog records its external interactions and permission decisions for audit.",
+      body: "OpenTelemetry traces and metrics. Each agent's oplog records its external interactions and permission decisions.",
     },
     {
       title: "Live updates and rollback",
-      body: "Update running agents after a compatibility check. Roll an agent back to an earlier point, or clone it to try another approach.",
+      body: "Update running agents if new code matches their history. Roll an agent back to an earlier point, or clone it to try another approach.",
     },
     {
       title: "Quotas",
@@ -432,7 +434,7 @@ export const faq = {
     {
       q: "Can I keep my agent framework?",
       aHtml:
-        "Yes. A framework shapes the agent loop and usually saves the conversation between turns. It runs inside a Golem agent, which keeps the agent's whole execution durable, in-progress tool calls included, and enforces permissions in the runtime.",
+        "Yes. Pi and other TypeScript agents can run on Golem unmodified. Keep your agent’s control logic and model integrations; Golem provides durable execution and runtime-enforced permissions.",
     },
     {
       q: "How is this different from an actor platform?",
@@ -443,6 +445,11 @@ export const faq = {
       q: "How does it compare with a workflow engine?",
       aHtml:
         "Workflow engines usually ask you to split work into activities they record. In Golem, ordinary code is durable as it runs, with no restructuring, and each agent also gets its own VM, with a durable file system, and runtime-checked permissions.",
+    },
+    {
+      q: "What runs exactly once?",
+      aHtml:
+        "Calls between agents and from agents to tools run exactly once. All agent and tool code takes effect once, file-system changes included. Database transactions through Golem's SDK never apply twice: an interrupted commit is checked against the database, not repeated. An HTTP request cut off by a crash or rescaling is resent with the same idempotency key, so it acts exactly once where the API honors the key, as Stripe does, and at least once otherwise. Database writes outside a transaction are resent the same way.",
     },
     {
       q: "Does showing an artifact need a build or deploy step?",
@@ -462,10 +469,10 @@ export const faq = {
 // =============================================================================
 
 export const finalCta = {
-  heading: "Build your first durable agent",
+  heading: "Run your agent durably for the first time",
   body: "Install one binary and run the platform locally.",
   ctas: {
-    primary: { label: "Start building →", href: "https://learn.golem.cloud/quickstart" },
+    primary: { label: "Get started →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
   },
 };

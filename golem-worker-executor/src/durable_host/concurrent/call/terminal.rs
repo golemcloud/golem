@@ -116,11 +116,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .await?;
             oplog.add(end).await?;
             access
-                .finish_scope_with_commit(
-                    self.retry.function_type().clone(),
-                    self.begin_index(),
-                    forced_commit,
-                )
+                .finish_scope_with_commit(self.retry.function_type().clone(), forced_commit)
                 .await?;
             response
         } else {
@@ -576,8 +572,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         guard: &mut AccessTerminalGuard<P>,
     ) -> Result<(), WorkerExecutorError> {
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
-        let result = access.finish_scope(function_type, begin_index).await;
+        let result = access.finish_scope(function_type).await;
         if result.is_err() {
             // The caller observes this failure; it is not a guest-discarded completion.
             guard.suppress_discard_marker();
@@ -793,32 +788,7 @@ pub(crate) async fn end_durable_function_access<T, D, Ctx>(
     store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     function_type: DurableFunctionType,
-    begin_index: OplogIndex,
     forced_commit: bool,
-) -> Result<(), WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    end_durable_function_access_with_span(
-        store,
-        get_ctx,
-        function_type,
-        begin_index,
-        forced_commit,
-        None,
-    )
-    .await
-}
-
-pub(crate) async fn end_durable_function_access_with_span<T, D, Ctx>(
-    store: &(impl DurableAccess<T, D> + ?Sized),
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    function_type: DurableFunctionType,
-    _begin_index: OplogIndex,
-    forced_commit: bool,
-    _span_finished: Option<golem_common::model::oplog::SpanFinished>,
 ) -> Result<(), WorkerExecutorError>
 where
     T: 'static,
@@ -850,6 +820,37 @@ where
         }
     }
 
+    Ok(())
+}
+
+/// Records that the guest released a host resource whose only durable content is its span
+/// `span_id`. The release is not a durable call: it reserves no invocation id and claims nothing
+/// in replay, so a guest may release the resource at another point when it replays (a garbage
+/// collector, a heap restored from a snapshot). A live Store appends a `SpanClosed` hint when the
+/// `Start` at `resource_start_index` recorded the span; a replaying or snapshotting Store and a
+/// resource without a recorded opening append nothing. The caller finishes the span in memory.
+pub(crate) async fn record_released_resource_span<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    resource_start_index: Option<OplogIndex>,
+    span_id: &SpanId,
+) -> Result<(), WorkerExecutorError> {
+    if resource_start_index.is_some()
+        && ctx.state.is_live()
+        && !ctx.state.durability_is_suppressed()
+    {
+        let finished_at = Timestamp::now_utc();
+        let entry = OplogEntry::SpanClosed {
+            timestamp: finished_at,
+            entity_parent_start_index: ctx.entity_parent_start_index(),
+            resource_start_index,
+            span_finished: golem_common::model::oplog::SpanFinished {
+                span_id: span_id.clone(),
+                finished_at,
+                outcome: golem_common::model::oplog::SpanOutcome::Completed,
+            },
+        };
+        ctx.state.oplog.add(entry).await?;
+    }
     Ok(())
 }
 

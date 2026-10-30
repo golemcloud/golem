@@ -279,13 +279,13 @@ async fn tool_trap_disposal_preserves_a_selected_pending_terminal() {
 #[test_r::timeout("10s")]
 async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
     use super::super::tests::InMemoryOplog;
-    use golem_common::model::oplog::HostRequestGolemRpcResource;
-    use golem_common::model::oplog::host_functions::GolemRpcWasmRpcDrop;
+    use golem_common::model::oplog::HostRequestGolemContextSpanResource;
+    use golem_common::model::oplog::host_functions::GolemContextSpanFinish;
 
     let recorded_invocation_id = DurableInvocationId::new(OplogIndex::from_u64(1), 7);
     for parent_start_index in [None, Some(OplogIndex::from_u64(19))] {
-        let request = HostRequestGolemRpcResource {
-            creation_index: OplogIndex::from_u64(7),
+        let request = HostRequestGolemContextSpanResource {
+            creation_index: Some(OplogIndex::from_u64(7)),
         };
         let oplog = Arc::new(InMemoryOplog::new());
         oplog
@@ -298,7 +298,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
             .add(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index,
-                function_name: GolemRpcWasmRpcDrop::HOST_FUNCTION_NAME,
+                function_name: GolemContextSpanFinish::HOST_FUNCTION_NAME,
                 invocation_id: Some(recorded_invocation_id),
                 observational_owner: None,
                 request: Some(OplogPayload::Inline(Box::new(request.clone().into()))),
@@ -336,33 +336,30 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
         )
         .await
         .unwrap();
-        let begun = |invocation_id| BegunCall::<GolemRpcWasmRpcDrop, NotCancellable> {
-            boundary: DurableCallBoundary::from_begin_index(OplogIndex::from_u64(1)),
-            execution_scope: BegunCallExecutionScope {
-                entity_parent_start_index: parent_start_index,
-                parent_start_index,
-                observational_owner: None,
-                invocation_id: Some(invocation_id),
-            },
-            retry: InFunctionRetryController::new(
-                DurableFunctionType::ReadLocal,
-                DurableExecutionState {
-                    is_live: false,
-                    snapshotting_mode: false,
-                    max_in_function_retry_delay: std::time::Duration::ZERO,
+        let claim = |invocation_id| {
+            DurableCallSession::<GolemContextSpanFinish, NotCancellable>::replay_start_claim(
+                &AccessClaimOptions::default(),
+                &BegunCallExecutionScope {
+                    entity_parent_start_index: parent_start_index,
+                    parent_start_index,
+                    observational_owner: None,
+                    invocation_id: Some(invocation_id),
+                    logical_key_position: None,
                 },
-                GolemRpcWasmRpcDrop::FQFN,
-            ),
-            requires_agent_authority: false,
-            agent_auth_ctx: None,
-            drop_sink: None,
-            cleanup_sink: None,
-            _phantom: PhantomData,
+                &InFunctionRetryController::new(
+                    DurableFunctionType::ReadLocal,
+                    DurableExecutionState {
+                        is_live: false,
+                        snapshotting_mode: false,
+                        max_in_function_retry_delay: std::time::Duration::ZERO,
+                    },
+                    GolemContextSpanFinish::FQFN,
+                ),
+            )
+            .unwrap()
         };
         let wrong = replay_state
-            .claim_start_or_replay_end(
-                begun(DurableInvocationId::new(OplogIndex::from_u64(1), 8)).replay_claim(),
-            )
+            .claim_start_or_replay_end(claim(DurableInvocationId::new(OplogIndex::from_u64(1), 8)))
             .await;
         // A top-level Start with another invocation id belongs to a concurrent sibling call,
         // so the claim retains it and goes live; under an unknown parent it is divergence.
@@ -372,7 +369,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
             assert!(wrong.is_err());
         }
         let claimed = replay_state
-            .claim_start_or_replay_end(begun(recorded_invocation_id).replay_claim())
+            .claim_start_or_replay_end(claim(recorded_invocation_id))
             .await
             .expect("a wrong invocation id must leave the recorded operation available");
         let ReplayStartClaimOutcome::Claimed { handle, .. } = claimed else {

@@ -13,15 +13,13 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::call_coordinator::{
-    DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
-};
+use crate::durable_host::call_coordinator::{DurableCallAdmission, DurableCallCoordinator};
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::golem::durability::durability;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::oplog::{DurableFunctionType, HostResponse, OplogIndex};
+use golem_common::model::oplog::{DurableFunctionType, HostResponse};
 use golem_common::model::{RetryProperties, Timestamp};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -50,7 +48,9 @@ pub use errors::{
     mark_durable_call_trap_context, semantic_trap_retry_override_error,
 };
 pub(crate) use interrupt::InterruptSources;
-pub(crate) use invocation_id::reserve_invocation_id;
+pub(crate) use invocation_id::{
+    GuestImportIdentity, GuestImportNumbering, ImportNumbering, UnidentifiedReason,
+};
 pub use retry::{
     AsyncRetryDecision, DurableExecutionState, InFunctionRetryController, InFunctionRetryHost,
     InFunctionRetryState, InternalRetryResult, TaskRetryContext, count_oplog_errors_for,
@@ -94,33 +94,16 @@ pub trait DurabilityHost: InFunctionRetryHost {
         &mut self,
         function_type: &DurableFunctionType,
         host_function: &str,
-    ) -> Result<OplogIndex, WorkerExecutorError>;
-
-    async fn begin_durable_function_with_span(
-        &mut self,
-        function_type: &DurableFunctionType,
-        host_function: &str,
-        span_started: golem_common::model::oplog::SpanStarted,
-    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError>;
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Marks the end of a durable function
     ///
     /// This is a pair of `begin_durable_function` and should be called after the durable function
-    /// has performed and persisted or replayed its work. The `begin_index` should be the index
-    /// returned by `begin_durable_function`.
+    /// has performed and persisted or replayed its work.
     async fn end_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
-    ) -> Result<(), WorkerExecutorError>;
-
-    async fn end_durable_function_with_span(
-        &mut self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-        forced_commit: bool,
-        span_finished: golem_common::model::oplog::SpanFinished,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Classifies a failed host operation and delegates transient failures to the worker's retry
@@ -233,64 +216,23 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
         host_function: &str,
-    ) -> Result<OplogIndex, WorkerExecutorError> {
-        let invocation_id = self.direct_call_invocation_id(function_type)?;
+    ) -> Result<(), WorkerExecutorError> {
+        let invocation_id = self.direct_call_invocation_id()?;
         DurableCallCoordinator::new(self)
             .admit(
                 DurableCallAdmission::new(function_type, host_function)
                     .with_invocation_id(invocation_id),
             )
             .await
-            .map(DurableCallBoundary::begin_index)
-    }
-
-    async fn begin_durable_function_with_span(
-        &mut self,
-        function_type: &DurableFunctionType,
-        host_function: &str,
-        span_started: golem_common::model::oplog::SpanStarted,
-    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
-        let invocation_id = self.direct_call_invocation_id(function_type)?;
-        DurableCallCoordinator::new(self)
-            .admit_with_span(
-                DurableCallAdmission::new(function_type, host_function)
-                    .with_invocation_id(invocation_id),
-                span_started,
-            )
-            .await
-            .map(|(boundary, span)| (boundary.begin_index(), span))
     }
 
     async fn end_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         DurableCallCoordinator::new(self)
-            .finish(
-                function_type,
-                DurableCallBoundary::from_begin_index(begin_index),
-                forced_commit,
-                None,
-            )
-            .await
-    }
-
-    async fn end_durable_function_with_span(
-        &mut self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-        forced_commit: bool,
-        span_finished: golem_common::model::oplog::SpanFinished,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableCallCoordinator::new(self)
-            .finish(
-                function_type,
-                DurableCallBoundary::from_begin_index(begin_index),
-                forced_commit,
-                Some(span_finished),
-            )
+            .finish(function_type, forced_commit)
             .await
     }
 

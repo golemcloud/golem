@@ -99,11 +99,15 @@ honours the request's idempotency key.
 #13 CompletionDiscarded { start_index: 11 } (h)   guest dropped the future without reading it
 ```
 
-Replay: classification `Undelivered`; the future is parked and the guest's deterministic drop
-happens at the same point, nothing is delivered. If the drop happened before host completion the
-entry is `Cancelled { start_index: 11, partial }` instead — guest-initiated and markerless:
-`partial: Some` classifies as `Delivered`/`Immediate` (the guest saw the partial value),
-`partial: None` as `Undelivered`.
+Replay: classification `Undelivered`; accessor delivery stays pending, so no value reaches the
+guest. Resource disposal need not occur at the same point: GC or snapshot restoration can move
+the drop. Runtime-owned deferred resolution preserves the recorded terminal without blocking
+the guest on intervening history. If the drop happened before host completion the entry is
+`Cancelled { start_index: 11, partial }` instead — guest-initiated and markerless:
+`partial: Some` classifies as `Delivered`/`Immediate` and replays the recorded partial response
+without a delivery-marker gate; `partial: None` is `Undelivered`. Partial completion is not a
+license to change actual guest observations. A missing terminal waits for the natural
+replay-to-live transition before live disposal under the original `Start`.
 
 ## 5. One invocation, end to end
 
@@ -118,7 +122,7 @@ entry is `Cancelled { start_index: 11, partial }` instead — guest-initiated an
 
 Crash before `#20` commits: the caller was never told "accepted"; it retries with the same key.
 Crash after `#20`, before `#21`: reconstruction folds status from the oplog, sees the pending
-invocation, and runs it. Crash between `#21` and `#41`: `resume_replay` replays the recorded prefix
+invocation, and runs it. Crash between `#21` and `#41`: `replay` replays the recorded prefix
 of this invocation, then the guest continues live from the tail. Crash after `#41`: a repeated
 call with key `K` hits `lookup_invocation_result` and returns `R` without touching the guest.
 Test: `tests/api/mod.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart`.
@@ -175,9 +179,14 @@ Synchronous local denials remain spanless and persist the denial decision in the
 Asynchronous validation and activation denials use their existing short durable operation with
 an embedded opening and failed/denied close; their baked future owns no later cleanup.
 
-Resource and guest-created spans can outlive their opening call. Finish, drop, and successful
+Resource and guest-created spans can outlive their opening call. Explicit finish and successful
 attribute mutation are short ordinary local operations whose terminals carry the close or
-applied updates; they do not hold the opening call for the span lifetime.
+applied updates; they do not hold the opening call for the span lifetime. A span-only resource
+drop instead closes resident state without a durable call or replay claim. Only a live Store
+with a recorded opening appends a `SpanClosed` hint naming that opening `Start`; replay does
+not claim the hint. HTTP response disposal avoids a second close when the send terminal
+already closed the span. Drops that terminate real durable effects retain their terminals and
+defer replay waits outside the guest thread.
 
 ## 7. Individual call repair keeps the RPC key
 
@@ -239,14 +248,14 @@ decides again. Now the head is a selected snapshot-assisted update, so the basel
 `plan_start` gives one `StartPlan`: restore the filesystem snapshot `p-…`, then load the
 application snapshot of `#40` and skip `1..=#40`. `materialize` restores the tree; `prepare_instance`
 then runs `try_load_snapshot` (the load hook runs in snapshotting mode: no oplog append or
-consume) and `resume_replay` replays the tail against the r2 component with r1's metadata. At
+consume) and `replay` replays the tail against the r2 component with r1's metadata. At
 `ReplayFinished`, `update_state_to_new_component_revision(r2)` applies the initial-file rule from
 r1 to r2, and `SuccessfulUpdate` is appended. The fold promotes `S` to `authoritative_snapshot`
 with its name and keeps `component_revision_for_replay = r1`, so a later start from `S` restores
 `p-…`, replays the tail with r1's metadata and applies the rule at the replayed `#90`.
 
 Without a usable record, `#71` is a plain `Automatic` strategy: the baseline is the
-authoritative baseline (or `INITIAL`), and `resume_replay` replays all the remaining old history
+authoritative baseline (or `INITIAL`), and `replay` replays all the remaining old history
 against r2. A failure of an attempt goes through `start_outcome::decide`, which builds the
 `FailedUpdate` (with `UPDATE_SNAPSHOT_INCOMPATIBLE`, `UPDATE_SNAPSHOT_UNAVAILABLE` or
 `UPDATE_REPLAY_FAILED` among others) and returns `RetryDecision::Immediate`, so the outer loop
@@ -280,7 +289,7 @@ preparation. A manual-update snapshot load failure is terminal and retains its c
 In every case the `Store` is discarded. Infrastructure-owned `RecoveryRequired` follows the same
 physical path: it records a Recovery error, retains the accepted invocation, and schedules a new
 incarnation without touching semantic retry state. The next incarnation runs `prepare_instance` →
-`resume_replay` from the snapshot baseline to the tail and publishes Live. The hints annotate
+`replay` from the snapshot baseline to the tail and publishes Live. The hints annotate
 *why* the previous incarnation stopped and drive status/scheduling (`Interrupted` stays
 interrupted until resumed; `Suspend` resumes on demand; `Restart` recovers automatically), but the
 reconstruction mechanism is identical.

@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::tail_work::TailActivity;
+use wasmtime::component::AccessorTask;
+
 impl DropPolicy for Cancellable {
     const CANCEL_ON_TOOL_TRAP: bool = true;
 
@@ -103,7 +106,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     ) -> DroppedCall {
         DroppedCall {
             start_idx: self.start_idx,
-            begin_index: self.begin_index(),
             function_type: self.retry.function_type().clone(),
             request_upload: self.request_upload.clone(),
             entity_admission: self.entity_admission,
@@ -161,7 +163,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .append_cancelled_with_oplog(oplog, partial_payload)
                     .await?;
                 DurableCallCoordinator::new(ctx)
-                    .finish(self.retry.function_type(), self.boundary, false, None)
+                    .finish(self.retry.function_type(), false)
                     .await?;
             }
         } else {
@@ -172,7 +174,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             let resolution = ctx.state.replay_state.await_resolution(replay).await?;
             expect_cancelled_resolution(&resolution)?;
             DurableCallCoordinator::new(ctx)
-                .finish(self.retry.function_type(), self.boundary, false, None)
+                .finish(self.retry.function_type(), false)
                 .await?;
         }
         Ok(())
@@ -214,7 +216,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.ensure_accessor_terminal_supported("cancel_access")?;
         self.finished = true;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         if self.is_live {
             if self.persisted {
                 let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
@@ -224,8 +225,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     guard.disarm();
                     return Err(err);
                 }
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 guard.disarm();
             }
         } else {
@@ -237,8 +237,60 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .expect("cancel_access() in replay called on a live handle");
             let resolution = replay_state.await_resolution(replay).await?;
             expect_cancelled_resolution(&resolution)?;
-            end_durable_function_access(store, get_ctx, function_type, begin_index, false).await?;
+            end_durable_function_access(store, get_ctx, function_type, false).await?;
         }
+        Ok(())
+    }
+
+    /// Replay counterpart of [`Self::cancel_access`] for a guest drop whose position is not part
+    /// of the recorded history: a garbage-collected guest, or a heap restored from a snapshot, may
+    /// drop the handle before or after the point where the recorded run dropped it. Awaiting the
+    /// recorded `Cancelled` on the guest thread would park the guest when the drop runs earlier
+    /// than recorded and an entry only the guest can consume lies between them, or when the
+    /// recorded `Cancelled` belongs to a later invocation. A spawned task awaits the resolution
+    /// instead and fails the Store if the call did not end as `Cancelled`. When the recorded run
+    /// never cancelled the call, the task waits for the end of replay and records the
+    /// cancellation live, as a live drop does.
+    pub async fn cancel_access_deferred<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<(), TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        debug_assert!(
+            !self.is_live,
+            "cancel_access_deferred() called on a live handle"
+        );
+        let context = self.trap_context();
+        if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
+            self.abandon_for_trap();
+            return Err(err);
+        }
+        self.ensure_accessor_terminal_supported("cancel_access_deferred")
+            .map_err(|source| TerminalCallError::new(source, context))?;
+        self.finished = true;
+        let replay = self
+            .replay
+            .take()
+            .expect("cancel_access_deferred() called on a live handle");
+        let (replay_state, activity) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.replay_state.clone(),
+                ctx.tail_work_tracker().activity(),
+            )
+        });
+        store.spawn(ReplayCancelWaiter {
+            replay_state,
+            replay,
+            call: self.dropped_call_snapshot(None),
+            get_ctx,
+            activity,
+        });
         Ok(())
     }
 
@@ -271,6 +323,92 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             None,
         );
         guard.wait_terminal().await
+    }
+}
+
+/// Awaits the recorded `Cancelled` of a replayed call that the guest dropped, off the guest
+/// thread. See [`DurableCallSession::cancel_access_deferred`].
+struct ReplayCancelWaiter<T: 'static, Ctx: WorkerCtx> {
+    replay_state: ReplayState,
+    replay: ReplayCallHandle,
+    /// Records the cancellation live when the recorded run never cancelled the call.
+    call: DroppedCall,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    activity: TailActivity,
+}
+
+impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx> AccessorTask<T, D>
+    for ReplayCancelWaiter<T, Ctx>
+{
+    async fn run(self, store: &Accessor<T, D>) -> wasmtime::Result<()> {
+        let context = self.call.trap_context;
+        self.finish(store)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context).into())
+    }
+}
+
+impl<T: 'static, Ctx: WorkerCtx> ReplayCancelWaiter<T, Ctx> {
+    async fn finish<D: HasData + ?Sized>(
+        self,
+        store: &Accessor<T, D>,
+    ) -> Result<(), WorkerExecutorError> {
+        let Self {
+            replay_state,
+            replay,
+            mut call,
+            get_ctx,
+            activity,
+        } = self;
+        let outcome = replay_state
+            .await_resolution_outcome_for_drop(replay, Some(&activity))
+            .await?;
+        match outcome {
+            ResolutionOutcome::Resolved(resolution) => {
+                expect_cancelled_resolution(&resolution)?;
+            }
+            ResolutionOutcome::Incomplete => {
+                let (live, rejected, oplog) = store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    (
+                        ctx.is_live(),
+                        ctx.rejects_live_continuation_at_replay_tail(),
+                        ctx.state.oplog.clone(),
+                    )
+                });
+                if !live {
+                    if rejected {
+                        // This check runs only after the shared cursor reaches its tail. A
+                        // completed entity can dispose its Store earlier, cancelling this
+                        // parked waiter; it is not a fence that keeps that Store alive.
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "Cancelled for a dropped future",
+                            format!(
+                                "no recorded cancellation for Start {} during completed entity replay",
+                                call.start_idx()
+                            ),
+                        ));
+                    }
+                    continue_live_at_natural_tail_end_access(
+                        store,
+                        get_ctx,
+                        &replay_state,
+                        &activity,
+                        "dropped future cancellation",
+                        None,
+                    )
+                    .await?;
+                }
+                call.live_call_permit = Some(store.with(|mut access| {
+                    LiveCallPermit::new(get_ctx(access.data_mut()).state.live_host_call_counter())
+                }));
+                call.wait_request_upload().await?;
+                call.append_cancelled_with_oplog(oplog, None).await?;
+            }
+        }
+        end_durable_function_access(store, get_ctx, call.function_type.clone(), false).await?;
+        drop(activity);
+        Ok(())
     }
 }
 

@@ -28,6 +28,24 @@ pub(in crate::durable_host::replay_state) fn recovery_metadata_floor(
 }
 
 impl ReplayState {
+    /// Installs an actor-FIFO status snapshot obtained without holding a cursor lock.
+    pub(crate) async fn install_entity_replay_progress(
+        &self,
+        status: &golem_common::model::AgentStatusRecord,
+        horizon: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if status.oplog_idx < horizon {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "entity replay metadata covering the committed replay horizon",
+                format!("status {} precedes horizon {horizon}", status.oplog_idx),
+            ));
+        }
+        let mut state = self.cursor.state.lock().await;
+        state.entity_replay_progress = status.entity_replay_progress.clone();
+        state.entity_replay_horizon = status.oplog_idx;
+        Ok(())
+    }
+
     pub(crate) async fn new_for_owner(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -40,7 +58,7 @@ impl ReplayState {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
         let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
-        let (completion_markers, stream_observations, transaction_markers) =
+        let (completion_markers, stream_observations, transaction_markers, start_invocation_ids) =
             Self::scan_completion_markers(
                 &oplog,
                 metadata_floor,
@@ -65,8 +83,10 @@ impl ReplayState {
             wallet,
             owner_tool_operations,
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
+            delivery_in_progress: AtomicBool::new(false),
             delivery_failure: std::sync::Mutex::new(None),
             stream_observations: std::sync::Mutex::new(stream_observations),
+            start_invocation_ids: std::sync::Mutex::new(start_invocation_ids),
             position: PublishedPosition {
                 last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
                 last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -78,6 +98,11 @@ impl ReplayState {
                 skipped_regions,
                 next_skipped_region,
                 initial_snapshot_skip_end,
+                entity_replay_progress: Default::default(),
+                entity_replay_horizon: OplogIndex::NONE,
+                entity_start_routes: HashMap::new(),
+                entity_route_members: HashMap::new(),
+                retained_entity_counts: HashMap::new(),
                 skip_hints_after_delivery: false,
                 replay_buffer: VecDeque::new(),
                 pending_fork_starts: HashSet::new(),
@@ -131,13 +156,15 @@ impl ReplayState {
             CompletionMarkers,
             StreamObservationPositions,
             TransactionMarkers,
+            StartsByInvocationId,
         ),
         WorkerExecutorError,
     > {
         const CHUNK_SIZE: u64 = 1024;
-        let mut markers = HashMap::new();
-        let mut stream_observations = HashMap::new();
+        let mut markers = CompletionMarkers::default();
+        let mut stream_observations = StreamObservationPositions::new();
         let mut transaction_markers = TransactionMarkers::new();
+        let mut start_invocation_ids = StartsByInvocationId::new();
         let mut next = from;
         while next <= to {
             let available = u64::from(to) - u64::from(next) + 1;
@@ -190,14 +217,26 @@ impl ReplayState {
                         }
                         None
                     }
-                    OplogEntry::Start {
-                        function_name,
-                        parent_start_index,
-                        observational_owner,
-                        invocation_id,
-                        request,
-                        ..
-                    } => {
+                    entry @ OplogEntry::Start { .. } => {
+                        let recorded = RecordedStart::of(&entry)
+                            .expect("a Start entry has a recorded identity");
+                        let OplogEntry::Start {
+                            function_name,
+                            parent_start_index,
+                            observational_owner,
+                            invocation_id,
+                            request,
+                            ..
+                        } = entry
+                        else {
+                            unreachable!("matched a Start entry");
+                        };
+                        if let Some(invocation_id) = invocation_id {
+                            start_invocation_ids
+                                .entry(invocation_id)
+                                .or_default()
+                                .insert(marker_idx, recorded);
+                        }
                         let attachment_write = matches!(
                             function_name,
                             HostFunctionName::GolemToolOutputWrite
@@ -456,7 +495,12 @@ impl ReplayState {
                 WorkerExecutorError::runtime(format!("invalid attachment history: {error:?}"))
             })?;
         attachments.index_logical_observations();
-        Ok((markers, stream_observations, transaction_markers))
+        Ok((
+            markers,
+            stream_observations,
+            transaction_markers,
+            start_invocation_ids,
+        ))
     }
 
     pub(crate) fn transaction_marker(
@@ -546,8 +590,12 @@ impl ReplayState {
                         .completion_markers
                         .lock()
                         .unwrap()
-                        .retain(|_, marker| marker.index() <= new_target);
+                        .truncate_after(new_target);
                     cursor.stream_observations.lock().unwrap().retain(|index, _| *index <= new_target);
+                    cursor.start_invocation_ids.lock().unwrap().retain(|_, starts| {
+                        starts.retain(|index, _| *index <= new_target);
+                        !starts.is_empty()
+                    });
                     cursor.transaction_markers.lock().unwrap().retain(|_, entries| {
                         entries.retain(|index, _| *index <= new_target);
                         !entries.is_empty()
@@ -557,7 +605,7 @@ impl ReplayState {
                 }
                 std::cmp::Ordering::Greater => {
                     let mut attachments = cursor.tool_attachment_reconstruction.lock().unwrap().clone();
-                    let (additions, stream_observations, transaction_markers) = Self::scan_completion_markers(
+                    let (additions, stream_observations, transaction_markers, start_invocation_ids) = Self::scan_completion_markers(
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
@@ -567,7 +615,7 @@ impl ReplayState {
                     .await?;
                     if !additions.is_empty() {
                         let mut markers = cursor.completion_markers.lock().unwrap();
-                        for (start_index, marker) in &additions {
+                        for (start_index, marker) in additions.iter() {
                             // Rediscovering the exact marker already in the map (recorded live by
                             // this instance before the target
                             // grew over it) is idempotent; only a *different* marker for the same
@@ -584,9 +632,17 @@ impl ReplayState {
                                 )));
                             }
                         }
-                        markers.extend(additions);
+                        for (start_index, marker) in additions.by_start {
+                            markers.insert(start_index, marker);
+                        }
                     }
                     cursor.stream_observations.lock().unwrap().extend(stream_observations);
+                    {
+                        let mut current = cursor.start_invocation_ids.lock().unwrap();
+                        for (invocation_id, starts) in start_invocation_ids {
+                            current.entry(invocation_id).or_default().extend(starts);
+                        }
+                    }
                     {
                         let mut current = cursor.transaction_markers.lock().unwrap();
                         for (owner, entries) in transaction_markers {

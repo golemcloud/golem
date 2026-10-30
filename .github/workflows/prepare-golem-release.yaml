@@ -94,8 +94,24 @@ jobs:
             if [[ "$GITHUB_REF_NAME" == *-* ]]; then
               prerelease=true
             fi
+            # Release PR heads are squash-merged, so earlier release tags need not be ancestors.
+            previous_tag=$(
+              gh api --paginate repos/golemcloud/golem/releases |
+                jq -rs --arg current "${GITHUB_REF_NAME#v}" '
+                  ($current | split("-")[0] | split(".") | map(tonumber)) as $current |
+                  [ .[][] |
+                    select(.draft == false and .prerelease == false) |
+                    .tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) |
+                    {tag: ., version: (ltrimstr("v") | split(".") | map(tonumber))} |
+                    select(.version < $current)
+                  ] | max_by(.version) | .tag // empty
+                '
+            )
+            notes_file=$(mktemp)
+            trap 'rm -f "$notes_file"' EXIT
+            node .github/scripts/release-notes.mjs "$GITHUB_REF_NAME" "$previous_tag" > "$notes_file"
             gh release create "$GITHUB_REF_NAME" --repo golemcloud/golem \
-              --verify-tag --draft --prerelease="$prerelease" --title "$GITHUB_REF_NAME" --generate-notes
+              --verify-tag --draft --latest=false --prerelease="$prerelease" --title "$GITHUB_REF_NAME" --notes-file "$notes_file"
           fi
       - name: Publish built-ins and attach the verified manifest
         shell: bash

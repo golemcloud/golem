@@ -29,6 +29,31 @@ use super::{
     validate_declared_tool_result,
 };
 
+async fn replay_disposal_termination<T>(
+    replay: crate::durable_host::replay_state::ReplayState,
+    operation: operation::OwnerToolOperation,
+    body: impl Future<Output = wasmtime::Result<T>>,
+) -> wasmtime::Result<T> {
+    let result = tokio::select! {
+        biased;
+        error = replay.await_disposal_admission_refusal(operation.clone()) => {
+            return Err(wasmtime::Error::from_anyhow(error.into()));
+        }
+        result = body => result,
+    };
+    if result.is_ok()
+        && let Some(refusal) = replay
+            .disposal_admission_refusal(&operation)
+            .await
+            .map_err(|error| wasmtime::Error::from_anyhow(error.into()))?
+    {
+        return Err(wasmtime::Error::from_anyhow(
+            operation.reproduce_admission_refusal(refusal).await.into(),
+        ));
+    }
+    result
+}
+
 impl<Ctx: WorkerCtx> EntityInvocationBody<Ctx, HostResponseEntityInvocation> for ToolSidecarBody {
     fn invoke<'a>(
         self,
@@ -244,6 +269,8 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     let principal = principal.into();
     let parent = store.data().durable_ctx().owner_invocation_id()?;
     let instance_pre = instance.instance_pre(&store);
+    let replay = store.data().durable_ctx().state.replay_state.clone();
+    let replay_operation = operation.clone();
     let result = match position.layer() {
         golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => {
             let indices =
@@ -258,8 +285,10 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 ))
             })?;
             run_guest_call_settled(&mut store, async move |accessor| {
-                let result = guest
-                    .call_invoke(
+                let result = replay_disposal_termination(
+                    replay,
+                    replay_operation,
+                    guest.call_invoke(
                         accessor,
                         tool_name,
                         command_path,
@@ -268,8 +297,9 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         stdout,
                         stderr,
                         principal,
-                    )
-                    .await?;
+                    ),
+                )
+                .await?;
                 materialize_guest_tool_response(
                     accessor,
                     result,
@@ -319,8 +349,10 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 ))
             })?;
             run_guest_call_settled(&mut store, async move |accessor| {
-                let result = guest
-                    .call_invoke_tool_middleware(
+                let result = replay_disposal_termination(
+                    replay,
+                    replay_operation,
+                    guest.call_invoke_tool_middleware(
                         accessor,
                         middleware_name,
                         tool_name,
@@ -333,8 +365,9 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         stderr,
                         principal,
                         wrapped,
-                    )
-                    .await;
+                    ),
+                )
+                .await;
                 revoke.revoke();
                 materialize_guest_tool_response(
                     accessor,
@@ -417,7 +450,9 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     if !matches!(&result, Ok(Ok(_))) {
         durability::abort_producer_disposals(store.data_mut().durable_ctx_mut()).await;
     }
-    let mut parent_end = prepare_tool_parent_end(&mut store, parent).await;
+    let errors = prepare_tool_parent_end(&mut store, parent).await;
+    let mut parent_end =
+        durability::native_finalization_failures(store.data().durable_ctx(), errors).await;
     if matches!(&result, Ok(Ok(_))) && finish.is_ok() && parent_end.is_ok() {
         parent_end = store
             .as_context_mut()
@@ -433,6 +468,15 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
     }
     drop(cancellation_epoch);
+    if let Err(
+        error @ (WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost,
+        }
+        | WorkerExecutorError::OplogFenced { .. }),
+    ) = &parent_end
+    {
+        return Err(error.clone());
+    }
     if operation.has_pending_live_admission_rejection().await {
         for error in [finish.as_ref().err(), parent_end.as_ref().err()]
             .into_iter()

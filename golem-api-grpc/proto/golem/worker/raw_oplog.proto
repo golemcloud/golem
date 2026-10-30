@@ -79,6 +79,7 @@ message RawOplogEntry {
     RawSnapshotConfirmedParameters snapshot_confirmed = 66;
     RawToolAttachmentReadParameters tool_attachment_read = 67;
     RawToolAttachmentControlParameters tool_attachment_control = 68;
+    RawSpanClosedParameters span_closed = 69;
   }
 }
 
@@ -407,6 +408,11 @@ message RawSnapshotConfirmedParameters {
   string filesystem_snapshot = 1;
 }
 
+message RawSpanClosedParameters {
+  optional uint64 resource_start_index = 1;
+  RawSpanFinished span_finished = 2;
+}
+
 message RawOplogProcessorCheckpointParameters {
   golem.component.EnvironmentPluginGrantId plugin_grant_id = 1;
   AgentId target_agent_id = 2;
@@ -499,6 +505,8 @@ message RawCardDerivedParameters {
   google.protobuf.Timestamp timestamp = 1;
   bytes card = 2;
   uint64 wallet_generation = 3;
+  // Set when a transfer derived the card as the installed child of a polymorphic source.
+  golem.common.UUID transfer_id = 4;
 }
 
 // Source-agent durable transfer intent. source_wallet_generation belongs only to

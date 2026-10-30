@@ -68,13 +68,17 @@ pub use agent::{
     DEFAULT_INVOCATION_RESULT_BLOOM_BITS, DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
     DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY, DURABLE_STREAM_SESSION_RECENT_CAPACITY,
     DurableStreamPublicBinding, DurableStreamSessionIndex, DurableStreamSessionStatus,
-    ExportForkAdmissions, ExportForkReservation, FailedUpdateRecord, InvocationResultBloom,
-    InvocationResultMembership, InvocationStatus, LogLevel, OplogProcessorCheckpointState,
-    OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions, ExportForkReservation,
+    FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership, InvocationStatus,
+    LogLevel, OpenEntityReplayScope, OplogProcessorCheckpointState, OwnedAgentId,
+    PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
     RedactedAgentInvocationResult, ScheduleId, ScheduledAction, SnapshotFiles,
     SuccessfulUpdateRecord, TimestampedAgentInvocation, UsableAutomaticSnapshot,
 };
-pub use card::{ReceivedCardTransferIndex, ReceivedCardTransferState};
+pub use card::{
+    ReceivedCardTransferIndex, ReceivedCardTransferState, SourceCardTransferIndex,
+    SourceCardTransferState,
+};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,

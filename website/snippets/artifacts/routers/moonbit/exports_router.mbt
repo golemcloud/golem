@@ -1,5 +1,5 @@
 // asked to export results as CSV, the agent replies with a link:
-// the link is /exports/<chat>/<random id>.csv, for that user only:
+// the router sets the status, content type and download headers:
 #derive.http_router
 #derive.mount("/exports")
 struct ExportsRouter {}

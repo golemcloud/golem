@@ -358,6 +358,112 @@ fn tool_failures_map_to_shell_statuses_and_messages() {
     }
 }
 
+#[test]
+fn a_bound_command_is_named_by_its_tool_and_subcommands() {
+    let path = |parts: &[&str]| {
+        parts
+            .iter()
+            .map(|part| part.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        command_label("crash-out", &path(&["emit-then-panic"])),
+        "crash-out emit-then-panic"
+    );
+    assert_eq!(
+        command_label("git", &path(&["remote", "add"])),
+        "git remote add"
+    );
+    // A tool whose root command has the body has no subcommand path.
+    assert_eq!(command_label("fixture", &[]), "fixture");
+}
+
+#[test]
+fn a_failed_output_channel_is_a_plain_line_that_names_the_command() {
+    let cases = [
+        (
+            OutputFailure::Stream(ByteStreamFailure::Cancelled),
+            "stdout",
+            "crash-out emit-then-panic: stdout: cancelled",
+        ),
+        (
+            OutputFailure::Stream(ByteStreamFailure::Abandoned),
+            "stderr",
+            "crash-out emit-then-panic: stderr: abandoned",
+        ),
+        (
+            OutputFailure::Stream(ByteStreamFailure::ResourceExhausted),
+            "stdout",
+            "crash-out emit-then-panic: stdout: resource exhausted",
+        ),
+        (
+            OutputFailure::Stream(ByteStreamFailure::Failed("stream producer failed".into())),
+            "stdout",
+            "crash-out emit-then-panic: stdout: failed: stream producer failed",
+        ),
+        (
+            OutputFailure::LimitExceeded,
+            "stdout",
+            "crash-out emit-then-panic: stdout attachment limit exceeded",
+        ),
+    ];
+    for (failure, channel, line) in cases {
+        assert_eq!(
+            output_failure_line("crash-out emit-then-panic", channel, &failure, None),
+            line
+        );
+    }
+}
+
+#[test]
+fn a_crash_text_that_the_call_error_repeats_is_written_once() {
+    let trace = "error while executing at wasm backtrace:\n    0:  0x3ae41 - provider.wasm!abort: \
+                 wasm trap: wasm `unreachable` instruction executed";
+    let failure = OutputFailure::Stream(ByteStreamFailure::Failed(trace.into()));
+    // A crashed tool's streams and its call error carry the same text; the error follows.
+    assert_eq!(
+        output_failure_line("crash-out emit-then-panic", "stdout", &failure, Some(trace)),
+        "crash-out emit-then-panic: stdout: failed"
+    );
+    // A different call error does not hide the stream's own text.
+    assert_eq!(
+        output_failure_line(
+            "crash-out emit-then-panic",
+            "stdout",
+            &failure,
+            Some("tool error: other")
+        ),
+        format!("crash-out emit-then-panic: stdout: failed: {trace}")
+    );
+}
+
+#[test]
+fn a_failed_stdin_write_is_a_plain_line_that_names_the_command() {
+    let cases = [
+        (
+            StreamWriteError::Closed(ByteStreamCloseCause::ConsumerCancelled),
+            "fixture transfer: stdin: closed by the tool",
+        ),
+        (
+            StreamWriteError::Closed(ByteStreamCloseCause::Finished),
+            "fixture transfer: stdin: closed",
+        ),
+        (
+            StreamWriteError::Closed(ByteStreamCloseCause::Failed(
+                ByteStreamFailure::ResourceExhausted,
+            )),
+            "fixture transfer: stdin: resource exhausted",
+        ),
+        (
+            StreamWriteError::ConcurrentOperation,
+            "fixture transfer: stdin: concurrent write",
+        ),
+    ];
+    for (error, line) in cases {
+        assert_eq!(stdin_failure_line("fixture transfer", &error), line);
+    }
+}
+
 fn option(name: &str, shape: OptionShape, default: Option<SchemaValue>) -> OptionSpec {
     OptionSpec {
         long: name.into(),

@@ -29,27 +29,27 @@ use crate::leader_gate::{GatedService, LeaderGate};
 use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
 use crate::sharding::error::{etcd_certificate_not_valid_now, is_certificate_failure};
-use crate::sharding::etcd_connection::{
-    EtcdConnectSettings, connect_requests_with, watch_refused_certificates,
-};
+use crate::sharding::etcd_clients::EtcdClients;
+use crate::sharding::etcd_connection::{EtcdConnectSettings, connect_requests_with};
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
 use anyhow::Context;
 use config::ShardManagerConfig;
-use etcd_client::Client;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerServiceServer;
 use golem_common::base_model::shard_lease;
 use golem_service_base::clients::registry::GrpcRegistryService;
 use golem_service_base::clients::shard_manager_leader::{LeaderAddress, valid_leader_address};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
+use golem_service_base::tls::server::GrpcServerTls;
 use include_dir::include_dir;
 use prometheus::Registry;
 pub use sharding::election_watch::{
     CampaignView, Campaigner, ElectionWatch, ElectionWatcher, LeaderView,
 };
 pub use sharding::error::{HealthCheckError, ShardManagerError};
+pub use sharding::etcd_clients::{ElectionClient, RequestClient};
 pub use sharding::etcd_retry::{ReadRetry, never_reached_etcd};
 pub use sharding::healthcheck::HealthCheck;
 pub use sharding::leader_election::{
@@ -1030,7 +1030,7 @@ async fn start_distributed_mode(
     gate: &LeaderGate<ShardManagerGrpcService>,
     own: LeaderAddress,
     join_set: &mut JoinSet<anyhow::Result<()>>,
-) -> anyhow::Result<(Client, LeaderFence, LeadershipHandle, LeaseBelief)> {
+) -> anyhow::Result<(RequestClient, LeaderFence, LeadershipHandle, LeaseBelief)> {
     let shutdown = match deployment {
         Deployment::Standalone { shutdown } => shutdown.clone(),
         Deployment::Embedded => anyhow::bail!(
@@ -1098,11 +1098,12 @@ async fn start_distributed_mode(
     )
     .await?
     .with_shutdown(shutdown.clone());
-    if etcd.tls.is_some() {
-        join_set.spawn(
-            watch_refused_certificates(etcd.clone(), settings, kv.clone(), election.client())
-                .in_current_span(),
-        );
+    let kv = RequestClient::fixed(kv);
+    // The files are looked at from here on; a replica that has none (inline values, or no TLS)
+    // has nothing to follow.
+    let clients = EtcdClients::new(etcd.clone(), settings, kv.clone(), election.client());
+    if clients.has_tls_files() {
+        join_set.spawn(clients.reload_on_change().in_current_span());
     }
     let election = match &etcd.test_version {
         Some(version) => election.with_version(version.clone()),
@@ -1121,7 +1122,7 @@ async fn start_distributed_mode(
     let stored_count = retry_retriable(
         "reading the stored shard count",
         || async {
-            EtcdRoutingTablePersistence::stored_number_of_shards(&kv)
+            EtcdRoutingTablePersistence::stored_number_of_shards(&kv.current())
                 .await
                 .map_err(stop_on_refused_certificate)
                 .inspect_err(count_retriable_failure)
@@ -1189,7 +1190,12 @@ async fn start_distributed_mode(
         let logged_in = unless_a_task_fails(join_set, async {
             retry_retriable(
                 "logging in to etcd again after the election",
-                || async { kv.refresh_token().await.map_err(ShardManagerError::from) },
+                || async {
+                    kv.current()
+                        .refresh_token()
+                        .await
+                        .map_err(ShardManagerError::from)
+                },
                 &shutdown,
                 etcd.retry_min_delay,
                 etcd.retry_max_delay,
@@ -1607,16 +1613,18 @@ pub async fn run(
     let server_shutdown = CancellationToken::new();
     let server_gate = gate.clone();
     let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
-    let mut server = Server::builder();
-    if let GrpcServerTlsConfig::Enabled(tls) = &shard_manager_config.grpc.tls {
-        server = server.tls_config(tls.to_tonic())?;
-    }
+    let tls = GrpcServerTls::from_config(&shard_manager_config.grpc.tls, "grpc server")?;
+    let server = Server::builder();
     // Its own task, outside the task set: the set is stopped before the leadership is released,
     // and the server must still be answering for the gate then. It closes when the stop says so,
     // or when the task that watches it below is dropped.
     let task_shutdown = server_shutdown.clone();
     let server_task = tokio::spawn(
         async move {
+            let incoming = GrpcServerTls::incoming(
+                tls.as_ref(),
+                accept_until(listener, task_shutdown.clone()),
+            );
             let serving = server
                 .layer(
                     middleware::server::OtelGrpcLayer::default()
@@ -1625,7 +1633,7 @@ pub async fn run(
                 .add_service(reflection_service)
                 .add_service(GatedService::new(server_gate))
                 .add_service(health_service)
-                .serve_with_incoming_shutdown(accept_until(listener, task_shutdown.clone()), {
+                .serve_with_incoming_shutdown(incoming, {
                     let shutdown = task_shutdown.clone();
                     async move { shutdown.cancelled().await }
                 });
@@ -1810,6 +1818,7 @@ pub async fn run(
                 shard_manager_config.state_write_timeout,
                 shard_manager_config.initial_health_check_timeout,
                 shard_manager_config.number_of_shards,
+                matches!(deployment, Deployment::Embedded),
             )
             .await?)
         })

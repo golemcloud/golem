@@ -100,15 +100,15 @@ object SiblingStreams {
 trait ScalaStreamingTarget extends BaseAgent {
   class Id(val name: String)
 
-  def consume(input: golem.schema.AgentStream[Int]): Future[List[Int]]
-  def consumeFirst(input: golem.schema.AgentStream[Int]): Future[Int]
-  def produce(values: List[Int]): Future[golem.schema.AgentStream[Int]]
-  def transform(label: String, input: golem.schema.AgentStream[Int]): Future[MixedStreamOutput]
-  def forward(input: golem.schema.AgentStream[Int]): Future[golem.schema.AgentStream[Int]]
+  def consume(input: AgentStream[Int]): Future[List[Int]]
+  def consumeFirst(input: AgentStream[Int]): Future[Int]
+  def produce(values: List[Int]): Future[AgentStream[Int]]
+  def transform(label: String, input: AgentStream[Int]): Future[MixedStreamOutput]
+  def forward(input: AgentStream[Int]): Future[AgentStream[Int]]
   def consumeNested(input: NestedStreams): Future[String]
-  def produceNested(): Future[golem.schema.AgentStream[NestedStreamItem]]
+  def produceNested(): Future[AgentStream[NestedStreamItem]]
   def produceSiblings(): Future[SiblingStreams]
-  def produceError(): Future[golem.schema.AgentStream[Int]]
+  def produceError(): Future[AgentStream[Int]]
   def ping(): Future[Int]
   def incrementScalar(): Future[Int]
 }

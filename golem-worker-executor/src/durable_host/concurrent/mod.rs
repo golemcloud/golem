@@ -74,8 +74,8 @@ mod drop_events;
 mod replay;
 
 pub(super) use super::call_coordinator::{
-    DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
-    lock_synchronized_card_event_boundary_access, process_pending_replay_events_access,
+    DurableCallAdmission, DurableCallCoordinator, lock_synchronized_card_event_boundary_access,
+    process_pending_replay_events_access,
 };
 pub(crate) use super::call_coordinator::{
     authorize_live_permissions_at_serialized_access, try_agent_auth_ctx_at_serialized_access,
@@ -92,7 +92,7 @@ pub(crate) use context::{
 pub use delivery::*;
 pub(crate) use demand_stream::*;
 #[cfg(test)]
-pub(crate) use drop_events::tests::cleanup_recorder;
+pub(crate) use drop_events::tests::{cleanup_recorder, cleanup_recorder_for_store};
 pub use drop_events::*;
 pub use replay::*;
 

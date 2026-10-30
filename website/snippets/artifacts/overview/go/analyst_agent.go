@@ -4,7 +4,7 @@ type AskIn struct{ Question string }
 var Analyst = golem.DefineAgent[AnalystID](golem.Spec{
     Name: "AnalystAgent",
     HTTP: &golem.Mount{Path: "/chats/{chat}",
-        // Golem serves files this agent writes, never half-written:
+        // Golem serves this agent's files only when fully written:
         ExposeFiles: []golem.FileMapping{
             {Route: "/*", Path: "/out/$1"}}}}) //@
 var Ask = Analyst.Method[AskIn, string]("ask",

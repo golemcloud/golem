@@ -705,6 +705,16 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             } => Entry::SnapshotConfirmed(RawSnapshotConfirmedParameters {
                 filesystem_snapshot: filesystem_snapshot.into(),
             }),
+            OplogEntry::SpanClosed {
+                resource_start_index,
+                span_finished,
+                ..
+            } => Entry::SpanClosed(
+                golem_api_grpc::proto::golem::worker::RawSpanClosedParameters {
+                    resource_start_index: resource_start_index.map(|index| index.as_u64()),
+                    span_finished: Some(raw_span_finished_to_proto(span_finished)),
+                },
+            ),
             OplogEntry::OplogProcessorCheckpoint {
                 plugin_grant_id,
                 target_agent_id,
@@ -773,11 +783,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 timestamp,
                 card,
                 wallet_generation,
+                transfer_id,
                 ..
             } => Entry::CardDerived(RawCardDerivedParameters {
                 timestamp: Some(timestamp.into()),
                 card: crate::serialization::serialize(&card)?,
                 wallet_generation,
+                transfer_id: transfer_id.map(Into::into),
             }),
             OplogEntry::CardTransferStarted {
                 timestamp,
@@ -1376,6 +1388,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 timestamp,
                 filesystem_snapshot: p.filesystem_snapshot.parse()?,
             }),
+            Entry::SpanClosed(p) => Ok(OplogEntry::SpanClosed {
+                timestamp,
+                entity_parent_start_index,
+                resource_start_index: p
+                    .resource_start_index
+                    .map(crate::base_model::OplogIndex::from_u64),
+                span_finished: raw_span_finished_from_proto(
+                    p.span_finished.ok_or("Missing span_finished")?,
+                )?,
+            }),
             Entry::OplogProcessorCheckpoint(p) => {
                 let plugin_grant_id = p
                     .plugin_grant_id
@@ -1444,6 +1466,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 entity_parent_start_index,
                 card: Box::new(deserialize_stored_card(&p.card, "derived card")?),
                 wallet_generation: p.wallet_generation,
+                transfer_id: p.transfer_id.map(Into::into),
             }),
             Entry::CardTransferStarted(p) => Ok(OplogEntry::CardTransferStarted {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),

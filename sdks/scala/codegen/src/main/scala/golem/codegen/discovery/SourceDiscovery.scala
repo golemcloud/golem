@@ -61,8 +61,16 @@ object SourceDiscovery {
     mode: Option[String],
     methods: List[DiscoveredMethod],
     configFields: List[ConfigField] = Nil,
-    kind: String = "regular"
+    kind: String = "regular",
+    sourceScopes: List[SourceScope] = Nil
   )
+
+  /**
+   * One level of the package clauses that enclose a discovered trait, with the
+   * import statements of that level which precede the trait, as written in the
+   * source. An empty `packageRef` is the level outside every package clause.
+   */
+  final case class SourceScope(packageRef: String, imports: List[String])
 
   final case class ConstructorParam(name: String, typeExpr: String)
 
@@ -228,6 +236,7 @@ object SourceDiscovery {
         "",
         Map.empty,
         Nil,
+        List(SourceScope("", Nil)),
         src.path,
         sourceHash(src.content),
         warnings,
@@ -623,6 +632,7 @@ object SourceDiscovery {
     pkg: String,
     imports: Map[String, String],
     wildcardImports: List[WildcardImport],
+    scopes: List[SourceScope],
     sourcePath: String,
     sourceHash: String,
     warnings: scala.collection.mutable.Builder[Warning, List[Warning]],
@@ -635,16 +645,20 @@ object SourceDiscovery {
   ): Unit = {
     var visibleImports         = imports
     var visibleWildcardImports = wildcardImports
+    var visibleScopes          = scopes
     stats.foreach {
       case i: Import =>
         visibleImports = visibleImports ++ extractNamedImports(i)
         visibleWildcardImports = visibleWildcardImports ++ extractWildcardImports(i)
+        visibleScopes =
+          visibleScopes.init :+ visibleScopes.last.copy(imports = visibleScopes.last.imports :+ i.pos.text)
       case stat =>
         collect(
           stat,
           pkg,
           visibleImports,
           visibleWildcardImports,
+          visibleScopes,
           sourcePath,
           sourceHash,
           warnings,
@@ -685,6 +699,7 @@ object SourceDiscovery {
     pkg: String,
     imports: Map[String, String],
     wildcardImports: List[WildcardImport],
+    scopes: List[SourceScope],
     sourcePath: String,
     sourceHash: String,
     warnings: scala.collection.mutable.Builder[Warning, List[Warning]],
@@ -702,6 +717,7 @@ object SourceDiscovery {
           pkg,
           imports,
           wildcardImports,
+          scopes,
           sourcePath,
           sourceHash,
           warnings,
@@ -720,6 +736,7 @@ object SourceDiscovery {
           nextPkg,
           imports,
           wildcardImports,
+          scopes :+ SourceScope(pkgNode.ref.syntax, Nil),
           sourcePath,
           sourceHash,
           warnings,
@@ -738,6 +755,7 @@ object SourceDiscovery {
           nextPkg,
           imports,
           wildcardImports,
+          scopes :+ SourceScope(name.value, Nil),
           sourcePath,
           sourceHash,
           warnings,
@@ -783,7 +801,8 @@ object SourceDiscovery {
           mode = modeValue,
           methods = discoveredMethods,
           configFields = cfgFields,
-          kind = if (router) "http-router" else "regular"
+          kind = if (router) "http-router" else "regular",
+          sourceScopes = scopes
         )
 
       case cls: Defn.Class if hasAgentImplementation(cls.mods) =>

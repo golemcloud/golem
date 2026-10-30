@@ -18,6 +18,7 @@ use super::{
 };
 use crate::config::EtcdConfig;
 use crate::sharding::error::ShardManagerError;
+use crate::sharding::etcd_clients::RequestClient;
 use crate::sharding::etcd_connection::connect_for_requests;
 use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until, send_again_while_unsent};
 use crate::sharding::leader_election::LeaderFence;
@@ -33,7 +34,8 @@ use tracing::{debug, info};
 pub const STATE_KEY: &str = "/golem/shard-manager/state";
 
 pub struct EtcdRoutingTablePersistence {
-    client: Client,
+    /// The handle: each request takes the current client, which follows renewed TLS files.
+    client: RequestClient,
     number_of_shards: usize,
     /// Proof that this process won the leadership campaign, added to every write.
     fence: LeaderFence,
@@ -61,7 +63,7 @@ impl EtcdRoutingTablePersistence {
         );
 
         Ok(Self::with_client(
-            client,
+            RequestClient::fixed(client),
             number_of_shards,
             fence,
             config.compaction_retention_revisions,
@@ -72,7 +74,7 @@ impl EtcdRoutingTablePersistence {
     /// Builds a persistence over `client`, the connection `run()` opened before campaigning and
     /// already used for the pre-election shard-count read, so one connection serves both.
     pub fn with_client(
-        client: Client,
+        client: RequestClient,
         number_of_shards: usize,
         fence: LeaderFence,
         compaction_retention_revisions: u64,
@@ -113,7 +115,7 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
         let response = retry_retriable_until(
             "reading the shard lease state",
             || {
-                let mut kv = self.client.kv_client();
+                let mut kv = self.client.current().kv_client();
                 async move { Ok(kv.get(STATE_KEY, None).await?) }
             },
             deadline,
@@ -173,7 +175,7 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
         let response = send_again_while_unsent(
             "writing the shard lease state",
             || {
-                let mut kv = self.client.kv_client();
+                let mut kv = self.client.current().kv_client();
                 let txn = txn.clone();
                 async move { kv.txn(txn).await }
             },
@@ -214,7 +216,7 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
         let compacted = send_again_while_unsent(
             "compacting the shard lease state history",
             || {
-                let mut kv = self.client.kv_client();
+                let mut kv = self.client.current().kv_client();
                 async move { kv.compact(target, None).await }
             },
             deadline,

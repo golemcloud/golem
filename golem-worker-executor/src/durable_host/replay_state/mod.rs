@@ -230,9 +230,62 @@ enum ReplayTransitionPhase {
     Live = 2,
 }
 
-type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
+/// The completion-delivery markers, keyed by the `Start` they refer to, with the positions of the
+/// `CompletionDelivered` markers in oplog order, so a claim can ask whether a delivery boundary
+/// lies in a range without visiting every marker.
+#[derive(Debug, Default)]
+struct CompletionMarkers {
+    by_start: HashMap<OplogIndex, CompletionMarker>,
+    delivered_at: std::collections::BTreeSet<OplogIndex>,
+}
+
+impl CompletionMarkers {
+    fn get(&self, start_index: &OplogIndex) -> Option<&CompletionMarker> {
+        self.by_start.get(start_index)
+    }
+
+    /// Records `marker` for the `Start` at `start_index` and returns the marker it replaced.
+    fn insert(
+        &mut self,
+        start_index: OplogIndex,
+        marker: CompletionMarker,
+    ) -> Option<CompletionMarker> {
+        let previous = self.by_start.insert(start_index, marker);
+        if let Some(CompletionMarker::Delivered(index)) = previous {
+            self.delivered_at.remove(&index);
+        }
+        if let CompletionMarker::Delivered(index) = marker {
+            self.delivered_at.insert(index);
+        }
+        previous
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_start.is_empty()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&OplogIndex, &CompletionMarker)> {
+        self.by_start.iter()
+    }
+
+    /// Drops the markers recorded after `target`.
+    fn truncate_after(&mut self, target: OplogIndex) {
+        self.by_start.retain(|_, marker| marker.index() <= target);
+        self.delivered_at.retain(|index| *index <= target);
+    }
+
+    /// The `CompletionDelivered` positions in `range`, in oplog order.
+    fn delivered_in(
+        &self,
+        range: impl std::ops::RangeBounds<OplogIndex>,
+    ) -> impl Iterator<Item = OplogIndex> + '_ {
+        self.delivered_at.range(range).copied()
+    }
+}
 type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIndex, OplogEntry>>;
-type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
+type StreamObservationPositions = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
+type StartsByInvocationId =
+    HashMap<DurableInvocationId, std::collections::BTreeMap<OplogIndex, claims::RecordedStart>>;
 
 /// The consuming invocation whose earlier retained Starts must be claimed before a native read
 /// is delivered, including host-internal descendants of its imports.
@@ -502,13 +555,20 @@ struct ReplayCursor {
     /// no later oplog entry can be consumed until the actual guest-delivery boundary acknowledges
     /// and releases it.
     advance_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Distinguishes an unacknowledged guest delivery from an ordinary cursor transaction.
+    delivery_in_progress: AtomicBool,
     /// Set when replay cannot reproduce a recorded successful delivery (for example, the guest
     /// cancels the completion after its delivery marker was consumed). Every subsequent cursor
     /// transaction fails with this same deterministic replay error.
-    delivery_failure: std::sync::Mutex<Option<String>>,
+    delivery_failure: std::sync::Mutex<Option<WorkerExecutorError>>,
     /// Guest-consumed journal positions, with their durable scope owner. Host projections are
     /// ordinary hints; guest records reserve the cursor until the native read observer fires.
     stream_observations: std::sync::Mutex<StreamObservationPositions>,
+    /// The `Start`s recorded under each durable invocation id, in oplog order, including the ones
+    /// in deleted regions. Built by the recovery metadata scan with the delivery markers, and
+    /// extended by the scan of exactly the newly visible range when the replay target grows. A
+    /// claim of an identified call looks its `Start` up here instead of scanning the oplog.
+    start_invocation_ids: std::sync::Mutex<StartsByInvocationId>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via
@@ -615,6 +675,10 @@ impl ReplayDeliveryBarrier {
         marker_index: OplogIndex,
         gate: tokio::sync::OwnedMutexGuard<()>,
     ) -> Self {
+        replay_state
+            .cursor
+            .delivery_in_progress
+            .store(true, Ordering::Release);
         Self {
             replay_state,
             boundary: format!(
@@ -629,6 +693,10 @@ impl ReplayDeliveryBarrier {
         index: OplogIndex,
         gate: tokio::sync::OwnedMutexGuard<()>,
     ) -> Self {
+        replay_state
+            .cursor
+            .delivery_in_progress
+            .store(true, Ordering::Release);
         Self {
             replay_state,
             boundary: format!("consumer stream observation at {index}"),
@@ -637,16 +705,25 @@ impl ReplayDeliveryBarrier {
     }
 
     pub(in crate::durable_host) fn acknowledge(mut self) {
+        self.replay_state
+            .cursor
+            .delivery_in_progress
+            .store(false, Ordering::Release);
         self.gate.take();
         self.replay_state.cursor.progress.notify_waiters();
     }
 
     pub(in crate::durable_host) fn fail(mut self, reason: impl Into<String>) {
-        self.replay_state.record_delivery_failure(format!(
-            "replay could not reproduce {}: {}",
-            self.boundary,
-            reason.into()
-        ));
+        self.replay_state
+            .record_delivery_failure(WorkerExecutorError::runtime(format!(
+                "replay could not reproduce {}: {}",
+                self.boundary,
+                reason.into()
+            )));
+        self.replay_state
+            .cursor
+            .delivery_in_progress
+            .store(false, Ordering::Release);
         self.gate.take();
         self.replay_state.cursor.progress.notify_waiters();
     }
@@ -655,10 +732,14 @@ impl ReplayDeliveryBarrier {
 impl Drop for ReplayDeliveryBarrier {
     fn drop(&mut self) {
         if self.gate.is_some() {
-            self.replay_state.record_delivery_failure(format!(
+            self.replay_state.record_delivery_failure(WorkerExecutorError::runtime(format!(
                 "replay delivery barrier for {} was dropped before the recorded guest-delivery boundary",
                 self.boundary
-            ));
+            )));
+            self.replay_state
+                .cursor
+                .delivery_in_progress
+                .store(false, Ordering::Release);
             self.gate.take();
             self.replay_state.cursor.progress.notify_waiters();
         }
@@ -705,6 +786,14 @@ struct CursorState {
     skipped_regions: DeletedRegions,
     next_skipped_region: Option<OplogRegion>,
     initial_snapshot_skip_end: Option<OplogIndex>,
+    entity_replay_progress: golem_common::model::EntityReplayProgress,
+    entity_replay_horizon: OplogIndex,
+    /// Enclosing, still-open entities of processed Starts. Protocol-parent routes survive their
+    /// own terminal, but disappear once their last enclosing entity reaches its terminal.
+    entity_start_routes: HashMap<OplogIndex, Vec<OplogIndex>>,
+    /// Reverse routes let an entity terminal retire only that entity's subtree membership.
+    entity_route_members: HashMap<OplogIndex, HashSet<OplogIndex>>,
+    retained_entity_counts: HashMap<OplogIndex, usize>,
     /// Set after consuming a `CompletionDelivered` marker. Its following hints cannot be skipped
     /// until the delivery barrier is acknowledged, because doing so would advance replay beyond
     /// the recorded guest callback boundary.
@@ -757,6 +846,8 @@ struct CursorState {
 #[derive(Debug)]
 struct RetainedStart {
     entry: OplogEntry,
+    /// Entity membership at this Start's position, independent of later route retirement.
+    enclosing_entities: Vec<OplogIndex>,
     /// The committed `End`/`Cancelled` closing this `Start`, once the cursor has reached it.
     terminal: Option<(OplogIndex, OplogEntry)>,
     /// Replay events of the entries the cursor committed past on this `Start`'s behalf: the

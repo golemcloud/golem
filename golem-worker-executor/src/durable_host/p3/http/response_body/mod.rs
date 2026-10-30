@@ -23,7 +23,7 @@ use super::*;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DurableDemandItem,
     DurableDemandStream, InvocationIdSource, ScopeReplayDecision, ScopeReplayRecovery,
-    demand_channel, reserve_import_invocation_id,
+    demand_channel, import_invocation_id,
 };
 use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::durability::{
@@ -241,7 +241,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             InvocationIdSource::Reserved(None)
         } else {
             let mut store_ctx = store.as_context_mut();
-            reserve_import_invocation_id(
+            import_invocation_id(
                 durable_worker_ctx::<Ctx, U>(store_ctx.data_mut()),
                 response_state
                     .as_ref()
@@ -318,34 +318,24 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             "drop",
         );
 
-        // Submit the whole live cleanup pair before returning from this synchronous drop.
-        // The next drain joins its receipt (or replays it); cancelling that waiter cannot
-        // cancel the actor job or cause another pair to be submitted.
-        let replay_cleanup = {
+        // Sample liveness at drop, not at send: replay-created responses can survive into live
+        // invocations. Snapshot drops and replay drops only release resident state.
+        {
             let mut store_ctx = store.as_context_mut();
             let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
-            ctx.state
-                .open_p3_http_responses
-                .remove(&res.rep())
-                .and_then(|state| {
-                    if !state.span.claim_closure() {
-                        return None;
-                    }
-                    crate::durable_host::concurrent::HttpSpanCleanupRecorder::new(
-                        ctx,
-                        state.span.send_start_index,
-                        state.observational_owner,
-                        state.span.persisted,
-                        state.span.invocation_id,
-                    )
-                    .record(p3_send_span_finished(
-                        &state.span,
-                        golem_common::model::oplog::SpanOutcome::Abandoned,
-                    ))
-                })
-        };
-        if let Some(replay_cleanup) = replay_cleanup {
-            store.spawn(replay_cleanup);
+            if let Some(state) = ctx.state.open_p3_http_responses.remove(&res.rep())
+                && state.span.claim_closure()
+            {
+                crate::durable_host::concurrent::HttpSpanCleanupRecorder::new(
+                    ctx,
+                    state.span.send_start_index,
+                    state.span.persisted,
+                )
+                .record(p3_send_span_finished(
+                    &state.span,
+                    golem_common::model::oplog::SpanOutcome::Abandoned,
+                ));
+            }
         }
 
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);

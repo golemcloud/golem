@@ -18,6 +18,7 @@ mod capabilities;
 mod custom_api;
 mod fork;
 mod gol40_chunk_g_environment_resolution_acceptance;
+mod invocation_context;
 mod otlp_plugin;
 mod owner_environment_resolution;
 mod permissions;
@@ -44,6 +45,7 @@ tag_suite!(fork, group1);
 tag_suite!(agent_config, group12);
 tag_suite!(api, group2);
 
+tag_suite!(invocation_context, group7);
 tag_suite!(otlp_plugin, group7);
 tag_suite!(plugins, group7);
 
@@ -63,7 +65,7 @@ test_r::sequential_suite!(plugins);
 // across this dimension via `matrix_suite!` below, producing one test per case
 // named `<test>_postgres` / `<test>_sqlite`, each carrying the `db_postgres` /
 // `db_sqlite` auto-tag (selectable with `:tag:db_postgres` / `:tag:db_sqlite`).
-// Unpaired suites (otlp_plugin, plugins) are NOT matrix-multiplied and run
+// Unpaired suites (invocation_context, otlp_plugin, plugins) are NOT matrix-multiplied and run
 // once against the untagged (postgres) `create_deps` below.
 define_matrix_dimension!(db: EnvBasedTestDependencies -> "postgres", "sqlite");
 
@@ -130,7 +132,7 @@ pub async fn create_deps() -> EnvBasedTestDependencies {
     // workers code path.
     //
     // This untagged constructor is the postgres backend used by the
-    // unpaired suites (otlp_plugin, plugins) which take a plain
+    // unpaired suites (invocation_context, otlp_plugin, plugins) which take a plain
     // `&EnvBasedTestDependencies`. It is also the compile-time getter
     // symbol the matrix-multiplied tests resolve against; their
     // dependency is rewritten to the tagged variant at runtime, so this

@@ -287,21 +287,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             queue.retain(|invocation| !invocation.is_abandoned());
             !queue.is_empty()
         };
-        let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
         let has_interrupt = running.interrupts.lock().await.has_interrupt();
         let has_filesystem_effects = self.has_active_filesystem_effects(running);
         let has_concurrent_agent_permit =
             running.concurrent_agent_permit_held.load(Ordering::Acquire);
 
         debug!(
-            "Worker {} idle check: waiting_for_command={waiting_for_command} has_pending_invocations={has_pending_invocations} has_queued_internal_work={has_queued_internal_work} has_resume_replay={has_resume_replay} has_interrupt={has_interrupt} has_filesystem_effects={has_filesystem_effects} has_concurrent_agent_permit={has_concurrent_agent_permit}",
+            "Worker {} idle check: waiting_for_command={waiting_for_command} has_pending_invocations={has_pending_invocations} has_queued_internal_work={has_queued_internal_work} has_interrupt={has_interrupt} has_filesystem_effects={has_filesystem_effects} has_concurrent_agent_permit={has_concurrent_agent_permit}",
             self.owned_agent_id
         );
 
         waiting_for_command
             && !has_pending_invocations
             && !has_queued_internal_work
-            && !has_resume_replay
             && !has_interrupt
             && !has_filesystem_effects
             && !has_concurrent_agent_permit
@@ -399,7 +397,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     queue.retain(|invocation| !invocation.is_abandoned());
                     !queue.is_empty()
                 };
-                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupts.lock().await.has_interrupt();
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
                 let has_concurrent_agent_permit =
@@ -409,7 +406,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if !running_worker_can_be_evicted(
                     waiting_for_command,
                     has_queued_internal_work,
-                    has_resume_replay,
                     has_interrupt,
                     has_filesystem_effects,
                     has_concurrent_agent_permit,
@@ -431,7 +427,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// Re-checks the eviction classification under the worker lifecycle lock to avoid
     /// races. Returns `true` if the worker was actually stopped.
-    pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> bool {
+    pub async fn stop_if_evictable(self: &Arc<Self>, target_class: EvictionClass) -> bool {
         self.stop_if_evictable_with_outcome(
             target_class,
             None,
@@ -441,7 +437,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             != EvictionStopOutcome::Ineligible
     }
     pub(crate) async fn stop_if_evictable_with_outcome(
-        &self,
+        self: &Arc<Self>,
         target_class: EvictionClass,
         expected_eligibility: Option<FilesystemPressureEligibility>,
         unload_request: UnloadRequest,
@@ -466,7 +462,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     queue.retain(|invocation| !invocation.is_abandoned());
                     !queue.is_empty()
                 };
-                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupts.lock().await.has_interrupt();
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
                 let has_concurrent_agent_permit =
@@ -475,7 +470,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if !running_worker_can_be_evicted(
                     waiting_for_command,
                     has_queued_internal_work,
-                    has_resume_replay,
                     has_interrupt,
                     has_filesystem_effects,
                     has_concurrent_agent_permit,
@@ -511,11 +505,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             drop(instance_guard);
             self.handle_stop_result(stop_result).await;
-            match &*self.instance.lock().await {
+            let outcome = match &*self.instance.lock().await {
                 WorkerInstance::CleanupFailed(_) => EvictionStopOutcome::CleanupFailed,
                 WorkerInstance::Unloaded { .. } => EvictionStopOutcome::Unloaded,
                 _ => EvictionStopOutcome::CleanupFailed,
+            };
+            if outcome == EvictionStopOutcome::Unloaded
+                && !self.pending_invocations().await.is_empty()
+            {
+                // Only the invocation loop runs durable pending invocations, and their callers
+                // already started the worker and only wait. The start waits for memory admission.
+                // It is spawned because eviction can run inside the memory growth of another
+                // worker.
+                let worker = self.clone();
+                self.tasks.spawn(async move {
+                    if let Err(error) = Worker::start_if_needed(worker).await {
+                        warn!(%error, "Failed to restart an evicted worker with pending invocations");
+                    }
+                });
             }
+            outcome
         } else {
             drop(instance_guard);
             if let (Some(generation), Some(active_agent)) = (reopen_entity_generation, active_agent)
@@ -719,14 +728,12 @@ pub(in crate::worker) fn startup_component_requirement(
 pub(in crate::worker) fn running_worker_can_be_evicted(
     waiting_for_command: bool,
     has_queued_internal_work: bool,
-    has_resume_replay: bool,
     has_interrupt: bool,
     has_filesystem_effects: bool,
     has_concurrent_agent_permit: bool,
 ) -> bool {
     waiting_for_command
         && !has_queued_internal_work
-        && !has_resume_replay
         && !has_interrupt
         && !has_filesystem_effects
         && !has_concurrent_agent_permit

@@ -19,7 +19,7 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
    subscriptions may vanish at any instruction boundary. Suspend, evict, reshard, restart and
    crash all reconstruct the instance from the oplog through the same path
    (`src/worker/invocation_loop/mod.rs::run` → `src/durable_host/recovery.rs::prepare_instance` →
-   `resume_replay`). Do not design feature-specific "safe to unload" gates; make every pending
+   `replay`). Do not design feature-specific "safe to unload" gates; make every pending
    obligation durable or deterministically recomputable instead.
 3. **Durable agent RPC is exactly-once per logical target invocation.** Caller attempts (replay,
    transport retry, individual call repair) share one idempotency key derived from the caller's
@@ -37,6 +37,17 @@ Authoritative: oplog entries and payloads, `PendingAgentInvocation` / `AgentInvo
 from the oplog. Derived and disposable: `Store` memory, in-memory queues, caches, event
 subscriptions, spawned store tasks, sockets. Never let correctness after a restart depend on
 anything in the second list.
+
+A host resource drop that has no guest-observable result and no remote effect must not open a
+durable call: the guest may release the resource at different points in different runs (garbage
+collection, a heap restored from a snapshot). Delete the resident state and record a hint for
+observability, as `wasm-rpc` and `span` drops do with `SpanClosed`.
+
+A drop that terminates a real durable effect must preserve the operation's terminal, but must
+never wait for recorded history on the guest thread or in a cleanup drain. Defer replay waits
+under the resident runtime's task ownership. Missing terminals may continue live only at the
+natural replay tail. A changed disposal time does not permit changed guest reads, completed
+effects, call identities, or terminal kinds.
 
 ## External effects
 

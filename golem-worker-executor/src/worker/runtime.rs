@@ -14,6 +14,40 @@
 
 use crate::worker::*;
 
+impl<Runtime, Adapter: SandboxFilesystemAdapter> PreparedAgent<Runtime, Adapter> {
+    pub(super) async fn finish(
+        runtime: Runtime,
+        filesystem: ReconstructingFilesystem<Adapter>,
+        decision: &Option<RetryDecision>,
+    ) -> Result<
+        Self,
+        (
+            Runtime,
+            crate::services::agent_filesystem::ReconstructionFailure<Adapter>,
+        ),
+    > {
+        if decision.is_some() {
+            // A Store can retain pending stream operations. Unload must drop it before
+            // draining the sealed generation; this attempt cannot become resident.
+            return Ok(Self::Aborted {
+                runtime,
+                filesystem: abort_reconstruction(filesystem),
+            });
+        }
+        let filesystem = match finish_replay(filesystem).await {
+            Ok(filesystem) => filesystem,
+            Err(failure) => return Err((runtime, failure)),
+        };
+        match finish_reconstruction(filesystem).await {
+            Ok(filesystem) => Ok(Self::Resident(RunningAgent {
+                runtime,
+                filesystem,
+            })),
+            Err(failure) => Err((runtime, failure)),
+        }
+    }
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn create_entity_context(
         self: &Arc<Self>,
@@ -378,7 +412,7 @@ impl RunningWorker {
         filesystem_snapshot_slot: &filesystem_snapshots::SnapshotSlot,
     ) -> Result<
         (
-            WorkerRunningAgent<Ctx>,
+            PreparedAgent<RunningAgentRuntime<Ctx>>,
             monthly_limits::ExecutionWindow,
             Option<RetryDecision>,
         ),
@@ -1068,55 +1102,44 @@ impl RunningWorker {
                 );
             }
         };
-        let reconstructing = match finish_replay(reconstructing).await {
-            Ok(filesystem) => filesystem,
-            Err(failure) => {
-                drop(store);
-                return Err(Self::end_failed_start(
-                    &parent,
-                    &role,
-                    pending_update_ref.as_ref(),
-                    start_outcome::RawStartError::Finish(&failure.source),
-                    async move |error| {
-                        cleanup_open_agent_filesystem(failure.filesystem, window, error).await
-                    },
-                )
-                .await);
-            }
-        };
-        let filesystem = match finish_reconstruction(reconstructing).await {
-            Ok(filesystem) => filesystem,
-            Err(failure) => {
-                drop(store);
-                return Err(Self::end_failed_start(
-                    &parent,
-                    &role,
-                    pending_update_ref.as_ref(),
-                    start_outcome::RawStartError::Finish(&failure.source),
-                    async move |error| {
-                        cleanup_open_agent_filesystem(failure.filesystem, window, error).await
-                    },
-                )
-                .await);
-            }
-        };
-        let filesystem_generation = resident_generation_handle(&filesystem);
-        store
-            .data_mut()
-            .durable_ctx_mut()
-            .activate_resident_generation_handle(filesystem_generation.clone());
-        filesystem_publication.commit(filesystem_generation);
-        Ok((
-            RunningAgent {
-                runtime: RunningAgentRuntime {
-                    instance,
-                    store: store.map(async_lock::Mutex::new),
-                },
-                filesystem,
+        let prepared = match PreparedAgent::finish(
+            RunningAgentRuntime {
+                instance,
+                store: store.map(async_lock::Mutex::new),
             },
-            window,
-            decision,
-        ))
+            reconstructing,
+            &decision,
+        )
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err((runtime, failure)) => {
+                drop(runtime);
+                return Err(Self::end_failed_start(
+                    &parent,
+                    &role,
+                    pending_update_ref.as_ref(),
+                    start_outcome::RawStartError::Finish(&failure.source),
+                    async move |error| {
+                        cleanup_open_agent_filesystem(failure.filesystem, window, error).await
+                    },
+                )
+                .await);
+            }
+        };
+        if let PreparedAgent::Resident(agent) = &prepared {
+            let filesystem_generation = resident_generation_handle(&agent.filesystem);
+            agent
+                .runtime
+                .store
+                .lock()
+                .await
+                .data_mut()
+                .durable_ctx_mut()
+                .activate_resident_generation_handle(filesystem_generation.clone());
+            filesystem_publication.commit(filesystem_generation);
+        }
+        Ok((prepared, window, decision))
     }
 }
 

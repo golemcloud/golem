@@ -26,6 +26,8 @@ pub fn encode_qualified(String, String) -> ParamType
 
 pub fn ensure_pkg_import(String, String, String) -> String raise ComponentRoleError
 
+pub fn error_message(Error) -> String
+
 pub fn find_config_param(Array[(String, ParamType)]) -> (String, String, Int)?
 
 pub fn find_principal_index(Array[(String, ParamType)]) -> Int?
@@ -250,6 +252,7 @@ pub(all) struct HttpMountInfo {
   router : Bool
   static_bindings : Array[HttpFileMapping]
   filesystem_bindings : Array[HttpFileMapping]
+  file_response_headers : Array[(String, String)]
   openapi_provider_method : String?
 } derive(Eq, @debug.Debug)
 
@@ -504,6 +507,7 @@ pub(all) struct ValueCase {
 pub(all) struct ValueTypeInfo {
   name : String
   kind : ValueTypeKind
+  inline : Bool
 } derive(Eq, @debug.Debug)
 
 pub(all) enum ValueTypeKind {

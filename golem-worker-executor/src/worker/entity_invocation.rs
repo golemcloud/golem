@@ -481,6 +481,21 @@ struct RetainedDisposedContext<Ctx: WorkerCtx> {
     prepared: bool,
 }
 
+async fn retained_cleanup_failure<Ctx: WorkerCtx>(
+    operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
+    error: anyhow::Error,
+    retry_from: golem_common::model::oplog::OplogIndex,
+    agent_mode: golem_common::model::agent::AgentMode,
+) -> WorkerExecutorError {
+    if let Some(operation) = operation {
+        let trap = crate::model::TrapType::from_error::<Ctx>(&error, retry_from, agent_mode);
+        // Elect before converting to the transport error, which cannot carry host retry markers.
+        // Trap selection also withdraws this operation's uncommitted cancellation.
+        operation.select_trap(trap).await;
+    }
+    WorkerExecutorError::from(error)
+}
+
 impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedDisposedContext<Ctx> {
     fn filesystem_invocation(
         &self,
@@ -503,11 +518,21 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedDisposedContext<Ctx> {
                 self.invocation.clone(),
             )
             .await?;
-            crate::durable_host::rdbms::cleanup_trapped_transactions(
+            if let Err(error) = crate::durable_host::rdbms::cleanup_trapped_transactions(
                 self.context.durable_ctx_mut(),
             )
             .await
-            .map_err(WorkerExecutorError::from)?;
+            {
+                use crate::workerctx::InvocationHooks;
+                let ctx = self.context.durable_ctx();
+                return Err(retained_cleanup_failure::<Ctx>(
+                    ctx.entity_tool_operation(),
+                    error,
+                    ctx.get_current_retry_point().await,
+                    ctx.agent_mode(),
+                )
+                .await);
+            }
             self.context
                 .durable_ctx_mut()
                 .dispose_trapped_guest_resources();
@@ -1228,6 +1253,191 @@ mod tests {
     use golem_common::model::oplog::OplogIndex;
     use std::sync::Mutex;
     use test_r::test;
+
+    fn cleanup_operation() -> (
+        Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+        crate::durable_host::tool::operation::OwnerToolOperation,
+    ) {
+        use crate::durable_host::tool::operation::{OwnerToolOperations, tests::replay_operation};
+        let template = replay_operation(42);
+        let owner = OwnerToolOperations::new();
+        let operation = owner
+            .create(template.context().clone())
+            .accept(template.invocation_id().unwrap())
+            .unwrap();
+        (owner, operation)
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn retained_cleanup_failure_preserves_retry_and_exhaustion_through_election() {
+        use crate::durable_host::durability::{
+            ClassifiedHostError, DurableCallTrapContext, HostFailureKind,
+            SemanticTrapRetryOverride, SemanticTrapRetryOverrideMarker, SemanticTrapRetryVerdict,
+            mark_durable_call_trap_context,
+        };
+        use crate::durable_host::tool::operation::OwnerFailureWinner;
+        use crate::model::TrapType;
+        use golem_common::model::RetryPolicyState;
+        use golem_common::model::agent::AgentMode;
+        use golem_common::model::oplog::AgentError;
+
+        for cancelling in [false, true] {
+            for exhausted in [false, true] {
+                let (owner, operation) = cleanup_operation();
+                if cancelling {
+                    assert!(operation.begin_cancel());
+                }
+                let payload = SemanticTrapRetryOverride {
+                    retry_from: OplogIndex::from_u64(17),
+                    policy_name: "transaction-status".to_string(),
+                    verdict: SemanticTrapRetryVerdict::Retry(std::time::Duration::from_millis(
+                        1873,
+                    )),
+                    retry_policy_state: RetryPolicyState::Counter(4),
+                };
+                let error = anyhow::Error::new(ClassifiedHostError {
+                    kind: if exhausted {
+                        HostFailureKind::Permanent
+                    } else {
+                        HostFailureKind::Transient
+                    },
+                    message: "transaction status resolution".to_string(),
+                });
+                let error = if exhausted {
+                    mark_durable_call_trap_context(
+                        error,
+                        DurableCallTrapContext {
+                            retry_from: OplogIndex::from_u64(17),
+                        },
+                    )
+                } else {
+                    anyhow::Error::new(SemanticTrapRetryOverrideMarker {
+                        payload: payload.clone(),
+                        inner: error,
+                    })
+                };
+                let transport = retained_cleanup_failure::<crate::workerctx::default::Context>(
+                    Some(operation),
+                    error,
+                    OplogIndex::from_u64(9),
+                    AgentMode::Durable,
+                )
+                .await;
+                assert!(
+                    transport
+                        .to_string()
+                        .contains("transaction status resolution")
+                );
+                let Some(OwnerFailureWinner::Trap(TrapType::Error {
+                    error,
+                    retry_from,
+                    semantic_trap_retry_override,
+                })) = owner.selected_owner_failure()
+                else {
+                    panic!("cleanup must elect its typed trap before transport conversion");
+                };
+                if exhausted {
+                    assert!(matches!(error, AgentError::PermanentError(_)));
+                    assert_eq!(retry_from, OplogIndex::from_u64(17));
+                    assert!(semantic_trap_retry_override.is_none());
+                } else {
+                    assert!(matches!(error, AgentError::TransientError(_)));
+                    assert_eq!(retry_from, payload.retry_from);
+                    let selected = semantic_trap_retry_override.unwrap();
+                    assert_eq!(selected.policy_name, payload.policy_name);
+                    assert_eq!(selected.verdict, payload.verdict);
+                    assert_eq!(selected.retry_policy_state, payload.retry_policy_state);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn retained_cleanup_failure_preserves_lifecycle_and_existing_winner() {
+        use crate::durable_host::tool::operation::OwnerFailureWinner;
+        use crate::model::TrapType;
+        use golem_common::model::agent::AgentMode;
+        use golem_service_base::error::worker_executor::InterruptKind;
+
+        for kind in [InterruptKind::Jump, InterruptKind::ShardLost] {
+            let (owner, operation) = cleanup_operation();
+            assert!(operation.begin_cancel());
+            retained_cleanup_failure::<crate::workerctx::default::Context>(
+                Some(operation.clone()),
+                anyhow::Error::new(kind),
+                OplogIndex::INITIAL,
+                AgentMode::Durable,
+            )
+            .await;
+            assert!(matches!(owner.selected_owner_failure(),
+                Some(OwnerFailureWinner::Trap(TrapType::Interrupt(selected))) if selected == kind));
+            retained_cleanup_failure::<crate::workerctx::default::Context>(
+                Some(operation),
+                anyhow::anyhow!("later cleanup failure"),
+                OplogIndex::INITIAL,
+                AgentMode::Durable,
+            )
+            .await;
+            assert!(matches!(owner.selected_owner_failure(),
+                Some(OwnerFailureWinner::Trap(TrapType::Interrupt(selected))) if selected == kind));
+        }
+        let (owner, operation) = cleanup_operation();
+        owner
+            .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Jump))
+            .await;
+        retained_cleanup_failure::<crate::workerctx::default::Context>(
+            Some(operation),
+            anyhow::anyhow!("cleanup failure"),
+            OplogIndex::INITIAL,
+            AgentMode::Durable,
+        )
+        .await;
+        assert!(matches!(
+            owner.selected_owner_failure(),
+            Some(OwnerFailureWinner::Lifecycle(InterruptKind::Jump))
+        ));
+
+        let (owner, operation) = cleanup_operation();
+        assert!(operation.begin_cancel());
+        operation.resolve_cancel(true).await;
+        retained_cleanup_failure::<crate::workerctx::default::Context>(
+            Some(operation.clone()),
+            anyhow::anyhow!("cleanup after cancellation"),
+            OplogIndex::INITIAL,
+            AgentMode::Durable,
+        )
+        .await;
+        assert!(owner.selected_owner_failure().is_none());
+        assert!(matches!(
+            operation.winner_if_active(),
+            Some(crate::durable_host::tool::operation::ToolOperationWinner::Cancelled)
+        ));
+
+        let (owner, operation) = cleanup_operation();
+        let fence = crate::services::oplog::OplogFence {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "cleanup-fenced".to_string(),
+            },
+            expected_epoch: golem_common::model::ShardEpoch(7),
+            actual_epoch: Some(golem_common::model::ShardEpoch(8)),
+        };
+        retained_cleanup_failure::<crate::workerctx::default::Context>(
+            Some(operation),
+            anyhow::Error::new(crate::services::oplog::OplogError::Fenced(fence)),
+            OplogIndex::INITIAL,
+            AgentMode::Durable,
+        )
+        .await;
+        assert!(matches!(
+            owner.selected_owner_failure(),
+            Some(OwnerFailureWinner::Trap(TrapType::Interrupt(
+                InterruptKind::ShardLost
+            )))
+        ));
+    }
 
     #[test]
     fn only_encoded_trapped_tool_terminal_requests_physical_disposal() {

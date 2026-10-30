@@ -62,6 +62,9 @@ message LaunchNewWorkerRequest {
   optional golem.worker.InvocationContext context = 7;
   optional golem.component.Principal principal = 8;
   optional string method_name = 9;
+  // Used only by PrepareWorker for the first creation attempt of an ephemeral RPC target.
+  optional golem.worker.IdempotencyKey idempotency_key = 10;
+  golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
 }
 
 message LaunchNewWorkerResponse {

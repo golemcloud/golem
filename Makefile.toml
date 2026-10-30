@@ -5,7 +5,8 @@
 # - `cargo make check-wit`: re-syncs the per-crate wit/deps and fails if the committed copies are out of date
 # - `cargo make build`: builds everything in debug mode
 # - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
-# - `cargo make clean`: cleans all test components, the main workspace, and every SDK
+# - `cargo make clean`: runs golem clean for test apps, then removes checkout build artifacts and dependencies; continues cleanup after failures and reports them at the end
+# - `cargo make clean --dry-run`: previews cache cleanup without running golem clean or deleting files
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make unit-tests`: runs unit tests only
@@ -159,8 +160,15 @@ run_task = [{ name = ["wit", "diff-wit"] }]
 [tasks.build]
 dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Builds everything in debug mode"
-command = "cargo"
-args = ["build", "--workspace", "--all-targets"]
+# Two invocations bound peak memory: the worker executor's unit-test build needs as much memory as
+# the executor library builds for its binaries and integration tests, and one invocation runs all
+# three at once. Both invocations resolve the same features, so the second one only builds the
+# executor's own targets.
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build --workspace --all-targets --exclude golem-worker-executor
+exec --fail-on-error cargo build --workspace --all-targets
+'''
 
 [tasks.build-golem]
 dependencies = ["wit", "ensure-builtin-artifacts"]
@@ -450,14 +458,7 @@ if [ -f target/.local-publish-marker ]; then
     echo "Scala SDK already published locally, skipping (delete sdks/scala/target/.local-publish-marker to force)"
 else
     ./scripts/generate-agent-guest-wasm.sh
-    sbt 'set every version := "0.0.0-SNAPSHOT"' \
-        '+modelJVM/publishLocal' \
-        '+modelJS/publishLocal' \
-        '+macros/publishLocal' \
-        'core/publishLocal' \
-        '+codegen/publishLocal' \
-        '++2.12.21' \
-        'sbtPlugin/publishLocal'
+    sbt golemPublishLocal
     mkdir -p target
     touch target/.local-publish-marker
 fi
@@ -704,12 +705,12 @@ env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRA
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:" -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:" -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test file_creation_mask -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:rdbms_service" -- --flaky-run=5 --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:ignite_service" -- --flaky-run=5 --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:rdbms_service" -- --flaky-run=5 --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:ignite_service" -- --flaky-run=5 --report-time --nocapture %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-ignite-service]
@@ -717,7 +718,7 @@ dependencies = ["wit"]
 description = "Runs ignite service worker-executor-tests (requires GOLEM_IGNITE_URL=ignite://host:10800 and a running Apache Ignite 2.x node)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor-tests --test integration :tag:ignite_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group1]
@@ -726,7 +727,7 @@ description = "Runs worker executor tests only (group 1/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group1" -- --skip ":tag:group5" --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:group1" -- --skip ":tag:group5" --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group2]
@@ -735,9 +736,9 @@ description = "Runs worker executor tests only (group 2/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group2" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:in_function_retry" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:storage_quota" -- --report-time --nocapture --test-threads=1 %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:group2" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:in_function_retry" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:storage_quota" -- --report-time --nocapture --test-threads=1 %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group3]
@@ -746,7 +747,7 @@ description = "Runs worker executor tests only (group 3/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group3" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:group3" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group4]
@@ -755,7 +756,7 @@ description = "Runs worker executor tests only (group 4/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group4" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:group4" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group5]
@@ -764,7 +765,7 @@ description = "Runs branch-added group 1 worker executor tests separately"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group1&group5" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:group1&group5" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-tool-streaming]
@@ -773,7 +774,7 @@ description = "Runs tool streaming worker executor tests with bounded concurrenc
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:tool_streaming" -- --report-time --nocapture --test-threads=8 %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor-tests --test integration ":tag:tool_streaming" -- --report-time --nocapture --test-threads=8 %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests]
@@ -870,7 +871,7 @@ cargo-test-r run --package integration-tests --test sharding -- --skip coordinat
 '''
 
 [tasks.integration-tests-group7]
-description = "Runs integration tests (group 7/11 - otlp_plugin, plugins)"
+description = "Runs integration tests (group 7/11 - invocation_context, otlp_plugin, plugins)"
 dependencies = ["build-bins-non-ci", "ensure-builtin-artifacts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -2524,13 +2525,16 @@ public_tag = trim ${public_tag.stdout}
 if not equals ${head} ${public_tag}
     trigger_error "The public release tag must equal HEAD"
 end
-exec --fail-on-error git fetch https://github.com/golemcloud/golem.git main
+parts = split ${version} .
+major = array_get ${parts} 0
+minor = array_get ${parts} 1
+maintenance = set "${major}.${minor}.x"
 publication_token = get_env GH_TOKEN
 workflow_token = get_env GITHUB_TOKEN
 if not is_empty ${workflow_token}
     set_env GH_TOKEN ${workflow_token}
 end
-pulls = exec --fail-on-error gh api --paginate "repos/golemcloud/golem/commits/${head}/pulls?per_page=100" --jq ".[] | select(.merged_at != null and .head.sha == \"${head}\" and .base.ref == \"main\" and .base.repo.full_name == \"golemcloud/golem\") | .merge_commit_sha"
+pulls = exec --fail-on-error gh api --paginate "repos/golemcloud/golem/commits/${head}/pulls?per_page=100" --jq ".[] | select(.merged_at != null and .head.sha == \"${head}\" and (.base.ref == \"main\" or .base.ref == \"${maintenance}\") and .base.repo.full_name == \"golemcloud/golem\") | [.base.ref, .merge_commit_sha] | join(\" \")"
 if not is_empty ${workflow_token}
     set_env GH_TOKEN ${publication_token}
 end
@@ -2538,14 +2542,18 @@ commits = split ${pulls.stdout} "\n"
 merged = set false
 for commit in ${commits}
     if not is_empty ${commit}
-        reachable = exec git merge-base --is-ancestor ${commit} FETCH_HEAD
+        fields = split ${commit} " "
+        branch = array_get ${fields} 0
+        merge_commit = array_get ${fields} 1
+        exec --fail-on-error git fetch https://github.com/golemcloud/golem.git "refs/heads/${branch}"
+        reachable = exec git merge-base --is-ancestor ${merge_commit} FETCH_HEAD
         if equals ${reachable.code} 0
             merged = set true
         end
     end
 end
 if not ${merged}
-    trigger_error "The release tag must identify the exact head of a PR merged into public main"
+    trigger_error "The release tag must identify the exact head of a PR merged into public main or ${maintenance}"
 end
 '''
 
@@ -2741,14 +2749,14 @@ elif equals ${component} filesystem-tools
     build_task = set build-filesystem-tools
     wasm = set builtin-tools/filesystem-tools.wasm
     artifact_id = set filesystem_tools
-    exports_json = set "{\"tools\":[\"read-file@0.4.1\",\"write-file@0.4.1\",\"edit-file@0.4.1\",\"ls@0.1.2\",\"grep@0.1.2\"],\"middlewares\":[\"path-policy@0.1.1\"]}"
+    exports_json = set "{\"tools\":[\"read-file@0.4.2\",\"write-file@0.4.2\",\"edit-file@0.4.2\",\"ls@0.1.2\",\"grep@0.1.2\"],\"middlewares\":[\"path-policy@0.1.2\"]}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.9\",\"npm@10.9.9+golem.9\",\"npx@10.9.9+golem.9\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.10\",\"npm@10.9.9+golem.9\",\"npx@10.9.9+golem.9\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2764,7 +2772,7 @@ elif equals ${component} bash
     build_task = set build-bash-tool
     wasm = set builtin-tools/bash.wasm
     artifact_id = set bash
-    exports_json = set "{\"tools\":[\"bash@0.3.0\"]}"
+    exports_json = set "{\"tools\":[\"bash@0.3.2\"]}"
     licenses = set builtin-tools/bash/LICENSE
     source_notice = set builtin-tools/bash/NOTICE
     sbom = set ""
@@ -2780,7 +2788,7 @@ elif equals ${component} web-fetch
     build_task = set build-web-fetch
     wasm = set builtin-tools/web-fetch.wasm
     artifact_id = set web_fetch
-    exports_json = set "{\"tools\":[\"web-fetch@0.1.2\"]}"
+    exports_json = set "{\"tools\":[\"web-fetch@0.1.3\"]}"
     licenses = set builtin-tools/web-fetch/licenses/THIRD_PARTY_LICENSES.html
     source_notice = set LICENSE
     sbom = set ""
@@ -2788,7 +2796,7 @@ elif equals ${component} python
     build_task = set build-python-tool
     wasm = set builtin-tools/python.wasm
     artifact_id = set python
-    exports_json = set "{\"tools\":[\"python@0.1.1\"]}"
+    exports_json = set "{\"tools\":[\"python@0.1.2\"]}"
     licenses = set builtin-tools/python/licenses
     source_notice = set builtin-tools/python/SOURCE.md
     sbom = set ""
@@ -3101,24 +3109,100 @@ description = "Runs and publishes the nightly Amp orb benchmark suite"
 command = "./integration-tests/benchmark_suites/run_orb_nightly.sh"
 
 [tasks.clean-test-components]
-description = "Cleans all test WASM components while preserving copied root-level WASM files"
-script_runner = "@duckscript"
-script = '''
-cd test-components
-exec --fail-on-error ./build-components.sh clean
-'''
+description = "Runs golem clean for test apps, then removes component caches, dependencies, and copied WASMs"
+env = { GOLEM_CLEAN_COMPONENTS_ONLY = "true" }
+run_task = "clean"
 
 [tasks.clean]
-description = "Cleans test components, the main workspace, and every SDK"
+description = "Runs golem clean for test apps, then removes checkout build artifacts and dependencies, preserving local data and global caches"
 script_runner = "@duckscript"
 script = '''
-test_component_clean = exec cargo make clean-test-components
-echo ${test_component_clean.stdout}
-echo ${test_component_clean.stderr}
-# Cargo validates its target marker before deletion. The configured target directory may intentionally be outside the repository.
-exec --fail-on-error cargo clean
-exec --fail-on-error cargo make clean-sdk-rust
-exec --fail-on-error cargo make clean-sdk-ts
-exec --fail-on-error cargo make clean-sdk-scala
-exec --fail-on-error cargo make clean-sdk-moonbit
+dry_run = set false
+arguments = set ${@}
+for argument in ${arguments}
+    if equals ${argument} --dry-run
+        dry_run = set true
+    else
+        trigger_error "Unknown clean argument: ${argument}"
+    end
+end
+mode = set -fdx
+if ${dry_run}
+    mode = set -ndx
+end
+
+failed = set false
+if ${dry_run}
+    echo "Would run golem clean for each test application before removing compiler caches"
+else
+    cd test-components
+    app_clean_code = exec --get-exit-code ./build-components.sh clean
+    cd ..
+    if not equals ${app_clean_code} 0
+        echo "Warning: test application cleanup failed; continuing with cache cleanup"
+        failed = set true
+    end
+end
+# These pathspecs are fixed build paths, not user input. Execute one Git scan for all of them.
+cleanup = set ""
+scopes = array test-components
+components_only = get_env GOLEM_CLEAN_COMPONENTS_ONLY
+if not equals ${components_only} true
+    manifest_code = exec --get-exit-code cargo locate-project --workspace --message-format plain
+    if not equals ${manifest_code} 0
+        failed = set true
+    end
+    scopes = array builtin-tools cli dev-tools docs golem-skills integration-tests plugins sdks test-components website
+    roots = array target target-tarpaulin node_modules dist golem-temp _build .mooncakes .zig-cache zig-cache __pycache__ build-out .scala-build
+    for path in ${roots}
+        cleanup = concat ${cleanup} " \"${path}\""
+    end
+    paths = array golem-client/openapi golem-worker-executor/golem-wit builtin-tools/js-ts-tools/generated sdks/ts/packages/golem-ts-sdk/tests/bench/quickjs/crate
+    for path in ${paths}
+        cleanup = concat ${cleanup} " \"${path}\""
+    end
+    scoped = array docs/.next docs/out docs/coverage docs/build docs/public/_pagefind docs/next-env.d.ts "docs/*.tsbuildinfo" website/.astro "sdks/scala/**/out" "sdks/scala/**/.generated" "sdks/scala/**/wasm/*.wasm" "sdks/ts/**/.metadata" "sdks/ts/**/.component-measurements" "sdks/ts/**/.agent-template-wit" "sdks/ts/**/agent-template" "sdks/ts/**/agent-tool-middleware-template" "sdks/ts/**/tool-middleware-template" "sdks/ts/**/wasm/*.wasm" "sdks/effect/**/.generated-types" "sdks/effect/**/.template-target" "sdks/effect/**/golem-types-generated" "sdks/effect/**/coverage" "sdks/effect/**/agent-template" "sdks/effect/**/agent-tool-middleware-template" "sdks/effect/**/tool-middleware-template" "sdks/effect/**/wasm/*.wasm" "sdks/effect/**/wasm/artifact-provenance.json"
+    for path in ${scoped}
+        cleanup = concat ${cleanup} " \":(glob)${path}\" \":(glob)${path}/**\""
+    end
+end
+
+# Git preserves tracked fixtures and does not follow symlinks or remove nested repositories.
+directories = array target target-tarpaulin node_modules dist golem-temp _build .mooncakes .zig-cache zig-cache __pycache__ build-out .bloop .bsp .scala-build
+for scope in ${scopes}
+    for directory in ${directories}
+        cleanup = concat ${cleanup} " \":(glob)${scope}/**/${directory}\" \":(glob)${scope}/**/${directory}/**\""
+    end
+end
+wasm_scopes = array test-components
+if not equals ${components_only} true
+    wasm_scopes = array test-components builtin-tools plugins
+end
+for scope in ${wasm_scopes}
+    cleanup = concat ${cleanup} " \":(glob)${scope}/**/*.wasm\" \":(glob)${scope}/**/*.wat\""
+end
+cleanup = concat ${cleanup} " test-components/tool-streaming-scala/.generated test-components/tool-streaming-scala/.golem"
+cache_clean_code = exec --get-exit-code git clean ${mode} -e tmp/ -e data/ -e logs/ -e research/ -- %{cleanup}
+if not equals ${cache_clean_code} 0
+    echo "Warning: cache cleanup failed; continuing with Cargo cleanup"
+    failed = set true
+end
+
+if not equals ${components_only} true
+    if ${dry_run}
+        echo "Would run cargo clean for the configured target directory"
+    else
+        # Cargo validates the configured target before deletion, including redirected external targets.
+        tracked = exec git ls-files -- "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}"
+        if is_empty ${tracked.stdout}
+            cargo_clean_code = exec --get-exit-code cargo clean
+            if not equals ${cargo_clean_code} 0
+                failed = set true
+            end
+        end
+    end
+end
+if ${failed}
+    trigger_error "Cleanup finished with failures; see the errors above"
+end
 '''

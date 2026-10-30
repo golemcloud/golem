@@ -131,7 +131,7 @@ This SDK is part of the main Golem repository but is **not built by `cargo make 
 
 ```shell
 # From repository root
-cargo test -p golem-worker-executor --test integration -- <affected-test> --report-time
+cargo test -p golem-worker-executor-tests --test integration -- <affected-test> --report-time
 ```
 
 Use a worker executor test group or `cargo make worker-executor-tests` only for broad SDK runtime, durability, value-conversion, or agent framework changes whose platform consumers cannot be isolated. SDK-only implementation, test, or documentation changes do not require root workspace checks.

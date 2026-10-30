@@ -5010,7 +5010,7 @@ mod app_builder {
                         app.application
                             .clean
                             .into_iter()
-                            .map(|path| WithSource::new(app.source.to_path_buf(), path)),
+                            .map(|path| WithSource::new(app_source_dir.to_path_buf(), path)),
                     );
 
                     if let Some(http_api) = app.application.http_api {

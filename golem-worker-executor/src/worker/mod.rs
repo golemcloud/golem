@@ -400,6 +400,17 @@ pub trait WorkerDeletionHook: Send + Sync {
 
     async fn before_filesystem_cleanup(&self, _owned_agent_id: &OwnedAgentId) {}
 
+    async fn before_owner_operation_settlement(&self, _owned_agent_id: &OwnedAgentId) {}
+
+    /// Coordinates the accepted supervisor after failed entity resources have been released,
+    /// but before its original operation leaves the owner registry.
+    async fn before_failed_tool_settlement(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _start: OplogIndex,
+    ) {
+    }
+
     async fn before_stage(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -909,9 +920,6 @@ struct RunningWorker {
     unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
     idle_since_millis: Arc<AtomicU64>,
     interrupts: Arc<Interrupts>,
-    /// `ResumeReplay` is signalled directly through the command channel rather
-    /// than the internal queue, so eviction must treat it as pending work.
-    resume_replay_pending: Arc<AtomicBool>,
     start_attempt: Uuid,
     owner_generation_started: bool,
 }
@@ -934,7 +942,22 @@ pub(crate) struct ObservedPrimaryStore<T> {
     )>,
 }
 
-type WorkerRunningAgent<Ctx> = RunningAgent<RunningAgentRuntime<Ctx>>;
+enum PreparedAgent<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
+    Resident(RunningAgent<Runtime, Adapter>),
+    Aborted {
+        runtime: Runtime,
+        filesystem: SealedFilesystem<Adapter>,
+    },
+}
+
+impl<Runtime, Adapter: SandboxFilesystemAdapter> PreparedAgent<Runtime, Adapter> {
+    fn runtime(&self) -> &Runtime {
+        match self {
+            Self::Resident(agent) => &agent.runtime,
+            Self::Aborted { runtime, .. } => runtime,
+        }
+    }
+}
 
 /// The filesystem of a start: the plan of its baseline, made before the agent filesystem exists,
 /// and the restore that [`StartFilesystem::materialize`] applies to the new filesystem.
@@ -989,8 +1012,8 @@ struct FilesystemGenerationPublication {
 ///    executing. Evicting requires oplog recovery on next start, so it is the
 ///    expensive fallback path.
 ///
-/// Workers with non-durable in-memory work (internal queue, `ResumeReplay`,
-/// interrupt) or that are actively executing are never evictable.
+/// Workers with non-durable in-memory work (internal queue, interrupt) or
+/// that are actively executing are never evictable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvictionClass {
     /// Resident in memory, not executing, no durable pending work.
@@ -1121,7 +1144,6 @@ struct ResolvedAgentProperties {
 enum WorkerCommand {
     WorkAvailable,
     InternalStatusChanged,
-    ResumeReplay,
     UpdateFilesystemLimit {
         allocated_bytes: u64,
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,

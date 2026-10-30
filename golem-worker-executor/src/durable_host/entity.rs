@@ -21,8 +21,8 @@
 use crate::durable_host::DurableWorkerCtx;
 pub(crate) use crate::durable_host::concurrent::EntitySettlementContext;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, DurableCallSession, HistoricalReconstruction, LeaveIncompleteOnDrop,
-    ReconstructionReplayOutcome, ReplayAccessStartOutcome,
+    AccessClaimOptions, DurableCallSession, HistoricalReconstruction, InvocationIdSource,
+    LeaveIncompleteOnDrop, ReconstructionReplayOutcome, ReplayAccessStartOutcome,
 };
 use crate::durable_host::durable_session::strip_typed_streams;
 use crate::durable_host::replay_state::ReplayState;
@@ -314,7 +314,8 @@ impl EntityInvocationDurability {
         operation: EntityInvocationDescriptor,
         plan: EntityInvocationPlanReference,
         input: TypedSchemaValue,
-    ) -> Result<Self, WorkerExecutorError>
+        invocation_id: InvocationIdSource,
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -323,7 +324,8 @@ impl EntityInvocationDurability {
         if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
             return Err(WorkerExecutorError::runtime(
                 "live entity invocation Start requested during historical replay",
-            ));
+            )
+            .into());
         }
         let parent_start_index = parent.start_index();
         let metadata = EntityInvocationRequest {
@@ -368,13 +370,14 @@ impl EntityInvocationDurability {
                 AccessClaimOptions {
                     parent_start_index: Some(parent_start_index),
                     incomplete_repair_authorized_by_scope: true,
+                    invocation_id,
                     ..AccessClaimOptions::default()
                 },
                 request,
                 span_started.clone(),
             )
             .await?;
-        Self::from_started_request(
+        Ok(Self::from_started_request(
             store,
             get_ctx,
             parent,
@@ -385,7 +388,7 @@ impl EntityInvocationDurability {
             started_input,
             Some(span_started),
         )
-        .await
+        .await?)
     }
 
     pub(crate) async fn replay_tool_access<T, D, Ctx>(
@@ -393,6 +396,7 @@ impl EntityInvocationDurability {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         parent: OwnerInvocationId,
         key_context: &EntityInvocationKeyContext,
+        invocation_id: InvocationIdSource,
     ) -> Result<ToolInvocationReplayOutcome, WorkerExecutorError>
     where
         T: 'static,
@@ -410,6 +414,7 @@ impl EntityInvocationDurability {
                     ),
                     parent_start_index: Some(parent_start_index),
                     incomplete_repair_authorized_by_scope: true,
+                    invocation_id,
                     ..AccessClaimOptions::default()
                 },
             )
@@ -1182,12 +1187,13 @@ fn take_entity_resources(
     resources.lock().unwrap().take()
 }
 
-pub async fn record_tool_rejection_access<T, D, Ctx>(
+pub(crate) async fn record_tool_rejection_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     parent: OwnerInvocationId,
     mut request: HostRequestGolemToolInvocationRejected,
-) -> Result<HostResponseEntityInvocation, WorkerExecutorError>
+    invocation_id: InvocationIdSource,
+) -> anyhow::Result<HostResponseEntityInvocation>
 where
     T: 'static,
     D: HasData + ?Sized,
@@ -1238,6 +1244,7 @@ where
         AccessClaimOptions {
             parent_start_index: Some(parent.start_index()),
             incomplete_repair_authorized_by_scope: true,
+            invocation_id,
             ..AccessClaimOptions::default()
         },
         request,
@@ -1247,7 +1254,7 @@ where
     handle
         .complete_access_with_span(store, get_ctx, response, span_finished)
         .await
-        .map_err(|error| error.source)
+        .map_err(|error| error.into_marked_anyhow())
 }
 
 pub(crate) async fn encode_tool_terminal(

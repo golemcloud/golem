@@ -14,7 +14,7 @@
 
 // `store_component_with` in `dsl_impl.rs` is an instrumented async fn whose
 // layout needs more depth than rustc's default of 128. On rustc 1.98 the
-// observed minimum is 129; 256 matches `golem-worker-executor/tests/lib.rs`.
+// observed minimum is 129; 256 matches `golem-worker-executor-tests/tests/lib.rs`.
 #![recursion_limit = "256"]
 
 pub mod agent_deployments_service;
@@ -1508,6 +1508,31 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// Pauses the next reconstruction of the agent after `prepare_instance` returns, before the
+    /// invocation loop takes a queued interrupt. Dropping the release sender also unblocks it.
+    pub fn gate_next_prepared_instance(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .prepared_instance_gates
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                OplogReadGate {
+                    entered_tx,
+                    release_rx,
+                },
+            );
+        (entered_rx, release_tx)
+    }
+
     /// Appends a buffered lifecycle hint after the next source commit has flushed.
     pub fn append_after_next_oplog_commit(&self, agent_id: &AgentId) {
         self.additional_test_deps
@@ -1556,6 +1581,22 @@ impl TestWorkerExecutor {
         Ok(golem_worker_executor::services::HasEvents::events(
             worker.as_ref(),
         ))
+    }
+
+    /// Adds an entry to the loaded worker's oplog and commits it through the worker, so the
+    /// status owner folds it as it folds the entries of production producers.
+    pub async fn add_and_commit_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        entry: OplogEntry,
+    ) -> anyhow::Result<OplogIndex> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        Ok(worker.add_and_commit_oplog(entry).await?)
     }
 
     pub async fn commit_oplog_entry_bypassing_worker_status(
@@ -1901,6 +1942,25 @@ impl TestWorkerExecutor {
         handle.gate.after_append.store(after_end, Ordering::SeqCst);
         handle.gate.commit_prefix.store(true, Ordering::SeqCst);
         handle
+    }
+
+    /// Holds the next queued source-transfer payload append before it changes storage.
+    pub async fn gate_next_source_transfer_queued_append(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        self.additional_test_deps
+            .gate_next_append(agent_id.clone(), |entry| {
+                matches!(
+                    entry,
+                    OplogEntry::CardEventQueued { event, .. }
+                        if matches!(
+                            event.as_ref(),
+                            golem_common::base_model::oplog::QueuedCardEvent::TransferStarted(_)
+                        )
+                )
+            })
+            .await
     }
 
     /// Holds the real invocation Started append before it changes storage.
@@ -2476,7 +2536,8 @@ impl TestContext {
             let result = tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
                 .await
                 .map_err(|_| anyhow!(
-                    "Executor tasks did not exit within 10s; refusing to start a replacement over the same storage"
+                    "Executor tasks did not exit within 10s; refusing to start a replacement over the same storage ({})",
+                    loops.describe_pending_exit()
                 ))?;
             result.map_err(anyhow::Error::msg)?;
             drained.push(loops.clone());
@@ -3456,21 +3517,25 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         .await
     }
 
-    async fn resume_replay(
-        store: &mut Store<TestWorkerCtx>,
-        instance: &Instance,
-        refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::resume_replay(store, instance, refresh_replay_target)
-            .await
-    }
-
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
         store: &mut Store<TestWorkerCtx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await
+        let result =
+            DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await;
+        let gate = store
+            .data()
+            .additional_test_deps
+            .prepared_instance_gates
+            .lock()
+            .unwrap()
+            .remove(agent_id);
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
+        result
     }
 
     async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync + 'static>(
@@ -4159,6 +4224,14 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn wrap_oplog_service(&self, service: Arc<dyn OplogService>) -> Arc<dyn OplogService> {
+        Arc::new(oplog_fixture::OplogFixtureService::new(
+            service,
+            self.additional_test_deps.clone(),
+            false,
+        ))
+    }
+
     fn capture_services(&self, services: &golem_worker_executor::services::All<TestWorkerCtx>) {
         *self.services.lock().unwrap() = Some(services.clone());
     }
@@ -4498,6 +4571,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         Arc::new(oplog_fixture::OplogFixtureService::new(
             service,
             self.test_oplog_deps.clone(),
+            true,
         ))
     }
 
@@ -7042,6 +7116,7 @@ pub struct AdditionalTestDeps {
     runtime_card_audit_gates:
         Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
     wallet_install_commit_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
+    prepared_instance_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
     append_after_commit: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
@@ -7127,6 +7202,7 @@ impl AdditionalTestDeps {
             oplog_delete_gates: Arc::default(),
             runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wallet_install_commit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            prepared_instance_gates: Arc::default(),
             append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
@@ -9337,6 +9413,8 @@ impl Rpc for RecordingRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
@@ -9348,6 +9426,8 @@ impl Rpc for RecordingRpc {
                 self_stack,
                 config,
                 auth_ctx,
+                idempotency_key,
+                freshness_disposition,
             )
             .await
     }
@@ -9432,6 +9512,8 @@ impl Rpc for FailingRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
@@ -9443,6 +9525,8 @@ impl Rpc for FailingRpc {
                 self_stack,
                 config,
                 auth_ctx,
+                idempotency_key,
+                freshness_disposition,
             )
             .await
     }

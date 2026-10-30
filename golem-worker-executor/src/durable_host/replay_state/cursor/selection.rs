@@ -63,6 +63,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         | OplogEntry::CancelPendingInvocation { .. }
         | OplogEntry::Snapshot { .. }
         | OplogEntry::SnapshotConfirmed { .. }
+        | OplogEntry::SpanClosed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }
@@ -136,6 +137,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::RolledBackRemoteTransaction { .. }
         | OplogEntry::Snapshot { .. }
         | OplogEntry::SnapshotConfirmed { .. }
+        | OplogEntry::SpanClosed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }
@@ -392,18 +394,6 @@ impl CursorTx<'_> {
         &mut self,
         claim: &StartClaim,
     ) -> Result<MissingStart, WorkerExecutorError> {
-        if let Some(invocation_id) = claim.expected_invocation_id()
-            && self
-                .unclaimed_start_with_invocation_id(invocation_id)
-                .await?
-        {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                claim.expected_description(),
-                "no matching Start; a Start with the same invocation id exists but does not match"
-                    .to_string(),
-            ));
-        }
-
         loop {
             self.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
                 .await?;
@@ -545,41 +535,17 @@ impl CursorTx<'_> {
 
     /// Whether a `Start` nobody has claimed yet carries `invocation_id`: a retained one, or one
     /// between the cursor and the replay target.
-    async fn unclaimed_start_with_invocation_id(
+    pub(in crate::durable_host::replay_state) fn unclaimed_start_with_invocation_id(
         &self,
         invocation_id: DurableInvocationId,
-    ) -> Result<bool, UnreadableOplog> {
-        let carries_id = |entry: &OplogEntry| match entry {
-            OplogEntry::Start {
-                invocation_id: Some(recorded),
-                ..
-            } => *recorded == invocation_id,
-            _ => false,
-        };
-        if self
-            .st
+    ) -> bool {
+        self.st
             .retained_starts
             .values()
-            .any(|retained| carries_id(&retained.entry))
-        {
-            return Ok(true);
-        }
-        let start = self.cursor.last_replayed_index().next();
-        let claimed = &self.st.claimed_starts;
-        Ok(matches!(
-            self.cursor
-                .scan_oplog(
-                    start,
-                    self.cursor.replay_target().next(),
-                    &self.st.skipped_regions,
-                    self.st.skipped_regions.find_next_deleted_region(start),
-                    OplogIndex::NONE,
-                    |entry, _, index| carries_id(entry) && !claimed.contains(&index),
-                    |_, _, _| true,
-                )
-                .await?,
-            OplogEntryLookupResult::Found { .. }
-        ))
+            .any(|retained| start_invocation_id(&retained.entry) == Some(invocation_id))
+            || self
+                .unclaimed_start_ahead(invocation_id, |_| true)
+                .is_some()
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
@@ -628,6 +594,14 @@ impl CursorTx<'_> {
     }
 }
 
+/// What a claim finds ahead of the cursor when its `Start` is not at the head.
+enum StartAhead {
+    Found(OplogIndex, Box<OplogEntry>),
+    /// A guest delivery boundary comes first.
+    Blocked,
+    Missing,
+}
+
 impl CursorState {
     /// Probes for a remaining claim without consuming delivery or observation boundaries.
     /// Admission-refusal replay must prefer every recorded occurrence of an identical call,
@@ -648,6 +622,21 @@ impl CursorState {
         }
         let end = terminal_index.min(cursor.replay_target().next());
         let next = cursor.last_replayed_index().next();
+        if let Some(invocation_id) = claim.expected_invocation_id() {
+            return Ok(next < end
+                && cursor
+                    .start_invocation_ids
+                    .lock()
+                    .unwrap()
+                    .get(&invocation_id)
+                    .is_some_and(|starts| {
+                        starts.range(next..end).any(|(index, recorded)| {
+                            !self.claimed_starts.contains(index)
+                                && !self.skipped_regions.is_in_deleted_region(*index)
+                                && claim.matches_recorded(recorded)
+                        })
+                    }));
+        }
         if next < end {
             let candidate = cursor
                 .scan_oplog(
@@ -672,7 +661,7 @@ impl CursorState {
 }
 
 impl CursorTx<'_> {
-    /// Looks for the first not-yet-claimed `Start` entry matching `matches_identity`, registering a
+    /// Looks for the first not-yet-claimed `Start` entry matching `claim`, registering a
     /// resolver receiver keyed by the `Start`'s index and returning the registered handle together
     /// with the claimed entry. Shared core of every concurrent-replay `Start` claim.
     ///
@@ -683,9 +672,12 @@ impl CursorTx<'_> {
     /// replay — only the initiation order *within one guest task / parent chain* is. The head is
     /// consumed positionally when it already matches (the serial fast path costs nothing);
     /// otherwise the **first not-yet-claimed matching `Start`** between the cursor and the replay
-    /// target is scan-ahead-claimed: its index is recorded in [`CursorState::claimed_starts`] (so
-    /// the cursor auto-consumes the entry when it reaches it, like an awaited terminal, and never
-    /// hands it to another reader) and the resolver awaiter is registered immediately.
+    /// target is claimed ahead of the cursor: its index is recorded in
+    /// [`CursorState::claimed_starts`] (so the cursor auto-consumes the entry when it reaches it,
+    /// like an awaited terminal, and never hands it to another reader) and the resolver awaiter is
+    /// registered immediately. A claim with an invocation id finds that `Start` among the `Start`s
+    /// recorded with its id ([`ReplayCursor::start_invocation_ids`]); only a claim without one scans
+    /// the oplog.
     ///
     /// The `Start` consume/claim and the resolver registration happen **atomically** within this
     /// transaction (under the cursor lock). This is required for concurrent replay: if the cursor
@@ -701,9 +693,10 @@ impl CursorTx<'_> {
     /// immediate head mismatch.
     pub(in crate::durable_host::replay_state) async fn claim_start_matching(
         &mut self,
-        matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
+        claim: &StartClaim,
         consume_at_head: bool,
     ) -> Result<StartClaimAttempt, WorkerExecutorError> {
+        let matches_identity = |entry: &OplogEntry| claim.matches_start_identity(entry);
         // Retained `Start`s precede everything at or beyond the cursor head, so claiming them
         // first keeps same-identity claims in oplog order.
         if let Some((handle, entry)) = self.claim_retained_start(&matches_identity).await? {
@@ -733,11 +726,50 @@ impl CursorTx<'_> {
             return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
         }
 
-        // The head belongs to someone else: scan ahead for the first not-yet-claimed matching
-        // `Start`, skipping deleted regions exactly like the cursor itself would. A delivery
-        // marker bounds the scan: a later `Start` must not be claimed before the recorded guest
-        // handoff at that marker.
-        let already_claimed = self.st.claimed_starts.clone();
+        // The head belongs to someone else: find the first not-yet-claimed matching `Start` ahead
+        // of the cursor, outside deleted regions. A delivery boundary before it bounds the claim:
+        // a later `Start` must not be claimed before the recorded guest handoff at that boundary.
+        let ahead = match claim.expected_invocation_id() {
+            Some(invocation_id) => {
+                let start = self.unclaimed_start_ahead(invocation_id, |recorded| {
+                    claim.matches_recorded(recorded)
+                });
+                let bound = start.unwrap_or_else(|| self.cursor.replay_target().next());
+                if self.delivery_boundary_before(bound) {
+                    StartAhead::Blocked
+                } else if let Some(index) = start {
+                    let entry = self.cursor.oplog.read(index).await?;
+                    StartAhead::Found(index, Box::new(entry))
+                } else {
+                    StartAhead::Missing
+                }
+            }
+            None => self.scan_for_start_ahead(&matches_identity).await?,
+        };
+        match ahead {
+            StartAhead::Found(index, entry) => {
+                self.st.claimed_starts.insert(index);
+                let handle = self
+                    .register_claimed_start(index, start_parent(&entry))
+                    .await?;
+                Ok(StartClaimAttempt::Claimed(handle, entry))
+            }
+            StartAhead::Blocked => {
+                self.blocked_on_completion_delivery = true;
+                Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress))
+            }
+            StartAhead::Missing => Ok(StartClaimAttempt::Missing),
+        }
+    }
+
+    /// Scans the oplog ahead of the cursor for the first not-yet-claimed `Start` matching
+    /// `matches_identity`, for a claim without an invocation id. The scan stops at the first
+    /// delivery boundary.
+    async fn scan_for_start_ahead(
+        &self,
+        matches_identity: &(impl Fn(&OplogEntry) -> bool + Sync),
+    ) -> Result<StartAhead, WorkerExecutorError> {
+        let already_claimed = &self.st.claimed_starts;
         let replay_target = self.cursor.replay_target();
         let scan_result = self
             .cursor
@@ -757,23 +789,75 @@ impl CursorTx<'_> {
                 |_, _, _| true,
             )
             .await?;
-
-        match scan_result {
+        Ok(match scan_result {
             OplogEntryLookupResult::Found { index, entry, .. } => {
                 if matches!(entry.as_ref(), OplogEntry::CompletionDelivered { .. })
                     || self.is_stream_observation(index)
                 {
-                    self.blocked_on_completion_delivery = true;
-                    return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
+                    StartAhead::Blocked
+                } else {
+                    StartAhead::Found(index, entry)
                 }
-                self.st.claimed_starts.insert(index);
-                let handle = self
-                    .register_claimed_start(index, start_parent(&entry))
-                    .await?;
-                Ok(StartClaimAttempt::Claimed(handle, entry))
             }
-            OplogEntryLookupResult::NotFound { .. } => Ok(StartClaimAttempt::Missing),
+            OplogEntryLookupResult::NotFound { .. } => StartAhead::Missing,
+        })
+    }
+
+    /// The first `Start` recorded with `invocation_id` that nobody has claimed, that lies between
+    /// the cursor and the replay target outside any deleted region, and that `accepts`.
+    fn unclaimed_start_ahead(
+        &self,
+        invocation_id: DurableInvocationId,
+        accepts: impl Fn(&RecordedStart) -> bool,
+    ) -> Option<OplogIndex> {
+        let next = self.cursor.last_replayed_index().next();
+        let target = self.cursor.replay_target();
+        if next > target {
+            return None;
         }
+        self.cursor
+            .start_invocation_ids
+            .lock()
+            .unwrap()
+            .get(&invocation_id)?
+            .range(next..=target)
+            .find(|(index, recorded)| {
+                !self.st.claimed_starts.contains(index)
+                    && !self.st.skipped_regions.is_in_deleted_region(**index)
+                    && accepts(recorded)
+            })
+            .map(|(index, _)| *index)
+    }
+
+    /// Whether a guest delivery boundary (a `CompletionDelivered` marker or a guest stream
+    /// observation) lies between the cursor and `bound`, outside any deleted region.
+    fn delivery_boundary_before(&self, bound: OplogIndex) -> bool {
+        let next = self.cursor.last_replayed_index().next();
+        if next >= bound {
+            return false;
+        }
+        let delivered = self
+            .cursor
+            .completion_markers
+            .lock()
+            .unwrap()
+            .delivered_in(next..bound)
+            .any(|index| !self.st.skipped_regions.is_in_deleted_region(index));
+        if delivered {
+            return true;
+        }
+        let observations: Vec<OplogIndex> = self
+            .cursor
+            .stream_observations
+            .lock()
+            .unwrap()
+            .range(next..bound)
+            .map(|(index, _)| *index)
+            .filter(|index| !self.st.skipped_regions.is_in_deleted_region(*index))
+            .collect();
+        observations
+            .into_iter()
+            .any(|index| self.is_stream_observation(index))
     }
 
     /// Returns the latest `Start` matching this claim in a jump-deleted region. An incomplete
@@ -785,6 +869,24 @@ impl CursorTx<'_> {
         claim: &StartClaim,
     ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
         let replay_target = self.cursor.replay_target();
+        if let Some(invocation_id) = claim.expected_invocation_id() {
+            return Ok(self
+                .cursor
+                .start_invocation_ids
+                .lock()
+                .unwrap()
+                .get(&invocation_id)
+                .and_then(|starts| {
+                    starts
+                        .range(..=replay_target)
+                        .rev()
+                        .find(|(index, recorded)| {
+                            self.st.skipped_regions.is_in_deleted_region(**index)
+                                && claim.matches_recorded(recorded)
+                        })
+                        .map(|(index, _)| *index)
+                }));
+        }
         let regions = self
             .st
             .skipped_regions
@@ -827,10 +929,7 @@ impl CursorTx<'_> {
         // A reconstruction claim does not consume the entity invocation `Start` at the head. It
         // claims the `Start` through the scan, and the cursor consumes it when it reaches it.
         let attempt = self
-            .claim_start_matching(
-                |entry: &OplogEntry| claim.matches_start_identity(entry),
-                !claim.is_reconstruction_claim(),
-            )
+            .claim_start_matching(claim, !claim.is_reconstruction_claim())
             .await?;
         let (mut handle, entry) = match attempt {
             StartClaimAttempt::Claimed(handle, entry) => (handle, entry),

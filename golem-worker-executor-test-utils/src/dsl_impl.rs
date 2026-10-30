@@ -588,6 +588,8 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
                 invocation_context: None,
+                idempotency_key: None,
+                freshness_disposition: 0,
             })
             .await?;
 

@@ -29,6 +29,7 @@ pub(super) fn matching_admission_refusal(
         SerializableToolAdmissionRefusal::AtRecordedOplogEntry { .. }
         | SerializableToolAdmissionRefusal::BeforePositional { .. }
         | SerializableToolAdmissionRefusal::BeforeInputRead { .. }
+        | SerializableToolAdmissionRefusal::BeforeDurableInputDisposal { .. }
         | SerializableToolAdmissionRefusal::BeforeAttachmentDisposal { .. } => false,
     };
     Ok(
@@ -205,20 +206,16 @@ impl StartClaim {
     }
 
     pub(super) fn matches_start_identity(&self, entry: &OplogEntry) -> bool {
-        matches!(entry, OplogEntry::Start {
-            function_name,
-            invocation_id,
-            observational_owner,
-            request,
-            durable_function_type,
-            parent_start_index,
-            ..
-        } if self.matches_function_name(function_name)
-            && *durable_function_type == self.function_type
-            && *invocation_id == self.invocation_id
-            && *observational_owner == self.observational_owner
-            && request.is_some() == self.carries_request()
-            && *parent_start_index == self.parent_start_index)
+        RecordedStart::of(entry).is_some_and(|recorded| self.matches_recorded(&recorded))
+    }
+
+    pub(super) fn matches_recorded(&self, recorded: &RecordedStart) -> bool {
+        self.matches_function_name(&recorded.function_name)
+            && recorded.function_type == self.function_type
+            && recorded.invocation_id == self.invocation_id
+            && recorded.observational_owner == self.observational_owner
+            && recorded.carries_request == self.carries_request()
+            && recorded.parent_start_index == self.parent_start_index
     }
 
     /// Human-readable description of the expected `Start`, used as the "expected" side of an
@@ -239,6 +236,41 @@ impl StartClaim {
         match self.invocation_id {
             Some(invocation_id) => format!("{description} with invocation id {invocation_id}"),
             None => description,
+        }
+    }
+}
+
+/// The identity of a recorded `Start` entry: the fields a [`StartClaim`] matches.
+#[derive(Debug, Clone)]
+pub(super) struct RecordedStart {
+    function_name: HostFunctionName,
+    function_type: DurableFunctionType,
+    parent_start_index: Option<OplogIndex>,
+    observational_owner: Option<OplogIndex>,
+    invocation_id: Option<DurableInvocationId>,
+    carries_request: bool,
+}
+
+impl RecordedStart {
+    pub(super) fn of(entry: &OplogEntry) -> Option<Self> {
+        match entry {
+            OplogEntry::Start {
+                function_name,
+                invocation_id,
+                observational_owner,
+                request,
+                durable_function_type,
+                parent_start_index,
+                ..
+            } => Some(Self {
+                function_name: function_name.clone(),
+                function_type: durable_function_type.clone(),
+                parent_start_index: *parent_start_index,
+                observational_owner: *observational_owner,
+                invocation_id: *invocation_id,
+                carries_request: request.is_some(),
+            }),
+            _ => None,
         }
     }
 }
@@ -303,6 +335,11 @@ impl ReplayState {
     }
 
     /// Waits until a blocked claim may run again.
+    ///
+    /// Only a running Store of the owner moves the cursor, changes the active bodies or selects
+    /// an owner failure. When the owner's tasks are stopped (executor shutdown or deletion), no
+    /// such Store remains, so the wait ends there instead of keeping the owner's retirement
+    /// pending forever.
     pub(super) async fn wait_while_blocked(
         &self,
         blocked: BlockedOn,
@@ -314,11 +351,20 @@ impl ReplayState {
                 .active_body_waits
                 .send_modify(|waits| *waits += 1);
         }
+        let owner_tasks_stopped = async {
+            match self.cursor.oplog.task_owner() {
+                Some(tasks) => tasks.stopped().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             biased;
             failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
                 Err(super::cursor::historical_reconstruction_owner_failure(failure))
             }
+            () = owner_tasks_stopped => Err(WorkerExecutorError::Interrupted {
+                kind: golem_service_base::error::worker_executor::InterruptKind::Jump,
+            }),
             _ = blocked.wait(progress) => Ok(()),
         }
     }
@@ -425,13 +471,23 @@ impl ReplayState {
                                 Ok((Some((handle, entry)), None, None))
                             }
                             Ok(StartClaimAttempt::Blocked(on)) => Ok((None, Some(on), None)),
-                            Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
-                                Ok((None, None, Some(Missing::ReplayEnded)))
-                            }
-                            Ok(StartClaimAttempt::Missing) if store_live => {
-                                Ok((None, None, Some(Missing::StoreAlreadyLive)))
-                            }
                             Ok(StartClaimAttempt::Missing) => {
+                                // Draining the cursor can retain calls the guest has not
+                                // reproduced. Exhaustion does not permit changing their identity.
+                                if let Some(invocation_id) = owned_claim.expected_invocation_id()
+                                    && tx.unclaimed_start_with_invocation_id(invocation_id)
+                                {
+                                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                        owned_claim.expected_description(),
+                                        "no matching Start; a Start with the same invocation id exists but does not match",
+                                    ));
+                                }
+                                if tx.cursor.is_live() {
+                                    return Ok((None, None, Some(Missing::ReplayEnded)));
+                                }
+                                if store_live {
+                                    return Ok((None, None, Some(Missing::StoreAlreadyLive)));
+                                }
                                 if let Some(bodies) = tx.active_body_owning_head(
                                     tx.buffered_head_owner(),
                                     owned_claim.expected_parent_start_index(),

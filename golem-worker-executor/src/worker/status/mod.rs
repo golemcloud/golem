@@ -34,6 +34,8 @@ pub(crate) use regions::{
 };
 use update_queue::{UpdateStep, manual_update_target_revision_of};
 
+#[cfg(test)]
+pub(crate) use entity_replay::calculate_entity_replay_progress;
 use execution::calculate_latest_worker_status;
 use fields::calculate_active_plugins;
 use fields::calculate_durable_stream_sessions;
@@ -44,6 +46,7 @@ pub(crate) use fields::calculate_pending_card_events;
 use fields::calculate_pending_invocations;
 use fields::calculate_received_card_transfers;
 use fields::calculate_revoked_cards;
+use fields::calculate_source_card_transfers;
 use fields::calculate_total_linear_memory_size;
 use fields::calculate_update_fields;
 use fields::collect_resources;
@@ -61,6 +64,7 @@ pub use reconstruction::try_fold_status_from;
 #[cfg(test)]
 use reconstruction::try_fold_status_from_reader;
 
+mod entity_replay;
 mod execution;
 mod fields;
 mod reconstruction;
@@ -271,6 +275,14 @@ fn update_status_with_precomputed_regions(
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
     let received_card_transfers =
         calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
+    let source_card_transfers =
+        calculate_source_card_transfers(last_known.source_card_transfers, &new_entries);
+    let entity_replay_progress = entity_replay::calculate_entity_replay_progress(
+        last_known.entity_replay_progress,
+        skipped_regions,
+        deleted_regions,
+        &new_entries,
+    )?;
     let durable_stream_sessions = calculate_durable_stream_sessions(
         last_known.durable_stream_sessions,
         deleted_regions,
@@ -392,6 +404,8 @@ fn update_status_with_precomputed_regions(
         successful_updates,
         invocation_results,
         received_card_transfers,
+        source_card_transfers,
+        entity_replay_progress,
         durable_stream_sessions,
         export_fork_admissions,
         has_durable_stream_history,

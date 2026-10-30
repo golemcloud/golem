@@ -78,7 +78,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 self,
                 DurableFunctionType::ReadRemote,
             )
-            .await?;
+            .await
+            .map_err(SocketError::trap)?;
 
         let result = 'resp: {
             let mut handle = match begun.resolve(self).await? {

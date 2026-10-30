@@ -36,7 +36,7 @@ use crate::model::oplog::public_oplog_entry::{
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, ResumedParams,
     RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, StartParams, SuccessfulUpdateParams, SuspendParams,
+    SnapshotParams, SpanClosedParams, StartParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
@@ -1945,6 +1945,68 @@ fn raw_snapshot_confirmed_roundtrips_and_is_a_hint() {
 }
 
 #[test]
+fn span_closed_is_a_hint_and_roundtrips() {
+    use crate::model::oplog::{SpanFinished, SpanOutcome};
+
+    let timestamp = Timestamp::now_utc().rounded();
+    let span_id = SpanId::generate();
+    let raw = OplogEntry::SpanClosed {
+        timestamp,
+        entity_parent_start_index: Some(OplogIndex::from_u64(3)),
+        resource_start_index: Some(OplogIndex::from_u64(7)),
+        span_finished: SpanFinished {
+            span_id: span_id.clone(),
+            finished_at: timestamp,
+            outcome: SpanOutcome::Cancelled,
+        },
+    };
+    assert!(raw.is_hint());
+    assert_eq!(
+        raw.entity_parent_start_index(),
+        Some(OplogIndex::from_u64(3))
+    );
+
+    let bytes = crate::serialization::serialize(&raw).unwrap();
+    let decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    assert_eq!(decoded, raw);
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        raw.clone().try_into().unwrap();
+    assert_eq!(OplogEntry::try_from(proto).unwrap(), raw);
+
+    for resource_start_index in [None, Some(OplogIndex::from_u64(7))] {
+        let public = PublicOplogEntry::SpanClosed(SpanClosedParams {
+            timestamp,
+            resource_start_index,
+            span_finished: PublicSpanFinished {
+                span_id: span_id.clone(),
+                finished_at: timestamp,
+                outcome: PublicSpanOutcome::Cancelled,
+            },
+        });
+        let json: PublicOplogEntry = serde_json::from_str(&public.to_json_string()).unwrap();
+        assert_eq!(json, public);
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            public.clone().try_into().unwrap();
+        assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+        assert!(public.matches(&Query::Term {
+            value: "span-closed".to_string(),
+        }));
+        match OplogEntry::try_from(public).unwrap() {
+            OplogEntry::SpanClosed {
+                resource_start_index: raw_resource_start_index,
+                span_finished,
+                ..
+            } => {
+                assert_eq!(raw_resource_start_index, resource_start_index);
+                assert_eq!(span_finished.span_id, span_id);
+                assert_eq!(span_finished.outcome, SpanOutcome::Cancelled);
+            }
+            other => panic!("expected span closed entry, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn public_snapshot_with_filesystem_snapshot_roundtrips() {
     let entry = PublicOplogEntry::Snapshot(SnapshotParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -2206,6 +2268,7 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
             entity_parent_start_index: None,
             card: Box::new(source_card.clone().into()),
             wallet_generation: 3,
+            transfer_id: Some(transfer_id),
         },
         OplogEntry::CardRevoked {
             timestamp,

@@ -23,7 +23,8 @@
 
 use super::route_schema::{ResponseModel, RouteSchema};
 use super::schema_mapping::{
-    arbitrary_binary_schema, render_output_schema, string_enum_schema, string_schema,
+    arbitrary_binary_schema, render_output_schema, request_validation_error_schema,
+    string_enum_schema, string_schema,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::HttpMethod;
@@ -120,6 +121,19 @@ pub fn get_route_response_schema(
                     responses.insert(200, ResponseBodyOpenApiSchema::Unknown);
                 }
             }
+            let bad_request_body = if route
+                .route_match
+                .method()
+                .is_some_and(|method| http_method_name(method) == "HEAD")
+            {
+                ResponseBodyOpenApiSchema::NoBody
+            } else {
+                ResponseBodyOpenApiSchema::Known {
+                    schema: request_validation_error_schema(components)?,
+                    content_type: "application/json".to_string(),
+                }
+            };
+            responses.insert(400, bad_request_body);
         }
         RichRouteBehaviour::CorsPreflight(cors_preflight_behaviour) => {
             let preflight = responses.insert(204, ResponseBodyOpenApiSchema::NoBody);

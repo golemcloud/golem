@@ -7,10 +7,11 @@
 //     http://license.golem.cloud/LICENSE
 
 use super::*;
+use crate::durable_host::durability::{GuestImportIdentity, ImportNumbering};
 use golem_common::model::component::ComponentId;
 use golem_common::model::entity::{AgentEntity, OwnedAgentEntityId};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{DurableInvocationId, OplogIndex};
 use golem_common::model::tool::ToolName;
 use golem_common::model::{AgentId, OwnedAgentId};
 use std::future::pending;
@@ -138,43 +139,48 @@ fn runtime_run_ids(count: usize) -> Vec<RuntimeRunId> {
 }
 
 #[test]
-fn only_the_newest_guest_import_can_reserve_an_invocation_id() {
-    let ids = runtime_ids(3);
-    let owner = OwnerSuspension::new();
-    let store = RuntimeStore::new(owner);
-    let started = |activity, kind| {
-        store.observe(RuntimeObservation::ActivityStarted { activity, kind });
+fn guest_imports_reserve_in_the_order_they_start() {
+    let ids = runtime_ids(5);
+    let guest_imports = Arc::new(GuestImportNumbering::default());
+    let store = RuntimeStore::with_guest_imports(OwnerSuspension::new(), guest_imports.clone());
+    let root = OplogIndex::from_u64(5);
+    let import = |activity| {
+        guest_imports.number_next_import(ImportNumbering::Under { root, anchor: root });
+        store.observe(RuntimeObservation::ActivityStarted {
+            activity,
+            kind: RuntimeActivityKind::Import,
+        });
+        guest_imports.host_call_returned();
     };
-    started(ids[0], RuntimeActivityKind::Import);
-    assert!(matches!(
-        store.guest_import_invocation_id(ids[0]),
-        GuestImportInvocationId::Reservable
-    ));
-
-    // Other activity kinds do not change the guest's import order.
-    started(ids[1], RuntimeActivityKind::Background);
-    assert!(matches!(
-        store.guest_import_invocation_id(ids[0]),
-        GuestImportInvocationId::Reservable
-    ));
-
-    let invocation_id = DurableInvocationId::new(OplogIndex::from_u64(1), 7);
-    store.record_guest_import_invocation_id(ids[0], invocation_id);
-    started(ids[2], RuntimeActivityKind::Import);
-    assert!(matches!(
-        store.guest_import_invocation_id(ids[0]),
-        GuestImportInvocationId::Reserved(id) if id == invocation_id
-    ));
-    assert!(matches!(
-        store.guest_import_invocation_id(ids[1]),
-        GuestImportInvocationId::Late
-    ));
+    // The first import reserves at entry, so it keeps its place after later imports start.
+    import(ids[0]);
+    assert_eq!(
+        guest_imports.reserve_import_identity(Some(ids[0])).unwrap(),
+        GuestImportIdentity::Id(DurableInvocationId::new(root, 0))
+    );
+    // Imports that make no durable call, such as polls, take no ordinal.
+    import(ids[1]);
+    // Other activity kinds, such as a task an import spawns, take no number.
+    store.observe(RuntimeObservation::ActivityStarted {
+        activity: ids[2],
+        kind: RuntimeActivityKind::Background,
+    });
+    import(ids[3]);
+    assert_eq!(
+        guest_imports.reserve_import_identity(Some(ids[3])).unwrap(),
+        GuestImportIdentity::Id(DurableInvocationId::new(root, 1))
+    );
+    assert_eq!(
+        guest_imports.reserve_import_identity(Some(ids[0])).unwrap(),
+        GuestImportIdentity::Id(DurableInvocationId::new(root, 0))
+    );
+    assert!(guest_imports.reserve_import_identity(Some(ids[2])).is_err());
+    // An import that reserves after the guest made another import call has lost its place.
+    import(ids[4]);
+    assert!(guest_imports.reserve_import_identity(Some(ids[1])).is_err());
 
     store.observe(RuntimeObservation::ActivityFinished { activity: ids[0] });
-    assert!(matches!(
-        store.guest_import_invocation_id(ids[0]),
-        GuestImportInvocationId::Late
-    ));
+    assert!(guest_imports.reserve_import_identity(Some(ids[0])).is_err());
 }
 
 pub(crate) fn blocked_timer(

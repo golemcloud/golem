@@ -22,6 +22,7 @@ use im::OrdMap;
 use uuid::Uuid;
 
 pub use crate::base_model::card::*;
+use crate::base_model::oplog::QueuedCardEventTransfer;
 
 const SCOPE_CARD_ENCODING_VERSION: u32 = 1;
 
@@ -158,25 +159,77 @@ pub enum ReceivedCardTransferState {
     Conflict,
 }
 
-/// An oplog-derived, sticky index of target-side permission-card receipts.
+/// The source-side records of one permission-card transfer, as the oplog of the source agent
+/// holds them.
 ///
-/// Receipts remain indexed even when their oplog entries are in skipped or deleted regions, so a
-/// retry cannot redeliver a transfer that the target has already observed. The persistent map
-/// keeps status clones and delta comparisons proportional to the changed paths rather than the
-/// total number of transfers.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ReceivedCardTransferIndex(OrdMap<Uuid, Arc<ReceivedCardTransferState>>);
+/// This is stored behind an `Arc` in [`SourceCardTransferIndex`].
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum SourceCardTransferState {
+    Recorded(SourceCardTransferRecords),
+    /// Two records of the same kind disagree.
+    Conflict,
+}
 
-impl ReceivedCardTransferIndex {
-    pub fn get(&self, transfer_id: &Uuid) -> Option<&ReceivedCardTransferState> {
+/// The first record of each kind that the oplog of the source agent holds for one transfer. A
+/// later record of the same kind must be equal to it, otherwise the transfer is in conflict.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BinaryCodec)]
+pub struct SourceCardTransferRecords {
+    /// The installed child card of a polymorphic source, from `CardDerived`.
+    pub derived_card: Option<StoredCard>,
+    /// The retry payload, from `CardEventQueued` with a `TransferStarted` event.
+    pub queued: Option<QueuedCardEventTransfer>,
+    /// The transfer intent, from `CardTransferStarted`.
+    pub started: Option<SourceCardTransferStarted>,
+    /// The target-admission receipt, from `CardTransferConfirmed`.
+    pub confirmed: Option<SourceCardTransferConfirmed>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct SourceCardTransferStarted {
+    pub card_id: CardId,
+    pub source_holder: CardHolder,
+    pub target_holder: CardHolder,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct SourceCardTransferConfirmed {
+    pub source_card_id: CardId,
+    pub installed_card_id: CardId,
+    pub target_holder: CardHolder,
+}
+
+/// An oplog-derived, sticky index of permission-card transfers by transfer ID.
+///
+/// Transfers remain indexed even when their oplog entries are in skipped or deleted regions: a
+/// received transfer is not received again, and a source transfer keeps the records that its
+/// retry continues from. The persistent map keeps status clones and delta comparisons
+/// proportional to the changed paths rather than the total number of transfers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CardTransferIndex<S>(OrdMap<Uuid, Arc<S>>);
+
+/// The target-side receipts of the transfers that the agent received.
+pub type ReceivedCardTransferIndex = CardTransferIndex<ReceivedCardTransferState>;
+
+/// The source-side records of the transfers that the agent started.
+pub type SourceCardTransferIndex = CardTransferIndex<SourceCardTransferState>;
+
+impl<S> Default for CardTransferIndex<S> {
+    fn default() -> Self {
+        Self(OrdMap::new())
+    }
+}
+
+impl<S: PartialEq> CardTransferIndex<S> {
+    pub fn get(&self, transfer_id: &Uuid) -> Option<&S> {
         self.0.get(transfer_id).map(Arc::as_ref)
     }
 
-    pub fn insert(&mut self, transfer_id: Uuid, state: ReceivedCardTransferState) {
+    pub fn insert(&mut self, transfer_id: Uuid, state: S) {
         self.0.insert(transfer_id, Arc::new(state));
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&Uuid, &ReceivedCardTransferState)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&Uuid, &S)> {
         self.0
             .iter()
             .map(|(transfer_id, state)| (transfer_id, state.as_ref()))
@@ -185,7 +238,7 @@ impl ReceivedCardTransferIndex {
     pub fn changes_from<'a>(
         &'a self,
         previous: &'a Self,
-    ) -> impl Iterator<Item = (Uuid, Option<&'a ReceivedCardTransferState>)> + 'a {
+    ) -> impl Iterator<Item = (Uuid, Option<&'a S>)> + 'a {
         use im::ordmap::DiffItem;
 
         previous.0.diff(&self.0).map(|change| match change {
@@ -199,7 +252,7 @@ impl ReceivedCardTransferIndex {
     }
 }
 
-impl BinarySerializer for ReceivedCardTransferIndex {
+impl<S: BinarySerializer> BinarySerializer for CardTransferIndex<S> {
     fn serialize<Output: BinaryOutput>(
         &self,
         context: &mut SerializationContext<Output>,
@@ -208,12 +261,11 @@ impl BinarySerializer for ReceivedCardTransferIndex {
     }
 }
 
-impl BinaryDeserializer for ReceivedCardTransferIndex {
+impl<S: BinaryDeserializer> BinaryDeserializer for CardTransferIndex<S> {
     fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
-        let entries =
-            desert_rust::deserialize_iterator::<(Uuid, Arc<ReceivedCardTransferState>)>(context)
-                .0
-                .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
+        let entries = desert_rust::deserialize_iterator::<(Uuid, Arc<S>)>(context)
+            .0
+            .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
         Ok(Self(entries))
     }
 }

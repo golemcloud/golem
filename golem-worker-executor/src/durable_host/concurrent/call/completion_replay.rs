@@ -73,7 +73,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
                 .await?;
                 access
-                    .finish_scope(self.retry.function_type().clone(), self.begin_index())
+                    .finish_scope(self.retry.function_type().clone())
                     .await?;
                 Ok(CallReplayOutcome::Replayed(response))
             }
@@ -123,8 +123,34 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_access_to(store, get_ctx, AccessResultDestination::Guest, false)
+        self.replay_access_to(store, get_ctx, AccessResultDestination::Guest, false, None)
             .await
+    }
+
+    /// Replays an effectful destructor from a background task. Its End is host-internal;
+    /// cancellation or a guest delivery marker is a divergence. Missing terminals repair only
+    /// after the natural replay tail, never by moving past intervening guest history.
+    pub(crate) async fn replay_drop_access<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        activity: &crate::durable_host::tail_work::TailActivity,
+    ) -> Result<CallReplayOutcome<Pair, P>, TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        self.replay_access_to(
+            store,
+            get_ctx,
+            AccessResultDestination::Host,
+            false,
+            Some(activity),
+        )
+        .await
+        .map_err(|source| TerminalCallError::new(source, context))
     }
 
     pub(super) async fn replay_access_to<T, D, Ctx>(
@@ -133,6 +159,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         destination: AccessResultDestination,
         require_completed: bool,
+        drop_activity: Option<&crate::durable_host::tail_work::TailActivity>,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
     where
         T: 'static,
@@ -143,7 +170,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.reproduce_refusal_for_claimed_start(&mut AccessorContext::new(store, get_ctx))
             .await?;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
@@ -158,7 +184,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .replay
             .take()
             .expect("replay_access() called on a live handle");
-        let outcome = replay_state.await_resolution_outcome(replay).await?;
+        let outcome = replay_state
+            .await_resolution_outcome_for_drop(replay, drop_activity)
+            .await?;
+        if drop_activity.is_some()
+            && matches!(
+                outcome,
+                ResolutionOutcome::Resolved(Resolution::Cancelled { .. })
+            )
+        {
+            self.finished = true;
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "End for an effectful resource drop",
+                format!("Cancelled for Start {}", self.start_idx),
+            ));
+        }
         if require_completed
             && !matches!(
                 outcome,
@@ -197,8 +237,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 if destination == AccessResultDestination::Guest {
                     CompletionDelivery::replay_delivered(
                         disposition,
@@ -238,16 +277,48 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
+                if let Some(activity) = drop_activity {
+                    if store.with(|mut access| {
+                        get_ctx(access.data_mut()).rejects_live_continuation_at_replay_tail()
+                    }) {
+                        self.finished = true;
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "End for an effectful resource drop",
+                            format!(
+                                "incomplete Start {} during completed entity replay",
+                                self.start_idx
+                            ),
+                        ));
+                    }
+                    // Do not acquire a live-call permit while later invocations must still
+                    // replay; that permit would hold their settlement open.
+                    replay_state.await_natural_tail_end(Some(activity)).await?;
+                }
                 self.prepare_incomplete_live_repair_at(&mut AccessorContext::new(store, get_ctx))
                     .await?;
-                let transition = publish_incomplete_replay_tail_at(
-                    &mut AccessorContext::new(store, get_ctx),
-                    Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
-                        index: self.start_idx.into(),
-                    }),
-                )
-                .await;
-                if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
+                let transition = if let Some(activity) = drop_activity {
+                    continue_live_at_natural_tail_end_access(
+                        store,
+                        get_ctx,
+                        &replay_state,
+                        activity,
+                        "effectful resource drop",
+                        Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                            index: self.start_idx.into(),
+                        }),
+                    )
+                    .await
+                } else {
+                    publish_incomplete_replay_tail_at(
+                        &mut AccessorContext::new(store, get_ctx),
+                        Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                            index: self.start_idx.into(),
+                        }),
+                    )
+                    .await
+                    .and_then(FinishReplayToLive::require_live)
+                };
+                if let Err(error) = transition {
                     self.finished = true;
                     return Err(error);
                 }
@@ -310,7 +381,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     {
         self.ensure_accessor_terminal_supported("replay_reconstruction_access")?;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
@@ -336,8 +406,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 CompletionDelivery::replay_delivered(
                     disposition,
                     self.start_idx,
@@ -358,8 +427,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 cancelled_idx,
             }) => {
                 self.finished = true;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 Err(WorkerExecutorError::unexpected_oplog_entry(
                     "entity cancellation with partial terminal provenance",
                     format!("Cancelled without partial at {cancelled_idx}"),
@@ -475,7 +543,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.ensure_accessor_terminal_supported("replay_access_deferred")?;
         self.reproduce_refusal_for_claimed_start(access).await?;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = access.with_ctx(|ctx| {
             (
                 ctx.state.replay_state.clone(),
@@ -499,7 +566,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                access.finish_scope(function_type, begin_index).await?;
+                access.finish_scope(function_type).await?;
                 // The delivery token is constructed only after the fallible decode / scope close
                 // succeeded: a token dropped on the error path would log a spurious
                 // unconsumed-token warning.
@@ -537,7 +604,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                access.finish_scope(function_type, begin_index).await?;
+                access.finish_scope(function_type).await?;
                 // As above, the token is constructed only after the fallible operations.
                 Ok(DeferredCallReplayOutcome::Replayed(
                     response,
@@ -743,8 +810,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                ctx.finish_scope(self.retry.function_type().clone(), self.begin_index())
-                    .await?;
+                ctx.finish_scope(self.retry.function_type().clone()).await?;
                 Ok(response)
             }
             ReplayedResolution::Undelivered(terminal) => {

@@ -2139,6 +2139,12 @@ async fn translate_private_response(
             translate_output_end(&mut state, end, keyring, PublicOutputStreamOutcome::Ok)
         }
         invocation_response::Response::OutputError(error) => {
+            tracing::warn!(
+                attempt_id = %attempt_id,
+                transport_stream_id = error.transport_stream_id,
+                error = %error.details,
+                "Invocation session output stream producer failed"
+            );
             translate_output_error(&mut state, error, keyring)
         }
         invocation_response::Response::InputAck(ack) => {
@@ -4702,6 +4708,7 @@ mod tests {
         let Message::Text(error_text) = &error_frames[0].message else {
             panic!("output error was not text")
         };
+        assert!(!error_text.contains("upstream failed"));
         assert!(matches!(
             golem_common::model::invocation_session_public::decode_server_text(
                 error_text.as_bytes()
