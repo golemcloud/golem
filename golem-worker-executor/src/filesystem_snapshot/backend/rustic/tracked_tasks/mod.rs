@@ -27,19 +27,27 @@ use tokio_util::task::TaskTracker;
 /// task does not run.
 #[derive(Clone, Debug)]
 pub(super) struct Spawner {
-    pub(super) tracker: TaskTracker,
-    pub(super) runtime: Handle,
+    tracker: TaskTracker,
+    runtime: Handle,
     /// The work of the incarnation of the operation that made the spawner.
-    pub(super) operation: OperationLease,
+    lease: OperationLease,
 }
 
 impl Spawner {
+    pub(super) fn new(tracker: TaskTracker, runtime: Handle, lease: OperationLease) -> Self {
+        Self {
+            tracker,
+            runtime,
+            lease,
+        }
+    }
+
     /// Runs the work as a task that the tracker and the work of the incarnation count.
     pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) -> JoinHandle<()> {
-        let operation = self.operation.clone();
+        let lease = self.lease.clone();
         self.tracker.spawn_on(
             async move {
-                let _operation = operation;
+                let _lease = lease;
                 task.await
             },
             &self.runtime,

@@ -142,8 +142,8 @@ pub(super) fn store_with_deadline(
             prune: PruneSettings {
                 fast_repack: true,
                 keep_delete: Duration::from_secs(15 * 60),
+                threshold: Percent(u16::MAX),
             },
-            prune_threshold: Percent(u16::MAX),
             retry: one_run(),
             publish_bound: publish_bound_for(deadline, Duration::from_secs(15 * 60)),
             in_call_tries: 1,
@@ -347,9 +347,9 @@ pub(super) fn policy(deadline: Duration, prune_threshold: Percent, grace: Durati
         deadline,
         prune: PruneSettings {
             keep_delete: grace,
+            threshold: prune_threshold,
             ..StorePolicy::from_config(&config()).prune
         },
-        prune_threshold,
         retry: one_run(),
         publish_bound: publish_bound_for(deadline, grace),
         in_call_tries: 1,
@@ -474,6 +474,7 @@ pub(super) async fn mark_the_packs_of_a_hidden_snapshot(
                 &PruneSettings {
                     fast_repack: true,
                     keep_delete: grace,
+                    ..PruneSettings::default()
                 },
             )
         })
@@ -803,22 +804,6 @@ pub(super) fn calls_of(storage: &ScriptedBlobStorage, label: &str) -> usize {
 /// A store over `inner` with the policy of the tests, which passes each call.
 pub(super) fn store_over(inner: &Arc<InMemoryBlobStorage>) -> Arc<RusticSnapshotStore> {
     store(inner.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO))
-}
-
-/// A storage over `inner` whose first write of a pack follows `first`, and whose other calls
-/// follow `other`.
-pub(super) fn scripted_first_pack(
-    inner: Arc<InMemoryBlobStorage>,
-    first: Script,
-    other: impl Fn(&str, &Path) -> Script + Send + Sync + 'static,
-) -> Arc<ScriptedBlobStorage> {
-    ScriptedBlobStorage::with_state(inner, 0usize, move |packs, op_label, path| {
-        match op_label == "write" && path.starts_with("data") {
-            true if *packs == 0 => (first, packs + 1),
-            true => (other(op_label, path), packs + 1),
-            false => (other(op_label, path), *packs),
-        }
-    })
 }
 
 /// Gives a rustic error whose source is the error, as rustic gives it to the store.

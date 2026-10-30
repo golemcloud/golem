@@ -161,7 +161,7 @@ fn the_first_refresh_starts_one_period_after_the_first_marker_and_not_after_the_
         .unwrap()
         .block_on(async {
             let files = files_over(Arc::new(InMemoryBlobStorage::new()));
-            let started = crate::filesystem_snapshot::backend::rustic::call_execution::now();
+            let started = crate::filesystem_snapshot::clock::monotonic_now();
             let marked = started.checked_sub(Duration::from_millis(900)).unwrap();
             let lease = Lease::until(started + Duration::from_secs(3600));
             let claim = claim_zero();
@@ -175,8 +175,7 @@ fn the_first_refresh_starts_one_period_after_the_first_marker_and_not_after_the_
                 &SystemClock,
             );
             std::pin::pin!(refreshes).next().await.unwrap();
-            crate::filesystem_snapshot::backend::rustic::call_execution::now()
-                .duration_since(started)
+            crate::filesystem_snapshot::clock::monotonic_now().duration_since(started)
         });
 
     assert_eq!(elapsed, Duration::from_millis(100));

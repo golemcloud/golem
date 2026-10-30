@@ -210,7 +210,7 @@ impl ScriptedBlobStorage {
             namespace: namespace.clone(),
             op_label,
             path: path.into(),
-            started: super::super::call_execution::now(),
+            started: crate::filesystem_snapshot::clock::monotonic_now(),
         }
     }
 
@@ -304,7 +304,7 @@ impl ScriptedBlobStorage {
         let (namespace, owned_path) = (call.namespace.clone(), Box::<Path>::from(path));
         let record_landing = move |landing_result: anyhow::Result<()>| {
             if landing_result.is_ok() {
-                let at = super::super::call_execution::now();
+                let at = crate::filesystem_snapshot::clock::monotonic_now();
                 events
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
@@ -461,7 +461,7 @@ impl Drop for InFlight<'_> {
                 op_label: self.op_label,
                 path: self.path.clone(),
                 started: self.started,
-                ended: super::super::call_execution::now(),
+                ended: crate::filesystem_snapshot::clock::monotonic_now(),
                 landed_late: false,
             });
     }

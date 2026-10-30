@@ -96,7 +96,7 @@ mod error_chains {
         CallFailure, ConfigExists, LeaseExpired, OperationCancelled, call_failure,
         is_config_exists, may_land, run_end, rustic_storage_end, storage_end,
     };
-    use crate::filesystem_snapshot::backend::rustic::call_execution::RunEnd;
+    use crate::filesystem_snapshot::backend::rustic::run_outcome::RunEnd;
     use crate::filesystem_snapshot::backend::rustic::test_support::{
         mapping_failed_call as failed_call, mapping_missing as missing, mapping_rustic as rustic,
     };

@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::call_execution::{Ended, Ran, RunResult};
 use super::failure_classification::{ended_by, storage_end};
 use super::operation::Operation;
-use super::pruning::PruneRan;
 use super::pruning::records::record_freed;
-use super::repository::open_existing;
+use super::pruning::{PruneRan, PruneSettings};
+use super::run_outcome::{Ended, Ran, RunResult};
 use super::snapshot_catalog::repository_snapshots;
 use crate::filesystem_snapshot::errors::CallError;
 use crate::metrics::filesystem_snapshots::{self, PruneOutcome};
@@ -34,30 +33,23 @@ fn added_packed_bytes(snapshot: &SnapshotFile) -> u64 {
         .map_or(0, |summary| summary.data_added_packed)
 }
 
-/// Settings and test observations of named deletion.
-pub(super) struct Delete<'a> {
-    pub(super) pruning: super::pruning::Pruning<'a>,
-    #[cfg(test)]
-    pub(super) failed_prunes: &'a std::sync::Mutex<Vec<anyhow::Error>>,
-}
-
 /// Records freed bytes before forgetting the snapshots, then prunes when due. A successful
 /// forget answers successfully even if the prune fails. The next delete can retry that prune.
 pub(super) async fn delete_run(
     operation: &Operation<'_>,
-    delete: Delete<'_>,
+    settings: PruneSettings,
     names: &HashSet<Box<str>>,
 ) -> RunResult<Result<(), CallError>> {
-    let (token, _guard, backend) = operation.begin_run()?;
-    let key = operation.key.clone();
+    let mut run = operation.begin_run()?;
+    let backend = run.take_backend();
     let names = names.clone();
     let found = operation
-        .blocking(move || {
-            let Some(repository) = open_existing(backend.clone(), &key)? else {
+        .read_existing(backend, move |repository, backend| {
+            let Some(repository) = repository else {
                 return Ok(None);
             };
             // One listing finds every snapshot of the batch.
-            let named = repository_snapshots(&repository, &backend)?
+            let named = repository_snapshots(&repository, backend)?
                 .readable
                 .into_iter()
                 .filter(|snapshot| names.contains(snapshot.label.as_str()))
@@ -78,7 +70,7 @@ pub(super) async fn delete_run(
     // The record comes before the forget, so a stop between the two cannot lose the bytes. A
     // forget that then fails ends the run, and the record stays, which only brings a prune
     // earlier.
-    let files = operation.files(&token);
+    let files = operation.files(run.token());
     if freed > 0 {
         let snapshots = ids
             .iter()
@@ -90,7 +82,7 @@ pub(super) async fn delete_run(
     }
     // The forget deletes the snapshot files with rayon, so it runs in a pool of its own. The
     // blocking thread starts the threads of that pool, so they have its normal priority.
-    let pool = operation.low_priority;
+    let pool = operation.low_priority();
     if let Err(error) = operation
         .blocking(move || {
             pool.in_own_pool("fs-snap-delete", move || {
@@ -104,7 +96,7 @@ pub(super) async fn delete_run(
     }
     filesystem_snapshots::record_released_bytes(freed);
     let started = Instant::now();
-    match super::pruning::when_due(operation, &delete.pruning, &token).await {
+    match super::pruning::when_due(operation, &settings, run.token()).await {
         Ok(PruneRan::Pruned) => {
             filesystem_snapshots::record_prune(PruneOutcome::Pruned, started.elapsed());
         }
@@ -117,11 +109,7 @@ pub(super) async fn delete_run(
             );
             filesystem_snapshots::record_prune(PruneOutcome::Failed, started.elapsed());
             #[cfg(test)]
-            delete
-                .failed_prunes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(error);
+            operation.record_prune_failure(error);
         }
     }
     Ok(Ran::Answered(Ok(())))

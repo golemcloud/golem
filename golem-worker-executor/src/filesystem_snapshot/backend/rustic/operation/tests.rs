@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Operation;
+use super::{Operation, Resources};
 use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::backend::rustic::cpu_priority::LowPriority;
 use crate::filesystem_snapshot::backend::rustic::repository::RepositoryKey;
+use crate::filesystem_snapshot::backend::rustic::restore::destination::{ClearHook, NoHook};
 use crate::filesystem_snapshot::clock::{Clock, SystemClock};
 use crate::filesystem_snapshot::operation_drain::{OperationDrain, OperationLease};
 use crate::filesystem_snapshot::test_support::new_scope;
@@ -38,6 +39,8 @@ struct Fixture {
     agent: AgentSnapshots,
     key: RepositoryKey,
     clock: Arc<dyn Clock>,
+    clear_hook: Arc<dyn ClearHook>,
+    failed_prunes: std::sync::Mutex<Vec<anyhow::Error>>,
 }
 
 impl Fixture {
@@ -51,22 +54,28 @@ impl Fixture {
             agent: new_scope(),
             key: RepositoryKey::new([0; 64]),
             clock: Arc::new(SystemClock),
+            clear_hook: Arc::new(NoHook),
+            failed_prunes: std::sync::Mutex::default(),
         }
     }
 
     fn operation<'a>(&'a self, lease: &'a OperationLease) -> Operation<'a> {
-        Operation {
-            storage: &self.storage,
-            root: &self.root,
-            tracker: &self.tracker,
+        Operation::new(
             lease,
-            key: &self.key,
-            low_priority: LowPriority::new(None),
-            clock: &self.clock,
-            deadline: Duration::from_secs(2),
-            tries: 1,
-            read_slots: &self.read_slots,
-        }
+            Resources {
+                storage: &self.storage,
+                root: &self.root,
+                tracker: &self.tracker,
+                key: &self.key,
+                low_priority: LowPriority::new(None),
+                clock: &self.clock,
+                deadline: Duration::from_secs(2),
+                tries: 1,
+                read_slots: &self.read_slots,
+                clear_hook: &self.clear_hook,
+                failed_prunes: &self.failed_prunes,
+            },
+        )
     }
 }
 
@@ -102,14 +111,53 @@ async fn the_backend_and_run_guard_retain_their_separate_lifetimes() {
     let fixture = Fixture::new();
     let lease = fixture.operations.begin(&fixture.agent);
     let operation = fixture.operation(&lease);
-    let (token, guard, backend) = operation.begin_run().unwrap();
+    let mut run = operation.begin_run().unwrap();
+    let token = run.token().clone();
+    let backend = run.take_backend();
 
     assert_eq!(fixture.tracker.len(), 1);
     assert!(!token.is_cancelled());
-    drop(guard);
+    drop(run);
     assert!(token.is_cancelled());
     assert!(!fixture.root.is_cancelled());
     assert_eq!(fixture.tracker.len(), 1);
     drop(backend);
     assert_eq!(fixture.tracker.len(), 0);
+}
+
+#[test]
+async fn an_untransferred_backend_drops_before_its_run_is_cancelled() {
+    struct OnCancel {
+        tracker: TaskTracker,
+        observed: std::sync::atomic::AtomicUsize,
+    }
+    impl futures::task::ArcWake for OnCancel {
+        fn wake_by_ref(this: &Arc<Self>) {
+            this.observed
+                .store(this.tracker.len(), std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    let fixture = Fixture::new();
+    let lease = fixture.operations.begin(&fixture.agent);
+    let operation = fixture.operation(&lease);
+    let run = operation.begin_run().unwrap();
+    let token = run.token().clone();
+    let observer = Arc::new(OnCancel {
+        tracker: fixture.tracker.clone(),
+        observed: std::sync::atomic::AtomicUsize::new(usize::MAX),
+    });
+    let waker = futures::task::waker(observer.clone());
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut cancelled = std::pin::pin!(token.cancelled());
+    assert!(cancelled.as_mut().poll(&mut context).is_pending());
+    assert_eq!(fixture.tracker.len(), 1);
+
+    drop(run);
+
+    assert!(token.is_cancelled());
+    assert_eq!(
+        observer.observed.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
 }

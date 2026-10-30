@@ -14,7 +14,7 @@
 
 use super::{CopyError, copy_end};
 use crate::filesystem_snapshot::backend::rustic::RusticSnapshotStore;
-use crate::filesystem_snapshot::backend::rustic::call_execution::RunEnd;
+use crate::filesystem_snapshot::backend::rustic::run_outcome::RunEnd;
 use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
@@ -531,7 +531,7 @@ async fn a_late_copy_write_of_an_earlier_run_lands_before_the_next_run() {
             "copy_read" => {
                 if config_reads.fetch_add(1, Ordering::SeqCst) == 1 {
                     *second_run_at.lock().unwrap() =
-                        Some(crate::filesystem_snapshot::backend::rustic::call_execution::now());
+                        Some(crate::filesystem_snapshot::clock::monotonic_now());
                 }
                 Script::Pass
             }
@@ -678,7 +678,7 @@ async fn a_delete_all_during_a_later_run_of_a_restore_starts_only_after_the_rest
 
 /// Gives the number of calls of a delete of all snapshots.
 fn scope_deletes(storage: &ScriptedBlobStorage) -> usize {
-    calls_of(storage, "delete_scope")
+    calls_of(storage, "delete_namespace")
 }
 
 mod value_rules {
@@ -1024,7 +1024,7 @@ mod value_rules {
             storage
                 .calls()
                 .into_iter()
-                .filter(|(op_label, _)| *op_label == "delete_scope")
+                .filter(|(op_label, _)| *op_label == "delete_namespace")
                 .map(|(_, path)| path)
                 .collect::<Vec<_>>(),
             vec!["config", "snapshots", "index", "keys", "data", "golem"]
@@ -1379,7 +1379,7 @@ mod drains {
     fn scope_deletes(calls: &[(&'static str, String)]) -> usize {
         calls
             .iter()
-            .filter(|(op_label, _)| *op_label == "delete_scope")
+            .filter(|(op_label, _)| *op_label == "delete_namespace")
             .count()
     }
 

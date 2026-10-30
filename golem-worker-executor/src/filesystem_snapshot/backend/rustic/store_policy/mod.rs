@@ -14,9 +14,9 @@
 
 //! Configuration mapping to the store's operation settings and retry policy.
 
-use super::pruning::eligibility::Percent;
-use super::pruning::{PRUNE_THRESHOLD, PruneSettings};
+use super::pruning::PruneSettings;
 use super::publication::PublishBound;
+use super::restore::RestoreSettings;
 use super::save::SaveSettings;
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
 use golem_common::model::RetryConfig;
@@ -37,9 +37,6 @@ pub(super) struct StorePolicy {
     /// The settings of a prune. Two prunes never run at once. The next prune waits a full hold from
     /// the newest claim marker that was written.
     pub(super) prune: PruneSettings,
-    /// The share of the size of the repository that deleted snapshots must free before a delete
-    /// prunes.
-    pub(super) prune_threshold: Percent,
     /// The runs of one call after a run whose storage call failed.
     pub(super) retry: RetryConfig,
     /// Whether a save lands its writes before the earliest index read of a prune.
@@ -57,7 +54,6 @@ impl StorePolicy {
             save_threads: Some(config.save_threads()),
             restore_reader_threads: config.restore_reader_threads(),
             prune: PruneSettings::default(),
-            prune_threshold: PRUNE_THRESHOLD,
             retry: config.storage_retry().clone(),
             publish_bound: PublishBound::On,
             #[cfg(test)]
@@ -83,6 +79,16 @@ impl StorePolicy {
             grace: self.prune.keep_delete,
             publish_bound: self.publish_bound,
         }
+    }
+
+    pub(super) fn restore_settings(&self) -> RestoreSettings {
+        RestoreSettings {
+            reader_threads: self.restore_reader_threads,
+        }
+    }
+
+    pub(super) fn prune_settings(&self) -> PruneSettings {
+        self.prune
     }
 }
 

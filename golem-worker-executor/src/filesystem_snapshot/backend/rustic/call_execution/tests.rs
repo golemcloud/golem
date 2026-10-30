@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::run_outcome::{
+    Checked, Ended, LateWrite, OwnFile, Ran, RunEnd, RunResult, Settle, Settled,
+};
 use super::{
-    Answers, Checked, Ended, Kind, Late, LateWrite, MOST_RACE_RUNS, NextRun, OwnFile, OwnName, Ran,
-    RunEnd, RunOutcome, RunSeen, Settle, Settled, Shell, Stand, jitter, next_run, run_delay,
+    Answers, Kind, Late, MOST_RACE_RUNS, NextRun, OwnName, RunOutcome, RunSeen, Shell, Stand,
+    jitter, next_run, run_delay,
 };
 use crate::filesystem_snapshot::{Failed, RunSlots, Slot, SnapshotInfo, Withdrawal};
 use futures::future::BoxFuture;
@@ -464,8 +467,8 @@ fn own_name() -> OwnName<Result<SnapshotInfo, &'static str>> {
 
 /// A run that ended with `end`, and with a staged snapshot file whose writes land or never land
 /// by `late`, when it has one.
-fn ended(end: RunEnd, late: Option<Instant>) -> Ran<Result<SnapshotInfo, &'static str>> {
-    Ran::Ended(Ended {
+fn ended(end: RunEnd, late: Option<Instant>) -> RunResult<Result<SnapshotInfo, &'static str>> {
+    Err(Ended {
         end,
         failure: anyhow::anyhow!("run"),
         late: late.map(|until| LateWrite {
@@ -530,7 +533,7 @@ fn the_shell_tells_its_limiter_before_a_wait_for_late_writes_and_before_a_wait_a
                                 Some(super::now() + Duration::from_secs(60)),
                             ),
                             2 => ended(RunEnd::CallFailed, None),
-                            _ => Ran::Answered(Ok(info())),
+                            _ => Ok(Ran::Answered(Ok(info()))),
                         }
                     }
                 },
@@ -594,7 +597,7 @@ fn a_save_with_two_lost_publishes_waits_for_and_checks_each_and_answers_with_the
                                 RunEnd::CallFailed,
                                 Some(super::now() + Duration::from_secs(60)),
                             ),
-                            _ => Ran::Answered(Err("a third run started")),
+                            _ => Ok(Ran::Answered(Err("a third run started"))),
                         }
                     }
                 },
@@ -745,14 +748,14 @@ async fn settled_call(
         |_| {
             let (gate, finished) = (gate.clone(), Arc::clone(&finished));
             async move {
-                Ran::Settling(Settle {
+                Ok(Ran::Settling(Settle {
                     wait: Box::pin(async move { gate.cancelled().await }),
                     finish: Box::new(move |settled| {
                         *finished.lock().unwrap() = Some(settled);
-                        Ran::Answered(Ok(info()))
+                        Ok(Ran::Answered(Ok(info())))
                     }),
                     may_land,
-                })
+                }))
             }
         },
         |_| async { Checked::Absent },

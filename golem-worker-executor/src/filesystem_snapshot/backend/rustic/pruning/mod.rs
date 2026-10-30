@@ -30,7 +30,7 @@ use super::repository::{RepositoryKey, open_existing};
 use crate::metrics::filesystem_snapshots::{self, PruneSkip, RemovedSource, StoredSource};
 use claim::{Claim, belongs_to_ledger, remove_old_claims};
 use eligibility::due_prune;
-use eligibility::{DueCheck, PrunePolicy};
+use eligibility::{DueCheck, DueCriteria};
 use futures::future::{self, Either};
 use records::{read_ledger, remove_freed, remove_older_ledgers, write_ledger};
 use rustic_core::jiff::Span;
@@ -49,6 +49,8 @@ pub(super) struct PruneSettings {
     /// How long a pack stays after a prune marks it for deletion. A later prune deletes a marked
     /// pack when this time is over.
     pub(super) keep_delete: Duration,
+    /// The share of the repository that freed bytes must reach before a delete prunes.
+    pub(super) threshold: eligibility::Percent,
 }
 
 impl Default for PruneSettings {
@@ -56,12 +58,13 @@ impl Default for PruneSettings {
         Self {
             fast_repack: true,
             keep_delete: PRUNE_GRACE,
+            threshold: PRUNE_THRESHOLD,
         }
     }
 }
 
 /// A delete prunes after freed bytes reach this share of the repository, rounded down.
-pub(super) const PRUNE_THRESHOLD: eligibility::Percent = eligibility::Percent(10);
+const PRUNE_THRESHOLD: eligibility::Percent = eligibility::Percent(10);
 
 /// How long a marked pack stays before a later prune deletes it.
 ///
@@ -73,7 +76,7 @@ pub(super) const PRUNE_THRESHOLD: eligibility::Percent = eligibility::Percent(10
 /// This assumes clocks differ by less than the skew margin, writes and deletes land within one
 /// deadline of their call ending or never, and the host does not suspend. Restores need no bound:
 /// they reread snapshots after a pack disappears and can read packs that are only marked.
-pub(super) const PRUNE_GRACE: Duration = Duration::from_secs(15 * 60);
+const PRUNE_GRACE: Duration = Duration::from_secs(15 * 60);
 
 /// The longest storage call deadline: one eighth of the prune grace period, so a save has time
 /// for its backup before the earliest index read of a prune.
@@ -102,12 +105,6 @@ pub(super) enum PruneRan {
     Skipped(PruneSkip),
 }
 
-/// The settings and due threshold of a prune.
-pub(super) struct Pruning<'a> {
-    pub(super) settings: &'a PruneSettings,
-    pub(super) threshold: eligibility::Percent,
-}
-
 /// Prunes the repository when a prune is due, and tells whether the prune ran or why it did
 /// not. It gives the failure of a prune that did not end. The records of freed bytes stay
 /// until a prune succeeds, so a later prune counts them again. It lists the packs only when
@@ -126,16 +123,16 @@ pub(super) struct Pruning<'a> {
 /// write. A prune that succeeds deletes each claim of its ledger.
 pub(super) async fn when_due(
     operation: &Operation<'_>,
-    pruning: &Pruning<'_>,
+    settings: &PruneSettings,
     token: &CancellationToken,
 ) -> anyhow::Result<PruneRan> {
     let files = operation.files(token).once();
-    let policy = PrunePolicy {
-        grace: pruning.settings.keep_delete,
+    let criteria = DueCriteria {
+        grace: settings.keep_delete,
         deadline: operation.deadline(),
-        threshold: pruning.threshold,
+        threshold: settings.threshold,
     };
-    let due = match due_prune(&files, &**operation.clock, &policy).await? {
+    let due = match due_prune(&files, &**operation.clock(), &criteria).await? {
         DueCheck::Due(due) => due,
         DueCheck::NotDue => return Ok(PruneRan::Skipped(PruneSkip::NotDue)),
         DueCheck::Held => return Ok(PruneRan::Skipped(PruneSkip::ClaimedElsewhere)),
@@ -151,9 +148,9 @@ pub(super) async fn when_due(
     let Some(claim) = Claim::take(
         &files,
         due.claim,
-        policy.grace,
-        policy.deadline,
-        Arc::clone(operation.clock),
+        criteria.grace,
+        criteria.deadline,
+        Arc::clone(operation.clock()),
         spawner,
         tracked,
     )
@@ -174,7 +171,7 @@ pub(super) async fn when_due(
     };
     // No attempt of a prune that found a snapshot file gone changed the repository, so no
     // prune ran, and the claim goes.
-    let pruned = match run_prune(operation, pruning, backend, &files, &claim).await {
+    let pruned = match run_prune(operation, settings, backend, &files, &claim).await {
         Ok(None) => {
             claim.release().await;
             anyhow::bail!(
@@ -189,7 +186,7 @@ pub(super) async fn when_due(
     claim.finish().await;
     let report = pruned?;
     filesystem_snapshots::record_removed_bytes(RemovedSource::Prune, report.bytes_removed);
-    let ended = operation.clock.now();
+    let ended = operation.clock().now();
     // The lease fences the ledger write as it fences the calls of rustic. A write that would
     // start after the lease ran out is not sent, and a write that starts before is bounded by
     // the time left, so the entry never lands after another delete can take the claim over.
@@ -211,7 +208,7 @@ async fn prepare_prune(
 ) -> anyhow::Result<Option<Arc<BlobBackend>>> {
     // A prune writes its ledger before it deletes the claims, so a delete that claims in a
     // directory that such a prune removed sees the new ledger here.
-    let again = read_ledger(files, &**operation.clock).await?;
+    let again = read_ledger(files, &**operation.clock()).await?;
     if !belongs_to_ledger(claim.directory(), &again) {
         return Ok(None);
     }
@@ -227,14 +224,14 @@ async fn prepare_prune(
 /// snapshot file gone.
 async fn run_prune(
     operation: &Operation<'_>,
-    pruning: &Pruning<'_>,
+    settings: &PruneSettings,
     backend: Arc<BlobBackend>,
     files: &SnapshotFiles,
     claim: &Claim,
 ) -> anyhow::Result<Option<Option<PruneReport>>> {
-    let key = operation.key.clone();
-    let settings = *pruning.settings;
-    let low_priority = operation.low_priority;
+    let key = operation.key().clone();
+    let settings = *settings;
+    let low_priority = operation.low_priority();
     let start = claim.start();
     // The plan of a prune reads each snapshot file before the prune changes the repository.
     // A forget of another delete can remove a listed file before its read, so the prune

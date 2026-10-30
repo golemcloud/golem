@@ -485,7 +485,7 @@ pub(super) async fn list_claims(
 /// no later than the time in the name, and it never ends later than the hold that other deletes
 /// count from the name.
 fn marker_time(clock: &dyn Clock) -> (Instant, Timestamp) {
-    let started = super::super::call_execution::now();
+    let started = crate::filesystem_snapshot::clock::monotonic_now();
     let time = clock.now();
     (started, time)
 }

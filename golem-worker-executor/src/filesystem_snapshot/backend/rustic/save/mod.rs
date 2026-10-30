@@ -14,9 +14,6 @@
 
 use super::blob_backend::BlobBackend;
 use super::blob_io::{LateWrites, lands_by, later};
-use super::call_execution::{
-    Checked, Ended, LateWrite, OwnFile, Ran, RunEnd, Settle, Settled, answered_after,
-};
 use super::failure_classification::{
     io_error_kind, is_index_missing, missing_file_path, rustic_storage_end,
 };
@@ -26,6 +23,9 @@ use super::publication::{
     PublishBound, Published, SnapshotStage, StagedSnapshot, backup_end, index_read_bound, publish,
 };
 use super::repository::{RepositoryKey, open_existing, open_or_create};
+use super::run_outcome::{
+    Checked, Ended, LateWrite, OwnFile, Ran, RunEnd, RunResult, Settle, Settled, answered_after,
+};
 use super::snapshot_catalog::{
     has_name, named, repository_snapshots, repository_snapshots_except, snapshot_info,
 };
@@ -37,7 +37,6 @@ use crate::filesystem_snapshot::{ChangeDetection, SnapshotInfo, snapshot_time};
 use crate::metrics::filesystem_snapshots::StoredSource;
 use anyhow::Context;
 use golem_common::model::Timestamp;
-use rustic_core::FileType;
 use rustic_core::jiff::tz::TimeZone;
 use rustic_core::jiff::{Timestamp as SnapshotTime, Zoned};
 use rustic_core::repofile::SnapshotId;
@@ -125,7 +124,7 @@ fn save_ran(
     exit: SaveExit,
     late: RunLate,
     deadline: Duration,
-) -> Ran<Result<SnapshotInfo, SaveError>> {
+) -> RunResult<Result<SnapshotInfo, SaveError>> {
     let latest = match (late.backend, late.publish) {
         (Some(backend), publish) => Some(later(publish, backend)),
         (None, publish) => publish,
@@ -137,7 +136,7 @@ fn save_ran(
             end,
             failure,
             staged,
-        } => Ran::Ended(Ended {
+        } => Err(Ended {
             end,
             failure,
             late: until.map(|until| LateWrite {
@@ -150,10 +149,10 @@ fn save_ran(
 
 /// A shutdown during settlement preserves an answer already chosen by the save. A run without
 /// an answer ends `Cancelled`.
-fn ran_at_shutdown(exit: SaveExit) -> Ran<Result<SnapshotInfo, SaveError>> {
+fn ran_at_shutdown(exit: SaveExit) -> RunResult<Result<SnapshotInfo, SaveError>> {
     match exit {
-        SaveExit::Answered(answer) => Ran::Answered(answer),
-        SaveExit::Ended { .. } => Ran::Ended(Ended::new(
+        SaveExit::Answered(answer) => Ok(Ran::Answered(answer)),
+        SaveExit::Ended { .. } => Err(Ended::new(
             RunEnd::Cancelled,
             anyhow::anyhow!("the filesystem snapshot store shut down while a save settled"),
         )),
@@ -397,7 +396,7 @@ pub(super) async fn run(
     parent: Option<(SnapshotName, ChangeDetection)>,
     cancel: &CancellationToken,
     t0: Instant,
-) -> Ran<Result<SnapshotInfo, SaveError>> {
+) -> RunResult<Result<SnapshotInfo, SaveError>> {
     let (token, _guard) = operation.run_token();
     operation.link_cancel(cancel, &token);
     let run_calls = TaskTracker::new();
@@ -414,19 +413,18 @@ pub(super) async fn run(
                 .staging_in(stage.clone())
                 .storing(StoredSource::Save),
         ),
-        Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
+        Err(error) => return Err(Ended::new(RunEnd::Permanent, error)),
     };
-    let key = operation.key.clone();
-    let policy = settings;
+    let key = operation.key().clone();
     let saved = name.clone();
     let name = name.clone();
     let tree: Box<Path> = tree.into();
-    let low_priority = operation.low_priority;
-    let clock = Arc::clone(operation.clock);
+    let low_priority = operation.low_priority();
+    let clock = Arc::clone(operation.clock());
     let mut backup = pin!(operation.blocking(move || {
         low_priority.run("fs-snap-save", move || {
             Ok(stage_save_again_after_a_missing_index(
-                &backend, &stage, &key, &policy, &name, &tree, parent, &*clock,
+                &backend, &stage, &key, &settings, &name, &tree, parent, &*clock,
             ))
         })
     }));
@@ -503,7 +501,7 @@ pub(super) async fn run(
         backend: backend_late.latest(),
         publish: publish_late.latest(),
     };
-    Ran::Settling(save_settle(
+    Ok(Ran::Settling(save_settle(
         operation.agent().clone(),
         saved,
         exit,
@@ -512,7 +510,7 @@ pub(super) async fn run(
         backend_late,
         publish_late,
         operation.deadline(),
-    ))
+    )))
 }
 
 /// Checks the own name of a save after a publish that ended without an answer: the file that
@@ -526,7 +524,10 @@ pub(super) async fn own_name_check(
     let OwnFile { path, info } = own;
     let files = operation.files(operation.root());
     let listed = match files
-        .list_below("check_name", Path::new(FileType::Snapshot.dirname()))
+        .list_below(
+            "check_name",
+            Path::new(super::repository_layout::SNAPSHOTS_PATH),
+        )
         .await
     {
         Ok(listed) => listed,
@@ -535,16 +536,15 @@ pub(super) async fn own_name_check(
     if listed.iter().any(|blob| *blob.path == *path) {
         return Checked::Found(info);
     }
-    let key = operation.key.clone();
     let name = name.clone();
     let backend = match operation.backend(files) {
         Ok(backend) => Arc::new(backend),
         Err(_) => return Checked::Unreadable,
     };
     let named = operation
-        .blocking(move || {
-            Ok(match open_existing(backend.clone(), &key)? {
-                Some(repository) => has_name(&repository_snapshots(&repository, &backend)?, &name),
+        .read_existing(backend, move |repository, backend| {
+            Ok(match repository {
+                Some(repository) => has_name(&repository_snapshots(&repository, backend)?, &name),
                 None => false,
             })
         })

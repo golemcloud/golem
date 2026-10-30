@@ -31,7 +31,7 @@ fn the_policy_takes_the_configured_values() {
             policy.restore_reader_threads.get(),
             policy.prune.keep_delete,
             policy.prune.fast_repack,
-            policy.prune_threshold,
+            policy.prune.threshold,
         ),
         (
             Duration::from_secs(30),

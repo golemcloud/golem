@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use super::blob_backend::BlobBackend;
-use super::call_execution::{Ran, RunResult};
 use super::failure_classification::{ended_by, is_file_missing, is_storage_failure};
 use super::operation::Operation;
-use super::repository::open_existing;
+use super::run_outcome::{Ran, RunResult};
 use crate::filesystem_snapshot::errors::{CallError, ReadError};
 use crate::filesystem_snapshot::snapshot_name::SnapshotName;
 use crate::filesystem_snapshot::{SnapshotInfo, newest_first};
@@ -160,49 +159,41 @@ pub(super) async fn stat_run(
     operation: &Operation<'_>,
     name: &SnapshotName,
 ) -> RunResult<Result<Option<SnapshotInfo>, ReadError>> {
-    let (_token, _guard, backend) = operation.begin_run()?;
-    let key = operation.key.clone();
+    let mut run = operation.begin_run()?;
     let name = name.clone();
-    Ok(
-        match operation
-            .blocking(move || {
-                Ok(match open_existing(backend.clone(), &key)? {
-                    Some(repository) => lookup(repository_snapshots(&repository, &backend)?, &name),
-                    None => Lookup::Missing,
-                })
+    let found = operation
+        .read_existing(run.take_backend(), move |repository, backend| {
+            Ok(match repository {
+                Some(repository) => lookup(repository_snapshots(&repository, backend)?, &name),
+                None => Lookup::Missing,
             })
-            .await
-        {
-            Ok(Lookup::Found(_, info)) => Ran::Answered(Ok(Some(info))),
-            Ok(Lookup::Missing) => Ran::Answered(Ok(None)),
-            Ok(Lookup::Corrupt(error)) => Ran::Answered(Err(ReadError::Corrupt(error))),
-            Err(error) => Ran::Ended(ended_by(error)),
-        },
-    )
+        })
+        .await
+        .map_err(ended_by)?;
+    Ok(Ran::Answered(match found {
+        Lookup::Found(_, info) => Ok(Some(info)),
+        Lookup::Missing => Ok(None),
+        Lookup::Corrupt(error) => Err(ReadError::Corrupt(error)),
+    }))
 }
 
 /// One run of a `list`.
 pub(super) async fn list_run(
     operation: &Operation<'_>,
 ) -> RunResult<Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError>> {
-    let (_token, _guard, backend) = operation.begin_run()?;
-    let key = operation.key.clone();
-    Ok(
-        match operation
-            .blocking(move || {
-                Ok(match open_existing(backend.clone(), &key)? {
-                    Some(repository) => {
-                        newest_first(listed(repository_snapshots(&repository, &backend)?))
-                    }
-                    None => Box::default(),
-                })
+    let mut run = operation.begin_run()?;
+    let listed = operation
+        .read_existing(run.take_backend(), move |repository, backend| {
+            Ok(match repository {
+                Some(repository) => {
+                    newest_first(listed(repository_snapshots(&repository, backend)?))
+                }
+                None => Box::default(),
             })
-            .await
-        {
-            Ok(listed) => Ran::Answered(Ok(listed)),
-            Err(error) => Ran::Ended(ended_by(error)),
-        },
-    )
+        })
+        .await
+        .map_err(ended_by)?;
+    Ok(Ran::Answered(Ok(listed)))
 }
 /// What the tree of a snapshot holds. The store keeps it as the description of the snapshot,
 /// because rustic counts a symlink as a file.

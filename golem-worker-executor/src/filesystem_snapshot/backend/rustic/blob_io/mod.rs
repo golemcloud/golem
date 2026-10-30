@@ -385,7 +385,7 @@ impl SnapshotFiles {
                     let (call, cut) = (&call, &cut);
                     async move {
                         let (tried, spent) = state?;
-                        let started = super::call_execution::now();
+                        let started = crate::filesystem_snapshot::clock::monotonic_now();
                         let expiry = self.lease.as_ref().map(|lease| lease.expiry());
                         let cut = match before_try(
                             expiry.is_some_and(|expiry| started >= expiry),
@@ -401,7 +401,7 @@ impl SnapshotFiles {
                             Err(refused) => return Some((Some(Err(refusal(refused))), None)),
                         };
                         let answer = self.one_try(cut, expiry, call()).await;
-                        let ended = super::call_execution::now();
+                        let ended = crate::filesystem_snapshot::clock::monotonic_now();
                         let spent = spent + ended.saturating_duration_since(started);
                         let error = match answer {
                             Ok(value) => return Some((Some(Ok(value)), None)),

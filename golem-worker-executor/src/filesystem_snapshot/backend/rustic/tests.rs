@@ -321,7 +321,7 @@ async fn shut_down_waits_for_a_blob_call_of_the_store_that_is_not_polled() {
     // The test polls the scope delete one time, so its first blob call waits at the gate, and
     // then the test does not poll it again. Only the tracker makes the shut down wait for it.
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
-        if op_label == "delete_scope" {
+        if op_label == "delete_namespace" {
             Script::WaitForGate
         } else {
             Script::Pass
@@ -1659,6 +1659,7 @@ mod save_prune_ordering {
                 &PruneSettings {
                     fast_repack: true,
                     keep_delete: Duration::from_secs(3600),
+                    ..PruneSettings::default()
                 },
             )
         })

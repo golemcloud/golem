@@ -61,12 +61,12 @@ fn prune_due(
         }),
         claims: None,
     };
-    let policy = PrunePolicy {
+    let criteria = DueCriteria {
         grace,
         deadline,
         threshold,
     };
-    matches!(next(&observed, now, &policy), Next::ListClaims(_))
+    matches!(next(&observed, now, &criteria), Next::ListClaims(_))
 }
 
 /// Tells whether the due check needs the size of the repository, through [`next`]: the delete
@@ -84,16 +84,16 @@ fn needs_repository_size(
         freed: Some(named(freed_bytes)),
         ..Observed::default()
     };
-    let policy = PrunePolicy {
+    let criteria = DueCriteria {
         grace,
         deadline,
         threshold: TEN_PERCENT,
     };
-    next(&observed, now, &policy) == Next::ListPacks
+    next(&observed, now, &criteria) == Next::ListPacks
 }
 
-/// The policy of the value tests of the due check: the grace period, the deadline and 10%.
-const POLICY: PrunePolicy = PrunePolicy {
+/// The criteria of the value tests of the due check: the grace period, the deadline and 10%.
+const CRITERIA: DueCriteria = DueCriteria {
     grace: GRACE,
     deadline: DEADLINE,
     threshold: TEN_PERCENT,
@@ -141,7 +141,7 @@ fn a_due_check_lists_each_kind_once_in_order_and_ends_with_the_claim_after_the_l
             &settled_found,
             &claims_found,
         ]
-        .map(|observed| next(observed, now, &POLICY)),
+        .map(|observed| next(observed, now, &CRITERIA)),
         [
             Next::ListLedgers,
             Next::ListFreed,
@@ -167,7 +167,7 @@ fn a_due_check_stops_as_soon_as_no_prune_can_be_due_and_reads_no_more() {
         settled,
         claims,
     };
-    let decide = |observed: Observed| next(&observed, now, &POLICY);
+    let decide = |observed: Observed| next(&observed, now, &CRITERIA);
 
     assert_eq!(
         [
@@ -235,7 +235,7 @@ fn a_due_check_that_observed_everything_gives_a_claim_or_stops() {
                     settled: Some(settled(*bytes)),
                     claims: Some(claims.clone()),
                 };
-                matches!(next(&observed, now, &POLICY), Next::Stop | Next::Claim(_))
+                matches!(next(&observed, now, &CRITERIA), Next::Stop | Next::Claim(_))
             })
         })
     });

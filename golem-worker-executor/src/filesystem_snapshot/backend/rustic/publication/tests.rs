@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use super::super::blob_io::{LateWrites, SnapshotFiles, lands_by};
-use super::super::call_execution::{RunEnd, now};
+use super::super::run_outcome::RunEnd;
 use super::super::test_support::files_of;
 use super::super::test_support::scripted::{Script, ScriptedBlobStorage};
 use super::{
     MIN_PUBLISH_TRY, Published, SnapshotStage, StagedSnapshot, backup_end, index_read_bound,
     publish, publish_try,
 };
+use crate::filesystem_snapshot::clock::monotonic_now as now;
 use bytes::Bytes;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;

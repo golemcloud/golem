@@ -19,12 +19,11 @@
 //! markers of this module, the name, range and missing-blob errors of the blob storage, and the
 //! I/O errors.
 
-use super::call_execution::{Ended, RunEnd};
-use super::repository_layout::SNAPSHOTS_PATH;
+use super::repository_layout::{INDEX_PATH, SNAPSHOTS_PATH};
+use super::run_outcome::{Ended, RunEnd};
 use golem_service_base::storage::blob::{
     BlobFailure, BlobMissingError, BlobNameError, BlobRangeError,
 };
-use rustic_core::FileType;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
@@ -138,7 +137,7 @@ pub(super) fn is_index_missing(error: &(dyn Error + 'static)) -> bool {
     chain(error).any(|error| {
         error
             .downcast_ref::<FileMissing>()
-            .is_some_and(|missing| missing.path.starts_with(FileType::Index.dirname()))
+            .is_some_and(|missing| missing.path.starts_with(INDEX_PATH))
     })
 }
 

@@ -79,7 +79,7 @@ async fn repository_bytes(files: &SnapshotFiles) -> anyhow::Result<u64> {
 /// The values of the prune decision: the grace period of a pack that a prune marks, the deadline
 /// of one storage call, and the share of the size of the repository that freed bytes must reach.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PrunePolicy {
+pub(super) struct DueCriteria {
     pub(super) grace: Duration,
     pub(super) deadline: Duration,
     pub(super) threshold: Percent,
@@ -185,11 +185,11 @@ impl Observed {
 /// make a prune due, or when the last prune marked packs. When a prune is due, the delete takes the
 /// claim that [`next_claim`] chooses from the claims of the ledger, or it stops when another delete
 /// holds them.
-fn next(observed: &Observed, now: Timestamp, policy: &PrunePolicy) -> Next {
+fn next(observed: &Observed, now: Timestamp, criteria: &DueCriteria) -> Next {
     let Some(ledger) = observed.ledger else {
         return Next::ListLedgers;
     };
-    if !hold_passed(&ledger, now, policy.grace, policy.deadline) {
+    if !hold_passed(&ledger, now, criteria.grace, criteria.deadline) {
         return Next::Stop;
     }
     let Some(freed) = &observed.freed else {
@@ -204,20 +204,20 @@ fn next(observed: &Observed, now: Timestamp, policy: &PrunePolicy) -> Next {
         None if !ledger.awaiting_removal => return Next::ListPacks,
         None => 0,
     };
-    if !may_be_due(&ledger, named, size, policy.threshold) {
+    if !may_be_due(&ledger, named, size, criteria.threshold) {
         return Next::Stop;
     }
     let Some(settled) = &observed.settled else {
         return Next::SettleFreed;
     };
-    if !may_be_due(&ledger, settled.bytes, size, policy.threshold) {
+    if !may_be_due(&ledger, settled.bytes, size, criteria.threshold) {
         return Next::Stop;
     }
     let directory = claims_directory(&ledger);
     let Some(claims) = &observed.claims else {
         return Next::ListClaims(directory);
     };
-    match next_claim(claims, now, claim_hold(policy.grace, policy.deadline)) {
+    match next_claim(claims, now, claim_hold(criteria.grace, criteria.deadline)) {
         ClaimChoice::Claim(number) => Next::Claim(ClaimName {
             directory: directory.into(),
             number,
@@ -264,7 +264,7 @@ const MOST_PASSES: usize = 5;
 pub(super) async fn due_prune(
     files: &SnapshotFiles,
     clock: &dyn Clock,
-    policy: &PrunePolicy,
+    criteria: &DueCriteria,
 ) -> anyhow::Result<DueCheck> {
     let (observed, step) = stream::iter(0..MOST_PASSES)
         .map(Ok)
@@ -276,7 +276,7 @@ pub(super) async fn due_prune(
                 };
                 let now = clock.now();
                 let observed = observed.with(found, now);
-                let step = next(&observed, now, policy);
+                let step = next(&observed, now, criteria);
                 anyhow::Ok((observed, step))
             },
         )

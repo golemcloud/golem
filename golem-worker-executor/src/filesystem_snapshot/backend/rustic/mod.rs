@@ -26,6 +26,7 @@ mod repository;
 mod repository_layout;
 mod repository_namespace;
 mod restore;
+mod run_outcome;
 mod save;
 mod snapshot_catalog;
 mod snapshot_deletion;
@@ -53,7 +54,7 @@ use blob_backend::MAX_SNAPSHOT_FILE_READS;
 use call_execution::{Answers, Kind, OwnName, Shell};
 use cpu_priority::LowPriority;
 use golem_service_base::storage::blob::BlobStorage;
-use operation::Operation;
+use operation::{Operation, Resources};
 use repository::RepositoryKey;
 use restore::destination::destination_is_valid;
 #[cfg(test)]
@@ -257,25 +258,24 @@ impl RusticSnapshotStore {
     }
 
     fn operation<'a>(&'a self, lease: &'a OperationLease) -> Operation<'a> {
-        Operation {
-            storage: &self.storage,
-            root: &self.root,
-            tracker: &self.tracker,
+        Operation::new(
             lease,
-            key: &self.key,
-            low_priority: self.low_priority,
-            clock: &self.clock,
-            deadline: self.policy.deadline,
-            tries: self.policy.in_call_tries(),
-            read_slots: &self.read_slots,
-        }
-    }
-
-    fn pruning(&self) -> pruning::Pruning<'_> {
-        pruning::Pruning {
-            settings: &self.policy.prune,
-            threshold: self.policy.prune_threshold,
-        }
+            Resources {
+                storage: &self.storage,
+                root: &self.root,
+                tracker: &self.tracker,
+                key: &self.key,
+                low_priority: self.low_priority,
+                clock: &self.clock,
+                deadline: self.policy.deadline,
+                tries: self.policy.in_call_tries(),
+                read_slots: &self.read_slots,
+                #[cfg(test)]
+                clear_hook: &self.clear_hook,
+                #[cfg(test)]
+                failed_prunes: &self.failed_prunes,
+            },
+        )
     }
 }
 
@@ -341,19 +341,8 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .await
             .map_err(RestoreFailure::Destination)?;
         self.shell(Kind::Restore, slots, None)
-            .call(restore_answers(), |_| async {
-                restore::run(
-                    &operation,
-                    restore::Restore {
-                        reader_threads: &self.policy.restore_reader_threads,
-                        #[cfg(test)]
-                        hook: &self.clear_hook,
-                    },
-                    name,
-                    into,
-                )
-                .await
-                .into()
+            .call(restore_answers(), |_| {
+                restore::run(&operation, self.policy.restore_settings(), name, into)
             })
             .await
     }
@@ -369,8 +358,8 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let lease = &self.begin_operation(agent);
         let operation = self.operation(lease);
         self.shell(Kind::Stat, &Unlimited, None)
-            .call(read_answers(), |_| async {
-                snapshot_catalog::stat_run(&operation, name).await.into()
+            .call(read_answers(), |_| {
+                snapshot_catalog::stat_run(&operation, name)
             })
             .await
     }
@@ -383,9 +372,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let lease = &self.begin_operation(agent);
         let operation = self.operation(lease);
         self.shell(Kind::List, slots, None)
-            .call(call_answers(), |_| async {
-                snapshot_catalog::list_run(&operation).await.into()
-            })
+            .call(call_answers(), |_| snapshot_catalog::list_run(&operation))
             .await
     }
 
@@ -403,18 +390,8 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let lease = &self.begin_operation(agent);
         let operation = self.operation(lease);
         self.shell(Kind::Delete, slots, None)
-            .call(call_answers(), |_| async {
-                snapshot_deletion::delete_run(
-                    &operation,
-                    snapshot_deletion::Delete {
-                        pruning: self.pruning(),
-                        #[cfg(test)]
-                        failed_prunes: &self.failed_prunes,
-                    },
-                    names,
-                )
-                .await
-                .into()
+            .call(call_answers(), |_| {
+                snapshot_deletion::delete_run(&operation, self.policy.prune_settings(), names)
             })
             .await
     }

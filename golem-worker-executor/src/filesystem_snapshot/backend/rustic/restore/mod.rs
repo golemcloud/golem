@@ -13,10 +13,11 @@
 // limitations under the License.
 
 pub(super) mod destination;
+#[cfg(test)]
+mod reader_threads_tests;
 mod revalidation;
 
 use super::blob_backend::BlobBackend;
-use super::call_execution::{Ended, Ran, RunEnd, RunResult};
 use super::cpu_priority::LowPriority;
 use super::failure_classification::{
     chain, ended_by, io_error_kind, is_file_missing, is_index_missing, missing_file_path,
@@ -24,6 +25,7 @@ use super::failure_classification::{
 };
 use super::operation::Operation;
 use super::repository::{RepositoryKey, open_existing};
+use super::run_outcome::{Ended, Ran, RunEnd, RunResult};
 use super::snapshot_catalog::{Lookup, lookup, repository_snapshots};
 use crate::filesystem_snapshot::SnapshotInfo;
 use crate::filesystem_snapshot::errors::RestoreFailure;
@@ -44,11 +46,10 @@ use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Dependencies of a restore's repository reads and local writes.
-pub(super) struct Restore<'a> {
-    pub(super) reader_threads: &'a NonZeroUsize,
-    #[cfg(test)]
-    pub(super) hook: &'a Arc<dyn ClearHook>,
+/// The number of threads that read packs in a restore.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RestoreSettings {
+    pub(super) reader_threads: NonZeroUsize,
 }
 
 /// The most steps of one run of a restore. A run loads at most once more for each index file that
@@ -97,12 +98,10 @@ enum Stepped {
 
 impl RestoreRun {
     /// Runs the steps of the restore until one gives the end of the run.
-    fn run(self) -> Ran<Result<SnapshotInfo, RestoreFailure>> {
+    fn run(self) -> RunResult<Result<SnapshotInfo, RestoreFailure>> {
         // A directory that is not empty holds what an earlier run wrote, also when its clear failed
         // part way.
-        if let Err(error) = self.clear_if_written() {
-            return Ran::Ended(error);
-        }
+        self.clear_if_written()?;
         let mut restoring = Restoring {
             listed: HashSet::new(),
             missed: HashSet::new(),
@@ -141,25 +140,25 @@ impl RestoreRun {
                 }
                 Step::LoadIndexAgain => ControlFlow::Continue(self.load_index(&mut restoring)),
                 Step::ClearAndEnd(end) => ControlFlow::Break(Some(match self.clear() {
-                    Ok(()) => Ran::Ended(Ended::new(end, last_error(&mut restoring))),
-                    Err(error) => Ran::Ended(error),
+                    Ok(()) => Err(Ended::new(end, last_error(&mut restoring))),
+                    Err(error) => Err(error),
                 })),
-                Step::RunEnded(end) => ControlFlow::Break(Some(Ran::Ended(Ended::new(
-                    end,
-                    last_error(&mut restoring),
-                )))),
-                Step::Answer(outcome) => {
-                    ControlFlow::Break(Some(Ran::Answered(Err(answer(outcome, &mut restoring)))))
+                Step::RunEnded(end) => {
+                    ControlFlow::Break(Some(Err(Ended::new(end, last_error(&mut restoring)))))
                 }
+                Step::Answer(outcome) => ControlFlow::Break(Some(Ok(Ran::Answered(Err(answer(
+                    outcome,
+                    &mut restoring,
+                )))))),
             }
         });
         match ended {
             ControlFlow::Break(Some(ran)) => ran,
             ControlFlow::Break(None) => match restoring.restored {
-                Some(info) => Ran::Answered(Ok(info)),
-                None => Ran::Ended(Ended::new(RunEnd::CallFailed, last_error(&mut restoring))),
+                Some(info) => Ok(Ran::Answered(Ok(info))),
+                None => Err(Ended::new(RunEnd::CallFailed, last_error(&mut restoring))),
             },
-            ControlFlow::Continue(_) => Ran::Ended(Ended::new(
+            ControlFlow::Continue(_) => Err(Ended::new(
                 RunEnd::CallFailed,
                 anyhow::anyhow!("the restore found new index files at each of its steps"),
             )),
@@ -438,31 +437,32 @@ fn answer(outcome: Outcome, restoring: &mut Restoring) -> RestoreFailure {
 /// One run of a restore, as [`revalidation::next_step`] decides each step.
 pub(super) async fn run(
     operation: &Operation<'_>,
-    restore: Restore<'_>,
+    settings: RestoreSettings,
     name: &SnapshotName,
     into: &Path,
 ) -> RunResult<Result<SnapshotInfo, RestoreFailure>> {
-    let (_token, _guard, backend) = operation.begin_run()?;
+    let mut run_guard = operation.begin_run()?;
+    let backend = run_guard.take_backend();
     let run = RestoreRun {
         backend,
-        key: operation.key.clone(),
+        key: operation.key().clone(),
         name: name.clone(),
         into: into.into(),
-        options: restore_options(*restore.reader_threads),
+        options: restore_options(settings.reader_threads),
         #[cfg(test)]
-        hook: Arc::clone(restore.hook),
+        hook: Arc::clone(operation.clear_hook()),
     };
     // The index load of a restore uses rayon, so the restore runs in a pool of its own, with
     // the reader threads of a restore. The blocking thread starts the threads of that pool, so
     // they have its normal priority.
     let pool = LowPriority {
-        threads: Some(*restore.reader_threads),
-        ..operation.low_priority
+        threads: Some(settings.reader_threads),
+        ..operation.low_priority()
     };
-    Ok(operation
+    operation
         .blocking(move || pool.in_own_pool("fs-snap-restore", move || Ok(run.run())))
         .await
-        .unwrap_or_else(|error| Ran::Ended(ended_by(error))))
+        .unwrap_or_else(|error| Err(ended_by(error)))
 }
 
 /// A metadata error fails the restore. The restore does not set the owner, because a snapshot
@@ -480,7 +480,8 @@ fn is_range_error(error: &(dyn Error + 'static)) -> bool {
 
 /// Tells whether an error in the chain is [`super::failure_classification::FileMissing`] for a pack.
 fn is_pack_missing(error: &(dyn Error + 'static)) -> bool {
-    missing_file_path(error).is_some_and(|path| path.starts_with(FileType::Pack.dirname()))
+    missing_file_path(error)
+        .is_some_and(|path| path.starts_with(super::repository_layout::DATA_PATH))
 }
 
 /// The phase of a run of a restore in which a step failed.

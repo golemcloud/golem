@@ -19,15 +19,18 @@
 
 use super::blob_backend::{BlobBackend, TREE_PACK_CACHE_LIMIT};
 use super::blob_io::SnapshotFiles;
-use super::call_execution::{Ended, RunEnd};
 use super::cpu_priority::LowPriority;
-use super::repository::RepositoryKey;
+use super::repository::{RepositoryKey, open_existing};
+#[cfg(test)]
+use super::restore::destination::ClearHook;
+use super::run_outcome::{Ended, RunEnd};
 use super::tracked_tasks::{Spawner, run_blocking};
 use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::clock::Clock;
 use crate::filesystem_snapshot::operation_drain::OperationLease;
 use anyhow::Context;
 use golem_service_base::storage::blob::BlobStorage;
+use rustic_core::{OpenStatus, Repository as RusticRepository};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
@@ -36,47 +39,88 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
-pub(super) struct Operation<'a> {
+/// Borrowed inputs used only to construct an operation. Construction does not register work.
+pub(super) struct Resources<'a> {
     pub(super) storage: &'a Arc<dyn BlobStorage>,
     pub(super) root: &'a CancellationToken,
     pub(super) tracker: &'a TaskTracker,
-    pub(super) lease: &'a OperationLease,
     pub(super) key: &'a RepositoryKey,
     pub(super) low_priority: LowPriority,
     pub(super) clock: &'a Arc<dyn Clock>,
     pub(super) deadline: Duration,
     pub(super) tries: u32,
     pub(super) read_slots: &'a Arc<Semaphore>,
+    #[cfg(test)]
+    pub(super) clear_hook: &'a Arc<dyn ClearHook>,
+    #[cfg(test)]
+    pub(super) failed_prunes: &'a std::sync::Mutex<Vec<anyhow::Error>>,
 }
 
-/// A run's token, cancellation guard and backend, in acquisition order. Bindings in this order
-/// drop in reverse order; a retained task can own the backend for longer.
-pub(super) type BackendRun = (CancellationToken, DropGuard, Arc<BlobBackend>);
+pub(super) struct Operation<'a> {
+    resources: Resources<'a>,
+    lease: &'a OperationLease,
+}
+
+/// Owns cleanup in field order: an untransferred backend, then cancellation, then the token.
+pub(super) struct BackendRun {
+    backend: Option<Arc<BlobBackend>>,
+    _guard: DropGuard,
+    token: CancellationToken,
+}
+
+impl BackendRun {
+    pub(super) fn token(&self) -> &CancellationToken {
+        &self.token
+    }
+
+    /// Transfers the backend into its blocking task without retaining another backend owner.
+    pub(super) fn take_backend(&mut self) -> Arc<BlobBackend> {
+        self.backend
+            .take()
+            .expect("the run backend was already transferred")
+    }
+}
 
 fn runtime() -> anyhow::Result<Handle> {
     Handle::try_current().context("a filesystem snapshot operation needs an async runtime")
 }
 
-impl Operation<'_> {
+impl<'a> Operation<'a> {
+    pub(super) fn new(lease: &'a OperationLease, resources: Resources<'a>) -> Self {
+        Self { resources, lease }
+    }
+
     /// The incarnation registered by this operation's lease.
     pub(super) fn agent(&self) -> &AgentSnapshots {
         self.lease.agent()
     }
 
     pub(super) fn root(&self) -> &CancellationToken {
-        self.root
+        self.resources.root
     }
 
     pub(super) fn deadline(&self) -> Duration {
-        self.deadline
+        self.resources.deadline
+    }
+
+    pub(super) fn key(&self) -> &RepositoryKey {
+        self.resources.key
+    }
+
+    pub(super) fn clock(&self) -> &Arc<dyn Clock> {
+        self.resources.clock
+    }
+
+    pub(super) fn low_priority(&self) -> LowPriority {
+        self.resources.low_priority
     }
 
     pub(super) fn registration(&self) -> TaskTrackerToken {
-        self.tracker.token()
+        self.resources.tracker.token()
     }
 
     pub(super) fn run_token(&self) -> (CancellationToken, DropGuard) {
-        let token = self.root.child_token();
+        let token = self.root().child_token();
         (token.clone(), token.drop_guard())
     }
 
@@ -87,28 +131,32 @@ impl Operation<'_> {
         let backend = self
             .backend(self.files(&token))
             .map_err(|error| Ended::new(RunEnd::Permanent, error))?;
-        Ok((token, guard, Arc::new(backend)))
+        Ok(BackendRun {
+            backend: Some(Arc::new(backend)),
+            _guard: guard,
+            token,
+        })
     }
 
     pub(super) fn backend(&self, files: SnapshotFiles) -> anyhow::Result<BlobBackend> {
         Ok(BlobBackend::new(files, runtime()?, TREE_PACK_CACHE_LIMIT)
-            .tracked_by(self.tracker.token())
-            .reading_under(self.read_slots.clone()))
+            .tracked_by(self.resources.tracker.token())
+            .reading_under(self.resources.read_slots.clone()))
     }
 
     pub(super) fn spawner(&self) -> anyhow::Result<Spawner> {
-        Ok(Spawner {
-            tracker: self.tracker.clone(),
-            runtime: runtime()?,
-            operation: self.lease.clone(),
-        })
+        Ok(Spawner::new(
+            self.resources.tracker.clone(),
+            runtime()?,
+            self.lease.clone(),
+        ))
     }
 
     pub(super) async fn blocking<T: Send + 'static>(
         &self,
         task: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     ) -> anyhow::Result<T> {
-        let tracked = (self.tracker.token(), self.lease.clone());
+        let tracked = (self.resources.tracker.token(), self.lease.clone());
         run_blocking(move || {
             let _tracked = tracked;
             task()
@@ -117,31 +165,62 @@ impl Operation<'_> {
     }
 
     pub(super) fn track<F: Future>(&self, future: F) -> impl Future<Output = F::Output> {
-        self.tracker.track_future(future)
+        self.resources.tracker.track_future(future)
     }
 
     pub(super) fn files(&self, token: &CancellationToken) -> SnapshotFiles {
         SnapshotFiles::new(
-            self.storage.clone(),
+            self.resources.storage.clone(),
             self.agent().namespace().clone(),
-            self.deadline,
+            self.deadline(),
             token.clone(),
-            self.tracker.clone(),
+            self.resources.tracker.clone(),
         )
-        .with_retry_stop(self.root.clone())
-        .with_tries(self.tries)
+        .with_retry_stop(self.root().clone())
+        .with_tries(self.resources.tries)
         .of_operation(self.lease)
     }
 
     pub(super) fn link_cancel(&self, cancel: &CancellationToken, token: &CancellationToken) {
         let (cancel, token, lease) = (cancel.clone(), token.clone(), self.lease.clone());
-        self.tracker.spawn(async move {
+        self.resources.tracker.spawn(async move {
             let _lease = lease;
             tokio::select! {
                 () = cancel.cancelled() => token.cancel(),
                 () = token.cancelled() => {}
             }
         });
+    }
+
+    /// Opens and reads an existing repository in one tracked blocking task. The caller supplies
+    /// its backend, so this does not start a run or change the backend's blob policy.
+    pub(super) async fn read_existing<T: Send + 'static>(
+        &self,
+        backend: Arc<BlobBackend>,
+        read: impl FnOnce(Option<RusticRepository<OpenStatus>>, &BlobBackend) -> anyhow::Result<T>
+        + Send
+        + 'static,
+    ) -> anyhow::Result<T> {
+        let key = self.key().clone();
+        self.blocking(move || {
+            let repository = open_existing(backend.clone(), &key)?;
+            read(repository, &backend)
+        })
+        .await
+    }
+
+    #[cfg(test)]
+    pub(super) fn clear_hook(&self) -> &Arc<dyn ClearHook> {
+        self.resources.clear_hook
+    }
+
+    #[cfg(test)]
+    pub(super) fn record_prune_failure(&self, error: anyhow::Error) {
+        self.resources
+            .failed_prunes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(error);
     }
 }
 

@@ -12,9 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The wall clock of a store.
+//! Wall time for stored timestamps and monotonic time for store-call deadlines.
 
 use golem_common::model::Timestamp;
+
+/// The runtime's monotonic clock, which a test can pause and advance.
+pub(super) fn monotonic_now() -> std::time::Instant {
+    tokio::time::Instant::now().into_std()
+}
 
 /// Gives the wall time.
 pub(super) trait Clock: Send + Sync {

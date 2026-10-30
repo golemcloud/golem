@@ -2493,20 +2493,25 @@ still waits for earlier work when the first drain's caller drops.
 The two store backends live in `filesystem_snapshot/backend/in_memory` and `backend/rustic`.
 The in-memory backend remains available only for tests and `test-utils`.
 `backend/rustic/mod.rs` owns the concrete rustic backend, construction, shutdown and operation
-routing. Operations are free functions with explicit dependencies. `operation::Operation`
-borrows the lease and shared storage, key, clock and priority resources without acquiring a
-tracker token or capturing a runtime. Its agent comes only from that lease, and `files` accepts
-no separate agent. It creates each backend or retained task at the point that registers that
-work. `Operation::begin_run` shares ordinary run setup and preserves token, guard and backend
-acquisition order. Setup failures propagate with `?`; `call_execution::Ran` converts them into
-run outcomes. Save keeps its cancellation link, per-run tracker and late-write recorders in its
-own setup order.
-`call_execution` drives runs and settlement; `blob_io` is the single blob-call policy;
+routing. Operations are free functions with explicit dependencies. `operation::Operation::new`
+borrows the lease and a named `Resources` input without acquiring a tracker token or capturing
+a runtime. The operation's fields are private. Its agent comes only from that lease, and `files`
+accepts no separate agent. Accessors expose the key, clock and priority; task and backend methods
+own registration. `BackendRun` keeps an untransferred backend before its cancellation guard in
+field order. Transferring the backend into a blocking task retains no extra backend owner.
+`Operation::read_existing` opens and reads a repository in one tracked blocking task. It uses the
+caller's backend and starts no run or retry. Save keeps its cancellation link, per-run tracker and
+late-write recorders in its own setup order.
+`run_outcome` defines one `RunResult` for all operations: `Result<Ran<_>, Ended>`. An `Err` is the
+only run failure path. An `Ok` holds an answer or settlement; settlement returns the same result
+shape. `call_execution` drives runs and settlement. `clock` owns both wall and monotonic time.
+`blob_io` is the single blob-call policy;
 `blob_backend` bridges blocking rustic calls to it. `save`, `restore`, `snapshot_catalog`,
 `snapshot_deletion` and `repository_namespace` own their operations. Save and restore also own
-their operation-specific failure classification, settings and rustic options. Restore receives
-only its reader-thread count and its test hook, not `StorePolicy`. `store_policy` maps configuration
-to operation settings. `pruning` owns its defaults, options, eligibility, durable records, claims
+their operation-specific failure classification, settings and rustic options. `store_policy`
+constructs `SaveSettings`, `RestoreSettings` and `PruneSettings` through matching factory methods.
+Restore owns its reader-thread count by value. Test observations use the borrowed resource input.
+`pruning` owns its defaults, options, eligibility criteria, durable records, claims
 and timing. `tracked_tasks` retains the runtime supplied by each operation.
 Tests and single-consumer fixtures live beside their owners. The `test_support` modules hold
 shared fixtures; shared prune inputs live in `pruning/test_support`. The shared contract cases in

@@ -275,7 +275,7 @@ impl ReadBackend for BlobBackend {
                 .collect()
             }
             _ => {
-                let directory = Path::new(tpe.dirname());
+                let directory = Path::new(super::repository_layout::type_path(tpe));
                 let listed = self.request(
                     StorageCall::List,
                     directory,

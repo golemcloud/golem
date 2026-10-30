@@ -65,6 +65,7 @@ fn the_off_side_of_each_prune_setting_goes_into_its_rustic_option() {
     let prune = prune_options(&PruneSettings {
         fast_repack: false,
         keep_delete: Duration::from_secs(23 * 3600),
+        ..PruneSettings::default()
     })
     .unwrap();
     assert_eq!(
@@ -78,6 +79,7 @@ fn each_prune_setting_goes_into_its_rustic_option() {
     let prune = prune_options(&PruneSettings {
         fast_repack: true,
         keep_delete: Duration::ZERO,
+        ..PruneSettings::default()
     })
     .unwrap();
     assert_eq!(
@@ -240,6 +242,7 @@ async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads
             PruneSettings {
                 fast_repack: true,
                 keep_delete: Duration::ZERO,
+                ..PruneSettings::default()
             },
         ),
     )
@@ -304,6 +307,7 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
     let settings = PruneSettings {
         fast_repack: true,
         keep_delete: Duration::ZERO,
+        ..PruneSettings::default()
     };
     prune_with(inner.clone(), &scope, STORAGE_CALL_DEADLINE, settings)
         .await
@@ -383,6 +387,7 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
         let settings = PruneSettings {
             fast_repack,
             keep_delete: Duration::ZERO,
+            ..PruneSettings::default()
         };
 
         let stored = |paths: Vec<String>| {
@@ -438,6 +443,7 @@ async fn a_prune_of_a_scope_without_a_repository_gives_nothing() {
         PruneSettings {
             fast_repack: false,
             keep_delete: Duration::ZERO,
+            ..PruneSettings::default()
         },
     )
     .await

@@ -20,7 +20,9 @@
 //! take, run, wait and check gave, and at a take it looks at the shutdown first, then the cancel,
 //! then the limiter.
 
+use super::run_outcome::{Checked, OwnFile, Ran, RunEnd, RunResult, Settle, Settled};
 use crate::filesystem_snapshot::SnapshotInfo;
+use crate::filesystem_snapshot::clock::monotonic_now as now;
 use crate::filesystem_snapshot::errors::Failed;
 use crate::filesystem_snapshot::run_admission::{
     RunSlots, Slot, Withdrawal, WithdrawnCall, withdrawn_call,
@@ -28,17 +30,10 @@ use crate::filesystem_snapshot::run_admission::{
 use golem_common::model::RetryConfig;
 use golem_common::retries::get_delay;
 use rand::Rng as _;
-use std::path::Path;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-/// Gives the instant now, from the clock of the runtime, which a test can pause and advance.
-pub(super) fn now() -> Instant {
-    tokio::time::Instant::now().into_std()
-}
-
 /// The most runs of one call that end because another call of the agent made their work invalid.
-pub(super) const MOST_RACE_RUNS: u32 = 8;
+const MOST_RACE_RUNS: u32 = 8;
 
 /// The method of a call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,26 +47,10 @@ pub(super) enum Kind {
     Stat,
 }
 
-/// How a run ended without an answer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RunEnd {
-    /// A storage call of the run failed after its tries.
-    CallFailed,
-    /// A storage call gave a failure that no try can fix, or the work gave an error that no new
-    /// run can change.
-    Permanent,
-    /// Another call of the agent made the work of the run invalid, and a new run can do it again.
-    RaceRunAgain,
-    /// The save did not finish its backup before the time that the store allows.
-    BoundPassed,
-    /// The cancel of the save fired, or the store shut down.
-    Cancelled,
-}
-
 /// Where a call stands after its last step: how its last run ended, or what its last take or wait
 /// gave. Only the shell makes the states that are not the end of a run, so a run cannot give one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Stand {
+enum Stand {
     /// A run gave the answer of the call.
     Answered,
     /// A run ended without an answer.
@@ -84,52 +63,39 @@ pub(super) enum Stand {
     SlotTaken,
 }
 
-/// What the check of the own name of a save found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Checked {
-    /// The snapshot file that the publish wrote is there.
-    Found(SnapshotInfo),
-    /// Another snapshot file has the name.
-    Other,
-    /// No snapshot file has the name.
-    Absent,
-    /// The check could not read the snapshots of the agent.
-    Unreadable,
-}
-
 /// A write of a run that ended without an answer, and the check that belongs to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Late {
+struct Late {
     /// After this instant, the write has landed or never lands.
-    pub(super) until: Instant,
+    until: Instant,
     /// What the check of the own name found after `until`.
-    pub(super) checked: Option<Checked>,
+    checked: Option<Checked>,
 }
 
 /// What the call saw before it decides its next step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct RunSeen {
-    pub(super) kind: Kind,
+struct RunSeen {
+    kind: Kind,
     /// The runs that ended `CallFailed`, the last one included.
-    pub(super) failed_runs: u32,
+    failed_runs: u32,
     /// The runs that ended `RaceRunAgain`, the last one included.
-    pub(super) races: u32,
+    races: u32,
     /// Whether a run of the call ended with a storage failure.
-    pub(super) ran: bool,
+    ran: bool,
     /// Where the call stands after its last step.
-    pub(super) stand: Stand,
-    pub(super) late: Option<Late>,
+    stand: Stand,
+    late: Option<Late>,
     /// A withdrawal that came at a take or during a wait.
-    pub(super) withdrawn: Option<Withdrawal>,
-    pub(super) shut_down: bool,
-    pub(super) now: Instant,
+    withdrawn: Option<Withdrawal>,
+    shut_down: bool,
+    now: Instant,
     /// The time after which a run of a save does not start.
-    pub(super) backup_end: Option<Instant>,
+    backup_end: Option<Instant>,
 }
 
 /// What the call does next.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NextRun {
+enum NextRun {
     /// Start the run whose slot was granted.
     Start,
     /// Take a slot at once, and run again.
@@ -146,7 +112,7 @@ pub(super) enum NextRun {
 
 /// The answer of the call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RunOutcome {
+enum RunOutcome {
     /// The answer that the last run gave.
     AsTheRunSaid,
     /// The publish of an earlier run landed.
@@ -185,7 +151,7 @@ pub(super) enum RunOutcome {
 /// call waits for late writes. Row 11 tells it that the call waits after a failed run.
 /// 12. Any other failure gives `Failed`.
 /// 13. and 14. A race runs again at once, at most [`MOST_RACE_RUNS`] times.
-pub(super) fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> NextRun {
+fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> NextRun {
     let late = seen.late.map(|late| (late.until, late.checked));
     match (seen.stand, late, seen.withdrawn) {
         (Stand::Answered, Some((until, None)), _) if !seen.shut_down => NextRun::WaitThenRun {
@@ -266,102 +232,11 @@ pub(crate) fn run_delay(retry: &RetryConfig, failed_runs: u32, jitter: f64) -> O
 
 /// Draws the jitter factor of a wait below the `max_jitter_factor` of `retry`. A factor of 0 or
 /// none gives no jitter.
-pub(super) fn jitter(retry: &RetryConfig) -> f64 {
+fn jitter(retry: &RetryConfig) -> f64 {
     retry
         .max_jitter_factor
         .filter(|factor| *factor > 0.0)
         .map_or(0.0, |factor| rand::rng().random_range(0.0..factor))
-}
-
-/// What one run of a call gave.
-pub(super) enum Ran<T> {
-    /// The run gives the answer of the call.
-    Answered(T),
-    /// The run gives the answer of the call after its writes that ended without an answer have
-    /// landed or can no longer land.
-    AnsweredAfter(T, LateWrite),
-    /// The run ended without an answer.
-    Ended(Ended),
-    /// The run gave its slot back, and ends with the settle: the shell waits for `wait` with no
-    /// slot, and then `finish` gives what the run gave.
-    Settling(Settle<T>),
-}
-
-/// A run outcome, or a failure while acquiring its resources.
-pub(super) type RunResult<T> = Result<Ran<T>, Ended>;
-
-impl<T> From<RunResult<T>> for Ran<T> {
-    fn from(result: RunResult<T>) -> Self {
-        result.unwrap_or_else(Self::Ended)
-    }
-}
-
-/// The end of a run that the shell runs after it gave the slot of the run back.
-pub(super) struct Settle<T> {
-    /// Ends when every blob call of the run has ended.
-    pub(super) wait: futures::future::BoxFuture<'static, ()>,
-    /// Gives what the run gave, from what the wait or a shutdown gave.
-    pub(super) finish: Box<dyn FnOnce(Settled) -> Ran<T> + Send>,
-    /// Whether the run can have a write that can still land.
-    pub(super) may_land: bool,
-}
-
-/// How the settle of a run ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Settled {
-    /// Every blob call of the run has ended.
-    Waited,
-    /// The store shut down first.
-    ShutDown,
-}
-
-/// Gives the run that answered `answer`, after the writes of the run that can still land, which
-/// have landed or can no longer land at `until`.
-pub(super) fn answered_after<T>(answer: T, until: Option<Instant>) -> Ran<T> {
-    match until {
-        Some(until) => Ran::AnsweredAfter(answer, LateWrite { until, own: None }),
-        None => Ran::Answered(answer),
-    }
-}
-
-/// A run that ended without an answer.
-#[derive(Debug)]
-pub(super) struct Ended {
-    /// How the run ended.
-    pub(super) end: RunEnd,
-    /// The failure of the run.
-    pub(super) failure: anyhow::Error,
-    /// The writes of the run that ended without an answer, when it has some.
-    pub(super) late: Option<LateWrite>,
-}
-
-impl Ended {
-    /// A run that ended with `end` and `failure`, and with no write that can still land.
-    pub(super) fn new(end: RunEnd, failure: anyhow::Error) -> Self {
-        Self {
-            end,
-            failure,
-            late: None,
-        }
-    }
-}
-
-/// The writes of a run that ended without an answer.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct LateWrite {
-    /// After this instant, each of the writes has landed or never lands.
-    pub(super) until: Instant,
-    /// The snapshot file that the publish of a save staged, which the check of the own name looks
-    /// for.
-    pub(super) own: Option<OwnFile>,
-}
-
-/// The snapshot file that a publish staged, with the info of its snapshot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct OwnFile {
-    /// The path of the file, which is the hash of its content.
-    pub(super) path: Arc<Path>,
-    pub(super) info: SnapshotInfo,
 }
 
 /// What a run gets from the shell.
@@ -432,7 +307,7 @@ impl Shell<'_> {
     pub(super) async fn call<T, R, F>(&self, answers: Answers<T>, run: R) -> T
     where
         R: FnMut(RunStart) -> F,
-        F: Future<Output = Ran<T>>,
+        F: Future<Output = RunResult<T>>,
     {
         self.runs(
             answers,
@@ -458,7 +333,7 @@ impl Shell<'_> {
     ) -> T
     where
         R: FnMut(RunStart) -> F,
-        F: Future<Output = Ran<T>>,
+        F: Future<Output = RunResult<T>>,
         C: Fn(OwnFile) -> G,
         G: Future<Output = Checked>,
     {
@@ -478,7 +353,7 @@ impl Shell<'_> {
     ) -> T
     where
         R: FnMut(RunStart) -> F,
-        F: Future<Output = Ran<T>>,
+        F: Future<Output = RunResult<T>>,
         C: Fn(OwnFile) -> G,
         G: Future<Output = Checked>,
     {
@@ -568,7 +443,7 @@ impl Shell<'_> {
     async fn run<T, R, F>(&self, mut calling: Calling<T>, run: &mut R) -> Calling<T>
     where
         R: FnMut(RunStart) -> F,
-        F: Future<Output = Ran<T>>,
+        F: Future<Output = RunResult<T>>,
     {
         let slot = calling.slot.take();
         calling.runs += 1;
@@ -579,11 +454,11 @@ impl Shell<'_> {
         let ran = run(start).await;
         drop(slot);
         let ran = match ran {
-            Ran::Settling(Settle {
+            Ok(Ran::Settling(Settle {
                 wait,
                 finish,
                 may_land,
-            }) => {
+            })) => {
                 if may_land {
                     self.slots.waiting_for_late_writes();
                 }
@@ -597,11 +472,11 @@ impl Shell<'_> {
             ran => ran,
         };
         match ran {
-            Ran::Answered(answer) => {
+            Ok(Ran::Answered(answer)) => {
                 calling.stand = Stand::Answered;
                 calling.answer = Some(answer);
             }
-            Ran::AnsweredAfter(answer, late) => {
+            Ok(Ran::AnsweredAfter(answer, late)) => {
                 calling.stand = Stand::Answered;
                 calling.answer = Some(answer);
                 calling.late = Some(Late {
@@ -609,7 +484,7 @@ impl Shell<'_> {
                     checked: None,
                 });
             }
-            Ran::Ended(ended) => {
+            Err(ended) => {
                 calling.stand = Stand::Ended(ended.end);
                 calling.failed_runs += u32::from(ended.end == RunEnd::CallFailed);
                 calling.races += u32::from(ended.end == RunEnd::RaceRunAgain);
@@ -622,7 +497,7 @@ impl Shell<'_> {
                 calling.own = ended.late.and_then(|late| late.own);
             }
             // A settle gives what the run gave, never a second settle.
-            Ran::Settling(_) => {
+            Ok(Ran::Settling(_)) => {
                 calling.stand = Stand::Ended(RunEnd::Permanent);
                 calling.last_failure = Some(anyhow::anyhow!(
                     "the settle of a filesystem snapshot run gave another settle"

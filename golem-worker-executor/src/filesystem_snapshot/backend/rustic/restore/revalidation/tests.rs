@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{Found, Learned, Lookup, Observed, Outcome, Reread, Step, next_step};
-use crate::filesystem_snapshot::backend::rustic::call_execution::RunEnd;
+use crate::filesystem_snapshot::backend::rustic::run_outcome::RunEnd;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use std::path::Path;

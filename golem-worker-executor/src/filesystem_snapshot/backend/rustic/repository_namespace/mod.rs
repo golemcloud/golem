@@ -19,12 +19,12 @@
 
 use super::blob_io::SnapshotFiles;
 use super::blob_io::{LateWrites, lands_by};
-use super::call_execution::{Ended, LateWrite, Ran, RunEnd, answered_after};
 use super::failure_classification::storage_end;
 use super::operation::Operation;
 use super::repository_layout::{
-    CONFIG_PATH, DATA_PATH, INDEX_PATH, KEYS_PATH, LEDGERS_PATH, SNAPSHOTS_PATH,
+    CONFIG_PATH, DATA_PATH, INDEX_PATH, KEYS_PATH, PRUNE_PATH, SNAPSHOTS_PATH,
 };
+use super::run_outcome::{Ended, LateWrite, Ran, RunEnd, RunResult, answered_after};
 use crate::filesystem_snapshot::errors::CallError;
 use crate::metrics::filesystem_snapshots::{self, RemovedSource, StoredSource};
 use futures::{StreamExt, TryStreamExt, stream};
@@ -122,8 +122,8 @@ fn catch_up(copied: &HashSet<Box<Path>>, listed: &[Box<Path>], rounds: u32) -> C
     }
 }
 
-/// Copies the repository of `from` into the scope `to` in one run, with the config file last, so
-/// `to` holds a repository only when all its blobs are there. It does not copy the ledger or a
+/// Copies the repository of `from` into the namespace `to` in one run, with the config file last, so
+/// `to` holds a repository only when all its blobs are there. It does not copy prune records or a
 /// snapshot file that a delete removes after the listing.
 ///
 /// The storage copies each blob on its own side, so no byte of a blob but the config comes to this
@@ -350,20 +350,23 @@ async fn copy_blob(
     }
 }
 
-/// Deletes the repository and the ledger of the scope. The config file goes first, so the scope
-/// holds no repository from that step on. A scope that holds nothing gives success. The metric of
+/// Deletes the repository and all prune records: ledgers, claims and freed-byte records. The config
+/// file goes first, so the namespace holds no repository from then on. An empty namespace gives
+/// success. The metric of
 /// the removed bytes counts the blobs of each deleted directory.
 async fn delete_namespace(files: &SnapshotFiles) -> anyhow::Result<()> {
-    files.delete("delete_scope", Path::new(CONFIG_PATH)).await?;
+    files
+        .delete("delete_namespace", Path::new(CONFIG_PATH))
+        .await?;
     stream::iter(
         LISTING_ORDER
             .iter()
             .map(Path::new)
-            .chain(Path::new(LEDGERS_PATH).parent())
+            .chain(std::iter::once(Path::new(PRUNE_PATH)))
             .map(Ok),
     )
     .try_for_each(|directory| async move {
-        let removed = files.delete_dir("delete_scope", directory).await?;
+        let removed = files.delete_dir("delete_namespace", directory).await?;
         filesystem_snapshots::record_removed_bytes(
             RemovedSource::DeleteAll,
             removed.unwrap_or_default(),
@@ -374,11 +377,11 @@ async fn delete_namespace(files: &SnapshotFiles) -> anyhow::Result<()> {
 }
 
 /// One run of a delete of all snapshots.
-pub(super) async fn delete_all_run(operation: &Operation<'_>) -> Ran<Result<(), CallError>> {
+pub(super) async fn delete_all_run(operation: &Operation<'_>) -> RunResult<Result<(), CallError>> {
     let (token, _guard) = operation.run_token();
     match delete_namespace(&operation.files(&token)).await {
-        Ok(()) => Ran::Answered(Ok(())),
-        Err(error) => Ran::Ended(Ended::new(storage_end(&error), error)),
+        Ok(()) => Ok(Ran::Answered(Ok(()))),
+        Err(error) => Err(Ended::new(storage_end(&error), error)),
     }
 }
 
@@ -388,7 +391,7 @@ pub(super) async fn copy_run(
     from_operation: &Operation<'_>,
     to_operation: &Operation<'_>,
     again: bool,
-) -> Ran<Result<(), CallError>> {
+) -> RunResult<Result<(), CallError>> {
     let (token, _guard) = from_operation.run_token();
     let late = Arc::new(LateWrites::default());
     let copied = copy_namespace(
@@ -399,7 +402,7 @@ pub(super) async fn copy_run(
     .await;
     match copied {
         Ok(()) => answered_after(Ok(()), lands_by(late.latest(), from_operation.deadline())),
-        Err(error) => Ran::Ended(Ended {
+        Err(error) => Err(Ended {
             end: copy_end(&error),
             failure: error.into_failure(),
             late: lands_by(late.latest(), from_operation.deadline())

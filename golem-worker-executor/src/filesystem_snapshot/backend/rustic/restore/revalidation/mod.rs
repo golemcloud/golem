@@ -20,7 +20,7 @@
 //! the run to load again, to read the snapshots again, or to answer, so that a name that no delete
 //! removes gives the whole tree and a name that a delete removes gives `NotFound`.
 
-use super::super::call_execution::RunEnd;
+use super::super::run_outcome::RunEnd;
 use std::collections::HashSet;
 use std::path::Path;
 

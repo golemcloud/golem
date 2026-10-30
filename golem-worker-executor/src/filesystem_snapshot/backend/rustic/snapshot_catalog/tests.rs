@@ -144,8 +144,8 @@ async fn a_read_ahead_that_fails_reads_no_file_twice_and_starts_no_new_read() {
             prune: PruneSettings {
                 fast_repack: true,
                 keep_delete: Duration::from_secs(15 * 60),
+                threshold: Percent(u16::MAX),
             },
-            prune_threshold: Percent(u16::MAX),
             retry: one_run(),
             publish_bound: publish_bound_for(STORAGE_CALL_DEADLINE, Duration::from_secs(15 * 60)),
             in_call_tries: crate::filesystem_snapshot::backend::rustic::blob_io::IN_CALL_TRIES,

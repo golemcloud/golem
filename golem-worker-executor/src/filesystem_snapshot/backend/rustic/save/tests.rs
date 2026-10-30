@@ -17,13 +17,13 @@ use super::{
     store_backup_options, whole_millis_from,
 };
 use crate::filesystem_snapshot::backend::rustic::blob_io::LateWrites;
-use crate::filesystem_snapshot::backend::rustic::call_execution::{
-    OwnFile, Ran, RunEnd, Settle, Settled,
-};
 use crate::filesystem_snapshot::backend::rustic::failure_classification::OperationCancelled;
 use crate::filesystem_snapshot::backend::rustic::pruning::PruneSettings;
 use crate::filesystem_snapshot::backend::rustic::publication::PublishBound;
 use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
+use crate::filesystem_snapshot::backend::rustic::run_outcome::{
+    OwnFile, Ran, RunEnd, RunResult, Settle, Settled,
+};
 use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::repository_snapshots;
 use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::test_support::holding::holding_storage;
@@ -41,8 +41,8 @@ use crate::filesystem_snapshot::backend::rustic::test_support::{
     holding_index_reads, is_failed, key, ledger, listed_names, mapping_failed_call,
     mapping_local_io_without_source, mapping_missing, mapping_refused, mapping_rustic, name,
     one_file_tree, policy, polled_until, refusing, repository_fixture_tree, restored_listing,
-    runs_policy, save_each, save_numbered, scope_with_a_prune_to_come, scripted_first_pack,
-    snapshot_files, store, store_over, store_with_deadline, stored_paths,
+    runs_policy, save_each, save_numbered, scope_with_a_prune_to_come, snapshot_files, store,
+    store_over, store_with_deadline, stored_paths,
 };
 
 use crate::filesystem_snapshot::backend::rustic::test_support::with_existing_repository;
@@ -72,6 +72,96 @@ use test_r::{test, timeout};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
+
+/// A storage over `inner` whose first write of a pack follows `first`, and whose other calls
+/// follow `other`.
+fn scripted_first_pack(
+    inner: Arc<InMemoryBlobStorage>,
+    first: Script,
+    other: impl Fn(&str, &Path) -> Script + Send + Sync + 'static,
+) -> Arc<ScriptedBlobStorage> {
+    ScriptedBlobStorage::with_state(inner, 0usize, move |packs, op_label, path| {
+        match op_label == "write" && path.starts_with("data") {
+            true if *packs == 0 => (first, packs + 1),
+            true => (other(op_label, path), packs + 1),
+            false => (other(op_label, path), *packs),
+        }
+    })
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_save_that_loses_the_creation_of_the_repository_after_its_first_config_check_saves_into_the_winner()
+ {
+    // The gate holds the second check of the config by the losing save, which the init of rustic
+    // makes before its config write. The winning save creates the repository meanwhile, so that
+    // check finds the config.
+    let shared = Arc::new(InMemoryBlobStorage::new());
+    let checks = Arc::new(AtomicUsize::new(0));
+    let losing = ScriptedBlobStorage::new(shared.clone(), {
+        let checks = checks.clone();
+        move |op_label, path| {
+            if op_label == "stat"
+                && path == Path::new("config")
+                && checks.fetch_add(1, Ordering::SeqCst) == 1
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let winner = store(shared.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO));
+    let loser = store(losing.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO));
+    let scope = new_scope();
+    let (won_tree, lost_tree) = (one_file_tree("winner"), one_file_tree("loser"));
+    let losing_save = AbortOnDropHandle::new(tokio::spawn({
+        let (loser, scope, path) = (loser.clone(), scope.clone(), lost_tree.path().to_path_buf());
+        async move {
+            loser
+                .save(
+                    &scope,
+                    &name("p-loser"),
+                    &path,
+                    None,
+                    never_cancelled(),
+                    &Unlimited,
+                )
+                .await
+        }
+    }));
+    let held = eventually(|| checks.load(Ordering::SeqCst) >= 2).await;
+    let won = winner
+        .save(
+            &scope,
+            &name("p-winner"),
+            won_tree.path(),
+            None,
+            never_cancelled(),
+            &Unlimited,
+        )
+        .await;
+    losing.open_gate();
+    let lost = tokio::time::timeout(LIMIT, losing_save).await;
+    assert!(won.is_ok(), "{won:?}");
+    assert!(matches!(lost, Ok(Ok(Ok(_)))), "{lost:?}");
+    assert_eq!(
+        (
+            held,
+            restored_listing(&winner, &scope, &name("p-loser"))
+                .await
+                .ok(),
+            restored_listing(&loser, &scope, &name("p-winner"))
+                .await
+                .ok()
+        ),
+        (
+            true,
+            Some(listing(lost_tree.path())),
+            Some(listing(won_tree.path()))
+        )
+    );
+}
 
 #[test]
 fn the_off_side_of_each_save_setting_goes_into_its_rustic_option() {
@@ -1907,7 +1997,7 @@ async fn a_save_whose_publish_lands_after_its_try_answers_with_its_own_file_and_
         .find(|event| event.op_label == "publish" && !event.landed_late)
         .map(|event| event.ended)
         .unwrap();
-    let answered = crate::filesystem_snapshot::backend::rustic::call_execution::now();
+    let answered = crate::filesystem_snapshot::clock::monotonic_now();
     tokio::time::sleep_until(tokio::time::Instant::from_std(tried + deadline * 2)).await;
     let restored = restored_listing(&store, &scope, &name("p-late")).await;
 
@@ -2347,7 +2437,7 @@ async fn the_settle_of_a_save_reads_its_late_writes_only_after_every_holder_of_i
         let (token, late) = (run_calls.token(), backend_late.clone());
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(200)).await;
-            let ended = crate::filesystem_snapshot::backend::rustic::call_execution::now();
+            let ended = crate::filesystem_snapshot::clock::monotonic_now();
             late.record(ended);
             drop(token);
             ended
@@ -2372,7 +2462,7 @@ async fn the_settle_of_a_save_reads_its_late_writes_only_after_every_holder_of_i
     wait.await;
     // The run is built before the test waits for the holder, as the shell builds it after the wait.
     let until = match finish(Settled::Waited) {
-        Ran::Ended(ended) => ended.late.map(|late| late.until),
+        Err(ended) => ended.late.map(|late| late.until),
         _ => None,
     };
     let recorded = holder.await.unwrap();
@@ -2482,14 +2572,14 @@ fn id_of(files: &[rustic_core::repofile::SnapshotFile], name: &str) -> Option<Sn
 }
 
 /// What a run of a save gave, with its instants as their distance after `base`.
-fn ran_shape(ran: Ran<Result<SnapshotInfo, SaveError>>, base: std::time::Instant) -> String {
+fn ran_shape(ran: RunResult<Result<SnapshotInfo, SaveError>>, base: std::time::Instant) -> String {
     let after = |until: std::time::Instant| until.saturating_duration_since(base);
     match ran {
-        Ran::Answered(answer) => format!("answered {}", answer.is_ok()),
-        Ran::AnsweredAfter(answer, late) => {
+        Ok(Ran::Answered(answer)) => format!("answered {}", answer.is_ok()),
+        Ok(Ran::AnsweredAfter(answer, late)) => {
             format!("answered {} after {:?}", answer.is_ok(), after(late.until))
         }
-        Ran::Ended(ended) => match ended.late {
+        Err(ended) => match ended.late {
             Some(late) => format!(
                 "ended {:?} after {:?} own {}",
                 ended.end,
@@ -2498,7 +2588,7 @@ fn ran_shape(ran: Ran<Result<SnapshotInfo, SaveError>>, base: std::time::Instant
             ),
             None => format!("ended {:?}", ended.end),
         },
-        Ran::Settling(_) => "settling".to_string(),
+        Ok(Ran::Settling(_)) => "settling".to_string(),
     }
 }
 
@@ -2741,8 +2831,8 @@ mod bounds {
             prune: PruneSettings {
                 fast_repack: true,
                 keep_delete: GRACE,
+                threshold: ALWAYS,
             },
-            prune_threshold: ALWAYS,
             retry: RetryConfig {
                 max_attempts: 5,
                 min_delay: Duration::from_millis(50),
@@ -2765,9 +2855,10 @@ mod bounds {
         fn take(&self, immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
             Box::pin(async move {
                 let slot = Unlimited.take(immediate).await?;
-                self.0.lock().unwrap().get_or_insert_with(
-                    crate::filesystem_snapshot::backend::rustic::call_execution::now,
-                );
+                self.0
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(crate::filesystem_snapshot::clock::monotonic_now);
                 Ok(slot)
             })
         }
