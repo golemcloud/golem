@@ -2879,8 +2879,6 @@ mod tests {
         let missing_guest = ComponentMetadata::from_parts_with_tools_and_middlewares(
             KnownExports::default(),
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
             BTreeMap::new(),
@@ -2894,8 +2892,6 @@ mod tests {
         let pure = ComponentMetadata::from_parts(
             KnownExports::default(),
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
         );
@@ -2914,8 +2910,6 @@ mod tests {
                     ..KnownExports::default()
                 },
                 Vec::new(),
-                None,
-                None,
                 Vec::new(),
                 BTreeMap::new(),
                 tools.clone(),
@@ -2932,8 +2926,6 @@ mod tests {
                 ..KnownExports::default()
             },
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
             tools,

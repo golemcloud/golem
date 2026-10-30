@@ -359,8 +359,6 @@ mod tests {
         let metadata = ComponentMetadata::from_parts(
             Default::default(),
             Vec::new(),
-            None,
-            None,
             vec![agent_type],
             BTreeMap::new(),
         );
@@ -441,8 +439,6 @@ mod tests {
         let metadata = ComponentMetadata::from_parts(
             Default::default(),
             Vec::new(),
-            None,
-            None,
             vec![agent_type],
             BTreeMap::new(),
         );
@@ -539,8 +535,6 @@ mod tests {
         let metadata = ComponentMetadata::from_parts(
             Default::default(),
             Vec::new(),
-            None,
-            None,
             vec![agent_type],
             BTreeMap::new(),
         );

@@ -929,8 +929,6 @@ pub async fn test_component_deletion_racing_runtime_derivation(deps: &Deps) {
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -1100,8 +1098,6 @@ pub async fn test_component_deletion_racing_multi_parent_runtime_derivation(deps
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([
             (high_agent_type.clone(), provision_config(high_card.clone())),
@@ -1263,8 +1259,6 @@ pub async fn test_component_deletion_racing_runtime_derivation_from_descendant(d
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -2778,8 +2772,6 @@ pub async fn test_environment_deletion_revokes_component_card_runtime_descendant
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3257,8 +3249,6 @@ pub async fn test_component_stage(deps: &Deps) {
         metadata: Blob::new(ComponentMetadata::from_parts_with_tools(
             KnownExports::default(),
             vec![],
-            Some("test".to_string()),
-            Some("1.0".to_string()),
             vec![],
             std::collections::BTreeMap::new(),
             BTreeMap::from([(
@@ -3480,8 +3470,6 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3576,8 +3564,6 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
     let metadata_with_agent = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3781,8 +3767,6 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3873,8 +3857,6 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3986,8 +3968,6 @@ pub async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -4101,8 +4081,6 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -7405,8 +7383,6 @@ pub async fn test_account_usage(deps: &Deps) {
                     metadata: Blob::new(ComponentMetadata::from_parts(
                         KnownExports::default(),
                         vec![],
-                        None,
-                        None,
                         vec![],
                         BTreeMap::new(),
                     )),
@@ -9908,8 +9884,6 @@ pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     vec![],
-                    Some("ordinary-metadata".to_string()),
-                    Some("1.0.0".to_string()),
                     expected.clone(),
                     BTreeMap::new(),
                 )),
@@ -9935,15 +9909,6 @@ pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
             .value()
             .agent_types(),
         expected
-    );
-    assert_eq!(
-        stored_component
-            .component
-            .revision
-            .metadata
-            .value()
-            .root_package_name(),
-        &Some("ordinary-metadata".to_string())
     );
 
     let deployment_revision_id = 1;
@@ -10061,8 +10026,6 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     Vec::new(),
-                    None,
-                    None,
                     Vec::new(),
                     BTreeMap::new(),
                 )),
@@ -10280,8 +10243,6 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     Vec::new(),
-                    None,
-                    None,
                     Vec::new(),
                     BTreeMap::new(),
                 )),
@@ -10406,8 +10367,6 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     Vec::new(),
-                    None,
-                    None,
                     Vec::new(),
                     BTreeMap::new(),
                 )),
@@ -10987,8 +10946,6 @@ pub async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     Vec::new(),
-                    None,
-                    None,
                     Vec::new(),
                     BTreeMap::new(),
                 )),
@@ -11391,8 +11348,6 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         metadata: Blob::new(ComponentMetadata::from_parts(
             KnownExports::default(),
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
         )),
@@ -13040,8 +12995,6 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     vec![],
-                    None,
-                    None,
                     vec![],
                     BTreeMap::new(),
                 )),

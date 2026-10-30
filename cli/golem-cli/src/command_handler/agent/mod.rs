@@ -1538,7 +1538,7 @@ impl AgentCommandHandler {
                     .await?
                 else {
                     bail!(
-                        "Component {} not found, while getting current component version",
+                        "Component {} not found, while getting current component revision",
                         component.component_name
                     );
                 };
@@ -1567,16 +1567,6 @@ impl AgentCommandHandler {
             agent_id: agent_id.clone(),
             from_revision,
             revision: target_revision,
-            from_version: self
-                .ctx
-                .component_handler()
-                .component_version_at(&component.id, from_revision)
-                .await,
-            version: self
-                .ctx
-                .component_handler()
-                .component_version_at(&component.id, target_revision)
-                .await,
         };
 
         let mut update_results = TryUpdateAllWorkersView::default();
@@ -2129,11 +2119,6 @@ impl AgentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        let version = self
-            .ctx
-            .component_handler()
-            .component_version_at(component_id, target_revision)
-            .await;
         let client_update_mode = client_update_mode(update_mode);
         let mut update_results = TryUpdateAllWorkersView::default();
         let mut agents_awaiting_update = Vec::new();
@@ -2167,12 +2152,6 @@ impl AgentCommandHandler {
                 agent_id: agent.agent_id.agent_id.as_str().into(),
                 from_revision: agent.component_revision,
                 revision: target_revision,
-                from_version: self
-                    .ctx
-                    .component_handler()
-                    .component_version_at(component_id, agent.component_revision)
-                    .await,
-                version: version.clone(),
             });
         }
 

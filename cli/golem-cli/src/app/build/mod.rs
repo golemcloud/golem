@@ -14,7 +14,6 @@
 
 use self::check::check_build_tool_requirements;
 use self::extract_component_metadata::extract_and_store_component_metadata;
-use crate::app::build::add_metadata::add_metadata_to_components;
 use crate::app::build::componentize::build_components;
 use crate::app::build::gen_bridge::{
     BridgeGenerationPlan, build_owner_components, component_tool_dependency_components,
@@ -42,7 +41,6 @@ use golem_common::model::tool::ToolName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-pub mod add_metadata;
 pub mod check;
 pub mod clean;
 pub mod command;
@@ -248,9 +246,6 @@ async fn build_components_with_dependency_ordering(
     let _indent = if ctx.should_run_step(AppBuildStep::Build) {
         log_action("Building", "components");
         Some(LogIndent::new())
-    } else if ctx.should_run_step(AppBuildStep::AddMetadata) {
-        log_action("Adding", "metadata to components");
-        Some(LogIndent::new())
     } else {
         None
     };
@@ -273,17 +268,7 @@ async fn build_components_with_dependency_ordering(
                 .cloned()
                 .collect::<Vec<_>>()
             {
-                if ctx.should_run_step(AppBuildStep::AddMetadata) {
-                    ctx.extracted_metadata
-                        .lock()
-                        .unwrap()
-                        .remove(&component_name);
-                    add_metadata_to_components(ctx, &component_name).await?;
-                }
-                let wasm = ctx
-                    .application()
-                    .component(&component_name)
-                    .agent_type_extraction_source_wasm();
+                let wasm = ctx.application().component(&component_name).output_wasm();
                 if !wasm.exists() {
                     continue;
                 }
@@ -360,17 +345,12 @@ async fn build_components_with_dependency_ordering(
                     .remove(&component_name);
                 build_components(ctx, &component_name).await?;
             }
-            if ctx.should_run_step(AppBuildStep::AddMetadata)
-                && (ctx.should_run_step(AppBuildStep::Build) || !has_dependency_guest_request)
-            {
-                add_metadata_to_components(ctx, &component_name).await?;
-            }
 
             pending_components.remove(&component_name);
             built_components.insert(component_name.clone());
             if has_dependency_guest_request {
                 let component = ctx.application().component(&component_name);
-                if component.agent_type_extraction_source_wasm().exists() {
+                if component.output_wasm().exists() {
                     let metadata =
                         extract_and_store_component_metadata(ctx, &component_name).await?;
                     validate_no_ambient_tool_collisions(ctx, &component_name, &metadata.tools)?;
@@ -481,7 +461,7 @@ async fn generate_available_dependency_guest_bridges(
         .filter(|component_name| {
             ctx.application()
                 .component(component_name)
-                .agent_type_extraction_source_wasm()
+                .output_wasm()
                 .exists()
         })
         .cloned()
@@ -1108,14 +1088,11 @@ fn add_existing_component_manifest_bridge_output_dir_claims(
 ) -> bool {
     let component_name = ComponentName(component_name.to_string());
     let component = ctx.application().component(&component_name);
-    if ctx.should_run_step(AppBuildStep::Build) && !component.build_commands().is_empty() {
-        return false;
-    }
-    if ctx.should_run_step(AppBuildStep::AddMetadata) {
+    if ctx.should_run_step(AppBuildStep::Build) {
         return false;
     }
 
-    let wasm = component.agent_type_extraction_source_wasm();
+    let wasm = component.output_wasm();
     let extracted_component_metadata = component.extracted_component_metadata(&wasm);
     if !extracted_component_metadata.exists() {
         return false;
@@ -1475,7 +1452,7 @@ fn validate_wildcard_manifest_sources_resolved(
         .filter(|component_name| {
             !ctx.application()
                 .component(component_name)
-                .agent_type_extraction_source_wasm()
+                .output_wasm()
                 .exists()
         })
         .collect::<Vec<_>>();
@@ -1507,7 +1484,7 @@ fn component_matcher_is_not_expected_to_resolve(
     let wasm_exists = ctx
         .application()
         .component(component_name)
-        .agent_type_extraction_source_wasm()
+        .output_wasm()
         .exists();
 
     !selected || wasm_exists

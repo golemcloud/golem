@@ -24436,10 +24436,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
-        rootPackageName:
-          type: string
-        rootPackageVersion:
-          type: string
         configSchema:
           default:
             schema:

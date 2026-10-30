@@ -177,7 +177,6 @@ impl ComponentUpsertResult {
 pub struct ComponentView {
     pub component_name: ComponentName,
     pub component_id: ComponentId,
-    pub component_version: Option<String>,
     pub component_revision: u64,
     pub component_size: u64,
     pub created_at: DateTime<Utc>,
@@ -254,7 +253,6 @@ impl ComponentView {
         ComponentView {
             component_name: value.component_name,
             component_id: value.id,
-            component_version: value.metadata.root_package_version().clone(),
             component_revision: value.revision.into(),
             component_size: value.component_size,
             created_at: value.created_at,
@@ -670,17 +668,6 @@ pub(crate) fn render_output_schema(
     }
 }
 
-pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> Option<String> {
-    match (
-        component.metadata.root_package_name(),
-        component.metadata.root_package_version(),
-    ) {
-        (Some(name), Some(version)) => Some(format!("{}/{}@{}", name, agent_type_name, version)),
-        (Some(name), None) => Some(format!("{}/{}", name, agent_type_name)),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1002,7 +989,6 @@ impl TextOutput for ComponentListView {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name"),
             Column::new("Revision").fixed_right(),
-            Column::new("Version").fixed_right(),
             Column::new("Size").fixed_right(),
             Column::new("Exports").fixed_right(),
         ]);
@@ -1010,7 +996,6 @@ impl TextOutput for ComponentListView {
             table.add_row(vec![
                 comp.component_name.to_string(),
                 comp.component_revision.to_string(),
-                comp.component_version.clone().unwrap_or_default(),
                 format_binary_size(&comp.component_size),
                 comp.exports.len().to_string(),
             ]);
@@ -1031,7 +1016,6 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
         .fmt_field("Component name", &view.component_name, format_main_id)
         .fmt_field("Component ID", &view.component_id, format_id)
         .fmt_field("Component revision", &view.component_revision, format_id)
-        .fmt_field_option("Component version", &view.component_version, format_id)
         .fmt_field("Environment ID", &view.environment_id, format_id)
         .fmt_field("Component size", &view.component_size, format_binary_size)
         .fmt_field("Created at", &view.created_at, |d| d.to_string())

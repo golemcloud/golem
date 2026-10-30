@@ -149,7 +149,6 @@ impl RawComponentMetadata {
         let exports = wit_analysis
             .get_top_level_exports()
             .map_err(ComponentProcessingError::Analysis)?;
-        let root_package = wit_analysis.root_package_name();
 
         for warning in wit_analysis.warnings() {
             tracing::warn!("Wit analysis warning: {}", warning);
@@ -171,10 +170,6 @@ impl RawComponentMetadata {
             known_exports,
             producers,
             memories,
-            root_package_name: root_package
-                .as_ref()
-                .map(|pkg| format!("{}:{}", pkg.namespace, pkg.name)),
-            root_package_version: root_package.and_then(|pkg| pkg.version.map(|v| v.to_string())),
         })
     }
 
@@ -197,8 +192,6 @@ impl RawComponentMetadata {
             known_exports: self.known_exports,
             producers,
             memories,
-            root_package_name: self.root_package_name,
-            root_package_version: self.root_package_version,
             config_schema: ComponentConfigSchema::default(),
             component_provision_config: ComponentProvisionConfig::default(),
             agent_method_streams: ComponentMetadata::derive_agent_method_streams(&agent_types),

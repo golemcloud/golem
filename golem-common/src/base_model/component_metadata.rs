@@ -138,8 +138,6 @@ impl Debug for ComponentMetadata {
             .field("known_exports", &self.data.known_exports)
             .field("producers", &self.data.producers)
             .field("memories", &self.data.memories)
-            .field("root_package_name", &self.data.root_package_name)
-            .field("root_package_version", &self.data.root_package_version)
             .field("agent_types", &self.data.agent_types)
             .field("agent_method_streams", &self.data.agent_method_streams)
             .field(
@@ -193,8 +191,6 @@ pub struct ComponentMetadataInnerData {
     pub known_exports: KnownExports,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
-    pub root_package_name: Option<String>,
-    pub root_package_version: Option<String>,
 
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]

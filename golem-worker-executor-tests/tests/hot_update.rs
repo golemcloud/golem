@@ -5081,8 +5081,6 @@ impl ComponentService for FlakyComponentService {
                 golem_common::model::component_metadata::ComponentMetadata::from_parts(
                     metadata.known_exports().clone(),
                     memories.clone(),
-                    metadata.root_package_name().clone(),
-                    metadata.root_package_version().clone(),
                     metadata.agent_types().to_vec(),
                     metadata.agent_type_provision_configs().clone(),
                 )

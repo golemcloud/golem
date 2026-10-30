@@ -2400,8 +2400,6 @@ mod tests {
         ComponentMetadata::from_parts(
             KnownExports::default(),
             Vec::new(),
-            None,
-            None,
             vec![at],
             BTreeMap::new(),
         )

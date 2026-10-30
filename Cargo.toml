@@ -251,6 +251,7 @@ rustix = { version = "1.1.4", features = ["fs"] }
 rustls = { version = "0.23.23", features = ["ring"] }
 rustls-pemfile = "2.2.0"
 rustls-platform-verifier = "0.7.0"
+same-file = "1.0.6"
 sanitize-filename = "0.6.0"
 scc = "3.6.9"
 semver = "1.0.26"

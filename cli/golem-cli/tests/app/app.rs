@@ -1,8 +1,8 @@
 use crate::app::{
-    CLOSED_OUTPUT_EXIT, ClosedStream, TestContext, check_component_metadata, cmd,
-    copy_placeholder_wasm, extracted_component_metadata_path_hash, extracted_metadata_json, flag,
-    pattern, placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
-    seed_full_extracted_metadata,
+    CLOSED_OUTPUT_EXIT, ClosedStream, TestContext, cmd, copy_placeholder_wasm,
+    extracted_component_metadata_path_hash, extracted_metadata_json, flag, pattern,
+    placeholder_component_wasm, seed_empty_component, seed_extracted_metadata,
+    seed_extraction_marker, seed_full_extracted_metadata,
 };
 use crate::{Tracing, workspace_path};
 
@@ -1000,6 +1000,7 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -1131,6 +1132,7 @@ async fn moonbit_component_build_waits_for_independently_buildable_agent_provide
                 build:
                   - command: moon build --target wasm
                   - command: cp -p {producer_wasm} producer.wasm
+                  - command: touch -t 200001010000 producer.wasm
                   - command: cp -p {producer_wasm} producer-final.wasm
                   - command: cp ../producer-agent-types.json ../golem-temp/extracted-component-metadata/{producer_extracted_component_metadata}
 
@@ -1146,6 +1148,7 @@ async fn moonbit_component_build_waits_for_independently_buildable_agent_provide
                 build:
                   - command: moon build --target wasm
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -1423,6 +1426,7 @@ async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks
                   - command: test -f ../golem-temp/bridge-sdk/scala/internal/echo-tool-guest-client/build.sbt
                   - command: test -f ../golem-temp/bridge-sdk/scala/internal/echo-tool-guest-client/project/plugins.sbt
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -1531,6 +1535,7 @@ async fn custom_typescript_component_build_waits_for_agent_and_tool_guest_bridge
                   - command: test -f ../golem-temp/bridge-sdk/ts/internal/echo-tool-guest-client/package.json
                   - command: test -f ../golem-temp/bridge-sdk/ts/internal/echo-tool-guest-client/echo-tool-guest-client.ts
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -1620,8 +1625,14 @@ async fn tool_publication_only_plan_qualifies_stage_comparison(_tracing: &Tracin
     let mut ctx = TestContext::new();
     ctx.start_server().await;
 
-    let component_wasm =
-        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm");
+    // Backdate a private input so the output and seeded metadata can be strictly newer.
+    let component_wasm = ctx.cwd_path_join("tools.wasm");
+    fs::copy(
+        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"),
+        &component_wasm,
+    )
+    .unwrap();
+    super::backdate_mtime(&component_wasm);
     let final_wasm = ctx.cwd_path_join("tools-final.wasm");
     let manifest = formatdoc! {r#"
         manifestVersion: {MANIFEST_VERSION}
@@ -1644,10 +1655,9 @@ async fn tool_publication_only_plan_qualifies_stage_comparison(_tracing: &Tracin
     let manifest_path = ctx.cwd_path_join("golem.yaml");
     fs::write_str(&manifest_path, &manifest).unwrap();
 
-    let build = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "add-metadata"])
-        .await;
+    let build = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
     assert!(build.success_or_dump());
+    super::backdate_mtime(&final_wasm);
     let metadata = ExtractedComponentMetadata {
         agent_types: Vec::new(),
         tools: vec![echo_tool()],
@@ -1772,6 +1782,7 @@ async fn dependency_and_explicit_guest_bridge_default_output_dedupe_with_matcher
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -1858,6 +1869,7 @@ async fn dependency_guest_bridge_coexists_with_default_external_bridge_output(_t
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -1959,6 +1971,7 @@ async fn dependency_guest_bridge_coexists_with_external_bridge_using_same_output
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -2175,6 +2188,7 @@ async fn explicit_guest_wildcard_matcher_with_missing_wasm_is_not_silently_skipp
 #[test]
 async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -2265,6 +2279,7 @@ async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
 #[test]
 async fn dependency_guest_bridge_generates_for_rust_manifest_dependency(_tracing: &Tracing) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -2471,6 +2486,7 @@ async fn dependency_guest_bridge_generates_for_rust_producer_used_by_rust_consum
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -2608,6 +2624,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
                 outputWasm: producer-final.wasm
                 build:
                   - command: cp -p {producer_wasm} producer.wasm
+                  - command: touch -t 200001010000 producer.wasm
                   - command: cp -p {producer_wasm} producer-final.wasm
                   - command: cp ../producer-agent-types.json ../golem-temp/extracted-component-metadata/{producer_extracted_component_metadata}
 
@@ -2623,6 +2640,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -3064,6 +3082,7 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -3363,6 +3382,7 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} middle.wasm
+                  - command: touch -t 200001010000 middle.wasm
                   - command: cp -p {producer_wasm} middle-final.wasm
                   - command: cp ../middle-agent-types.json ../golem-temp/extracted-component-metadata/{middle_extracted_component_metadata}
 
@@ -3378,6 +3398,7 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -3479,6 +3500,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let base_final_wasm = ctx.cwd_path_join("base-final.wasm");
@@ -3576,6 +3598,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} middle.wasm
+                  - command: touch -t 200001010000 middle.wasm
                   - command: cp -p {producer_wasm} middle-final.wasm
                   - command: touch ../{middle_extracted_component_metadata}
 
@@ -3613,6 +3636,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
 #[test]
 async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_tracing: &Tracing) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let base_final_wasm = ctx.cwd_path_join("base-final.wasm");
@@ -3727,6 +3751,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
                 build:
                   - command: cargo metadata --format-version=1
                   - command: cp -p {producer_wasm} middle.wasm
+                  - command: touch -t 200001010000 middle.wasm
                   - command: cp -p {producer_wasm} middle-final.wasm
                   - command: touch ../{middle_extracted_component_metadata}
 
@@ -3765,6 +3790,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let base_final_wasm = ctx.cwd_path_join("base-final.wasm");
@@ -3879,6 +3905,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
                 build:
                   - command: cargo metadata --format-version=1
                   - command: cp -p {producer_wasm} middle.wasm
+                  - command: touch -t 200001010000 middle.wasm
                   - command: cp -p {producer_wasm} middle-final.wasm
                   - command: touch ../{middle_extracted_component_metadata}
 
@@ -4043,6 +4070,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} rust-consumer.wasm
+                  - command: touch -t 200001010000 rust-consumer.wasm
                   - command: cp -p {producer_wasm} rust-consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{rust_consumer_extracted_component_metadata}
 
@@ -4057,6 +4085,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
                 outputWasm: ts-consumer-final.wasm
                 build:
                   - command: cp -p {producer_wasm} ts-consumer.wasm
+                  - command: touch -t 200001010000 ts-consumer.wasm
                   - command: cp -p {producer_wasm} ts-consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{ts_consumer_extracted_component_metadata}
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -4172,6 +4201,7 @@ async fn selected_typed_dependency_guest_bridge_does_not_build_unselected_compon
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -4269,6 +4299,13 @@ async fn selected_typed_dependency_guest_bridge_discovers_prebuilt_provider_meta
     fs::create_dir_all(ctx.cwd_path_join("consumer/src")).unwrap();
     fs::write_str(ctx.cwd_path_join("consumer/src/lib.rs"), "").unwrap();
 
+    let consumer_wasm = placeholder_component_wasm(&ctx);
+    let consumer_wasm = consumer_wasm.to_str().unwrap();
+    let consumer_output_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
+    copy_placeholder_wasm(consumer_wasm, &consumer_output_wasm);
+    seed_extracted_metadata(&ctx, "app:consumer", &consumer_output_wasm, "[]");
+    seed_extraction_marker(&ctx, "app:consumer");
+
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -4298,7 +4335,7 @@ async fn selected_typed_dependency_guest_bridge_discovers_prebuilt_provider_meta
                 outputWasm: consumer-final.wasm
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/counter-agent-guest-client/Cargo.toml
-                  - command: cp ../provider-final.wasm consumer.wasm
+                  - command: cp -p {consumer_wasm} consumer.wasm
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
@@ -4421,6 +4458,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml
                   - command: cp -p {component_wasm} middle.wasm
+                  - command: touch -t 200001010000 middle.wasm
                   - command: cp -p {component_wasm} middle-final.wasm
                   - command: cp ../middle-agent-types.json ../golem-temp/extracted-component-metadata/{middle_extracted_component_metadata}
 
@@ -4436,6 +4474,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {component_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {component_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -4458,6 +4497,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
 #[test]
 async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_tracing: &Tracing) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let base_final_wasm = ctx.cwd_path_join("base-final.wasm");
@@ -4562,6 +4602,7 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
                 build:
                   - command: cargo metadata --format-version=1
                   - command: cp -p {producer_wasm} middle.wasm
+                  - command: touch -t 200001010000 middle.wasm
                   - command: cp -p {producer_wasm} middle-final.wasm
                   - command: cp ../middle-agent-types.json ../golem-temp/extracted-component-metadata/{middle_extracted_component_metadata}
 
@@ -4750,6 +4791,7 @@ async fn selected_dependency_guest_bridge_does_not_expand_explicit_guest_bridge_
                 outputWasm: provider-final.wasm
                 build:
                   - command: cp -p {producer_wasm} provider.wasm
+                  - command: touch -t 200001010000 provider.wasm
                   - command: cp -p {producer_wasm} provider-final.wasm
                   - command: cp ../provider-agent-types.json ../golem-temp/extracted-component-metadata/{provider_extracted_component_metadata}
 
@@ -4760,6 +4802,7 @@ async fn selected_dependency_guest_bridge_does_not_expand_explicit_guest_bridge_
                 outputWasm: unrelated-final.wasm
                 build:
                   - command: cp -p {producer_wasm} unrelated.wasm
+                  - command: touch -t 200001010000 unrelated.wasm
                   - command: cp -p {producer_wasm} unrelated-final.wasm
                   - command: cp ../unrelated-agent-types.json ../golem-temp/extracted-component-metadata/{unrelated_extracted_component_metadata}
 
@@ -4775,6 +4818,7 @@ async fn selected_dependency_guest_bridge_does_not_expand_explicit_guest_bridge_
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -4878,6 +4922,7 @@ async fn selected_dependency_provider_agent_type_does_not_satisfy_explicit_guest
                 outputWasm: provider-final.wasm
                 build:
                   - command: cp -p {producer_wasm} provider.wasm
+                  - command: touch -t 200001010000 provider.wasm
                   - command: cp -p {producer_wasm} provider-final.wasm
                   - command: cp ../provider-agent-types.json ../golem-temp/extracted-component-metadata/{provider_extracted_component_metadata}
 
@@ -4893,6 +4938,7 @@ async fn selected_dependency_provider_agent_type_does_not_satisfy_explicit_guest
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -4923,6 +4969,7 @@ async fn dependency_guest_bridge_does_not_infer_rust_guest_target_from_cargo_fil
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -5085,6 +5132,7 @@ async fn dependency_guest_bridge_external_bridge_does_not_block_prebuilt_guest_c
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
 
@@ -5187,6 +5235,8 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:middle", "middle/middle-final.wasm");
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let seed_final_wasm = ctx.cwd_path_join("seed-final.wasm");
@@ -5316,6 +5366,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
                 build:
                   - command: cargo metadata --format-version=1
                   - command: cp -p {producer_wasm} base.wasm
+                  - command: touch -t 200001010000 base.wasm
                   - command: cp -p {producer_wasm} base-final.wasm
                   - command: touch ../{base_extracted_component_metadata}
 
@@ -5357,6 +5408,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
 #[test]
 async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing: &Tracing) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let seed_final_wasm = ctx.cwd_path_join("seed-final.wasm");
@@ -5471,6 +5523,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
                 build:
                   - command: cargo metadata --format-version=1
                   - command: cp -p {producer_wasm} base.wasm
+                  - command: touch -t 200001010000 base.wasm
                   - command: cp -p {producer_wasm} base-final.wasm
                   - command: cp ../base-agent-types.json ../{base_extracted_component_metadata}
 
@@ -5505,6 +5558,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let seed_final_wasm = ctx.cwd_path_join("seed-final.wasm");
@@ -5621,6 +5675,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
                 build:
                   - command: cargo metadata --format-version=1
                   - command: cp -p {producer_wasm} base.wasm
+                  - command: touch -t 200001010000 base.wasm
                   - command: cp -p {producer_wasm} base-final.wasm
                   - command: cp ../base-agent-types.json ../{base_extracted_component_metadata}
 
@@ -5659,6 +5714,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
 #[test]
 async fn custom_build_env_guest_bridge_path_waits_for_guest_bridge_sdks(_tracing: &Tracing) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -5740,6 +5796,7 @@ async fn dependency_guest_bridge_shell_command_literal_guest_bridge_path_waits_f
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -5878,6 +5935,7 @@ async fn dependency_guest_bridge_build_targets_do_not_make_component_require_gue
 #[test]
 async fn rust_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(_tracing: &Tracing) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -5969,6 +6027,7 @@ async fn rust_manifest_path_cargo_guest_bridge_dependency_waits_for_guest_bridge
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -6072,6 +6131,7 @@ async fn rust_target_specific_cargo_path_guest_bridge_dependency_waits_for_guest
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -6163,6 +6223,7 @@ async fn rust_workspace_cargo_path_guest_bridge_dependency_waits_for_guest_bridg
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -6266,6 +6327,7 @@ async fn rust_workspace_multiline_guest_bridge_dependency_waits_for_guest_bridge
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -6370,6 +6432,7 @@ async fn rust_workspace_multiline_guest_bridge_dependency_waits_for_guest_bridge
 #[test]
 async fn rust_workspace_multiline_dependency_use_waits_for_guest_bridge_sdks(_tracing: &Tracing) {
     let ctx = TestContext::new();
+    seed_empty_component(&ctx, "app:consumer", "consumer/consumer-final.wasm");
     let producer_wasm = placeholder_component_wasm(&ctx);
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
@@ -6631,6 +6694,7 @@ async fn rust_no_build_producer_generates_guest_bridge_before_consumer_build(_tr
                 outputWasm: consumer-final.wasm
                 build:
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -6778,6 +6842,7 @@ async fn custom_unknown_language_build_consumer_waits_for_custom_guest_bridge_ou
                 outputWasm: consumer-final.wasm
                 build:
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -6846,9 +6911,7 @@ async fn rust_guest_bridge_choreography_allows_metadata_before_later_builds(_tra
     )
     .unwrap();
 
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "add-metadata"])
-        .await;
+    let outputs = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
     assert!(outputs.success_or_dump());
 }
 
@@ -6916,6 +6979,7 @@ async fn rust_template_no_build_producer_generates_guest_bridge_before_consumer_
                 outputWasm: consumer-final.wasm
                 build:
                   - command: cp -p {producer_wasm} consumer.wasm
+                  - command: touch -t 200001010000 consumer.wasm
                   - command: cp -p {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
@@ -7426,6 +7490,10 @@ async fn component_matcher_same_output_dir_base_with_guest_consumer_generates_si
     seed_extraction_marker(&ctx, "app:producer");
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
+    let consumer_output_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
+    copy_placeholder_wasm(producer_wasm, &consumer_output_wasm);
+    seed_extracted_metadata(&ctx, "app:consumer", &consumer_output_wasm, "[]");
+    seed_extraction_marker(&ctx, "app:consumer");
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -7447,7 +7515,7 @@ async fn component_matcher_same_output_dir_base_with_guest_consumer_generates_si
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: cp -p {producer_wasm} consumer-final.wasm
+                  - command: cp -p {producer_wasm} consumer.wasm
 
             bridge:
               rust:
@@ -8407,6 +8475,93 @@ async fn rust_guest_bridge_component_matcher_without_non_rust_component_is_rejec
 }
 
 #[test]
+async fn build_preserves_wasm_bytes_and_output_paths(_tracing: &Tracing) {
+    for output in [
+        None,
+        Some("nested/output.wasm"),
+        Some("component.wasm"),
+        Some("./component.wasm"),
+        Some("hard-linked.wasm"),
+        #[cfg(unix)]
+        Some("symlinked.wasm"),
+    ] {
+        let ctx = TestContext::new();
+        let output_property = output
+            .map(|path| format!("    outputWasm: {path}\n"))
+            .unwrap_or_default();
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            format!(
+                "manifestVersion: {}\napp: unchanged-wasm\nenvironments:\n  local:\n    server: local\ncomponents:\n  app:example:\n    componentWasm: component.wasm\n{output_property}",
+                versions::sdk::MANIFEST
+            ),
+        )
+        .unwrap();
+        let source = ctx.cwd_path_join("component.wasm");
+        let original =
+            wat::parse_str(r#"(component $toolchain-name (@custom "version" "2.3.4"))"#).unwrap();
+        fs::write(&source, &original).unwrap();
+        super::backdate_mtime(&source);
+        let source_modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+        let target = ctx.cwd_path_join(output.unwrap_or("component.wasm"));
+        match output {
+            Some("hard-linked.wasm") => std::fs::hard_link(&source, &target).unwrap(),
+            #[cfg(unix)]
+            Some("symlinked.wasm") => std::os::unix::fs::symlink(&source, &target).unwrap(),
+            _ => {}
+        }
+
+        let result = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(result.success_or_dump());
+        assert_eq!(fs::read(&target).unwrap(), original);
+        let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
+        if output != Some("nested/output.wasm") {
+            assert_eq!(modified, source_modified);
+        }
+        assert!(!ctx.cwd_path_join("golem-temp/final-wasm").exists());
+        let result = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(result.success_or_dump());
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert_eq!(fs::read(&target).unwrap(), original);
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().modified().unwrap(),
+            modified
+        );
+
+        let result = ctx
+            .cli([cmd::BUILD, flag::STEP, "build", flag::FORCE_BUILD])
+            .await;
+        assert!(result.success_or_dump());
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert_eq!(fs::read(&target).unwrap(), original);
+        if output != Some("nested/output.wasm") {
+            assert_eq!(
+                std::fs::metadata(&target).unwrap().modified().unwrap(),
+                source_modified
+            );
+        }
+
+        let updated =
+            wat::parse_str(r#"(component $new-name (@custom "version" "3.4.5"))"#).unwrap();
+        fs::write(&source, &updated).unwrap();
+        // Kernel-assigned write timestamps can lag behind the copy's explicit timestamp.
+        std::fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now())
+            .unwrap();
+        let result = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(result.success_or_dump());
+        assert_eq!(fs::read(&target).unwrap(), updated);
+
+        std::fs::remove_file(&source).unwrap();
+        let result = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(!result.success());
+    }
+}
+
+#[test]
 async fn app_build_with_rust_component(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
@@ -8423,11 +8578,9 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
-    check_component_metadata(
-        &ctx.working_dir
-            .join("golem-temp/agents/test_app_name_rust_main_debug.wasm"),
-        "test-app-name:rust-main".to_string(),
-        None,
+    assert!(
+        ctx.cwd_path_join("golem-temp/agents/test_app_name_rust_main_debug.wasm")
+            .is_file()
     );
 
     // Rebuild - 1

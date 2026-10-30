@@ -567,8 +567,6 @@ impl ComponentService for FakeComponentService {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![],
                 provision_configs,
             ),

@@ -31,8 +31,6 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
     let agent = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         test_agent_types().into_values().collect(),
         Default::default(),
     );
