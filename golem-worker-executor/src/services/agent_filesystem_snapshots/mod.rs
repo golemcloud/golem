@@ -36,6 +36,7 @@ mod store_calls;
 mod tests;
 mod transitions;
 
+use crate::filesystem::volume::FilesystemVolume;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::filesystem_snapshot::FilesystemSnapshotStore;
 use crate::filesystem_snapshot::{
@@ -47,7 +48,6 @@ use crate::services::golem_config::{
     DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT, FilesystemPressureConfig,
     FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
 };
-use crate::storage_volume::FilesystemVolume;
 use futures::future::BoxFuture;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::FilesystemSnapshotName;
@@ -392,7 +392,7 @@ impl VolumeRoom {
     async fn has_room(&self) -> bool {
         match self {
             Self::Pressure { volume, pressure } => {
-                let space = crate::storage_volume::observe_space(volume)
+                let space = crate::filesystem::volume::observe_space(volume)
                     .await
                     .inspect_err(|error| {
                         tracing::warn!(error = %error, "Failed to observe the free space of the volume")
@@ -452,7 +452,7 @@ enum Source {
     ),
     /// A store that a test gives, with its upload settings. It bypasses the configuration, and
     /// its volume always has room.
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     Given(
         Arc<dyn FilesystemSnapshotStore>,
         FilesystemSnapshotUploadConfig,
@@ -470,7 +470,7 @@ impl StoreSource {
     }
 
     /// `store` with `settings`, on any storage mode and whatever the configuration says.
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn given(
         store: Arc<dyn FilesystemSnapshotStore>,
         settings: FilesystemSnapshotUploadConfig,
@@ -529,7 +529,7 @@ impl AgentFilesystemSnapshots {
                     ),
                 }
             }
-            #[cfg(feature = "test-utils")]
+            #[cfg(any(test, feature = "test-utils"))]
             Source::Given(store, settings) => Self::enabled(
                 StoreOf::Given(store),
                 settings,

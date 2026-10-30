@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::filesystem::volume::{
+    FilesystemSpace, FilesystemVolume, StorageVolumeError, observe_space,
+};
 use crate::metrics::agent_filesystem::{self, PressureRecovery, PressureUnload};
 use crate::services::active_agents::{
     ActiveAgents, FilesystemPressureVictim, eligible_loaded_idle_filesystem_pressure_victims,
     request_loaded_idle_filesystem_unload,
 };
 use crate::services::golem_config::FilesystemPressureConfig;
-use crate::storage_volume::{FilesystemSpace, FilesystemVolume, StorageVolumeError, observe_space};
 use crate::worker::{EvictionStopOutcome, UnloadReason, UnloadRequest};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;

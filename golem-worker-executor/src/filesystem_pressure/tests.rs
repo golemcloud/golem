@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::*;
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
 #[cfg(target_os = "linux")]
-use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+use crate::filesystem::sandbox::SandboxFilesystemProvisioning;
 #[cfg(target_os = "linux")]
 use crate::services::golem_config::FilesystemStorageMode;
 use std::collections::{HashMap, VecDeque};
@@ -764,7 +764,7 @@ async fn managed_xfs_reobserves_fresh_space_after_verified_deletion() {
     let root = PathBuf::from(std::env::var("GOLEM_MANAGED_XFS_TEST_ROOT").unwrap());
     let provisioning = SandboxFilesystemProvisioning::new(
         &FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::storage_volume::in_process_xfs_quotad(&root),
+            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
             root: root.clone().into(),
         },
         golem_common::model::RetryConfig::default(),

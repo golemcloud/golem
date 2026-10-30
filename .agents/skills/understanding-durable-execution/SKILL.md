@@ -6,10 +6,10 @@ description: "Explains how the Golem worker executor implements durable executio
 # Understanding Durable Execution
 
 The worker executor runs WASM agents whose progress survives the loss of the process running
-them. Read this guide alongside `golem-worker-executor/src/` and `tests/`; when code
+them. Read this guide alongside `golem-worker-executor/src/` and `golem-worker-executor-tests/tests/`; when code
 and guide disagree, the code wins and the guide needs a fix. Combined verification of
 the instrumentation removal and adapted tests is pending. The scoped `AGENTS.md` files under
-`golem-worker-executor/` state the mandatory rules; this skill explains the mechanisms.
+`golem-worker-executor/` and `golem-worker-executor-tests/` state the mandatory rules; this skill explains the mechanisms.
 
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong
@@ -276,7 +276,9 @@ reconstructing, that generation is retired — stopped without writing its statu
 this executor and never restarted — and the executor that now holds the shard reconstructs it.
 
 Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a
-worker that is executing or holds non-durable in-memory work. Ephemeral agents are fail-stop:
+worker that is executing or holds non-durable in-memory work. A `WarmRunnable` eviction starts the
+worker again in a spawned task (`stop_if_evictable_with_outcome`): the callers of its pending
+invocations already started it and only wait, and the start waits for memory admission. Ephemeral agents are fail-stop:
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
@@ -1187,7 +1189,9 @@ even the empty status baseline are corrupt history; they do not mean the worker 
 status can still name an invocation whose completion was committed and published as current, so
 the hydrated result cache keeps the keys of committed completions that the status has not folded
 yet, apart from the evictable payloads, and the terminal stop (`fail_pending_invocations`) does not
-fail those keys. When
+fail those keys. For a key that it fails, it caches the typed agent error and stderr of an
+`InvocationFailed` (any other error as `AgentError::Unknown`), so a later lookup of the key returns
+the same error as its waiters. When
 `on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
 classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
 that failed for good fails the invocation with its cause. A storage that did not answer returns
@@ -1306,9 +1310,12 @@ captured oplog generations, then cancels executor-owned invocation and entity ta
 above, and joins their destruction before closing those generations.
 Already-spawned metadata loads and attachment queries finish independently, so a suspended Store
 cannot retain their locks; registration occurs once per spawned task, never on cached no-spawn
-queries. Attachment queries may spawn every time. Worker-state actors register once at construction
-and drain lifecycle jobs before status jobs and the status flusher, including on ordinary worker
-drop. Final retirement also joins oplog actors, payload uploads, archive transfers, and monitors.
+queries. A replay claim that such a task runs (`owned_access_claim`) and that waits for cursor
+progress or an active body ends with `Interrupted(Jump)` once the owner's tasks are stopped: no
+Store remains to move the cursor, so the wait must not keep retirement pending. Attachment queries
+may spawn every time. Worker-state actors register once at construction and drain lifecycle jobs
+before status jobs and the status flusher, including on ordinary worker drop. Final retirement
+also joins oplog actors, payload uploads, archive transfers, and monitors.
 An error is reported only after all owned work finishes. Deletion records that completion separately
 so an explicit retry can remove storage without reusing a retained stop error; the original attempt
 keeps its error. A later cold acquisition reloads persisted state rather than inheriting a stopped
@@ -2313,10 +2320,14 @@ retaining the underlying cause.
 
 ### Filesystem snapshots
 
+`filesystem` groups the low-level volume, sandbox and host-directory modules as siblings. Their
+shared helpers are `filesystem::errors`, `filesystem::blocking` and the private `path_removal` module.
+Agent lifecycle, pressure recovery and snapshot policy remain outside this group.
+
 Executor startup creates `.scratch` and `.initial-files` through
-`services/agent_filesystem/executor_directories/mod.rs`. The generic `host_directories` module owns
+`services/agent_filesystem/executor_directories/mod.rs`. The generic `filesystem::host_directories` module owns
 their filesystem operations and does not know about sandbox provisioning or filesystem-specific
-quotas. Executor setup first opens and validates `storage_volume::FilesystemVolume`, then creates
+quotas. Executor setup first opens and validates `filesystem::volume::FilesystemVolume`, then creates
 the host directories and constructs sandbox provisioning on that shared volume.
 On executor shutdown, `AgentFilesystems::track_shutdown` joins invocation loops and snapshot-store shutdown before
 `AgentFilesystems::shut_down` removes both directories. The file loader stops new loads and drains
@@ -2335,7 +2346,7 @@ not drop the service graph or release its root lock. A fixed-root replacement
 must not start while old cleanup still owns the XFS lock or can remove its directories. A failed
 invocation drain disables fallback removal of both host directories and retains their temporary
 parent on disk. Production drain and cleanup share the existing shutdown grace, not a new budget.
-Bootstrap owns a cancellation guard until it returns `RunDetails`. `epoch_ticker::EpochTicker`
+Bootstrap owns a cancellation guard until it returns `RunDetails`. `bootstrap::epoch_ticker::EpochTicker`
 owns its thread from creation, before snapshot binding or service construction can fail. Every
 drop stops and joins that thread. An ordinary bootstrap error cancels only this executor's token
 and waits up to `SHUTDOWN_GRACE` for tracked cleanup. It never shuts down the caller's join set,
@@ -2346,12 +2357,12 @@ signal before awaiting their bounded cleanup.
 Both failed bootstrap and process termination use `Shutdown::cancel_and_wait_for_tracked` for
 the cancel, bounded wait and warning. The caller still owns termination of its server join set.
 
-`storage_volume` owns shared storage roots, capacity observations, native cloning and XFS project
+`filesystem::volume` owns shared storage roots, capacity observations, native cloning and XFS project
 allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
-`sandbox_filesystem` owns one capability-confined tree, its handles, provisioning and verified
+`filesystem::sandbox` owns one capability-confined tree, its handles, provisioning and verified
 deletion, and seed/copy orchestration. XFS quotas account and limit allocation; root capabilities
 confine path access. Physical pressure recovery observes the volume without accessing a sandbox.
-Sandbox, volume and host-directory errors embed `operation_failure::OperationContext`. It owns
+Sandbox, volume and host-directory errors embed `filesystem::errors::OperationContext`. It owns
 the operation, optional path and typed `OperationFailure`, plus their construction, formatting
 and cause access. It carries no domain classification, cleanup flag or error-selection policy.
 The domains own those decisions. Pressure validation returns its own configuration error. At service binding,
@@ -2367,7 +2378,7 @@ lower-level error was unflagged. Worker startup then retains its cleanup obligat
 treating the result only as a creation error. Task failures have no I/O kind and remain terminal.
 
 Plain construction uses `OperationContext` and `From` rather than domain constructor forwarders.
-The sandbox I/O factory remains because it classifies capability escapes. `cleanup_failure::CleanupFailure<E>`
+The sandbox I/O factory remains because it classifies capability escapes. `filesystem::errors::CleanupFailure<E>`
 shares the flag, original-error chain and formatting without choosing when a domain marks cleanup.
 Its type parameter preserves original error types. Conversions consume the chain and map its
 original errors; they do not detach them through a mutator. Debug output uses the stored context

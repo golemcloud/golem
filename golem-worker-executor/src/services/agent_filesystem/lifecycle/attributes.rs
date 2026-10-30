@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
 
 /// What a change of the times of an object with the modification time `before_modified` counts,
 /// when `origin` asks for it. A snapshot keeps no access time, so only a change of the modification

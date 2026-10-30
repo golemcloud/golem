@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
-use crate::host_directories::HostDirectory;
-use crate::host_directories::HostDirectoryError;
-use crate::metrics::agent_filesystem::{self, StorageRefusal};
-use crate::operation_failure::OperationContext;
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::host_directories::HostDirectory;
+use crate::filesystem::host_directories::HostDirectoryError;
 #[cfg(test)]
-use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
-use crate::sandbox_filesystem::{
+use crate::filesystem::sandbox::ScriptedSandboxFilesystem;
+use crate::filesystem::sandbox::{
     FilesystemStorageError, InstalledLimits, LinkGroup, SandboxAccessMode, SandboxAttributes,
     SandboxDirectoryId, SandboxFile, SandboxFileDisposition, SandboxFilesystem,
     SandboxFilesystemAdapter, SandboxFilesystemName, SandboxFilesystemProvisioning,
@@ -29,6 +27,10 @@ use crate::sandbox_filesystem::{
     SandboxWriteAttempt, SandboxWritePlacement, SeedAccess, SeedEntry, SeedPlacement,
     TreeExclusions,
 };
+use crate::filesystem::volume::AgentAccounting;
+use crate::filesystem::volume::FilesystemLimits;
+use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
+use crate::metrics::agent_filesystem::{self, StorageRefusal};
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::file_loader::{
     FileLoader, InitialFileLoadError, InitialFileLoadFailure, InitialFileSource,
@@ -38,8 +40,6 @@ use crate::services::resource_usage_metering::{
     ResourceUsageAccount, ResourceUsageMeter, ResourceUsageMeteringWindow, create_unbound_meter,
     install_filesystem_usage, open_window, stop_metering,
 };
-use crate::storage_volume::AgentAccounting;
-use crate::storage_volume::FilesystemLimits;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use golem_common::model::OwnedAgentId;

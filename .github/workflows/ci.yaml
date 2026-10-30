@@ -36,12 +36,16 @@ env:
   NPM_CONFIG_AUDIT: 'false'
 
 jobs:
+  # Three producers publish separate nextest archives so that each group of test jobs waits only
+  # for the binaries it runs. Each producer builds one package selection in one cargo invocation and
+  # saves its own Rust cache.
   build-and-store:
     outputs:
-      native-binaries-disk-key: ${{ steps.native-binaries-key.outputs.key }}
+      native-binaries-disk-key: ${{ steps.publish.outputs.disk-key }}
     env:
       CARGO_BUILD_JOBS: 20
     runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
@@ -52,46 +56,56 @@ jobs:
       # Test the build tooling (dev-tools/) first so a broken tool fails fast
       - name: Test build tools (dev-tools)
         run: cargo make --profile ci dev-tools-tests
-      - uses: taiki-e/install-action@v2
+      - id: publish
+        uses: ./.github/actions/publish-native-binaries
         with:
-          tool: nextest
-      - name: Building all executables
-        env:
-          QUIET: true
-        run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 45
-      - name: Identify native binary disk
-        id: native-binaries-key
-        run: echo "key=${GITHUB_REPOSITORY}-native-binaries-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      # Preserve snapshots for partial consumer reruns; inactive disks expire after seven days.
-      - name: Mount native binary producer disk
-        uses: useblacksmith/stickydisk@v1
-        with:
-          key: ${{ steps.native-binaries-key.outputs.key }}
-          path: tmp/native-binaries
-          commit: 'true'
-      - name: Validate native binary producer mount
-        run: |
-          mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
-          rm -f tmp/native-binaries/PUBLICATION
-      - name: Packaging all binaries with cargo-nextest
-        run: |
-          cargo nextest -v archive --archive-file tmp/native-binaries/golem-binaries.tar.zst --zstd-level 1 --cargo-profile dev-ci
-        timeout-minutes: 5
+          name: native-binaries
+          cargo-args: --workspace --bins --tests
 
-      - name: Publish packaged binaries
-        env:
-          DISK_KEY: ${{ steps.native-binaries-key.outputs.key }}
-          SOURCE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
-          cd tmp/native-binaries
-          test -s golem-binaries.tar.zst
-          sha256sum golem-binaries.tar.zst > SHA256SUMS
-          sha256sum --check --strict SHA256SUMS
-          stat -c 'Native archive bytes=%s' golem-binaries.tar.zst
-          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
+  build-executor-tests:
+    outputs:
+      native-binaries-disk-key: ${{ steps.publish.outputs.disk-key }}
+    env:
+      CARGO_BUILD_JOBS: 20
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: 'dev-ci-executor-tests'
+          cache-save-if: 'true'
+      - id: publish
+        uses: ./.github/actions/publish-native-binaries
+        with:
+          name: executor-test-binaries
+          cargo-args: --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common
+
+  build-service-tests:
+    outputs:
+      native-binaries-disk-key: ${{ steps.publish.outputs.disk-key }}
+    env:
+      CARGO_BUILD_JOBS: 20
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: 'dev-ci-service-tests'
+          cache-save-if: 'true'
+      - id: publish
+        uses: ./.github/actions/publish-native-binaries
+        with:
+          name: service-test-binaries
+          cargo-args: >-
+            --bins --tests -p integration-tests -p golem-cli -p golem-service-base
+            -p golem-registry-service -p golem-worker-service -p golem-shard-manager
+            -p golem-test-framework -p golem-component-compilation-service -p golem-worker-executor
 
   check-clippy-and-format:
     env:
@@ -246,8 +260,6 @@ jobs:
             test -s "$path"
             wasm-tools validate --features all "$path"
           done < <(jq -r '.[].path' builtin-artifacts.json)
-      - name: Test embedded local-install defaults and source overrides
-        run: cargo test --profile dev-ci -p golem-registry-service --lib --features embed-builtin-artifacts -- builtin_artifact --report-time
       - name: Identify built-in publication
         id: publication-key
         run: echo "key=${GITHUB_REPOSITORY}-builtin-artifacts-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
@@ -274,12 +286,37 @@ jobs:
           stat -c 'Built-in archive bytes=%s' builtin-artifacts.tar.zst
           printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
+  # Separate from builtin-artifacts so that the test jobs, which need only the published
+  # artifacts, do not wait for this registry-service test build.
+  builtin-artifacts-embedded-tests:
+    needs: builtin-artifacts
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    env:
+      CARGO_BUILD_JOBS: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: 'builtin-artifacts-embedded-tests'
+          cache-save-if: 'true'
+          install-cargo-binstall: 'true'
+      - name: Sync WIT dependencies
+        run: cargo make wit
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          run-id: ${{ github.run_id }}
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+      - name: Test embedded local-install defaults and source overrides
+        run: cargo test --profile dev-ci -p golem-registry-service --lib --features embed-builtin-artifacts -- builtin_artifact --report-time
+
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
-      - build-and-store
+      - build-executor-tests
       - builtin-artifacts
       - merge-test-components
     strategy:
@@ -309,7 +346,7 @@ jobs:
           auto-start: false
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          disk-key: ${{ needs.build-executor-tests.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-test-components
         with:
@@ -333,7 +370,7 @@ jobs:
     name: managed-xfs-tests
     runs-on: blacksmith-8vcpu-ubuntu-2404
     needs:
-      - build-and-store
+      - build-executor-tests
       - builtin-artifacts
       - merge-test-components
     timeout-minutes: 45
@@ -347,7 +384,7 @@ jobs:
           install-cargo-binstall: 'true'
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          disk-key: ${{ needs.build-executor-tests.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-test-components
         with:
@@ -501,7 +538,7 @@ jobs:
       CARGO_BUILD_JOBS: 10
     runs-on: ${{ matrix.group.runner || 'blacksmith-8vcpu-ubuntu-2204' }}
     needs:
-      - build-and-store
+      - build-service-tests
       - build-golem-ts
       - builtin-artifacts
       - merge-test-components
@@ -559,7 +596,7 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          disk-key: ${{ needs.build-service-tests.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-test-components
@@ -589,7 +626,7 @@ jobs:
       GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
     runs-on: blacksmith-32vcpu-ubuntu-2204
     needs:
-      - build-and-store
+      - build-service-tests
       - build-golem-effect
       - build-golem-ts
       - build-cli-test-bins
@@ -770,7 +807,7 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
-          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          disk-key: ${{ needs.build-service-tests.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
 
@@ -820,7 +857,7 @@ jobs:
     env: *cli-test-env
     runs-on: blacksmith-32vcpu-ubuntu-2204
     needs:
-      - build-and-store
+      - build-service-tests
       - build-golem-effect
       - build-golem-ts
       - build-cli-test-bins
@@ -840,7 +877,7 @@ jobs:
     env: *cli-test-env
     runs-on: blacksmith-32vcpu-ubuntu-2204
     needs:
-      - build-and-store
+      - build-service-tests
       - build-golem-effect
       - build-golem-ts
       - build-cli-test-bins
@@ -910,7 +947,10 @@ jobs:
     timeout-minutes: 10
     needs:
       - build-and-store
+      - build-executor-tests
+      - build-service-tests
       - builtin-artifacts
+      - builtin-artifacts-embedded-tests
       - build-cli-test-bins
       - build-golem-scala
       - merge-test-components
@@ -932,6 +972,18 @@ jobs:
         uses: useblacksmith/stickydisk-delete@v1
         with:
           delete-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+      - name: Delete executor test binary disk
+        if: needs.build-executor-tests.outputs.native-binaries-disk-key != ''
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ needs.build-executor-tests.outputs.native-binaries-disk-key }}
+      - name: Delete service test binary disk
+        if: needs.build-service-tests.outputs.native-binaries-disk-key != ''
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ needs.build-service-tests.outputs.native-binaries-disk-key }}
       - name: Delete built-in artifact disk
         if: needs.builtin-artifacts.outputs.artifacts-disk-key != ''
         continue-on-error: true
@@ -1888,6 +1940,7 @@ jobs:
       - build-and-store
       - build-cli-test-bins
       - builtin-artifacts
+      - builtin-artifacts-embedded-tests
       - check-clippy-and-format
       - unit-tests-and-checks
       - config-checks

@@ -834,14 +834,14 @@ no CI job runs it, so run it locally after a change to APFS capture or restore. 
 `test-components/it_initial_file_system_release.wasm` fixture:
 
 ```shell
-cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- sandbox_filesystem:: storage_volume:: services::agent_filesystem::lifecycle:: services::agent_filesystem_snapshots:: --test-threads 1 --report-time
-RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --test integration -- :tag:local_filesystem --test-threads 1 --report-time
+cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- filesystem::sandbox:: filesystem::volume:: services::agent_filesystem::lifecycle:: services::agent_filesystem_snapshots:: --test-threads 1 --report-time
+RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor-tests --test integration -- :tag:local_filesystem --test-threads 1 --report-time
 cargo test --locked -j 4 --profile dev-ci -p golem --lib -- filesystem_config:: command_handler:: launch:: --test-threads 1 --report-time
 ```
 
 The library module filters automatically select every portable and macOS seed helper test
 in those modules, without a naming prefix or a per-test filter edit. They cover the clone test
-in `storage_volume::apfs::tests` and `sandbox_filesystem::host_adapter::tree_copy::tests`,
+in `filesystem::volume::apfs::tests` and `filesystem::sandbox::host_adapter::tree_copy::tests`,
 the startup probe, conservative filename coordination,
 the configuration round trip and the capture pressure check.
 The portable seed tests also run their APFS branches. They check file attributes and temporary-file

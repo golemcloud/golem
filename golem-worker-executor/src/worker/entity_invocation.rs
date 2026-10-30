@@ -1590,7 +1590,7 @@ mod tests {
     #[test]
     #[test_r::timeout("5s")]
     async fn cancelled_active_body_drains_its_write_and_close_before_releasing_the_lane() {
-        use crate::sandbox_filesystem::{SandboxHandle, SandboxWriteAttempt};
+        use crate::filesystem::sandbox::{SandboxHandle, SandboxWriteAttempt};
 
         use crate::services::agent_filesystem as fs;
         use futures::FutureExt;
@@ -1924,7 +1924,7 @@ mod tests {
     #[test]
     #[test_r::timeout("5s")]
     async fn abandoned_failure_release_holds_lane_until_filesystem_close_finishes() {
-        use crate::sandbox_filesystem::SandboxHandle;
+        use crate::filesystem::sandbox::SandboxHandle;
         use crate::services::agent_filesystem as fs;
         use futures::FutureExt;
 

@@ -15,7 +15,7 @@
 //! The runtime and the tracker of the work that the store runs as a task, so that the work also
 //! ends when its caller stops waiting.
 
-use crate::blocking::BlockingTask;
+use crate::filesystem::blocking::BlockingTask;
 use crate::filesystem_snapshot::operation_drain::OperationLease;
 use std::path::Path;
 use tokio::runtime::Handle;

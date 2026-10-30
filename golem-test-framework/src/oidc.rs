@@ -44,6 +44,7 @@ pub enum OidcTokenFailure {
 struct FixtureState {
     issuer: String,
     private_key: Arc<RsaPrivateKey>,
+    wrong_private_key: Arc<RsaPrivateKey>,
     transactions: Arc<Mutex<HashMap<String, String>>>,
     next_failure: Arc<Mutex<OidcTokenFailure>>,
 }
@@ -58,11 +59,20 @@ impl OidcFixture {
     pub async fn start() -> anyhow::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let issuer = format!("http://{}/", listener.local_addr()?);
-        let private_key = Arc::new(RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)?);
+        // RSA key generation takes seconds in unoptimised builds; on a runtime worker
+        // it would stall timers and I/O for every test sharing the runtime.
+        let (private_key, wrong_private_key) = tokio::task::spawn_blocking(|| {
+            anyhow::Ok((
+                RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)?,
+                RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)?,
+            ))
+        })
+        .await??;
         let next_failure = Arc::new(Mutex::new(OidcTokenFailure::None));
         let state = FixtureState {
             issuer: issuer.clone(),
-            private_key,
+            private_key: Arc::new(private_key),
+            wrong_private_key: Arc::new(wrong_private_key),
             transactions: Arc::new(Mutex::new(HashMap::new())),
             next_failure: next_failure.clone(),
         };
@@ -211,9 +221,9 @@ async fn token(State(state): State<FixtureState>, Form(form): Form<TokenForm>) -
         email: "fixture-user@example.com".into(),
     };
     let key = if matches!(failure, OidcTokenFailure::InvalidSignature) {
-        RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap()
+        &state.wrong_private_key
     } else {
-        (*state.private_key).clone()
+        &state.private_key
     };
     let pem = key.to_pkcs1_pem(Default::default()).unwrap();
     let mut header = Header::new(Algorithm::RS256);

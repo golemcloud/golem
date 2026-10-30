@@ -3,7 +3,7 @@ use super::super::tests::{
 };
 use super::super::{delete, resident_generation_handle, seal};
 use super::*;
-use crate::sandbox_filesystem::{SandboxHandle, SandboxObjectKind};
+use crate::filesystem::sandbox::{SandboxHandle, SandboxObjectKind};
 
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadExtent, FileReadHead,

@@ -651,7 +651,7 @@ fn p2_p3_cross_project_link_mapping_is_identical() {
 
 #[test]
 async fn staged_p2_p3_attribute_namespace_and_replay_routes_execute_through_agent_filesystem() {
-    use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+    use crate::filesystem::sandbox::SandboxFilesystemProvisioning;
     use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
     use crate::services::agent_filesystem::{
         ResolvedStorageLimits, bind_resource_usage_metering, close, create_fresh, delete,

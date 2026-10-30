@@ -92,15 +92,15 @@ mod random;
 pub mod rdbms;
 pub(crate) mod replay_application;
 pub(crate) mod replay_state;
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub struct TestEntityBoundaryClaim(pub(crate) concurrent::ReplayCallHandle);
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 impl TestEntityBoundaryClaim {
     pub fn start_idx(&self) -> OplogIndex {
         self.0.start_idx()
     }
 }
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub use replay_state::ReplayEvent as TestReplayEvent;
 pub(crate) mod revision_update;
 pub mod schema_value_stream;
@@ -536,7 +536,7 @@ pub(crate) struct TailWorkDeadline {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_stage_replay_applications(
         &mut self,
         events: Vec<TestReplayEvent>,
@@ -545,7 +545,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         replay_application::reserve(self)
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_replay_application_state(&self) -> (Vec<(usize, bool)>, u64, u64, bool) {
         use futures::FutureExt;
         (
@@ -565,13 +565,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_set_historical_wallet_generation(&mut self, generation: u64) {
         assert!(self.state.replay_applications.is_empty());
         self.state.wallet_generation = generation;
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_refuse_next_metadata_admission(&self) {
         self.public_state
             .worker()
@@ -593,7 +593,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         })
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_install_entity_tool_operation(
         &mut self,
         parent: OwnerInvocationId,

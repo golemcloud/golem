@@ -13,8 +13,8 @@ use super::{
     unload_resident_agent_ownership, wait_for_resident_wakeup, with_end,
 };
 use crate::durable_host::tool::operation::OwnerToolOperations;
-use crate::operation_failure::OperationContext;
-use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::sandbox::ScriptedSandboxFilesystem;
 use crate::services::active_agents::stop_loaded_idle_if_eligible;
 use crate::services::agent_filesystem::{
     AccessError, FilesystemStorageError, FlushLevel, Follow, OpenNode, PathTarget, Target,
@@ -905,7 +905,7 @@ async fn unload_deadline_during_drain_keeps_final_sample_and_deletion_owned() {
         billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
     let close = control.block("close");
-    control.push_observe_allocation(Ok(crate::storage_volume::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1265,7 +1265,7 @@ async fn production_unload_starts_final_observation_after_native_close_drains() 
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
     let close = control.block("close");
-    control.push_observe_allocation(Ok(crate::storage_volume::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1331,7 +1331,7 @@ async fn production_unload_starts_final_observation_after_native_close_drains() 
 #[test]
 #[timeout("5s")]
 async fn aborted_preparation_unloads_a_retained_pending_write_before_draining() {
-    use crate::sandbox_filesystem::SandboxWriteAttempt;
+    use crate::filesystem::sandbox::SandboxWriteAttempt;
     use crate::services::agent_filesystem::{
         WritePlacement, reconstructing_with_open_file_for_unload_test, write,
     };
@@ -1415,7 +1415,7 @@ async fn startup_disposal_releases_execution_before_failed_deletion_and_repair()
         billing_metered_resident_with_open_node_for_unload_test(None).await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
-    control.push_observe_allocation(Ok(crate::storage_volume::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1484,7 +1484,7 @@ async fn unload_preparation_defers_allocation_to_window_close() {
     let (filesystem, control, window, _generation_handle, node) =
         billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
-    control.push_observe_allocation(Ok(crate::storage_volume::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1530,7 +1530,7 @@ async fn execution_window_closes_before_filesystem_deletion() {
     let (filesystem, control, window, _generation_handle, node) =
         billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
-    control.push_observe_allocation(Ok(crate::storage_volume::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1625,7 +1625,7 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
         let (filesystem, control, window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test(Some(clock.clone())).await;
         clock.wait_for_sleep_until(Duration::from_millis(10)).await;
-        control.push_observe_allocation(Ok(crate::storage_volume::FilesystemAllocation {
+        control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
             allocated_bytes: 50,
             filesystem_objects: 1,
         }));
@@ -1644,7 +1644,7 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
                 .await;
         }
         control.push_close(Ok(()));
-        control.push_observe_allocation(Ok(crate::storage_volume::FilesystemAllocation {
+        control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
             allocated_bytes: 100,
             filesystem_objects: 1,
         }));
@@ -1757,7 +1757,7 @@ async fn active_allocation_failure_remains_failed_after_successful_physical_dele
             .contains("active allocation observation failed")
     );
     control.push_close(Ok(()));
-    control.push_observe_allocation(Ok(crate::storage_volume::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));

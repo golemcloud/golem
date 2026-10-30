@@ -56,7 +56,7 @@ impl RuntimeAppendTasks {
 pub struct WorkerTasks(
     Arc<Inner>,
     Option<Weak<dyn Send + Sync>>,
-    #[cfg(feature = "test-utils")] Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(any(test, feature = "test-utils"))] Arc<std::sync::atomic::AtomicBool>,
 );
 
 #[derive(Default)]
@@ -94,7 +94,7 @@ impl WorkerTasks {
         Self(
             self.0.clone(),
             Some(Arc::downgrade(&worker)),
-            #[cfg(feature = "test-utils")]
+            #[cfg(any(test, feature = "test-utils"))]
             Arc::default(),
         )
     }
@@ -103,7 +103,7 @@ impl WorkerTasks {
         self.1.as_ref().and_then(Weak::upgrade)
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn test_refuse_next_metadata_admission(&self) {
         self.2.store(true, std::sync::atomic::Ordering::Release);
     }
@@ -118,6 +118,11 @@ impl WorkerTasks {
             self.0.stop.cancel();
         }
         self.0.tasks.wait().await;
+    }
+
+    /// Resolves once root admission is closed and the roots are cancelled.
+    pub(crate) async fn stopped(&self) {
+        self.0.stop.cancelled().await
     }
 
     /// Metadata queries remain available for owner-driven stream cleanup after external roots
@@ -151,12 +156,29 @@ impl WorkerTasks {
         result
     }
 
+    /// Describes the tasks that still keep [`Self::stop_and_wait`] pending, if any.
+    pub(crate) fn describe_pending(&self) -> Option<String> {
+        let roots = self.0.tasks.len();
+        let metadata = self.0.metadata.len();
+        let actors = self
+            .0
+            .actors
+            .lock()
+            .unwrap()
+            .owners
+            .iter()
+            .filter(|owner| owner.strong_count() != 0)
+            .count();
+        (roots + metadata + actors != 0)
+            .then(|| format!("roots={roots} metadata={metadata} actors={actors}"))
+    }
+
     pub(crate) fn spawn_metadata<F>(&self, future: F) -> Result<JoinHandle<F::Output>, &'static str>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        #[cfg(feature = "test-utils")]
+        #[cfg(any(test, feature = "test-utils"))]
         if self.2.swap(false, std::sync::atomic::Ordering::AcqRel) {
             return Err("Injected metadata admission refusal");
         }

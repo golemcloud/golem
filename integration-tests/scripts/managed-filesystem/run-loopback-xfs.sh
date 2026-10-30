@@ -537,6 +537,7 @@ build_test_binaries() {
     timeout --kill-after=30s 20m cargo test
     "${cargo_profile_args[@]}"
     -p golem-worker-executor
+    -p golem-worker-executor-tests
     --lib
     --test integration
     --no-run
@@ -634,14 +635,14 @@ run_selected_test() {
   if [[ ${reuse_test_binaries} == 1 ]]; then
     local target_args=()
     if [[ ${target} == integration ]]; then
-      target_args=(--test integration)
+      target_args=(--package golem-worker-executor-tests --test integration)
     else
-      target_args=(--lib)
+      target_args=(--package golem-worker-executor --lib)
     fi
     run_and_verify_privileged_test "${result_file}" "${filter}" \
       timeout --kill-after=30s 5m \
       "${runner[@]}" \
-      "${cargo_test_r}" run --package golem-worker-executor "${target_args[@]}" \
+      "${cargo_test_r}" run "${target_args[@]}" \
       "${filter}" -- --exact --include-ignored --nocapture --report-time
     return
   fi
@@ -651,7 +652,7 @@ run_selected_test() {
   chmod 0755 "${capable_binary}"
   if [[ ${target} == integration ]]; then
     (
-      cd "${repo_root}/golem-worker-executor"
+      cd "${repo_root}/golem-worker-executor-tests"
       run_and_verify_privileged_test "${result_file}" "${filter}" \
         timeout --kill-after=30s 5m \
         "${runner[@]}" \
@@ -678,7 +679,7 @@ run_filesystem_benchmark() {
   cp "${selected}" "${capable_binary}"
   chmod 0755 "${capable_binary}"
   (
-    cd "${repo_root}/golem-worker-executor"
+    cd "${repo_root}/golem-worker-executor-tests"
     run_and_verify_privileged_test "${result_file}" "${filter}" \
       env GOLEM_FILESYSTEM_BENCH_MODE="${mode}" \
       timeout --kill-after=30s 30m \
@@ -693,7 +694,7 @@ run_filesystem_benchmark() {
 
   if command -v strace >/dev/null 2>&1; then
     (
-      cd "${repo_root}/golem-worker-executor"
+      cd "${repo_root}/golem-worker-executor-tests"
       run_and_verify_privileged_test "${strace_result}" "${filter}" \
         env GOLEM_FILESYSTEM_BENCH_MODE="${mode}" GOLEM_FILESYSTEM_BENCH_QUICK=1 \
         timeout --kill-after=30s 10m \
@@ -845,22 +846,22 @@ fi
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::host_adapter::sandbox_provisioning::managed::tests::managed_xfs_sandbox_filesystem_owns_allocation_limits_and_cleanup
+  filesystem::sandbox::host_adapter::sandbox_provisioning::managed::tests::managed_xfs_sandbox_filesystem_owns_allocation_limits_and_cleanup
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::host_adapter::tree_copy::tests::managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota
+  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::host_adapter::tree_copy::tests::managed_xfs_write_after_copy_contents_consumes_one_cow_extent
+  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_write_after_copy_contents_consumes_one_cow_extent
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::host_adapter::tree_copy::tests::managed_xfs_seed_charges_the_project_and_follows_the_placement
+  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_seed_charges_the_project_and_follows_the_placement
 
 run_privileged_test \
   lib \
@@ -966,22 +967,22 @@ run_privileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::host_adapter::tree_copy::tests::an_empty_standard_seed_succeeds_after_root_retirement
+  filesystem::sandbox::host_adapter::tree_copy::tests::an_empty_standard_seed_succeeds_after_root_retirement
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::host_adapter::tree_copy::tests::linux_volume_seed_batch_uses_the_root_path_without_root_admission
+  filesystem::sandbox::host_adapter::tree_copy::tests::linux_volume_seed_batch_uses_the_root_path_without_root_admission
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::host_adapter::tree_copy::tests::reflink_xfs_copy_contents_and_seed_share_extents
+  filesystem::sandbox::host_adapter::tree_copy::tests::reflink_xfs_copy_contents_and_seed_share_extents
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  storage_volume::xfs::tests::xfs_without_reflink_is_refused_at_startup
+  filesystem::volume::xfs::tests::xfs_without_reflink_is_refused_at_startup
 
 run_unprivileged_test \
   lib \
@@ -991,12 +992,12 @@ run_unprivileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  storage_volume::xfs::tests::reflink_xfs_refuses_a_volume_with_project_quota_accounting
+  filesystem::volume::xfs::tests::reflink_xfs_refuses_a_volume_with_project_quota_accounting
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  storage_volume::xfs::tests::reflink_xfs_refuses_a_root_with_a_project_identity
+  filesystem::volume::xfs::tests::reflink_xfs_refuses_a_root_with_a_project_identity
 
 run_unprivileged_test \
   lib \

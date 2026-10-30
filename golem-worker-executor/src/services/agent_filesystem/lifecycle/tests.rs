@@ -1,12 +1,12 @@
 use super::*;
-use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
-use crate::host_directories::HostDirectory;
-use crate::operation_failure::OperationContext;
-use crate::sandbox_filesystem::{
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::host_directories::HostDirectory;
+use crate::filesystem::sandbox::{
     ScriptedSandboxFilesystemControl, ScriptedSandboxFilesystemProvisioning, ScriptedSandboxPath,
     ScriptedSandboxPathBase, ScriptedSandboxPathCall,
 };
-use crate::storage_volume::FilesystemAllocation;
+use crate::filesystem::volume::FilesystemAllocation;
+use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
 
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use crate::services::agent_filesystem::ExecutorDirectories;
@@ -6937,7 +6937,7 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
         mode: FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::storage_volume::in_process_xfs_quotad(&root),
+            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
             root: root.into(),
         },
         ..FilesystemStorageConfig::default()
@@ -6987,7 +6987,7 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
         mode: FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::storage_volume::in_process_xfs_quotad(&root),
+            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
             root: root.into(),
         },
         ..FilesystemStorageConfig::default()
