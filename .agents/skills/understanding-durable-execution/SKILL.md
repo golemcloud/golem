@@ -2483,6 +2483,23 @@ tail: it keeps the busy count of the agent, starts no run and no write, never co
 successful save is never replaced, and neither is a job whose call has returned. A periodic
 admission never waits.
 
+`filesystem_snapshot/mod.rs` holds the store contract and `create_store` factory.
+`agent_snapshots`, `snapshot_name`, `errors` and `run_admission` hold the shared caller vocabulary.
+`operation_drain` tracks store-local operation cohorts by incarnation, not queued jobs.
+Its `OperationLease` stays alive through retained tasks. `drain_before` establishes the
+`delete_all` cutoff before admission and links each old cohort to its successor, so a later drain
+still waits for earlier work when the first drain's caller drops.
+
+The two store backends live in `filesystem_snapshot/backend/in_memory` and `backend/rustic`.
+The in-memory backend remains available only for tests and `test-utils`.
+`backend/rustic/mod.rs` owns the concrete rustic backend and shutdown. `call_execution`
+drives runs and settlement; `blob_io` is the single blob-call policy; `blob_backend` bridges
+blocking rustic calls to it. `save`, `restore`, `snapshot_catalog`, `snapshot_deletion` and
+`repository_namespace` own their operations. `pruning` groups eligibility, durable records,
+claim ownership and timing. `tracked_tasks` retains the runtime supplied by each operation.
+Tests live beside these owners. The shared contract cases in `filesystem_snapshot/tests.rs`
+register for both adapters and use the independent fixtures in `test_support`.
+
 `StoreCalls` is the only owner of the store. The store takes a slot of its caller's limiter
 (`RunSlots`, `max_concurrent_uploads` for the uploads and deletes) for each run of a call, and
 holds none while it waits. A storage call gets a few tries in its run; after them the run ends,
