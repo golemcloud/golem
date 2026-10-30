@@ -3318,6 +3318,7 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         ),
         ("start-closed", "unreachable", "Within(500)", STABLE),
         ("start-blackhole", "unreachable", "Within(1500)", STABLE),
+        ("start-unanswered", "unreachable", "Within(500)", STABLE),
         ("start-503", "", window, STABLE),
         ("start-no-limit", "", "Unlimited", STABLE),
         ("start-retryable", "", window, STABLE),

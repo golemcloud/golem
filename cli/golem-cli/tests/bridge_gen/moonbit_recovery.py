@@ -127,6 +127,18 @@ if mode == "start-blackhole":
     listener.close()
     sys.exit(0)
 
+# A peer that upgrades and keeps the connection up but never answers the
+# start: the client gives up after its reconnect window, on that connection.
+if mode == "start-unanswered":
+    with connect() as conn:
+        receive(conn)
+        try:
+            receive_frame(conn)
+            conn.sendall(b"\x88\x02\x03\xe8")
+        except (EOFError, ConnectionResetError):
+            pass
+    terminal()
+
 def accept_operation(conn, operation, key, mappings):
     send(
         conn,

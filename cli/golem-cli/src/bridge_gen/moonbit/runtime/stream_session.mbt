@@ -253,10 +253,12 @@ async fn ReconnectClock::next_attempt(self : ReconnectClock) -> Int {
 
 ///|
 /// One attempt to attach with `descriptor`: connect within `timeout_ms`, send
-/// the descriptor and read the server's answer. `Err` is a failure worth
-/// another attempt with the same descriptor: a lost connection, or an upgrade
-/// refused with HTTP 429 or 5xx. Any other failure is raised.
+/// the descriptor and read the server's answer until the reconnect window of
+/// `clock` ends. `Err` is a failure worth another attempt with the same
+/// descriptor: a lost connection, an upgrade refused with HTTP 429 or 5xx, or
+/// an answer that did not come within the window. Any other failure is raised.
 async fn attach_attempt(
+  clock : ReconnectClock,
   url : String,
   headers : @http.Headers,
   descriptor : String,
@@ -268,7 +270,18 @@ async fn attach_attempt(
       return Err("no WebSocket connection within \{timeout_ms} ms")
     }
     socket.send_text(descriptor)
-    Ok((socket, expect_object(read_text(socket))))
+    let answer = match clock.remaining() {
+      None => Some(read_text(socket))
+      Some(left) =>
+        @async.with_timeout_opt(if left > 0 { left } else { 1 }, () => {
+          read_text(socket)
+        })
+    }
+    guard answer is Some(answer) else {
+      socket.close()
+      return Err("the server answered neither the start nor the resume")
+    }
+    Ok((socket, expect_object(answer)))
   } catch {
     @websocket.HandshakeRejected(message, response) =>
       if response.code == 429 || response.code >= 500 {
@@ -355,7 +368,7 @@ async fn start_invocation(
   let mut frozen_start = freeze(attempt_id, parameters)
   for ;; {
     let timeout_ms = clock.next_attempt()
-    match attach_attempt(url, headers, frozen_start, timeout_ms) {
+    match attach_attempt(clock, url, headers, frozen_start, timeout_ms) {
       Err(cause) => clock.failed(cause)
       Ok((socket, response)) =>
         match expect_string(get_field(response, "type")) {
@@ -437,7 +450,13 @@ async fn resume_session(session : LiveStreamSession, rejection? : String) -> Uni
   let mut socket : @websocket.Conn? = None
   while accepted is None {
     let timeout_ms = session.clock.next_attempt()
-    match attach_attempt(session.url, session.headers, frozen_resume, timeout_ms) {
+    match attach_attempt(
+      session.clock,
+      session.url,
+      session.headers,
+      frozen_resume,
+      timeout_ms,
+    ) {
       Err(cause) => session.clock.failed(cause)
       Ok((candidate, response)) =>
         match expect_string(get_field(response, "type")) {
