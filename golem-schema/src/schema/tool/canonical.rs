@@ -415,9 +415,22 @@ impl Tool {
         &self,
         command_index: usize,
     ) -> Result<SchemaGraph, ToolValidationError> {
+        let graph = self.canonical_input_record_schema_unvalidated(command_index)?;
+        check_graph_closed(&graph, self.root_command_name(), "canonical input record")?;
+        Ok(graph)
+    }
+
+    /// The same projection as [`Tool::canonical_input_record_schema`], without
+    /// validating the resulting schema graph: dangling references and
+    /// ill-formed types are not reported. Use it only on a descriptor that is
+    /// already validated, for example by the host that registered the tool.
+    pub fn canonical_input_record_schema_unvalidated(
+        &self,
+        command_index: usize,
+    ) -> Result<SchemaGraph, ToolValidationError> {
         self.check_canonical_input_command_index(command_index)?;
         let fields = self.canonical_input_fields(command_index);
-        self.canonical_input_record_schema_for_fields(&fields)
+        self.project_canonical_input_record(&fields)
     }
 
     /// Decodes a canonical input record value against the command's canonical
@@ -437,12 +450,23 @@ impl Tool {
         &self,
         fields: &[CanonicalInputField],
     ) -> Result<SchemaGraph, ToolValidationError> {
-        let command = self
-            .commands
+        let graph = self.project_canonical_input_record(fields)?;
+        check_graph_closed(&graph, self.root_command_name(), "canonical input record")?;
+        Ok(graph)
+    }
+
+    fn root_command_name(&self) -> String {
+        self.commands
             .nodes
             .first()
             .map(|node| node.name.clone())
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    fn project_canonical_input_record(
+        &self,
+        fields: &[CanonicalInputField],
+    ) -> Result<SchemaGraph, ToolValidationError> {
         let root = SchemaType::record(
             fields
                 .iter()
@@ -472,9 +496,7 @@ impl Tool {
                 });
             }
         }
-        let graph = SchemaGraph { defs, root };
-        check_graph_closed(&graph, command, "canonical input record")?;
-        Ok(graph)
+        Ok(SchemaGraph { defs, root })
     }
 
     fn check_canonical_input_command_index(
@@ -1178,6 +1200,60 @@ mod tests {
         assert!(matches!(
             error,
             ToolValidationError::UnresolvedTypeRef { .. }
+        ));
+    }
+
+    #[test]
+    fn unvalidated_record_schema_matches_the_validated_projection() {
+        let tool = grep_tool();
+        assert_eq!(
+            tool.canonical_input_record_schema_unvalidated(0)
+                .expect("projection"),
+            tool.canonical_input_record_schema(0).expect("valid schema")
+        );
+    }
+
+    #[test]
+    fn unvalidated_record_schema_does_not_check_text_regexes() {
+        let mut tool = grep_tool();
+        let Some(body) = tool.commands.nodes[0].body.as_mut() else {
+            panic!("grep has a body");
+        };
+        body.positionals.fixed[0].type_ = SchemaType::Text {
+            restrictions: crate::schema::schema_type::TextRestrictions {
+                regex: Some("[".into()),
+                ..Default::default()
+            },
+            metadata: Default::default(),
+        };
+
+        assert!(matches!(
+            tool.canonical_input_record_schema(0),
+            Err(ToolValidationError::IllFormedSchema { .. })
+        ));
+        let graph = tool
+            .canonical_input_record_schema_unvalidated(0)
+            .expect("projection");
+        let SchemaType::Record { fields, .. } = &graph.root else {
+            panic!("record schema root must be a record");
+        };
+        let pattern = fields
+            .iter()
+            .find(|field| field.name == "pattern")
+            .expect("pattern field");
+        assert!(matches!(
+            &pattern.body,
+            SchemaType::Text { restrictions, .. } if restrictions.regex.as_deref() == Some("[")
+        ));
+    }
+
+    #[test]
+    fn unvalidated_record_schema_rejects_duplicate_reachable_type_ids() {
+        let mut tool = grep_tool();
+        tool.schema.defs.push(color_def());
+        assert!(matches!(
+            tool.canonical_input_record_schema_unvalidated(0),
+            Err(ToolValidationError::DuplicateTypeId { .. })
         ));
     }
 
