@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::app::rust_refined_tool_args::set_golem_rust_regex_feature;
 use crate::app::{TestContext, cmd, flag};
 use golem_cli::{fs, versions};
 use indoc::{formatdoc, indoc};
@@ -37,7 +38,9 @@ const SLUG_DEFINITION: &str = indoc! { r#"
 /// Rust parameter type and forwards it to the tool, which publishes the text
 /// argument as `text`. The caller sends the published input record directly,
 /// so a value that breaks a refinement reaches the host validation, which must
-/// name the broken restriction.
+/// name the broken restriction. Every component defines the regex-refined tool
+/// and validates that definition, so every component builds with golem-rust's
+/// `regex` feature.
 #[test]
 #[timeout("20 minutes")]
 async fn rust_tool_middleware_forwards_refined_arguments() {
@@ -66,6 +69,10 @@ async fn rust_tool_middleware_forwards_refined_arguments() {
             ])
             .await;
         assert!(outputs.success_or_dump());
+    }
+
+    for component_dir in ["provider", "middleware", "consumer"] {
+        set_golem_rust_regex_feature(&ctx, component_dir, true);
     }
 
     fs::write_str(
