@@ -684,7 +684,7 @@ fn scope_deletes(storage: &ScriptedBlobStorage) -> usize {
 mod value_rules {
     use crate::filesystem_snapshot::backend::rustic::blob_io::SnapshotFiles;
     use crate::filesystem_snapshot::backend::rustic::repository_namespace::{
-        CatchUp, CopyError, MOST_CATCH_UPS, catch_up, copy_scope, delete_scope,
+        CatchUp, CopyError, MOST_CATCH_UPS, catch_up, copy_namespace, delete_namespace,
     };
     use crate::filesystem_snapshot::backend::rustic::test_support::files_of;
     use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
@@ -790,7 +790,7 @@ mod value_rules {
         let (from, to) = (new_namespace(), new_namespace());
         put_all(&*storage, &from, &REPOSITORY).await;
 
-        copy_scope(&files(&storage, &from), &files(&storage, &to), false)
+        copy_namespace(&files(&storage, &from), &files(&storage, &to), false)
             .await
             .unwrap();
 
@@ -849,7 +849,7 @@ mod value_rules {
 
         let (from_files, to_files) = (files(&storage, &from), files(&storage, &to));
         let started = tokio::time::Instant::now();
-        let (copied, ()) = tokio::join!(copy_scope(&from_files, &to_files, false), deleting);
+        let (copied, ()) = tokio::join!(copy_namespace(&from_files, &to_files, false), deleting);
         let copy_time = started.elapsed();
 
         let calls = storage.calls();
@@ -891,7 +891,7 @@ mod value_rules {
         let (from, to) = (new_namespace(), new_namespace());
         put_all(&*storage, &from, &REPOSITORY).await;
 
-        copy_scope(&files(&storage, &from), &files(&storage, &to), false)
+        copy_namespace(&files(&storage, &from), &files(&storage, &to), false)
             .await
             .unwrap();
 
@@ -920,7 +920,7 @@ mod value_rules {
         let (from, to) = (new_namespace(), new_namespace());
         put_all(&*storage, &from, &REPOSITORY).await;
 
-        copy_scope(&files(&storage, &from), &files(&storage, &to), false)
+        copy_namespace(&files(&storage, &from), &files(&storage, &to), false)
             .await
             .unwrap();
 
@@ -950,7 +950,7 @@ mod value_rules {
         )
         .await;
 
-        copy_scope(&files(&storage, &from), &files(&storage, &to), false)
+        copy_namespace(&files(&storage, &from), &files(&storage, &to), false)
             .await
             .unwrap();
 
@@ -971,7 +971,7 @@ mod value_rules {
         let (from, to) = (new_namespace(), new_namespace());
         put_all(&*storage, &from, &REPOSITORY).await;
 
-        let copied = copy_scope(&files(&storage, &from), &files(&storage, &to), false).await;
+        let copied = copy_namespace(&files(&storage, &from), &files(&storage, &to), false).await;
 
         assert_eq!(
             (
@@ -997,7 +997,7 @@ mod value_rules {
         put_all(&*storage, &deleted, &REPOSITORY).await;
         put_all(&*storage, &kept, &REPOSITORY).await;
 
-        delete_scope(&files(&storage, &deleted)).await.unwrap();
+        delete_namespace(&files(&storage, &deleted)).await.unwrap();
 
         assert_eq!(
             (
@@ -1016,7 +1016,9 @@ mod value_rules {
         let namespace = new_namespace();
         put_all(&*storage, &namespace, &REPOSITORY).await;
 
-        delete_scope(&files(&storage, &namespace)).await.unwrap();
+        delete_namespace(&files(&storage, &namespace))
+            .await
+            .unwrap();
 
         assert_eq!(
             storage
@@ -1035,10 +1037,10 @@ mod value_rules {
         let storage = Arc::new(InMemoryBlobStorage::new());
         let namespace = new_namespace();
 
-        let first = delete_scope(&files(&storage, &namespace)).await;
+        let first = delete_namespace(&files(&storage, &namespace)).await;
         put_all(&*storage, &namespace, &REPOSITORY).await;
-        let second = delete_scope(&files(&storage, &namespace)).await;
-        let third = delete_scope(&files(&storage, &namespace)).await;
+        let second = delete_namespace(&files(&storage, &namespace)).await;
+        let third = delete_namespace(&files(&storage, &namespace)).await;
 
         assert_eq!(
             (
@@ -1122,7 +1124,7 @@ mod value_rules {
         };
 
         let (from_files, to_files) = (files(&storage, &from), files(&storage, &to));
-        let (copied, ()) = tokio::join!(copy_scope(&from_files, &to_files, false), saving);
+        let (copied, ()) = tokio::join!(copy_namespace(&from_files, &to_files, false), saving);
         let target = stored(&*storage, &to)
             .await
             .into_iter()
@@ -1181,7 +1183,7 @@ mod value_rules {
         };
 
         let (from_files, to_files) = (files(&storage, &from), files(&storage, &to));
-        let (copied, ()) = tokio::join!(copy_scope(&from_files, &to_files, false), saving);
+        let (copied, ()) = tokio::join!(copy_namespace(&from_files, &to_files, false), saving);
         let target = stored(&*storage, &to)
             .await
             .into_iter()
@@ -1231,7 +1233,7 @@ mod value_rules {
         let to = new_namespace();
         put_all(&*storage, &from, &REPOSITORY).await;
 
-        let copied = copy_scope(&files(&storage, &from), &files(&storage, &to), false).await;
+        let copied = copy_namespace(&files(&storage, &from), &files(&storage, &to), false).await;
 
         assert!(matches!(copied, Err(CopyError::Race)), "{copied:?}");
         // The first listing of the copy, then one listing for each round.
@@ -1249,7 +1251,7 @@ mod value_rules {
         put_all(&*storage, &from, &REPOSITORY).await;
         put_all(&*storage, &to, &[("snapshots/0202", "of an earlier run")]).await;
 
-        copy_scope(&files(&storage, &from), &files(&storage, &to), true)
+        copy_namespace(&files(&storage, &from), &files(&storage, &to), true)
             .await
             .unwrap();
 
@@ -1271,10 +1273,10 @@ mod value_rules {
         put_all(&*storage, &to, &[("snapshots/0202", "of an earlier run")]).await;
         put_all(&*storage, &first, &[("snapshots/0303", "kept")]).await;
 
-        copy_scope(&files(&storage, &from), &files(&storage, &to), true)
+        copy_namespace(&files(&storage, &from), &files(&storage, &to), true)
             .await
             .unwrap();
-        copy_scope(&files(&storage, &from), &files(&storage, &first), false)
+        copy_namespace(&files(&storage, &from), &files(&storage, &first), false)
             .await
             .unwrap();
 
@@ -1301,7 +1303,7 @@ mod value_rules {
         let (from, to) = (new_namespace(), new_namespace());
         put_all(&*storage, &from, &REPOSITORY).await;
 
-        let copied = copy_scope(&files(&storage, &from), &files(&storage, &to), false).await;
+        let copied = copy_namespace(&files(&storage, &from), &files(&storage, &to), false).await;
 
         assert!(
             matches!(&copied, Err(CopyError::CopySourceMissing { path }) if **path == *Path::new("data/ab/abab")),

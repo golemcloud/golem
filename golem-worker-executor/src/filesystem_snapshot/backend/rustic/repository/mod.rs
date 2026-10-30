@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Concrete rustic repository opening, encryption keys and explicit options.
+//! Concrete rustic repository opening, encryption keys and format options.
 
 use super::blob_backend::BlobBackend;
 use super::failure_classification;
 use rustic_core::repofile::{Chunker, MasterKey};
 use rustic_core::{
-    BackupOptions, ConfigOptions, Credentials, KeyOptions, OpenStatus, ParentOptions,
-    Repository as RusticRepository, RepositoryBackends, RepositoryOptions, RusticResult,
-    SnapshotGroupCriterion,
+    ConfigOptions, Credentials, KeyOptions, OpenStatus, Repository as RusticRepository,
+    RepositoryBackends, RepositoryOptions, RusticResult,
 };
 use std::fmt::{Debug, Formatter};
-use std::num::NonZeroUsize;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// The key that encrypts a repository.
@@ -131,16 +128,6 @@ fn config_options() -> ConfigOptions {
         .set_chunker(CHUNKER)
         .set_compression(ZSTD_LEVEL)
         .set_extra_verify(EXTRA_VERIFY)
-}
-
-/// The options that each save shares. The snapshot keeps the paths relative to the saved tree. The
-/// group of the parent has no criterion. Each parallel stage of the save has `threads` threads.
-/// `None` is the number of CPUs that the process can use.
-pub(super) fn backup_options(threads: Option<NonZeroUsize>) -> BackupOptions {
-    BackupOptions::default()
-        .as_path(PathBuf::from("/"))
-        .parent_opts(ParentOptions::default().group_by(SnapshotGroupCriterion::new()))
-        .threads(threads)
 }
 
 #[cfg(test)]

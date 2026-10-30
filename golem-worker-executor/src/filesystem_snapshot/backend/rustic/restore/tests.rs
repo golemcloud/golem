@@ -20,7 +20,7 @@ use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
 use crate::filesystem_snapshot::backend::rustic::test_support::{
-    ALWAYS, LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, SHORT_DEADLINE, SharedSlots, blobs,
+    ALWAYS, LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, SHORT_DEADLINE, SharedSlots, blobs, calls_of,
     data_packs, dropped_within_limit, eventually, failed_at_deadline, fixture_tree,
     holding_index_reads, is_failed, key, ledger, mark_the_packs_of_a_hidden_snapshot, name,
     one_file_tree, policy, repository_fixture_tree, restored_listing, runs_policy, save_each,
@@ -31,7 +31,7 @@ use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::test_support::fixture::{Scratch, Spec, fixture, listing};
 use crate::filesystem_snapshot::test_support::{never_cancelled, new_scope};
 use crate::filesystem_snapshot::{
-    AgentSnapshots, FilesystemSnapshotStore, RestoreFailure, SnapshotInfo, Unlimited,
+    AgentSnapshots, FilesystemSnapshotStore, RestoreFailure, SnapshotInfo, Unlimited, Withdrawal,
 };
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -45,6 +45,54 @@ use test_r::{test, timeout};
 use tokio_util::task::AbortOnDropHandle;
 
 use golem_service_base::storage::blob::BlobStorage;
+
+#[test]
+#[timeout("60s")]
+async fn a_shutdown_during_a_restore_gives_stopped_and_clears_nothing() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let saving = store_over(&inner);
+    let scope = new_scope();
+    save_each(&saving, &scope, &["p-1"]).await;
+    let storage = ScriptedBlobStorage::new(inner.clone(), |op_label, path| {
+        if op_label == "read_range" && path.starts_with("data") {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 1));
+    let into = Scratch::new();
+    let restoring = AbortOnDropHandle::new(tokio::spawn({
+        let (store, scope, path) = (store.clone(), scope.clone(), into.path().to_path_buf());
+        async move { store.restore(&scope, &name("p-1"), &path, &Unlimited).await }
+    }));
+    let held = eventually(|| calls_of(&storage, "read_range") > 0).await;
+    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
+    let restored = tokio::time::timeout(LIMIT, restoring).await;
+    storage.open_gate();
+    assert!(
+        matches!(
+            restored,
+            Ok(Ok(Err(RestoreFailure::Stopped(Withdrawal::Stopped))))
+        ),
+        "{restored:?}"
+    );
+    assert_eq!((held, stopped), (true, true));
+}
+
+#[test]
+fn restore_options_are_strict_and_use_the_reader_thread_count() {
+    let restore = super::restore_options(NonZeroUsize::new(4).unwrap());
+    assert_eq!(
+        (
+            restore.fail_on_metadata_error,
+            restore.no_ownership,
+            restore.reader_threads.map(NonZeroUsize::get)
+        ),
+        (true, true, Some(4))
+    );
+}
+
 #[test]
 #[timeout("120s")]
 async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threads() {

@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use super::blob_backend::BlobBackend;
-use super::call_execution::Ran;
-use super::execution::{BackendRun, Execution};
+use super::call_execution::{Ran, RunResult};
 use super::failure_classification::{ended_by, is_file_missing, is_storage_failure};
+use super::operation::Operation;
 use super::repository::open_existing;
-use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::errors::{CallError, ReadError};
 use crate::filesystem_snapshot::snapshot_name::SnapshotName;
 use crate::filesystem_snapshot::{SnapshotInfo, newest_first};
@@ -30,23 +29,23 @@ use std::collections::HashSet;
 /// Reads each snapshot file of the repository, whose blobs `backend` reads. A failed storage call
 /// fails the read, a file that a delete removed after the listing is left out, and each other
 /// failure counts as a failed check.
-pub(super) fn scope_snapshots<S: Open>(
+pub(super) fn repository_snapshots<S: Open>(
     repository: &RusticRepository<S>,
     backend: &BlobBackend,
-) -> anyhow::Result<ScopeSnapshots> {
-    scope_snapshots_except(repository, backend, &HashSet::new()).map(|(found, _)| found)
+) -> anyhow::Result<RepositorySnapshots> {
+    repository_snapshots_except(repository, backend, &HashSet::new()).map(|(found, _)| found)
 }
 
 /// Reads each snapshot file of the repository whose id is not in `known`, as
-/// [`scope_snapshots`] does, and gives also the ids of every snapshot file that the listing found.
+/// [`repository_snapshots`] does, and gives also the ids of every snapshot file that the listing found.
 /// The files are read ahead concurrently through `backend` before rustic reads and decrypts them
 /// one after the other, so the reads of the storage overlap. The order of the files does not
 /// matter, because each reader sorts or filters them.
-pub(super) fn scope_snapshots_except<S: Open>(
+pub(super) fn repository_snapshots_except<S: Open>(
     repository: &RusticRepository<S>,
     backend: &BlobBackend,
     known: &HashSet<SnapshotId>,
-) -> anyhow::Result<(ScopeSnapshots, HashSet<SnapshotId>)> {
+) -> anyhow::Result<(RepositorySnapshots, HashSet<SnapshotId>)> {
     let listed = repository.list::<SnapshotId>()?.collect::<HashSet<_>>();
     let new = listed
         .iter()
@@ -56,7 +55,7 @@ pub(super) fn scope_snapshots_except<S: Open>(
     backend.read_ahead(FileType::Snapshot, new.iter().map(|id| **id))?;
     new.into_iter()
         .try_fold(
-            ScopeSnapshots {
+            RepositorySnapshots {
                 readable: Vec::new(),
                 unreadable: false,
             },
@@ -65,12 +64,12 @@ pub(super) fn scope_snapshots_except<S: Open>(
         .map(|found| (found, listed))
 }
 
-/// Adds the snapshot file `id` of the repository to `found`, as [`scope_snapshots`] says.
+/// Adds the snapshot file `id` of the repository to `found`, as [`repository_snapshots`] says.
 fn read_snapshot_file<S: Open>(
     repository: &RusticRepository<S>,
-    mut found: ScopeSnapshots,
+    mut found: RepositorySnapshots,
     id: SnapshotId,
-) -> anyhow::Result<ScopeSnapshots> {
+) -> anyhow::Result<RepositorySnapshots> {
     match repository.get_file::<SnapshotFile>(&id) {
         Ok(mut snapshot) => {
             snapshot.id = id;
@@ -79,14 +78,14 @@ fn read_snapshot_file<S: Open>(
         }
         Err(error) if is_storage_failure(&*error) => Err(anyhow::Error::from(error)),
         Err(error) if is_file_missing(&*error) => Ok(found),
-        Err(_) => Ok(ScopeSnapshots {
+        Err(_) => Ok(RepositorySnapshots {
             unreadable: true,
             ..found
         }),
     }
 }
 
-pub(super) fn has_name(found: &ScopeSnapshots, name: &SnapshotName) -> bool {
+pub(super) fn has_name(found: &RepositorySnapshots, name: &SnapshotName) -> bool {
     found
         .readable
         .iter()
@@ -96,7 +95,7 @@ pub(super) fn has_name(found: &ScopeSnapshots, name: &SnapshotName) -> bool {
 /// Finds the snapshot with the name. Of the snapshot files with the name, the one with the least
 /// time and id wins. When no file has the name and a file failed its integrity check, the result is
 /// `Corrupt`, because that file can have the name.
-pub(super) fn lookup(found: ScopeSnapshots, name: &SnapshotName) -> Lookup {
+pub(super) fn lookup(found: RepositorySnapshots, name: &SnapshotName) -> Lookup {
     match (named(&found.readable, name), found.unreadable) {
         (Some(snapshot), _) => match snapshot_info(snapshot) {
             Some(info) => Lookup::Found(Box::new(snapshot.clone()), info),
@@ -125,7 +124,7 @@ pub(super) fn named<'a>(
 
 /// Gives the name and the info of each snapshot whose label is a name and whose description
 /// parses. Of the files with one name, only the one that [`lookup`] takes stays.
-fn listed(found: ScopeSnapshots) -> Vec<(SnapshotName, SnapshotInfo)> {
+fn listed(found: RepositorySnapshots) -> Vec<(SnapshotName, SnapshotInfo)> {
     let mut snapshots = found.readable;
     snapshots.sort_by(|left, right| {
         (&left.label, left.time.timestamp(), left.id).cmp(&(
@@ -158,64 +157,52 @@ pub(super) fn snapshot_info(snapshot: &SnapshotFile) -> Option<SnapshotInfo> {
 
 /// One run of a `stat`.
 pub(super) async fn stat_run(
-    execution: &Execution<'_>,
-    repository_key: &super::repository::RepositoryKey,
-    agent: &AgentSnapshots,
+    operation: &Operation<'_>,
     name: &SnapshotName,
-) -> Ran<Result<Option<SnapshotInfo>, ReadError>> {
-    let BackendRun {
-        token: _token,
-        guard: _guard,
-        backend,
-    } = match execution.begin_run(agent) {
-        Ok(run) => run,
-        Err(ended) => return Ran::Ended(ended),
-    };
-    let key = repository_key.clone();
+) -> RunResult<Result<Option<SnapshotInfo>, ReadError>> {
+    let (_token, _guard, backend) = operation.begin_run()?;
+    let key = operation.key.clone();
     let name = name.clone();
-    match execution
-        .blocking(move || {
-            Ok(match open_existing(backend.clone(), &key)? {
-                Some(repository) => lookup(scope_snapshots(&repository, &backend)?, &name),
-                None => Lookup::Missing,
+    Ok(
+        match operation
+            .blocking(move || {
+                Ok(match open_existing(backend.clone(), &key)? {
+                    Some(repository) => lookup(repository_snapshots(&repository, &backend)?, &name),
+                    None => Lookup::Missing,
+                })
             })
-        })
-        .await
-    {
-        Ok(Lookup::Found(_, info)) => Ran::Answered(Ok(Some(info))),
-        Ok(Lookup::Missing) => Ran::Answered(Ok(None)),
-        Ok(Lookup::Corrupt(error)) => Ran::Answered(Err(ReadError::Corrupt(error))),
-        Err(error) => Ran::Ended(ended_by(error)),
-    }
+            .await
+        {
+            Ok(Lookup::Found(_, info)) => Ran::Answered(Ok(Some(info))),
+            Ok(Lookup::Missing) => Ran::Answered(Ok(None)),
+            Ok(Lookup::Corrupt(error)) => Ran::Answered(Err(ReadError::Corrupt(error))),
+            Err(error) => Ran::Ended(ended_by(error)),
+        },
+    )
 }
 
 /// One run of a `list`.
 pub(super) async fn list_run(
-    execution: &Execution<'_>,
-    repository_key: &super::repository::RepositoryKey,
-    agent: &AgentSnapshots,
-) -> Ran<Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError>> {
-    let BackendRun {
-        token: _token,
-        guard: _guard,
-        backend,
-    } = match execution.begin_run(agent) {
-        Ok(run) => run,
-        Err(ended) => return Ran::Ended(ended),
-    };
-    let key = repository_key.clone();
-    match execution
-        .blocking(move || {
-            Ok(match open_existing(backend.clone(), &key)? {
-                Some(repository) => newest_first(listed(scope_snapshots(&repository, &backend)?)),
-                None => Box::default(),
+    operation: &Operation<'_>,
+) -> RunResult<Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError>> {
+    let (_token, _guard, backend) = operation.begin_run()?;
+    let key = operation.key.clone();
+    Ok(
+        match operation
+            .blocking(move || {
+                Ok(match open_existing(backend.clone(), &key)? {
+                    Some(repository) => {
+                        newest_first(listed(repository_snapshots(&repository, &backend)?))
+                    }
+                    None => Box::default(),
+                })
             })
-        })
-        .await
-    {
-        Ok(listed) => Ran::Answered(Ok(listed)),
-        Err(error) => Ran::Ended(ended_by(error)),
-    }
+            .await
+        {
+            Ok(listed) => Ran::Answered(Ok(listed)),
+            Err(error) => Ran::Ended(ended_by(error)),
+        },
+    )
 }
 /// What the tree of a snapshot holds. The store keeps it as the description of the snapshot,
 /// because rustic counts a symlink as a file.
@@ -227,7 +214,7 @@ pub(super) struct TreeContent {
 
 /// The snapshot files of a scope that rustic could read, and whether a file failed its integrity
 /// check. A file that a delete removed after the listing is in neither.
-pub(super) struct ScopeSnapshots {
+pub(super) struct RepositorySnapshots {
     pub(super) readable: Vec<SnapshotFile>,
     pub(super) unreadable: bool,
 }

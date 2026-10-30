@@ -467,7 +467,7 @@ mod value_rules {
     //! runtime that the backend holds, as the threads of rustic are not.
 
     use crate::filesystem_snapshot::backend::rustic::blob_backend::{
-        BlobBackend, KEPT_PACKS_LIMIT, file_size,
+        BlobBackend, TREE_PACK_CACHE_LIMIT, file_size,
     };
     use crate::filesystem_snapshot::backend::rustic::call_execution::RunEnd;
     use crate::filesystem_snapshot::backend::rustic::failure_classification::{
@@ -527,7 +527,7 @@ mod value_rules {
                     CancellationToken::new(),
                 ),
                 runtime.handle().clone(),
-                KEPT_PACKS_LIMIT,
+                TREE_PACK_CACHE_LIMIT,
             );
             Self {
                 runtime,
@@ -821,7 +821,7 @@ mod value_rules {
                 CancellationToken::new(),
             ),
             runtime.handle().clone(),
-            KEPT_PACKS_LIMIT,
+            TREE_PACK_CACHE_LIMIT,
         );
         let pack = format!("data/ab/{}", "ab".repeat(32));
 
@@ -857,7 +857,7 @@ mod value_rules {
         let backend = BlobBackend::new(
             files_of(storage, new_namespace(), deadline, CancellationToken::new()),
             runtime.handle().clone(),
-            KEPT_PACKS_LIMIT,
+            TREE_PACK_CACHE_LIMIT,
         );
         let pack = format!("data/ab/{}", "ab".repeat(32));
 
@@ -918,7 +918,7 @@ mod value_rules {
                 CancellationToken::new(),
             ),
             runtime.handle().clone(),
-            KEPT_PACKS_LIMIT,
+            TREE_PACK_CACHE_LIMIT,
         );
         let answer_after = Duration::from_millis(100);
         let started = Instant::now();
@@ -1363,7 +1363,7 @@ mod value_rules {
                 CancellationToken::new(),
             ),
             fixture.runtime.handle().clone(),
-            KEPT_PACKS_LIMIT,
+            TREE_PACK_CACHE_LIMIT,
         )
         .tracked_by(tracker.token());
 
@@ -1387,7 +1387,7 @@ mod value_rules {
                 cancel.clone(),
             ),
             runtime.handle().clone(),
-            KEPT_PACKS_LIMIT,
+            TREE_PACK_CACHE_LIMIT,
         );
         cancel.cancel();
 
@@ -1428,7 +1428,7 @@ mod value_rules {
                 cancel.clone(),
             ),
             runtime.handle().clone(),
-            KEPT_PACKS_LIMIT,
+            TREE_PACK_CACHE_LIMIT,
         );
         runtime.spawn(async move {
             held.cancelled().await;
@@ -1456,7 +1456,7 @@ mod value_rules {
                 CancellationToken::new(),
             ),
             fixture.runtime.handle().clone(),
-            KEPT_PACKS_LIMIT,
+            TREE_PACK_CACHE_LIMIT,
         );
 
         let read = backend
@@ -1537,7 +1537,7 @@ mod value_rules {
                 CancellationToken::new(),
             ),
             fixture.runtime.handle().clone(),
-            KEPT_PACKS_LIMIT,
+            TREE_PACK_CACHE_LIMIT,
         )
         .staging_in(stage.clone());
         let content = [Bytes::from_static(b"snap"), Bytes::from_static(b"shot")]
@@ -1583,7 +1583,7 @@ mod value_rules {
                 CancellationToken::new(),
             ),
             runtime.handle().clone(),
-            KEPT_PACKS_LIMIT,
+            TREE_PACK_CACHE_LIMIT,
         );
 
         let classified = [
@@ -1784,7 +1784,7 @@ mod value_rules {
             CancellationToken::new(),
         );
         let expected = files.location();
-        let backend = BlobBackend::new(files, runtime.handle().clone(), KEPT_PACKS_LIMIT);
+        let backend = BlobBackend::new(files, runtime.handle().clone(), TREE_PACK_CACHE_LIMIT);
 
         assert_eq!(backend.location(), expected);
     }

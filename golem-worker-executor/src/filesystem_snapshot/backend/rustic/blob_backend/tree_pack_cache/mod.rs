@@ -29,7 +29,7 @@ use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 /// The packs that one backend keeps, and the packs that a thread reads now. When the kept bytes
 /// reach the limit, or a pack that was read whole does not fit, the set is closed. A closed set
 /// keeps no more packs, and a pack that it does not keep is not read whole.
-pub(super) struct KeptPacks {
+pub(super) struct TreePackCache {
     limit: usize,
     state: Mutex<State>,
     /// Wakes the threads that wait for the read of a pack when that read ends.
@@ -97,7 +97,7 @@ fn admit(closed: bool, kept_bytes: usize, len: usize, limit: usize) -> Admit {
     }
 }
 
-impl KeptPacks {
+impl TreePackCache {
     /// Gives an empty set that keeps packs up to `limit` bytes in total.
     pub(super) fn new(limit: usize) -> Self {
         Self {
@@ -132,7 +132,7 @@ impl KeptPacks {
         state.reading.insert(*id);
         drop(state);
         let reading = Reading {
-            kept: self,
+            cache: self,
             id: *id,
         };
         let read = read();
@@ -147,11 +147,11 @@ impl KeptPacks {
     }
 }
 
-impl Debug for KeptPacks {
+impl Debug for TreePackCache {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         let state = self.state();
         formatter
-            .debug_struct("KeptPacks")
+            .debug_struct("TreePackCache")
             .field("limit", &self.limit)
             .field("packs", &state.packs.len())
             .field("bytes", &state.bytes)
@@ -162,7 +162,7 @@ impl Debug for KeptPacks {
 /// The read of one pack by one thread. Its drop ends the read and wakes the waiting threads, also
 /// when the read fails or panics.
 struct Reading<'a> {
-    kept: &'a KeptPacks,
+    cache: &'a TreePackCache,
     id: Id,
 }
 
@@ -170,8 +170,8 @@ impl Reading<'_> {
     /// Keeps the pack when the set is open and the pack fits in the limit. Otherwise it keeps nothing
     /// and closes the set, which can be closed already.
     fn keep(&self, pack: &Bytes) {
-        let mut state = self.kept.state();
-        match admit(state.closed, state.bytes, pack.len(), self.kept.limit) {
+        let mut state = self.cache.state();
+        match admit(state.closed, state.bytes, pack.len(), self.cache.limit) {
             Admit::Keep { bytes } => {
                 state.bytes = bytes;
                 state.packs.insert(self.id, pack.clone());
@@ -183,8 +183,8 @@ impl Reading<'_> {
 
 impl Drop for Reading<'_> {
     fn drop(&mut self) {
-        self.kept.state().reading.remove(&self.id);
-        self.kept.read_ended.notify_all();
+        self.cache.state().reading.remove(&self.id);
+        self.cache.read_ended.notify_all();
     }
 }
 

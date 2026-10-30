@@ -77,6 +77,11 @@ impl Clone for OperationLease {
 }
 
 impl OperationLease {
+    /// The incarnation that this lease registers.
+    pub(super) fn agent(&self) -> &AgentSnapshots {
+        &self.cohort.agent
+    }
+
     fn of(cohort: Arc<OperationCohort>) -> Self {
         Self {
             _token: cohort.tracker.token(),

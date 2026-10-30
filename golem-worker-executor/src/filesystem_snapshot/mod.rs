@@ -36,6 +36,8 @@ mod snapshot_name;
 pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod time_zone_tests;
 
 pub(crate) use agent_snapshots::AgentSnapshots;
 #[cfg(any(test, feature = "test-utils"))]

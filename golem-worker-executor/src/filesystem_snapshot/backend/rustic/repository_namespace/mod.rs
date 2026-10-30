@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The copy and the delete of a whole scope, on the blobs of its repository.
+//! The copy and deletion of a whole repository namespace, directly on its blobs.
 //!
 //! These operations do not read the repository format. They only know the directories of the
 //! repository, its config file, and the ledger directory of the store.
@@ -20,12 +20,11 @@
 use super::blob_io::SnapshotFiles;
 use super::blob_io::{LateWrites, lands_by};
 use super::call_execution::{Ended, LateWrite, Ran, RunEnd, answered_after};
-use super::execution::Execution;
 use super::failure_classification::storage_end;
+use super::operation::Operation;
 use super::repository_layout::{
     CONFIG_PATH, DATA_PATH, INDEX_PATH, KEYS_PATH, LEDGERS_PATH, SNAPSHOTS_PATH,
 };
-use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::errors::CallError;
 use crate::metrics::filesystem_snapshots::{self, RemovedSource, StoredSource};
 use futures::{StreamExt, TryStreamExt, stream};
@@ -43,11 +42,11 @@ const LISTING_ORDER: [&str; 4] = [SNAPSHOTS_PATH, INDEX_PATH, KEYS_PATH, DATA_PA
 const COPY_CONCURRENCY: usize = 8;
 
 /// The most rounds of the catch-up of one run of a copy.
-pub(super) const MOST_CATCH_UPS: u32 = 16;
+const MOST_CATCH_UPS: u32 = 16;
 
 /// Why a run of a copy failed.
 #[derive(Debug)]
-pub(super) enum CopyError {
+enum CopyError {
     /// A blob that the run listed outside the snapshot files is gone.
     CopySourceMissing { path: Box<Path> },
     /// The catch-up found new index files in each of its rounds.
@@ -71,7 +70,7 @@ impl CopyError {
     }
 
     /// Gives the failure of the run.
-    pub(super) fn into_failure(self) -> anyhow::Error {
+    fn into_failure(self) -> anyhow::Error {
         match self {
             Self::CopySourceMissing { path } => anyhow::anyhow!(
                 "the blob {} that the copy listed is gone, because a prune removed it",
@@ -88,7 +87,7 @@ impl CopyError {
 /// What the catch-up of a copy does after a listing of the index files and the packs of the
 /// source.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum CatchUp {
+enum CatchUp {
     /// Copy these packs, then these index files, then list again. An index file is copied only
     /// after every pack of its round, so a pack that a prune removed ends the run before an index
     /// file that lists it lands.
@@ -105,7 +104,7 @@ pub(super) enum CatchUp {
 /// Decides the catch-up after round number `rounds` listed `listed`, when the run copied `copied`.
 /// The run copies each listed blob that it did not copy, the packs before the index files, and
 /// lists again, while the listing holds an index file that it did not copy.
-pub(super) fn catch_up(copied: &HashSet<Box<Path>>, listed: &[Box<Path>], rounds: u32) -> CatchUp {
+fn catch_up(copied: &HashSet<Box<Path>>, listed: &[Box<Path>], rounds: u32) -> CatchUp {
     let (index, packs): (Vec<_>, Vec<_>) = listed
         .iter()
         .filter(|path| !copied.contains(*path))
@@ -143,7 +142,7 @@ pub(super) fn catch_up(copied: &HashSet<Box<Path>>, listed: &[Box<Path>], rounds
 ///
 /// A source without a config is gone: the run copies nothing, and when `again` tells that an
 /// earlier run of the call ran, it deletes each snapshot file of `to`.
-pub(super) async fn copy_scope(
+async fn copy_namespace(
     from: &SnapshotFiles,
     to: &SnapshotFiles,
     again: bool,
@@ -354,7 +353,7 @@ async fn copy_blob(
 /// Deletes the repository and the ledger of the scope. The config file goes first, so the scope
 /// holds no repository from that step on. A scope that holds nothing gives success. The metric of
 /// the removed bytes counts the blobs of each deleted directory.
-pub(super) async fn delete_scope(files: &SnapshotFiles) -> anyhow::Result<()> {
+async fn delete_namespace(files: &SnapshotFiles) -> anyhow::Result<()> {
     files.delete("delete_scope", Path::new(CONFIG_PATH)).await?;
     stream::iter(
         LISTING_ORDER
@@ -374,16 +373,10 @@ pub(super) async fn delete_scope(files: &SnapshotFiles) -> anyhow::Result<()> {
     .await
 }
 
-#[cfg(test)]
-mod tests;
-
 /// One run of a delete of all snapshots.
-pub(super) async fn delete_all_run(
-    execution: &Execution<'_>,
-    agent: &AgentSnapshots,
-) -> Ran<Result<(), CallError>> {
-    let (token, _guard) = execution.run_token();
-    match delete_scope(&execution.files(agent, &token)).await {
+pub(super) async fn delete_all_run(operation: &Operation<'_>) -> Ran<Result<(), CallError>> {
+    let (token, _guard) = operation.run_token();
+    match delete_namespace(&operation.files(&token)).await {
         Ok(()) => Ran::Answered(Ok(())),
         Err(error) => Ran::Ended(Ended::new(storage_end(&error), error)),
     }
@@ -392,26 +385,24 @@ pub(super) async fn delete_all_run(
 /// One run of a copy. `again` tells that an earlier run of the call ran. A write of the run
 /// that ended without an answer gives the instant after which it landed or never lands.
 pub(super) async fn copy_run(
-    from_execution: &Execution<'_>,
-    to_execution: &Execution<'_>,
-    from: &AgentSnapshots,
-    to: &AgentSnapshots,
+    from_operation: &Operation<'_>,
+    to_operation: &Operation<'_>,
     again: bool,
 ) -> Ran<Result<(), CallError>> {
-    let (token, _guard) = from_execution.run_token();
+    let (token, _guard) = from_operation.run_token();
     let late = Arc::new(LateWrites::default());
-    let copied = copy_scope(
-        &from_execution.files(from, &token).recording(late.clone()),
-        &to_execution.files(to, &token).recording(late.clone()),
+    let copied = copy_namespace(
+        &from_operation.files(&token).recording(late.clone()),
+        &to_operation.files(&token).recording(late.clone()),
         again,
     )
     .await;
     match copied {
-        Ok(()) => answered_after(Ok(()), lands_by(late.latest(), from_execution.deadline())),
+        Ok(()) => answered_after(Ok(()), lands_by(late.latest(), from_operation.deadline())),
         Err(error) => Ran::Ended(Ended {
             end: copy_end(&error),
             failure: error.into_failure(),
-            late: lands_by(late.latest(), from_execution.deadline())
+            late: lands_by(late.latest(), from_operation.deadline())
                 .map(|until| LateWrite { until, own: None }),
         }),
     }
@@ -419,7 +410,7 @@ pub(super) async fn copy_run(
 /// Gives the end of a run of a copy whose error is `error`: a source blob that is gone, and a
 /// catch-up that did not end, run again; a failed storage call fails the run; and a name error
 /// cannot change.
-pub(super) fn copy_end(error: &CopyError) -> RunEnd {
+fn copy_end(error: &CopyError) -> RunEnd {
     match error {
         CopyError::CopySourceMissing { .. } | CopyError::Race => RunEnd::RaceRunAgain,
         CopyError::CallFailed(_) => RunEnd::CallFailed,
@@ -427,3 +418,6 @@ pub(super) fn copy_end(error: &CopyError) -> RunEnd {
         CopyError::Cancelled(_) => RunEnd::Cancelled,
     }
 }
+
+#[cfg(test)]
+mod tests;

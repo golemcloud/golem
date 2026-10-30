@@ -287,6 +287,15 @@ pub(super) enum Ran<T> {
     Settling(Settle<T>),
 }
 
+/// A run outcome, or a failure while acquiring its resources.
+pub(super) type RunResult<T> = Result<Ran<T>, Ended>;
+
+impl<T> From<RunResult<T>> for Ran<T> {
+    fn from(result: RunResult<T>) -> Self {
+        result.unwrap_or_else(Self::Ended)
+    }
+}
+
 /// The end of a run that the shell runs after it gave the slot of the run back.
 pub(super) struct Settle<T> {
     /// Ends when every blob call of the run has ended.

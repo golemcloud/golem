@@ -37,10 +37,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::runtime::Handle;
 use tokio_util::task::task_tracker::TaskTrackerToken;
-use tree_pack_cache::KeptPacks;
+use tree_pack_cache::TreePackCache;
 /// The largest number of bytes of tree packs that the backend of one operation of the store keeps
 /// in memory.
-pub(super) const KEPT_PACKS_LIMIT: usize = 32 * 1024 * 1024;
+pub(super) const TREE_PACK_CACHE_LIMIT: usize = 32 * 1024 * 1024;
 
 /// The largest number of reads ahead of one call of [`BlobBackend::read_ahead`] that run at the
 /// same time.
@@ -105,7 +105,7 @@ pub(super) struct BlobBackend {
     /// Counts the backend as work of a tracker, until the last owner drops the backend.
     _tracked: Option<TaskTrackerToken>,
     /// The packs of tree blobs that the operation of the backend read.
-    kept: KeptPacks,
+    tree_pack_cache: TreePackCache,
     /// The files that [`BlobBackend::read_ahead`] read and no read of rustic took yet, by path.
     read_ahead: Mutex<HashMap<Box<Path>, Bytes>>,
     /// The paths of the index files that a listing of the backend gave.
@@ -116,16 +116,16 @@ pub(super) struct BlobBackend {
 
 impl BlobBackend {
     /// Makes a backend over the blobs. Each call goes through `files` and waits on `runtime`. The
-    /// backend keeps tree packs up to `kept_limit` bytes, and has
+    /// backend keeps tree packs up to `tree_pack_cache_limit` bytes, and has
     /// [`MAX_SNAPSHOT_FILE_READS`] slots of reads ahead of its own.
-    pub(super) fn new(files: SnapshotFiles, runtime: Handle, kept_limit: usize) -> Self {
+    pub(super) fn new(files: SnapshotFiles, runtime: Handle, tree_pack_cache_limit: usize) -> Self {
         Self {
             files,
             runtime,
             stage: None,
             stored: None,
             _tracked: None,
-            kept: KeptPacks::new(kept_limit),
+            tree_pack_cache: TreePackCache::new(tree_pack_cache_limit),
             read_ahead: Mutex::default(),
             index_listed: Mutex::default(),
             read_slots: Arc::new(tokio::sync::Semaphore::new(MAX_SNAPSHOT_FILE_READS)),
@@ -339,7 +339,9 @@ impl ReadBackend for BlobBackend {
         // range, as each other blob.
         if cacheable
             && tpe == FileType::Pack
-            && let Some(pack) = self.kept.get_or_read(id, || self.read_full(tpe, id))
+            && let Some(pack) = self
+                .tree_pack_cache
+                .get_or_read(id, || self.read_full(tpe, id))
         {
             return range_of(&pack?, &path, offset, last);
         }

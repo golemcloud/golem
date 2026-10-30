@@ -2493,19 +2493,25 @@ still waits for earlier work when the first drain's caller drops.
 The two store backends live in `filesystem_snapshot/backend/in_memory` and `backend/rustic`.
 The in-memory backend remains available only for tests and `test-utils`.
 `backend/rustic/mod.rs` owns the concrete rustic backend, construction, shutdown and operation
-routing. Operations are free functions with explicit dependencies. `execution::Execution`
-borrows the operation lease and store resources without acquiring a tracker token or capturing
-a runtime. It creates each backend or retained task at the point that registers that work.
-`Execution::begin_run` shares ordinary run setup. Save keeps its cancellation link, per-run
-tracker and late-write recorders in its own setup order.
+routing. Operations are free functions with explicit dependencies. `operation::Operation`
+borrows the lease and shared storage, key, clock and priority resources without acquiring a
+tracker token or capturing a runtime. Its agent comes only from that lease, and `files` accepts
+no separate agent. It creates each backend or retained task at the point that registers that
+work. `Operation::begin_run` shares ordinary run setup and preserves token, guard and backend
+acquisition order. Setup failures propagate with `?`; `call_execution::Ran` converts them into
+run outcomes. Save keeps its cancellation link, per-run tracker and late-write recorders in its
+own setup order.
 `call_execution` drives runs and settlement; `blob_io` is the single blob-call policy;
 `blob_backend` bridges blocking rustic calls to it. `save`, `restore`, `snapshot_catalog`,
 `snapshot_deletion` and `repository_namespace` own their operations. Save and restore also own
-their operation-specific failure classification. `pruning` owns its settings, eligibility,
-durable records, claims and timing. `tracked_tasks` retains the runtime supplied by each operation.
+their operation-specific failure classification, settings and rustic options. Restore receives
+only its reader-thread count and its test hook, not `StorePolicy`. `store_policy` maps configuration
+to operation settings. `pruning` owns its defaults, options, eligibility, durable records, claims
+and timing. `tracked_tasks` retains the runtime supplied by each operation.
 Tests and single-consumer fixtures live beside their owners. The `test_support` modules hold
 shared fixtures; shared prune inputs live in `pruning/test_support`. The shared contract cases in
-`filesystem_snapshot/tests.rs` register for both adapters and use independent tree fixtures.
+`filesystem_snapshot/tests.rs` register for both adapters and own their counting limiter. They
+use independent tree fixtures. `filesystem_snapshot/time_zone_tests.rs` checks the executor image.
 
 `StoreCalls` is the only owner of the store. The store takes a slot of its caller's limiter
 (`RunSlots`, `max_concurrent_uploads` for the uploads and deletes) for each run of a call, and

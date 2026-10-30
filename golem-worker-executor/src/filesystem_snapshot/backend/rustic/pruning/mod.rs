@@ -23,12 +23,10 @@ pub(super) mod timing;
 
 use super::blob_backend::BlobBackend;
 use super::blob_io::SnapshotFiles;
-use super::execution::Execution;
 use super::failure_classification::is_snapshot_missing;
+use super::operation::Operation;
 use super::repository::{RepositoryKey, open_existing};
 
-use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
-use crate::filesystem_snapshot::clock::Clock;
 use crate::metrics::filesystem_snapshots::{self, PruneSkip, RemovedSource, StoredSource};
 use claim::{Claim, belongs_to_ledger, remove_old_claims};
 use eligibility::due_prune;
@@ -53,6 +51,35 @@ pub(super) struct PruneSettings {
     pub(super) keep_delete: Duration,
 }
 
+impl Default for PruneSettings {
+    fn default() -> Self {
+        Self {
+            fast_repack: true,
+            keep_delete: PRUNE_GRACE,
+        }
+    }
+}
+
+/// A delete prunes after freed bytes reach this share of the repository, rounded down.
+pub(super) const PRUNE_THRESHOLD: eligibility::Percent = eligibility::Percent(10);
+
+/// How long a marked pack stays before a later prune deletes it.
+///
+/// A save lands its snapshot and index writes before the earliest prune index read that could
+/// delete its packs. That bound is this grace period, less two storage call deadlines and one
+/// claim refresh period, after the save's first slot. A prune stops its data reads and deletes
+/// within one refresh period and two deadlines of its newest successful marker write, including
+/// when refresh writes fail or its executor stops. Later claim and ledger cleanup touches no data.
+/// This assumes clocks differ by less than the skew margin, writes and deletes land within one
+/// deadline of their call ending or never, and the host does not suspend. Restores need no bound:
+/// they reread snapshots after a pack disappears and can read packs that are only marked.
+pub(super) const PRUNE_GRACE: Duration = Duration::from_secs(15 * 60);
+
+/// The longest storage call deadline: one eighth of the prune grace period, so a save has time
+/// for its backup before the earliest index read of a prune.
+pub(super) const MAX_STORAGE_CALL_DEADLINE: Duration =
+    Duration::from_millis(PRUNE_GRACE.as_millis() as u64 / 8);
+
 /// The number of times that a prune plans again when a snapshot file that it listed is gone at
 /// its read.
 const PRUNE_ATTEMPTS: usize = 3;
@@ -60,7 +87,7 @@ const PRUNE_ATTEMPTS: usize = 3;
 /// Tells whether a later prune removes packs that this prune leaves marked: unused packs, repacked
 /// packs, packs that no index lists, and packs of an earlier prune whose grace period is not over.
 /// A marked pack is in an index after the prune, so a later prune does not count it as unindexed.
-pub(super) fn leaves_marked_packs(report: &PruneReport) -> bool {
+fn leaves_marked_packs(report: &PruneReport) -> bool {
     report.packs_unused > 0
         || report.packs_repacked > 0
         || report.packs_unindexed > 0
@@ -75,13 +102,10 @@ pub(super) enum PruneRan {
     Skipped(PruneSkip),
 }
 
-/// Dependencies of prune planning, execution and durable cleanup.
+/// The settings and due threshold of a prune.
 pub(super) struct Pruning<'a> {
-    pub(super) key: &'a RepositoryKey,
     pub(super) settings: &'a PruneSettings,
     pub(super) threshold: eligibility::Percent,
-    pub(super) low_priority: super::cpu_priority::LowPriority,
-    pub(super) clock: &'a Arc<dyn Clock>,
 }
 
 /// Prunes the repository when a prune is due, and tells whether the prune ran or why it did
@@ -101,18 +125,17 @@ pub(super) struct Pruning<'a> {
 /// outcome, also when the prune or its ledger write fails, or when the lease skips its ledger
 /// write. A prune that succeeds deletes each claim of its ledger.
 pub(super) async fn when_due(
-    execution: &Execution<'_>,
+    operation: &Operation<'_>,
     pruning: &Pruning<'_>,
-    agent: &AgentSnapshots,
     token: &CancellationToken,
 ) -> anyhow::Result<PruneRan> {
-    let files = execution.files(agent, token).once();
+    let files = operation.files(token).once();
     let policy = PrunePolicy {
         grace: pruning.settings.keep_delete,
-        deadline: execution.deadline(),
+        deadline: operation.deadline(),
         threshold: pruning.threshold,
     };
-    let due = match due_prune(&files, &**pruning.clock, &policy).await? {
+    let due = match due_prune(&files, &**operation.clock, &policy).await? {
         DueCheck::Due(due) => due,
         DueCheck::NotDue => return Ok(PruneRan::Skipped(PruneSkip::NotDue)),
         DueCheck::Held => return Ok(PruneRan::Skipped(PruneSkip::ClaimedElsewhere)),
@@ -120,17 +143,17 @@ pub(super) async fn when_due(
     // The token of the tracker comes before the check of the cancel, so either the delete sees
     // a shut down and makes no more storage calls, or `shut_down` waits for the claim and for
     // each call that the claim makes.
-    let tracked = execution.registration();
-    if execution.root().is_cancelled() {
+    let tracked = operation.registration();
+    if operation.root().is_cancelled() {
         anyhow::bail!("the filesystem snapshot store is shut down");
     }
-    let spawner = execution.spawner()?;
+    let spawner = operation.spawner()?;
     let Some(claim) = Claim::take(
         &files,
         due.claim,
         policy.grace,
         policy.deadline,
-        Arc::clone(pruning.clock),
+        Arc::clone(operation.clock),
         spawner,
         tracked,
     )
@@ -142,7 +165,7 @@ pub(super) async fn when_due(
     // When the second read of the ledger finds another time of the last prune than the first
     // read, the claim is released too, and the prune gives no error. A prune that started can
     // have marked packs, so its claim stays.
-    let backend = match prepare_prune(execution, &**pruning.clock, &files, &claim).await {
+    let backend = match prepare_prune(operation, &files, &claim).await {
         Ok(Some(backend)) => backend,
         other => {
             claim.release().await;
@@ -151,7 +174,7 @@ pub(super) async fn when_due(
     };
     // No attempt of a prune that found a snapshot file gone changed the repository, so no
     // prune ran, and the claim goes.
-    let pruned = match run_prune(execution, pruning, backend, &files, &claim).await {
+    let pruned = match run_prune(operation, pruning, backend, &files, &claim).await {
         Ok(None) => {
             claim.release().await;
             anyhow::bail!(
@@ -166,7 +189,7 @@ pub(super) async fn when_due(
     claim.finish().await;
     let report = pruned?;
     filesystem_snapshots::record_removed_bytes(RemovedSource::Prune, report.bytes_removed);
-    let ended = pruning.clock.now();
+    let ended = operation.clock.now();
     // The lease fences the ledger write as it fences the calls of rustic. A write that would
     // start after the lease ran out is not sent, and a write that starts before is bounded by
     // the time left, so the entry never lands after another delete can take the claim over.
@@ -182,19 +205,18 @@ pub(super) async fn when_due(
 /// read finds another time of the last prune than the first read. So a prune runs only with a
 /// claim in the claim directory of the ledger that the second read gives.
 async fn prepare_prune(
-    execution: &Execution<'_>,
-    clock: &dyn Clock,
+    operation: &Operation<'_>,
     files: &SnapshotFiles,
     claim: &Claim,
 ) -> anyhow::Result<Option<Arc<BlobBackend>>> {
     // A prune writes its ledger before it deletes the claims, so a delete that claims in a
     // directory that such a prune removed sees the new ledger here.
-    let again = read_ledger(files, clock).await?;
+    let again = read_ledger(files, &**operation.clock).await?;
     if !belongs_to_ledger(claim.directory(), &again) {
         return Ok(None);
     }
     Ok(Some(Arc::new(
-        execution
+        operation
             .backend(claim.leased(files))?
             .storing(StoredSource::Prune),
     )))
@@ -204,20 +226,20 @@ async fn prepare_prune(
 /// A scope without a repository gives `Some(None)`. It gives `None` when each attempt found a
 /// snapshot file gone.
 async fn run_prune(
-    execution: &Execution<'_>,
+    operation: &Operation<'_>,
     pruning: &Pruning<'_>,
     backend: Arc<BlobBackend>,
     files: &SnapshotFiles,
     claim: &Claim,
 ) -> anyhow::Result<Option<Option<PruneReport>>> {
-    let key = pruning.key.clone();
+    let key = operation.key.clone();
     let settings = *pruning.settings;
-    let low_priority = pruning.low_priority;
+    let low_priority = operation.low_priority;
     let start = claim.start();
     // The plan of a prune reads each snapshot file before the prune changes the repository.
     // A forget of another delete can remove a listed file before its read, so the prune
     // plans again from a new listing.
-    let pruning = execution.blocking(move || {
+    let pruning = operation.blocking(move || {
         low_priority.run("fs-snap-prune", move || {
             // A delete that dropped before this point released the claim, so no prune runs.
             if !start.start() {
@@ -238,7 +260,7 @@ async fn run_prune(
     // period keeps its claim. The markers stop when the prune ends or the operation is
     // cancelled. The tracker counts the whole step, so no timer of it runs after a shut down.
     let refreshing = claim.keep_fresh(files);
-    let attempts = execution
+    let attempts = operation
         .track(async {
             match future::select(pin!(pruning), pin!(refreshing)).await {
                 Either::Left((pruned, _)) => pruned,
@@ -292,7 +314,7 @@ const MAX_UNUSED: LimitOption = LimitOption::Percentage(5);
 const MAX_REPACK: LimitOption = LimitOption::Percentage(10);
 
 /// The options of a prune.
-pub(super) fn prune_options(settings: &PruneSettings) -> anyhow::Result<PruneOptions> {
+fn prune_options(settings: &PruneSettings) -> anyhow::Result<PruneOptions> {
     Ok(PruneOptions::default()
         .max_unused(MAX_UNUSED)
         .max_repack(MAX_REPACK)

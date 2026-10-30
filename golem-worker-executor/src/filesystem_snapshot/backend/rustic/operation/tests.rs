@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{BackendRun, Execution};
+use super::Operation;
 use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
+use crate::filesystem_snapshot::backend::rustic::cpu_priority::LowPriority;
+use crate::filesystem_snapshot::backend::rustic::repository::RepositoryKey;
+use crate::filesystem_snapshot::clock::{Clock, SystemClock};
 use crate::filesystem_snapshot::operation_drain::{OperationDrain, OperationLease};
 use crate::filesystem_snapshot::test_support::new_scope;
 use golem_service_base::storage::blob::BlobStorage;
@@ -33,6 +36,8 @@ struct Fixture {
     operations: OperationDrain,
     read_slots: Arc<Semaphore>,
     agent: AgentSnapshots,
+    key: RepositoryKey,
+    clock: Arc<dyn Clock>,
 }
 
 impl Fixture {
@@ -44,19 +49,24 @@ impl Fixture {
             operations: OperationDrain::default(),
             read_slots: Arc::new(Semaphore::new(1)),
             agent: new_scope(),
+            key: RepositoryKey::new([0; 64]),
+            clock: Arc::new(SystemClock),
         }
     }
 
-    fn execution<'a>(&'a self, lease: &'a OperationLease) -> Execution<'a> {
-        Execution::new(
-            &self.storage,
-            &self.root,
-            &self.tracker,
+    fn operation<'a>(&'a self, lease: &'a OperationLease) -> Operation<'a> {
+        Operation {
+            storage: &self.storage,
+            root: &self.root,
+            tracker: &self.tracker,
             lease,
-            Duration::from_secs(2),
-            1,
-            &self.read_slots,
-        )
+            key: &self.key,
+            low_priority: LowPriority::new(None),
+            clock: &self.clock,
+            deadline: Duration::from_secs(2),
+            tries: 1,
+            read_slots: &self.read_slots,
+        }
     }
 }
 
@@ -66,15 +76,22 @@ fn construction_needs_no_runtime_and_registers_no_store_task() {
         assert!(Handle::try_current().is_err());
         let fixture = Fixture::new();
         let lease = fixture.operations.begin(&fixture.agent);
-        let execution = fixture.execution(&lease);
+        let operation = fixture.operation(&lease);
 
         assert_eq!(fixture.tracker.len(), 0);
-        assert!(!execution.root().is_cancelled());
+        assert!(!operation.root().is_cancelled());
+        assert_eq!(operation.agent(), &fixture.agent);
 
-        let tracked = execution.track(std::future::pending::<()>());
+        let tracked = operation.track(std::future::pending::<()>());
         assert_eq!(fixture.tracker.len(), 1);
         drop(tracked);
         assert_eq!(fixture.tracker.len(), 0);
+
+        let other = new_scope();
+        let other_lease = fixture.operations.begin(&other);
+        let operation = fixture.operation(&other_lease);
+        assert_eq!(operation.agent(), &other);
+        assert_ne!(operation.agent(), &fixture.agent);
     })
     .join()
     .unwrap();
@@ -84,12 +101,8 @@ fn construction_needs_no_runtime_and_registers_no_store_task() {
 async fn the_backend_and_run_guard_retain_their_separate_lifetimes() {
     let fixture = Fixture::new();
     let lease = fixture.operations.begin(&fixture.agent);
-    let execution = fixture.execution(&lease);
-    let BackendRun {
-        token,
-        guard,
-        backend,
-    } = execution.begin_run(&fixture.agent).unwrap();
+    let operation = fixture.operation(&lease);
+    let (token, guard, backend) = operation.begin_run().unwrap();
 
     assert_eq!(fixture.tracker.len(), 1);
     assert!(!token.is_cancelled());

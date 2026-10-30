@@ -15,13 +15,16 @@
 //! The resources and registrations of one store operation and its runs.
 //!
 //! Construction borrows the operation lease and the store resources. It creates no tracker token
-//! and captures no runtime. Each task or backend acquires its registration when it starts.
+//! and captures no runtime. Each backend, spawned task and tracked future holds its own registration.
 
-use super::blob_backend::{BlobBackend, KEPT_PACKS_LIMIT};
+use super::blob_backend::{BlobBackend, TREE_PACK_CACHE_LIMIT};
 use super::blob_io::SnapshotFiles;
 use super::call_execution::{Ended, RunEnd};
+use super::cpu_priority::LowPriority;
+use super::repository::RepositoryKey;
 use super::tracked_tasks::{Spawner, run_blocking};
 use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
+use crate::filesystem_snapshot::clock::Clock;
 use crate::filesystem_snapshot::operation_drain::OperationLease;
 use anyhow::Context;
 use golem_service_base::storage::blob::BlobStorage;
@@ -33,46 +36,31 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
-pub(super) struct Execution<'a> {
-    storage: &'a Arc<dyn BlobStorage>,
-    root: &'a CancellationToken,
-    tracker: &'a TaskTracker,
-    lease: &'a OperationLease,
-    deadline: Duration,
-    tries: u32,
-    read_slots: &'a Arc<Semaphore>,
+pub(super) struct Operation<'a> {
+    pub(super) storage: &'a Arc<dyn BlobStorage>,
+    pub(super) root: &'a CancellationToken,
+    pub(super) tracker: &'a TaskTracker,
+    pub(super) lease: &'a OperationLease,
+    pub(super) key: &'a RepositoryKey,
+    pub(super) low_priority: LowPriority,
+    pub(super) clock: &'a Arc<dyn Clock>,
+    pub(super) deadline: Duration,
+    pub(super) tries: u32,
+    pub(super) read_slots: &'a Arc<Semaphore>,
 }
 
-/// A run's cancellation guard and backend, in their acquisition order.
-pub(super) struct BackendRun {
-    pub(super) token: CancellationToken,
-    pub(super) guard: DropGuard,
-    pub(super) backend: Arc<BlobBackend>,
-}
+/// A run's token, cancellation guard and backend, in acquisition order. Bindings in this order
+/// drop in reverse order; a retained task can own the backend for longer.
+pub(super) type BackendRun = (CancellationToken, DropGuard, Arc<BlobBackend>);
 
 fn runtime() -> anyhow::Result<Handle> {
     Handle::try_current().context("a filesystem snapshot operation needs an async runtime")
 }
 
-impl<'a> Execution<'a> {
-    pub(super) fn new(
-        storage: &'a Arc<dyn BlobStorage>,
-        root: &'a CancellationToken,
-        tracker: &'a TaskTracker,
-        lease: &'a OperationLease,
-        deadline: Duration,
-        tries: u32,
-        read_slots: &'a Arc<Semaphore>,
-    ) -> Self {
-        Self {
-            storage,
-            root,
-            tracker,
-            lease,
-            deadline,
-            tries,
-            read_slots,
-        }
+impl Operation<'_> {
+    /// The incarnation registered by this operation's lease.
+    pub(super) fn agent(&self) -> &AgentSnapshots {
+        self.lease.agent()
     }
 
     pub(super) fn root(&self) -> &CancellationToken {
@@ -94,20 +82,16 @@ impl<'a> Execution<'a> {
 
     /// Starts a run with unmodified blob handles. Save configures its own handles before opening
     /// its backend because the per-run tracker and late-write recorder must count those handles.
-    pub(super) fn begin_run(&self, agent: &AgentSnapshots) -> Result<BackendRun, Ended> {
+    pub(super) fn begin_run(&self) -> Result<BackendRun, Ended> {
         let (token, guard) = self.run_token();
         let backend = self
-            .backend(self.files(agent, &token))
+            .backend(self.files(&token))
             .map_err(|error| Ended::new(RunEnd::Permanent, error))?;
-        Ok(BackendRun {
-            token,
-            guard,
-            backend: Arc::new(backend),
-        })
+        Ok((token, guard, Arc::new(backend)))
     }
 
     pub(super) fn backend(&self, files: SnapshotFiles) -> anyhow::Result<BlobBackend> {
-        Ok(BlobBackend::new(files, runtime()?, KEPT_PACKS_LIMIT)
+        Ok(BlobBackend::new(files, runtime()?, TREE_PACK_CACHE_LIMIT)
             .tracked_by(self.tracker.token())
             .reading_under(self.read_slots.clone()))
     }
@@ -136,10 +120,10 @@ impl<'a> Execution<'a> {
         self.tracker.track_future(future)
     }
 
-    pub(super) fn files(&self, agent: &AgentSnapshots, token: &CancellationToken) -> SnapshotFiles {
+    pub(super) fn files(&self, token: &CancellationToken) -> SnapshotFiles {
         SnapshotFiles::new(
             self.storage.clone(),
-            agent.namespace().clone(),
+            self.agent().namespace().clone(),
             self.deadline,
             token.clone(),
             self.tracker.clone(),

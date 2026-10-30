@@ -14,7 +14,9 @@
 
 use super::super::test_support::{at, files_over, files_with_cancel, ledger, new_files};
 use super::*;
-use crate::filesystem_snapshot::backend::rustic::blob_backend::{BlobBackend, KEPT_PACKS_LIMIT};
+use crate::filesystem_snapshot::backend::rustic::blob_backend::{
+    BlobBackend, TREE_PACK_CACHE_LIMIT,
+};
 use crate::filesystem_snapshot::backend::rustic::failure_classification::is_lease_expired;
 use crate::filesystem_snapshot::backend::rustic::pruning::timing::claim_hold;
 use crate::filesystem_snapshot::backend::rustic::repository_layout::LEDGERS_PATH;
@@ -251,7 +253,7 @@ async fn a_refresh_that_starts_after_the_lease_ran_out_does_not_move_it_and_the_
     let backend = BlobBackend::new(
         files.leased(lease.clone()),
         tokio::runtime::Handle::current(),
-        KEPT_PACKS_LIMIT,
+        TREE_PACK_CACHE_LIMIT,
     );
     let listed = tokio::task::spawn_blocking(move || backend.list(FileType::Snapshot))
         .await

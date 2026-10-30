@@ -17,7 +17,9 @@
 use self::holding::reached_deadline;
 use self::scripted::{Script, ScriptedBlobStorage};
 use crate::filesystem_snapshot::backend::rustic::RusticSnapshotStore;
-use crate::filesystem_snapshot::backend::rustic::blob_backend::{BlobBackend, KEPT_PACKS_LIMIT};
+use crate::filesystem_snapshot::backend::rustic::blob_backend::{
+    BlobBackend, TREE_PACK_CACHE_LIMIT,
+};
 use crate::filesystem_snapshot::backend::rustic::blob_io::SnapshotFiles;
 use crate::filesystem_snapshot::backend::rustic::failure_classification::{
     BlobCallFailed, FileMissing,
@@ -27,7 +29,7 @@ use crate::filesystem_snapshot::backend::rustic::pruning::eligibility::Percent;
 use crate::filesystem_snapshot::backend::rustic::pruning::records::{PruneLedger, read_ledger};
 use crate::filesystem_snapshot::backend::rustic::publication::PublishBound;
 use crate::filesystem_snapshot::backend::rustic::repository::{RepositoryKey, open_existing};
-use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::scope_snapshots;
+use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::repository_snapshots;
 use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking;
 use crate::filesystem_snapshot::clock::SystemClock;
@@ -230,7 +232,7 @@ pub(super) fn backend_of(
             CancellationToken::new(),
         ),
         Handle::current(),
-        KEPT_PACKS_LIMIT,
+        TREE_PACK_CACHE_LIMIT,
     ))
 }
 
@@ -652,7 +654,9 @@ pub(super) async fn snapshot_files(
     let backend = backend_of(storage, scope, LONG_DEADLINE);
     tokio::task::spawn_blocking(move || {
         let repository = open_existing(backend.clone(), &key()).unwrap().unwrap();
-        scope_snapshots(&repository, &backend).unwrap().readable
+        repository_snapshots(&repository, &backend)
+            .unwrap()
+            .readable
     })
     .await
     .unwrap()

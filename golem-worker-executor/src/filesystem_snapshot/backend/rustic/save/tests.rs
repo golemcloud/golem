@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::{
-    RunLate, SaveExit, ran_at_shutdown, save_failure, save_ran, settle_may_land, whole_millis_from,
+    RunLate, SaveExit, backup_options, ran_at_shutdown, save_failure, save_ran, settle_may_land,
+    store_backup_options, whole_millis_from,
 };
 use crate::filesystem_snapshot::backend::rustic::blob_io::LateWrites;
 use crate::filesystem_snapshot::backend::rustic::call_execution::{
@@ -23,7 +24,7 @@ use crate::filesystem_snapshot::backend::rustic::failure_classification::Operati
 use crate::filesystem_snapshot::backend::rustic::pruning::PruneSettings;
 use crate::filesystem_snapshot::backend::rustic::publication::PublishBound;
 use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
-use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::scope_snapshots;
+use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::repository_snapshots;
 use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::test_support::holding::holding_storage;
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
@@ -62,6 +63,7 @@ use golem_service_base::storage::blob::{BlobNameError, BlobStorageNamespace};
 use pretty_assertions::assert_eq;
 use rustic_core::repofile::SnapshotId;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -70,6 +72,114 @@ use test_r::{test, timeout};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
+
+#[test]
+fn the_off_side_of_each_save_setting_goes_into_its_rustic_option() {
+    assert_eq!(backup_options(None).threads, None);
+}
+
+#[test]
+fn each_save_setting_goes_into_its_rustic_option() {
+    let backup = backup_options(NonZeroUsize::new(2));
+    assert_eq!(
+        (
+            backup.threads,
+            backup.parent_opts.group_by.is_some(),
+            backup.as_path
+        ),
+        (NonZeroUsize::new(2), true, Some(PathBuf::from("/")))
+    );
+}
+
+#[test]
+fn backup_options_are_strict_and_use_the_save_thread_count() {
+    let settings = StorePolicy::from_config(
+        &crate::filesystem_snapshot::backend::rustic::test_support::config(),
+    )
+    .save_settings();
+    let backup = store_backup_options(&settings, None);
+    assert_eq!(
+        (
+            backup.fail_on_read_error,
+            backup.threads.map(NonZeroUsize::get),
+            backup.as_path.as_deref().map(Path::to_path_buf)
+        ),
+        (true, Some(3), Some(Path::new("/").to_path_buf()))
+    );
+}
+
+#[test]
+fn a_size_and_mtime_save_names_its_parent_and_ignores_the_change_time_and_a_full_save_forces_a_read()
+ {
+    let settings = StorePolicy::from_config(
+        &crate::filesystem_snapshot::backend::rustic::test_support::config(),
+    )
+    .save_settings();
+    let parent = SnapshotId::default();
+    let modes = [
+        Some((parent, ChangeDetection::SizeMtime)),
+        Some((parent, ChangeDetection::Full)),
+        None,
+    ]
+    .map(|mode| {
+        let options = store_backup_options(&settings, mode).parent_opts;
+        (
+            options.parents,
+            options.ignore_ctime,
+            options.ignore_inode,
+            options.force,
+        )
+    });
+    assert_eq!(
+        modes,
+        [
+            (vec![parent.to_hex().to_string()], true, false, false),
+            (Vec::new(), false, false, true),
+            (Vec::new(), false, false, true)
+        ]
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_failed_run_whose_pack_try_was_lost_waits_for_it_and_runs_again_without_a_check_of_its_name()
+ {
+    // The first pack try loses its answer and its next try writes the pack. Each try of the first
+    // index write is refused, so the backup fails before the publish. The listing of the check
+    // of the own name would fail.
+    let deadline = Duration::from_secs(4);
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let index_writes = AtomicUsize::new(0);
+    let storage = scripted_first_pack(
+        inner.clone(),
+        Script::LandAfter(Duration::from_secs(1)),
+        move |op_label, path| match op_label {
+            "write"
+                if path.starts_with("index") && index_writes.fetch_add(1, Ordering::SeqCst) < 3 =>
+            {
+                Script::Refuse
+            }
+            "check_name" => Script::Refuse,
+            _ => Script::Pass,
+        },
+    );
+    let store = store(storage.clone(), runs_policy(deadline, 3));
+    let started = std::time::Instant::now();
+    let saved = store
+        .save(
+            &new_scope(),
+            &name("p-own-name"),
+            fixture_tree().path(),
+            None,
+            never_cancelled(),
+            &Unlimited,
+        )
+        .await;
+    let took = started.elapsed();
+    assert!(saved.is_ok(), "{saved:?}");
+    assert!(took >= deadline, "the second run started after {took:?}");
+    assert_eq!(calls_of(&storage, "check_name"), 0);
+}
 
 #[test]
 #[timeout("120s")]
@@ -387,7 +497,7 @@ async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
     let backend = backend_of(storage, &scope, LONG_DEADLINE);
     let paths = tokio::task::spawn_blocking(move || {
         let repository = open_existing(backend.clone(), &key()).unwrap().unwrap();
-        scope_snapshots(&repository, &backend)
+        repository_snapshots(&repository, &backend)
             .unwrap()
             .readable
             .iter()

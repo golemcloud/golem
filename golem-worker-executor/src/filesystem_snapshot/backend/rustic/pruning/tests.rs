@@ -17,7 +17,7 @@ use super::eligibility::Percent;
 use super::records::PruneLedger;
 use super::test_support::freed;
 use super::timing::{CLOCK_SKEW_MARGIN, claim_hold};
-use super::{PruneReport, leaves_marked_packs};
+use super::{PruneReport, leaves_marked_packs, prune_options};
 use crate::filesystem_snapshot::backend::rustic::RusticSnapshotStore;
 use crate::filesystem_snapshot::backend::rustic::failure_classification::CallFailure;
 use crate::filesystem_snapshot::backend::rustic::failure_classification::call_failure;
@@ -54,6 +54,51 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{test, timeout};
 use tokio_util::task::AbortOnDropHandle;
+
+/// Gives the length of the span in seconds.
+fn seconds(span: rustic_core::jiff::Span) -> f64 {
+    span.total(rustic_core::jiff::Unit::Second).unwrap()
+}
+
+#[test]
+fn the_off_side_of_each_prune_setting_goes_into_its_rustic_option() {
+    let prune = prune_options(&PruneSettings {
+        fast_repack: false,
+        keep_delete: Duration::from_secs(23 * 3600),
+    })
+    .unwrap();
+    assert_eq!(
+        (prune.fast_repack, seconds(prune.keep_delete)),
+        (false, 82_800.0)
+    );
+}
+
+#[test]
+fn each_prune_setting_goes_into_its_rustic_option() {
+    let prune = prune_options(&PruneSettings {
+        fast_repack: true,
+        keep_delete: Duration::ZERO,
+    })
+    .unwrap();
+    assert_eq!(
+        (
+            prune.fast_repack,
+            seconds(prune.keep_delete),
+            format!("{:?}", (prune.max_unused, prune.max_repack))
+        ),
+        (
+            true,
+            0.0,
+            format!(
+                "{:?}",
+                (
+                    rustic_core::LimitOption::Percentage(5),
+                    rustic_core::LimitOption::Percentage(10)
+                )
+            )
+        )
+    );
+}
 
 /// Makes the ledger one entry with the marked packs of `ledger` and a time before it by two hours,
 /// which is more than the grace period of each test and the margin for clock skew.

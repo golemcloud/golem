@@ -16,18 +16,16 @@ pub(super) mod destination;
 mod revalidation;
 
 use super::blob_backend::BlobBackend;
-use super::call_execution::{Ended, Ran, RunEnd};
+use super::call_execution::{Ended, Ran, RunEnd, RunResult};
 use super::cpu_priority::LowPriority;
-use super::execution::{BackendRun, Execution};
 use super::failure_classification::{
     chain, ended_by, io_error_kind, is_file_missing, is_index_missing, missing_file_path,
     rustic_storage_end,
 };
+use super::operation::Operation;
 use super::repository::{RepositoryKey, open_existing};
-use super::snapshot_catalog::{Lookup, lookup, scope_snapshots};
-use super::store_policy::store_restore_options;
+use super::snapshot_catalog::{Lookup, lookup, repository_snapshots};
 use crate::filesystem_snapshot::SnapshotInfo;
-use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::errors::RestoreFailure;
 use crate::filesystem_snapshot::snapshot_name::SnapshotName;
 #[cfg(test)]
@@ -41,15 +39,14 @@ use rustic_core::{
 };
 use std::collections::HashSet;
 use std::error::Error;
+use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::Arc;
 
 /// Dependencies of a restore's repository reads and local writes.
 pub(super) struct Restore<'a> {
-    pub(super) key: &'a RepositoryKey,
-    pub(super) policy: &'a super::store_policy::StorePolicy,
-    pub(super) low_priority: LowPriority,
+    pub(super) reader_threads: &'a NonZeroUsize,
     #[cfg(test)]
     pub(super) hook: &'a Arc<dyn ClearHook>,
 }
@@ -208,7 +205,10 @@ impl RestoreRun {
             let Some(repository) = open_existing(self.backend.clone(), &self.key)? else {
                 return Ok(Stepped::Observed(Observed::ConfigMissing));
             };
-            match lookup(scope_snapshots(&repository, &self.backend)?, &self.name) {
+            match lookup(
+                repository_snapshots(&repository, &self.backend)?,
+                &self.name,
+            ) {
                 Lookup::Missing => Ok(Stepped::Observed(Observed::Loaded(
                     revalidation::Lookup::Missing,
                 ))),
@@ -311,7 +311,10 @@ impl RestoreRun {
                 return Ok(Found::NoName);
             };
             Ok(
-                match lookup(scope_snapshots(&repository, &self.backend)?, &self.name) {
+                match lookup(
+                    repository_snapshots(&repository, &self.backend)?,
+                    &self.name,
+                ) {
                     Lookup::Found(..) => Found::Name,
                     Lookup::Missing => Found::NoName,
                     Lookup::Corrupt(error) => {
@@ -434,26 +437,18 @@ fn answer(outcome: Outcome, restoring: &mut Restoring) -> RestoreFailure {
 
 /// One run of a restore, as [`revalidation::next_step`] decides each step.
 pub(super) async fn run(
-    execution: &Execution<'_>,
+    operation: &Operation<'_>,
     restore: Restore<'_>,
-    agent: &AgentSnapshots,
     name: &SnapshotName,
     into: &Path,
-) -> Ran<Result<SnapshotInfo, RestoreFailure>> {
-    let BackendRun {
-        token: _token,
-        guard: _guard,
-        backend,
-    } = match execution.begin_run(agent) {
-        Ok(run) => run,
-        Err(ended) => return Ran::Ended(ended),
-    };
+) -> RunResult<Result<SnapshotInfo, RestoreFailure>> {
+    let (_token, _guard, backend) = operation.begin_run()?;
     let run = RestoreRun {
         backend,
-        key: restore.key.clone(),
+        key: operation.key.clone(),
         name: name.clone(),
         into: into.into(),
-        options: store_restore_options(restore.policy),
+        options: restore_options(*restore.reader_threads),
         #[cfg(test)]
         hook: Arc::clone(restore.hook),
     };
@@ -461,13 +456,22 @@ pub(super) async fn run(
     // the reader threads of a restore. The blocking thread starts the threads of that pool, so
     // they have its normal priority.
     let pool = LowPriority {
-        threads: Some(restore.policy.restore_reader_threads),
-        ..restore.low_priority
+        threads: Some(*restore.reader_threads),
+        ..operation.low_priority
     };
-    execution
+    Ok(operation
         .blocking(move || pool.in_own_pool("fs-snap-restore", move || Ok(run.run())))
         .await
-        .unwrap_or_else(|error| Ran::Ended(ended_by(error)))
+        .unwrap_or_else(|error| Ran::Ended(ended_by(error))))
+}
+
+/// A metadata error fails the restore. The restore does not set the owner, because a snapshot
+/// does not keep it.
+fn restore_options(reader_threads: NonZeroUsize) -> RestoreOptions {
+    RestoreOptions::default()
+        .reader_threads(Some(reader_threads))
+        .fail_on_metadata_error(true)
+        .no_ownership(true)
 }
 /// Tells whether a range error of the blob storage is in the chain.
 fn is_range_error(error: &(dyn Error + 'static)) -> bool {

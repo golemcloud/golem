@@ -18,8 +18,8 @@ mod blob_backend;
 mod blob_io;
 mod call_execution;
 mod cpu_priority;
-mod execution;
 mod failure_classification;
+mod operation;
 mod pruning;
 mod publication;
 mod repository;
@@ -52,8 +52,8 @@ use async_trait::async_trait;
 use blob_backend::MAX_SNAPSHOT_FILE_READS;
 use call_execution::{Answers, Kind, OwnName, Shell};
 use cpu_priority::LowPriority;
-use execution::Execution;
 use golem_service_base::storage::blob::BlobStorage;
+use operation::Operation;
 use repository::RepositoryKey;
 use restore::destination::destination_is_valid;
 #[cfg(test)]
@@ -70,7 +70,7 @@ use tokio_util::task::TaskTracker;
 /// The storage call deadlines allowed by the publish/prune bound.
 pub(in crate::filesystem_snapshot) const STORAGE_CALL_DEADLINES: std::ops::RangeInclusive<
     Duration,
-> = publication::MIN_PUBLISH_TRY..=store_policy::MAX_STORAGE_CALL_DEADLINE;
+> = publication::MIN_PUBLISH_TRY..=pruning::MAX_STORAGE_CALL_DEADLINE;
 
 /// A filesystem snapshot store that keeps one rustic repository for each scope in blob storage.
 pub(crate) struct RusticSnapshotStore {
@@ -256,25 +256,25 @@ impl RusticSnapshotStore {
         self.operations.begin(agent)
     }
 
-    fn execution<'a>(&'a self, lease: &'a OperationLease) -> Execution<'a> {
-        Execution::new(
-            &self.storage,
-            &self.root,
-            &self.tracker,
+    fn operation<'a>(&'a self, lease: &'a OperationLease) -> Operation<'a> {
+        Operation {
+            storage: &self.storage,
+            root: &self.root,
+            tracker: &self.tracker,
             lease,
-            self.policy.deadline,
-            self.policy.in_call_tries(),
-            &self.read_slots,
-        )
+            key: &self.key,
+            low_priority: self.low_priority,
+            clock: &self.clock,
+            deadline: self.policy.deadline,
+            tries: self.policy.in_call_tries(),
+            read_slots: &self.read_slots,
+        }
     }
 
     fn pruning(&self) -> pruning::Pruning<'_> {
         pruning::Pruning {
-            key: &self.key,
             settings: &self.policy.prune,
             threshold: self.policy.prune_threshold,
-            low_priority: self.low_priority,
-            clock: &self.clock,
         }
     }
 }
@@ -293,7 +293,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         // The call takes its share of the work of the incarnation first, so a later delete of all
         // snapshots waits for it.
         let lease = &self.begin_operation(agent);
-        let execution = self.execution(lease);
+        let operation = self.operation(lease);
         if self.root.is_cancelled() {
             return Err(SaveError::Stopped(Withdrawal::Stopped));
         }
@@ -301,21 +301,16 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .await
             .map_err(SaveError::Source)?;
         let parent = parent.map(|(parent, detection)| (parent.clone(), detection));
+        let settings = self.policy.save_settings();
         self.shell(Kind::Save, slots, Some(cancel))
             .save(
                 save_answers(),
                 save_own_name(),
-                |t0| self.policy.backup_end(t0),
+                |t0| settings.backup_end(t0, operation.deadline()),
                 |start| {
                     save::run(
-                        &execution,
-                        save::Save {
-                            key: &self.key,
-                            policy: &self.policy,
-                            low_priority: self.low_priority,
-                            clock: &self.clock,
-                        },
-                        agent,
+                        &operation,
+                        settings,
                         name,
                         tree,
                         parent.clone(),
@@ -323,7 +318,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
                         start.t0,
                     )
                 },
-                |own| save::own_name_check(&execution, &self.key, agent, name, own),
+                |own| save::own_name_check(&operation, name, own),
             )
             .await
     }
@@ -338,7 +333,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         // The call takes its share of the work of the incarnation first, so a later delete of all
         // snapshots waits for it.
         let lease = &self.begin_operation(agent);
-        let execution = self.execution(lease);
+        let operation = self.operation(lease);
         if self.root.is_cancelled() {
             return Err(RestoreFailure::Stopped(Withdrawal::Stopped));
         }
@@ -346,20 +341,19 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .await
             .map_err(RestoreFailure::Destination)?;
         self.shell(Kind::Restore, slots, None)
-            .call(restore_answers(), |_| {
+            .call(restore_answers(), |_| async {
                 restore::run(
-                    &execution,
+                    &operation,
                     restore::Restore {
-                        key: &self.key,
-                        policy: &self.policy,
-                        low_priority: self.low_priority,
+                        reader_threads: &self.policy.restore_reader_threads,
                         #[cfg(test)]
                         hook: &self.clear_hook,
                     },
-                    agent,
                     name,
                     into,
                 )
+                .await
+                .into()
             })
             .await
     }
@@ -373,10 +367,10 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             return Err(ReadError::Stopped);
         }
         let lease = &self.begin_operation(agent);
-        let execution = self.execution(lease);
+        let operation = self.operation(lease);
         self.shell(Kind::Stat, &Unlimited, None)
-            .call(read_answers(), |_| {
-                snapshot_catalog::stat_run(&execution, &self.key, agent, name)
+            .call(read_answers(), |_| async {
+                snapshot_catalog::stat_run(&operation, name).await.into()
             })
             .await
     }
@@ -387,10 +381,10 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         slots: &dyn RunSlots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError> {
         let lease = &self.begin_operation(agent);
-        let execution = self.execution(lease);
+        let operation = self.operation(lease);
         self.shell(Kind::List, slots, None)
-            .call(call_answers(), |_| {
-                snapshot_catalog::list_run(&execution, &self.key, agent)
+            .call(call_answers(), |_| async {
+                snapshot_catalog::list_run(&operation).await.into()
             })
             .await
     }
@@ -407,19 +401,20 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .collect::<HashSet<_>>();
         let names = &names;
         let lease = &self.begin_operation(agent);
-        let execution = self.execution(lease);
+        let operation = self.operation(lease);
         self.shell(Kind::Delete, slots, None)
-            .call(call_answers(), |_| {
+            .call(call_answers(), |_| async {
                 snapshot_deletion::delete_run(
-                    &execution,
-                    &self.key,
-                    agent,
+                    &operation,
+                    snapshot_deletion::Delete {
+                        pruning: self.pruning(),
+                        #[cfg(test)]
+                        failed_prunes: &self.failed_prunes,
+                    },
                     names,
-                    self.low_priority,
-                    self.pruning(),
-                    #[cfg(test)]
-                    &self.failed_prunes,
                 )
+                .await
+                .into()
             })
             .await
     }
@@ -436,10 +431,10 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             () = self.root.cancelled() => self.begin_operation(agent),
             lease = self.operations.drain_before(agent) => lease,
         };
-        let execution = self.execution(lease);
+        let operation = self.operation(lease);
         self.shell(Kind::DeleteAll, slots, None)
             .call(call_answers(), |_| {
-                repository_namespace::delete_all_run(&execution, agent)
+                repository_namespace::delete_all_run(&operation)
             })
             .await
     }
@@ -451,17 +446,11 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         slots: &dyn RunSlots,
     ) -> Result<(), CallError> {
         let leases = &(self.begin_operation(from), self.begin_operation(to));
-        let from_execution = self.execution(&leases.0);
-        let to_execution = self.execution(&leases.1);
+        let from_operation = self.operation(&leases.0);
+        let to_operation = self.operation(&leases.1);
         self.shell(Kind::Copy, slots, None)
             .call(call_answers(), |start| {
-                repository_namespace::copy_run(
-                    &from_execution,
-                    &to_execution,
-                    from,
-                    to,
-                    start.number > 1,
-                )
+                repository_namespace::copy_run(&from_operation, &to_operation, start.number > 1)
             })
             .await
     }

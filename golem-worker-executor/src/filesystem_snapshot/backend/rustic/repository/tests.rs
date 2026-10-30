@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{RepositoryKey, backup_options, open_existing, open_or_create, repository_options};
-use crate::filesystem_snapshot::backend::rustic::pruning::PruneSettings;
-use crate::filesystem_snapshot::backend::rustic::pruning::prune_options;
+use super::{RepositoryKey, open_existing, open_or_create, repository_options};
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
@@ -32,8 +30,7 @@ use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEAD
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use pretty_assertions::assert_eq;
-use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -155,60 +152,6 @@ fn the_key_is_the_aes_key_then_k_then_r() {
             (0..32).collect::<Vec<u8>>(),
             (32..48).collect::<Vec<u8>>(),
             (48..64).collect::<Vec<u8>>()
-        )
-    );
-}
-
-#[test]
-fn the_off_side_of_each_save_and_prune_setting_goes_into_its_rustic_option() {
-    let backup = backup_options(None);
-    let prune = prune_options(&PruneSettings {
-        fast_repack: false,
-        keep_delete: Duration::from_secs(23 * 3600),
-    })
-    .unwrap();
-
-    assert_eq!(
-        (
-            backup.threads,
-            prune.fast_repack,
-            seconds(prune.keep_delete)
-        ),
-        (None, false, 82_800.0)
-    );
-}
-
-#[test]
-fn each_setting_goes_into_its_rustic_option() {
-    let backup = backup_options(NonZeroUsize::new(2));
-    let prune = prune_options(&PruneSettings {
-        fast_repack: true,
-        keep_delete: Duration::ZERO,
-    })
-    .unwrap();
-
-    assert_eq!(
-        (
-            backup.threads,
-            backup.parent_opts.group_by.is_some(),
-            backup.as_path,
-            prune.fast_repack,
-            seconds(prune.keep_delete),
-            format!("{:?}", (prune.max_unused, prune.max_repack)),
-        ),
-        (
-            NonZeroUsize::new(2),
-            true,
-            Some(PathBuf::from("/")),
-            true,
-            0.0,
-            format!(
-                "{:?}",
-                (
-                    rustic_core::LimitOption::Percentage(5),
-                    rustic_core::LimitOption::Percentage(10)
-                )
-            ),
         )
     );
 }
@@ -451,31 +394,4 @@ async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
         ),
         "{saved:?}"
     );
-}
-
-mod time_zone {
-    //! The image of the executor must give rustic a time zone. rustic asks for the time zone of the
-    //! system for each timestamp that a save writes, and it logs a warning when it finds none.
-
-    use test_r::test;
-
-    const DOCKERFILE: &str = include_str!("../../../../../docker/Dockerfile");
-
-    #[test]
-    fn the_executor_image_sets_a_posix_utc_time_zone() {
-        let final_stage = DOCKERFILE
-            .rsplit_once("\nFROM ")
-            .map(|(_, stage)| stage)
-            .unwrap_or_default();
-
-        assert!(
-            final_stage.lines().any(|line| line.trim() == "ENV TZ=UTC0"),
-            "the final stage of the executor image does not set `ENV TZ=UTC0`:\n{final_stage}"
-        );
-    }
-}
-
-/// Gives the length of the span in seconds.
-fn seconds(span: rustic_core::jiff::Span) -> f64 {
-    span.total(rustic_core::jiff::Unit::Second).unwrap()
 }

@@ -17,10 +17,10 @@ use super::repository::open_existing;
 use super::store_policy::StorePolicy;
 use super::test_support::scripted::{Script, ScriptedBlobStorage};
 use super::test_support::{
-    ALWAYS, LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, calls_of, changed_tree, config, drop_when,
-    eventually, files_of, fixture_tree, is_stopped, key, ledger, name, one_file_tree, policy,
-    polled_until, prunes, restored_listing, runs_policy, save_each, save_numbered,
-    scripted_first_pack, store, store_over, store_with_deadline, stored_paths, written_times,
+    ALWAYS, LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, changed_tree, config, drop_when, eventually,
+    files_of, fixture_tree, is_stopped, key, ledger, name, one_file_tree, policy, polled_until,
+    prunes, restored_listing, save_each, save_numbered, store, store_with_deadline, stored_paths,
+    written_times,
 };
 use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::test_support::clock::TestClock;
@@ -604,85 +604,6 @@ async fn a_delete_dropped_in_its_prune_while_a_save_of_the_same_agent_runs_keeps
             Some(listing(new_tree.path())),
         )
     );
-}
-
-#[test]
-#[timeout("60s")]
-async fn a_shutdown_during_a_restore_gives_stopped_and_clears_nothing() {
-    let inner = Arc::new(InMemoryBlobStorage::new());
-    let saving = store_over(&inner);
-    let scope = new_scope();
-    save_each(&saving, &scope, &["p-1"]).await;
-    let storage = ScriptedBlobStorage::new(inner.clone(), |op_label, path| {
-        if op_label == "read_range" && path.starts_with("data") {
-            Script::WaitForGate
-        } else {
-            Script::Pass
-        }
-    });
-    let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 1));
-    let into = Scratch::new();
-    let restoring = AbortOnDropHandle::new(tokio::spawn({
-        let (store, scope, path) = (store.clone(), scope.clone(), into.path().to_path_buf());
-        async move { store.restore(&scope, &name("p-1"), &path, &Unlimited).await }
-    }));
-    let held = eventually(|| calls_of(&storage, "read_range") > 0).await;
-
-    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
-    let restored = tokio::time::timeout(LIMIT, restoring).await;
-    storage.open_gate();
-
-    assert!(
-        matches!(
-            restored,
-            Ok(Ok(Err(RestoreFailure::Stopped(Withdrawal::Stopped))))
-        ),
-        "{restored:?}"
-    );
-    assert_eq!((held, stopped), (true, true));
-}
-
-#[test]
-#[timeout("60s")]
-async fn a_failed_run_whose_pack_try_was_lost_waits_for_it_and_runs_again_without_a_check_of_its_name()
- {
-    // The first pack try loses its answer and its next try writes the pack. Each try of the first
-    // index write is refused, so the backup fails before the publish. The listing of the check
-    // of the own name would fail.
-    let deadline = Duration::from_secs(4);
-    let inner = Arc::new(InMemoryBlobStorage::new());
-    let index_writes = AtomicUsize::new(0);
-    let storage = scripted_first_pack(
-        inner.clone(),
-        Script::LandAfter(Duration::from_secs(1)),
-        move |op_label, path| match op_label {
-            "write"
-                if path.starts_with("index") && index_writes.fetch_add(1, Ordering::SeqCst) < 3 =>
-            {
-                Script::Refuse
-            }
-            "check_name" => Script::Refuse,
-            _ => Script::Pass,
-        },
-    );
-    let store = store(storage.clone(), runs_policy(deadline, 3));
-    let started = std::time::Instant::now();
-
-    let saved = store
-        .save(
-            &new_scope(),
-            &name("p-own-name"),
-            fixture_tree().path(),
-            None,
-            never_cancelled(),
-            &Unlimited,
-        )
-        .await;
-    let took = started.elapsed();
-
-    assert!(saved.is_ok(), "{saved:?}");
-    assert!(took >= deadline, "the second run started after {took:?}");
-    assert_eq!(calls_of(&storage, "check_name"), 0);
 }
 
 /// The resident memory of the process, in KiB, from `/proc/self/status`. Zero where the file is

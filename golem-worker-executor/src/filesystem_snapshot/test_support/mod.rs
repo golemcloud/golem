@@ -18,16 +18,13 @@ pub(crate) mod clock;
 pub(crate) mod fixture;
 
 use super::{
-    AgentSnapshots, CallError, FilesystemSnapshotStore, ReadError, RestoreFailure, RunSlots,
-    SaveError, Slot, SnapshotInfo, SnapshotName, Withdrawal,
+    AgentSnapshots, CallError, FilesystemSnapshotStore, ReadError, RestoreFailure, SaveError,
+    SnapshotInfo, SnapshotName,
 };
-use futures::FutureExt;
-use futures::future::BoxFuture;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -47,71 +44,6 @@ pub(super) fn new_scope() -> AgentSnapshots {
         ),
         golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
     )
-}
-
-/// A limiter that counts its takes and the slots that live, and keeps the most slots that lived at
-/// once. With a withdrawal, each take gives it.
-#[derive(Default)]
-pub(crate) struct CountingSlots {
-    takes: AtomicU64,
-    live: Arc<AtomicU64>,
-    most: Arc<AtomicU64>,
-    withdraw: Option<Withdrawal>,
-}
-
-impl CountingSlots {
-    /// A limiter that withdraws each take with `cause`.
-    pub(super) fn withdrawing(cause: Withdrawal) -> Self {
-        Self {
-            withdraw: Some(cause),
-            ..Self::default()
-        }
-    }
-
-    /// The takes, the slots that live now, and the most slots that lived at once.
-    pub(super) fn counts(&self) -> (u64, u64, u64) {
-        (
-            self.takes.load(Ordering::SeqCst),
-            self.live.load(Ordering::SeqCst),
-            self.most.load(Ordering::SeqCst),
-        )
-    }
-}
-
-/// A slot of a [`CountingSlots`]: it counts as live until it drops.
-struct CountedSlot(Arc<AtomicU64>);
-
-impl Drop for CountedSlot {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-impl RunSlots for CountingSlots {
-    fn take(&self, _immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
-        self.takes.fetch_add(1, Ordering::SeqCst);
-        let taken = match self.withdraw {
-            Some(cause) => Err(cause),
-            None => {
-                let live = self.live.fetch_add(1, Ordering::SeqCst) + 1;
-                self.most.fetch_max(live, Ordering::SeqCst);
-                Ok(Slot::new(CountedSlot(Arc::clone(&self.live))))
-            }
-        };
-        std::future::ready(taken).boxed()
-    }
-
-    fn withdrawn(&self) -> BoxFuture<'_, Withdrawal> {
-        match self.withdraw {
-            Some(cause) => std::future::ready(cause).boxed(),
-            None => std::future::pending().boxed(),
-        }
-    }
-}
-
-/// The limiter of a call of a case: a counting limiter that withdraws nothing.
-pub(crate) fn slots() -> CountingSlots {
-    CountingSlots::default()
 }
 
 /// The failure of an error of a call, for the tests that look at it.

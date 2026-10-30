@@ -40,7 +40,7 @@
 use super::test_support::fixture::{
     Listed, Scratch, Spec, files_and_bytes, fixture, listing, one_file, pattern, write_tree,
 };
-use super::test_support::{CountingSlots, OpenStore, new_scope, slots};
+use super::test_support::{OpenStore, new_scope};
 use super::{
     AgentSnapshots, CallError, ChangeDetection, FilesystemSnapshotStore, RestoreFailure, SaveError,
     SnapshotInfo, SnapshotName, Withdrawal, newest_first, snapshot_time,
@@ -56,6 +56,72 @@ use std::time::Duration;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::test;
 use tokio_util::task::AbortOnDropHandle;
+
+/// A limiter that counts its takes and the slots that live, and keeps the most slots that lived at
+/// once. With a withdrawal, each take gives it.
+#[derive(Default)]
+struct CountingSlots {
+    takes: AtomicU64,
+    live: Arc<AtomicU64>,
+    most: Arc<AtomicU64>,
+    withdraw: Option<Withdrawal>,
+}
+
+impl CountingSlots {
+    /// A limiter that withdraws each take with `cause`.
+    fn withdrawing(cause: Withdrawal) -> Self {
+        Self {
+            withdraw: Some(cause),
+            ..Self::default()
+        }
+    }
+
+    /// The takes, the slots that live now, and the most slots that lived at once.
+    fn counts(&self) -> (u64, u64, u64) {
+        (
+            self.takes.load(Ordering::SeqCst),
+            self.live.load(Ordering::SeqCst),
+            self.most.load(Ordering::SeqCst),
+        )
+    }
+}
+
+/// A slot of a [`CountingSlots`]: it counts as live until it drops.
+struct CountedSlot(Arc<AtomicU64>);
+
+impl Drop for CountedSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl RunSlots for CountingSlots {
+    fn take(&self, _immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
+        self.takes.fetch_add(1, Ordering::SeqCst);
+        let taken = match self.withdraw {
+            Some(cause) => Err(cause),
+            None => {
+                let live = self.live.fetch_add(1, Ordering::SeqCst) + 1;
+                self.most.fetch_max(live, Ordering::SeqCst);
+                Ok(Slot::new(CountedSlot(Arc::clone(&self.live))))
+            }
+        };
+        std::future::ready(taken).boxed()
+    }
+
+    fn withdrawn(&self) -> BoxFuture<'_, Withdrawal> {
+        match self.withdraw {
+            Some(cause) => std::future::ready(cause).boxed(),
+            None => std::future::pending().boxed(),
+        }
+    }
+}
+
+/// The limiter of a call of a case: a counting limiter that withdraws nothing.
+fn slots() -> CountingSlots {
+    CountingSlots::default()
+}
+
 type Case = fn(OpenStore) -> BoxFuture<'static, ()>;
 
 /// Each case of the contract, with its name.
