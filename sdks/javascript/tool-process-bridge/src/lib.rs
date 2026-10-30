@@ -188,8 +188,8 @@ fn prepare_command<'js>(
 fn create_input(ctx: Ctx<'_>, bytes: Option<TypedArray<'_, u8>>) -> rquickjs::Result<Input> {
     let bytes = bytes
         .map(|bytes| {
-            bytes
-                .as_bytes()
+            // SAFETY: the bytes are copied before any JavaScript runs.
+            unsafe { bytes.as_bytes() }
                 .map(Vec::from)
                 .ok_or_else(|| error(&ctx, "detached stdin buffer"))
         })
@@ -310,8 +310,8 @@ async fn write<'js>(
     input: Input,
     bytes: TypedArray<'js, u8>,
 ) -> rquickjs::Result<()> {
-    let bytes = bytes
-        .as_bytes()
+    // SAFETY: the bytes are copied before any JavaScript runs.
+    let bytes = unsafe { bytes.as_bytes() }
         .ok_or_else(|| error(&ctx, "detached stdin buffer"))?
         .to_vec();
     let writer = input

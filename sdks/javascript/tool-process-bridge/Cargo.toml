@@ -10,5 +10,13 @@ publish = false
 [dependencies]
 futures = "0.3"
 golem-rust = { path = "../../rust/golem-rust", default-features = false, features = ["macro"] }
-rquickjs = { version = "0.10.0", default-features = false, features = ["std", "futures", "bindgen", "loader", "macro"] }
+rquickjs = { version = "0.14.0", default-features = false, features = ["std", "futures", "bindgen", "loader", "macro"] }
 wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
+
+# The same rquickjs as the wasm-rquickjs component this bridge is built into; components
+# take it from their own manifest, this applies to standalone builds of the bridge.
+[patch.crates-io]
+rquickjs = { git = "https://github.com/golemcloud/rquickjs", branch = "v0.14.0-patched" }
+rquickjs-core = { git = "https://github.com/golemcloud/rquickjs", branch = "v0.14.0-patched" }
+rquickjs-macro = { git = "https://github.com/golemcloud/rquickjs", branch = "v0.14.0-patched" }
+rquickjs-sys = { git = "https://github.com/golemcloud/rquickjs", branch = "v0.14.0-patched" }
