@@ -242,11 +242,28 @@ overlapping synchronous/asynchronous calls and the ordinary Node-stream control
 through the normal SDK template. The independent SDK overflow control passes
 through its custom wrapper, which provides its separate module.
 
+In-flight crash cuts run through built-in `node` and an npm lifecycle child.
+`builtin_node_crash_during_pending_tool_output` and
+`builtin_npm_lifecycle_crash_during_pending_tool_output` hold a bound-tool call at the
+provider's `after-both-partial` checkpoint. The provider has recorded one HTTP effect and
+written partial stdout and stderr, and neither output has a terminal. The test crashes the
+owner there, waits for replay to reach the checkpoint again and releases it. It then checks
+the exact result of the original invocation, that the effect was not resent, the recorded
+oplog prefix entry by entry, settled history and a follow-up invocation. These tests use
+`builtin-tools/javascript-tools.wasm` built from the current SDK template.
+
+The ignored `builtin_node_crash_during_open_tool_stdin` and
+`builtin_npm_lifecycle_crash_during_open_tool_stdin` also hold a second call whose stdin is
+still open at the crash. Without the crash the npm case passes. With it, 4 of 9 isolated
+built-in `node` runs and 4 of 5 isolated npm runs hung after recovery: the script's last
+stdin write and end never reached the provider. Each hung run, and none of the passing runs,
+logged that runtime teardown left the pending `tool-stdin-closed::wait` without a
+completion marker.
+
 The remaining work is:
 
-- Validate crash cuts during pending attachment work and the combined npm lifecycle
-  path without relaxing history checks. Completed offline reconstruction does not
-  establish every in-flight crash window.
+- Fix the hang after a crash with an open tool stdin, then enable the two open-stdin
+  crash-cut tests with their history checks unchanged.
 - Measure registration/startup cost and representative component-size deltas.
 - Replace the draft CI Git pin with a WRQJS release containing the generic hooks,
   and align the publication toolchain pins before merging.
