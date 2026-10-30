@@ -24,11 +24,14 @@ use golem_service_base::storage::blob::BlobStorageNamespace;
 /// an earlier one. The value is opaque outside the filesystem snapshot store. Many owners hold it,
 /// so a clone shares the namespace instead of copying it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct AgentSnapshots(
-    pub(in crate::filesystem_snapshot) std::sync::Arc<BlobStorageNamespace>,
-);
+pub(crate) struct AgentSnapshots(std::sync::Arc<BlobStorageNamespace>);
 
 impl AgentSnapshots {
+    /// Gives the blob namespace shared by the snapshots of this incarnation.
+    pub(super) fn namespace(&self) -> &BlobStorageNamespace {
+        &self.0
+    }
+
     /// Gives the filesystem snapshots of the incarnation `fingerprint` of the agent.
     pub(crate) fn agent(agent: &OwnedAgentId, fingerprint: AgentFingerprint) -> Self {
         Self(std::sync::Arc::new(

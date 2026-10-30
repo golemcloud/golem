@@ -15,20 +15,24 @@
 pub(super) mod destination;
 mod revalidation;
 
-use super::RusticSnapshotStore;
 use super::blob_backend::BlobBackend;
 use super::call_execution::{Ended, Ran, RunEnd};
 use super::cpu_priority::LowPriority;
+use super::execution::{BackendRun, Execution};
 use super::failure_classification::{
-    Phase, RestoreError, ended_by, is_file_missing, is_index_missing, restore_error,
+    chain, ended_by, io_error_kind, is_file_missing, is_index_missing, missing_file_path,
+    rustic_storage_end,
 };
 use super::repository::{RepositoryKey, open_existing};
 use super::snapshot_catalog::{Lookup, lookup, scope_snapshots};
 use super::store_policy::store_restore_options;
-use crate::filesystem_snapshot::operation_drain::OperationLease;
-use crate::filesystem_snapshot::{AgentSnapshots, RestoreFailure, SnapshotInfo, SnapshotName};
+use crate::filesystem_snapshot::SnapshotInfo;
+use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
+use crate::filesystem_snapshot::errors::RestoreFailure;
+use crate::filesystem_snapshot::snapshot_name::SnapshotName;
 #[cfg(test)]
 use destination::ClearHook;
+use golem_service_base::storage::blob::BlobRangeError;
 use revalidation::{Found, Learned, Observed, Outcome, Reread, Step};
 use rustic_core::repofile::{IndexFile, IndexId, SnapshotFile};
 use rustic_core::{
@@ -36,9 +40,19 @@ use rustic_core::{
     Repository as RusticRepository, RestoreOptions,
 };
 use std::collections::HashSet;
+use std::error::Error;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::Arc;
+
+/// Dependencies of a restore's repository reads and local writes.
+pub(super) struct Restore<'a> {
+    pub(super) key: &'a RepositoryKey,
+    pub(super) policy: &'a super::store_policy::StorePolicy,
+    pub(super) low_priority: LowPriority,
+    #[cfg(test)]
+    pub(super) hook: &'a Arc<dyn ClearHook>,
+}
 
 /// The most steps of one run of a restore. A run loads at most once more for each index file that
 /// its listings give, so a run that reaches this bound found new index files at each step.
@@ -418,42 +432,127 @@ fn answer(outcome: Outcome, restoring: &mut Restoring) -> RestoreFailure {
     }
 }
 
-impl RusticSnapshotStore {
-    /// One run of a restore, as [`revalidation::next_step`] decides each step.
-    pub(super) async fn restore_run(
-        &self,
-        work: &OperationLease,
-        scope: &AgentSnapshots,
-        name: &SnapshotName,
-        into: &Path,
-    ) -> Ran<Result<SnapshotInfo, RestoreFailure>> {
-        let (token, _guard) = self.run_token();
-        let backend = match self.scope_backend(work, scope, &token) {
-            Ok(backend) => Arc::new(backend),
-            Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
-        };
-        let run = RestoreRun {
-            backend,
-            key: self.key.clone(),
-            name: name.clone(),
-            into: into.into(),
-            options: store_restore_options(&self.policy),
-            #[cfg(test)]
-            hook: self.clear_hook.clone(),
-        };
-        // The index load of a restore uses rayon, so the restore runs in a pool of its own, with
-        // the reader threads of a restore. The blocking thread starts the threads of that pool, so
-        // they have its normal priority.
-        let pool = LowPriority {
-            threads: Some(self.policy.restore_reader_threads),
-            ..self.low_priority
-        };
-        self.blocking(work, move || {
-            pool.in_own_pool("fs-snap-restore", move || Ok(run.run()))
-        })
+/// One run of a restore, as [`revalidation::next_step`] decides each step.
+pub(super) async fn run(
+    execution: &Execution<'_>,
+    restore: Restore<'_>,
+    agent: &AgentSnapshots,
+    name: &SnapshotName,
+    into: &Path,
+) -> Ran<Result<SnapshotInfo, RestoreFailure>> {
+    let BackendRun {
+        token: _token,
+        guard: _guard,
+        backend,
+    } = match execution.begin_run(agent) {
+        Ok(run) => run,
+        Err(ended) => return Ran::Ended(ended),
+    };
+    let run = RestoreRun {
+        backend,
+        key: restore.key.clone(),
+        name: name.clone(),
+        into: into.into(),
+        options: store_restore_options(restore.policy),
+        #[cfg(test)]
+        hook: Arc::clone(restore.hook),
+    };
+    // The index load of a restore uses rayon, so the restore runs in a pool of its own, with
+    // the reader threads of a restore. The blocking thread starts the threads of that pool, so
+    // they have its normal priority.
+    let pool = LowPriority {
+        threads: Some(restore.policy.restore_reader_threads),
+        ..restore.low_priority
+    };
+    execution
+        .blocking(move || pool.in_own_pool("fs-snap-restore", move || Ok(run.run())))
         .await
         .unwrap_or_else(|error| Ran::Ended(ended_by(error)))
+}
+/// Tells whether a range error of the blob storage is in the chain.
+fn is_range_error(error: &(dyn Error + 'static)) -> bool {
+    chain(error).any(|error| error.is::<BlobRangeError>())
+}
+
+/// Tells whether an error in the chain is [`super::failure_classification::FileMissing`] for a pack.
+fn is_pack_missing(error: &(dyn Error + 'static)) -> bool {
+    missing_file_path(error).is_some_and(|path| path.starts_with(FileType::Pack.dirname()))
+}
+
+/// The phase of a run of a restore in which a step failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    /// A load of the repository, a read of the snapshots or of the index.
+    Load,
+    /// The check of the index for the whole tree, which writes nothing.
+    Check,
+    /// The write of the tree into the directory.
+    Write,
+}
+
+/// What the error of a failed step of a restore is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RestoreError {
+    /// A pack, with its id when the path names one, was gone at its read.
+    PackMissing(Option<Id>),
+    /// A file that is not a pack or the config was gone at its read: an index file, a key or a
+    /// snapshot file that a prune or a delete of all snapshots removed after the listing.
+    FileMissing(Box<Path>),
+    /// The config of the repository was gone at its read.
+    ConfigMissing,
+    Cancelled,
+    /// A storage call gave a failure that no try can fix; `range` for a range error.
+    Permanent {
+        range: bool,
+    },
+    /// A storage call failed after its tries.
+    CallFailed,
+    /// The local filesystem of the directory gave this kind of I/O error.
+    Destination(std::io::ErrorKind),
+    /// The index of the check does not hold a blob of the tree.
+    CheckFailed,
+    /// The data of the repository failed an integrity check.
+    Corrupt,
+}
+
+/// Classifies the error of a failed step of a restore in `phase`. The storage decides first: a
+/// missing file, then a failed storage call. A local I/O error in the check or the write is
+/// `Destination`. Any other error is `CheckFailed` in the check, where the index misses a blob of
+/// the tree, and `Corrupt` elsewhere: it comes from data that fails its integrity check, because
+/// the store reads only data of the repository and writes only into the directory.
+fn restore_error(error: &anyhow::Error, phase: Phase) -> RestoreError {
+    let config = Path::new(super::repository_layout::CONFIG_PATH);
+    if is_pack_missing(error.as_ref()) {
+        return RestoreError::PackMissing(pack_of(error));
     }
+    match missing_file_path(error.as_ref()) {
+        Some(path) if path == config => return RestoreError::ConfigMissing,
+        Some(path) => return RestoreError::FileMissing(path.into()),
+        None => {}
+    }
+    match rustic_storage_end(error) {
+        Some(RunEnd::Cancelled) => return RestoreError::Cancelled,
+        Some(RunEnd::Permanent) => {
+            return RestoreError::Permanent {
+                range: is_range_error(error.as_ref()),
+            };
+        }
+        Some(_) => return RestoreError::CallFailed,
+        None => {}
+    }
+    match (phase, io_error_kind(error.as_ref())) {
+        (Phase::Check | Phase::Write, Some(kind)) => RestoreError::Destination(kind),
+        (Phase::Check, None) => RestoreError::CheckFailed,
+        (Phase::Load, _) | (Phase::Write, None) => RestoreError::Corrupt,
+    }
+}
+
+/// Gives the id of the pack that a [`super::failure_classification::FileMissing`] of a pack names.
+fn pack_of(error: &anyhow::Error) -> Option<Id> {
+    missing_file_path(error.as_ref())?
+        .file_name()?
+        .to_str()
+        .and_then(|name| name.parse::<Id>().ok())
 }
 
 #[cfg(test)]

@@ -20,19 +20,15 @@ use crate::filesystem_snapshot::backend::rustic::RusticSnapshotStore;
 use crate::filesystem_snapshot::backend::rustic::blob_backend::{BlobBackend, KEPT_PACKS_LIMIT};
 use crate::filesystem_snapshot::backend::rustic::blob_io::SnapshotFiles;
 use crate::filesystem_snapshot::backend::rustic::failure_classification::{
-    BlobCallFailed, CallFailure, FileMissing, call_failure,
+    BlobCallFailed, FileMissing,
 };
-use crate::filesystem_snapshot::backend::rustic::pruning::claim::{ClaimEntry, parse_claim_entry};
+use crate::filesystem_snapshot::backend::rustic::pruning::PruneSettings;
 use crate::filesystem_snapshot::backend::rustic::pruning::eligibility::Percent;
-use crate::filesystem_snapshot::backend::rustic::pruning::records::{
-    PruneLedger, parse_freed, read_ledger,
-};
-use crate::filesystem_snapshot::backend::rustic::pruning::timing::CLOCK_SKEW_MARGIN;
+use crate::filesystem_snapshot::backend::rustic::pruning::records::{PruneLedger, read_ledger};
 use crate::filesystem_snapshot::backend::rustic::publication::PublishBound;
 use crate::filesystem_snapshot::backend::rustic::repository::{RepositoryKey, open_existing};
-use crate::filesystem_snapshot::backend::rustic::repository_layout::LEDGERS_PATH;
 use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::scope_snapshots;
-use crate::filesystem_snapshot::backend::rustic::store_policy::{PruneSettings, StorePolicy};
+use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking;
 use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::test_support::fixture::{
@@ -58,7 +54,7 @@ use rustic_core::{
     ErrorKind, OpenStatus, Repository as RusticRepository, RusticError, RusticResult,
 };
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -67,9 +63,10 @@ use tokio::sync::{Semaphore, oneshot};
 use tokio::time::error::Elapsed;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-
 pub(super) mod counting;
+
 pub(super) mod holding;
+
 pub(super) mod scripted;
 
 /// The deadline of each call in the tests that hold a call.
@@ -166,7 +163,7 @@ pub(super) async fn stored_paths(
     scope: &AgentSnapshots,
 ) -> Vec<String> {
     let mut paths = storage
-        .list_blobs_below("test", "test", (*scope.0).clone(), Path::new(""))
+        .list_blobs_below("test", "test", scope.namespace().clone(), Path::new(""))
         .await
         .unwrap()
         .iter()
@@ -228,7 +225,7 @@ pub(super) fn backend_of(
     Arc::new(BlobBackend::new(
         files_of(
             storage,
-            (*scope.0).clone(),
+            scope.namespace().clone(),
             deadline,
             CancellationToken::new(),
         ),
@@ -280,92 +277,6 @@ pub(super) async fn dropped_within_limit(dropped: oneshot::Receiver<()>) -> bool
         .is_ok()
 }
 
-/// Gives the modification time of the file.
-pub(super) fn modified(path: &Path) -> std::time::SystemTime {
-    std::fs::metadata(path).unwrap().modified().unwrap()
-}
-
-/// Sets the modification time of the file.
-pub(super) fn set_modified(path: &Path, time: std::time::SystemTime) {
-    std::fs::File::options()
-        .write(true)
-        .open(path)
-        .unwrap()
-        .set_modified(time)
-        .unwrap();
-}
-
-/// Copies each file of the flat tree `from` into the new directory `to`, with its modification
-/// time. Each copy is a new inode with a new change time, as a capture gives.
-pub(super) fn copy_flat_tree(from: &Path, to: &Path) {
-    std::fs::read_dir(from).unwrap().for_each(|entry| {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        std::fs::copy(entry.path(), &target).unwrap();
-        set_modified(&target, modified(&entry.path()));
-    });
-}
-
-/// Gives the change time of the file as seconds and nanoseconds.
-#[cfg(unix)]
-pub(super) fn changed_at(path: &Path) -> (i64, i64) {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::symlink_metadata(path).unwrap();
-    (metadata.ctime(), metadata.ctime_nsec())
-}
-
-/// The longest time that [`wait_past_change_times`] waits.
-#[cfg(unix)]
-pub(super) const CHANGE_TIME_WAIT: Duration = Duration::from_secs(10);
-
-/// Waits until a file that changes now gets a later change time than each of the files.
-///
-/// The kernel takes the change time from a clock that moves in ticks of some milliseconds, so two
-/// changes within one tick get the same change time. The wait changes a probe file in its own
-/// directory until the change time of the probe is later than the latest change time of the
-/// files. It fails the test when that does not happen within [`CHANGE_TIME_WAIT`].
-#[cfg(unix)]
-pub(super) fn wait_past_change_times(files: &[PathBuf]) {
-    let latest = files.iter().map(|file| changed_at(file)).max().unwrap();
-    let probe_directory = Scratch::new();
-    let probe = probe_directory.path().join("probe");
-    let started = std::time::Instant::now();
-    let passed = std::iter::repeat_with(|| {
-        std::fs::write(&probe, b"probe").unwrap();
-        changed_at(&probe)
-    })
-    .take_while(|_| started.elapsed() < CHANGE_TIME_WAIT)
-    .find(|probe_time| *probe_time > latest);
-    assert!(
-        passed.is_some(),
-        "the change time of a new change did not pass {latest:?} within {CHANGE_TIME_WAIT:?}"
-    );
-}
-
-/// Gives the path of each entry of the directory, in the order of the names.
-pub(super) fn entries(directory: &Path) -> Vec<PathBuf> {
-    let mut paths = std::fs::read_dir(directory)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths
-}
-
-/// Writes a tree of three files into a new directory, and gives the directory.
-pub(super) fn three_file_tree() -> Scratch {
-    let tree = Scratch::new();
-    ["a.txt", "b.txt", "c.txt"]
-        .iter()
-        .for_each(|file| std::fs::write(tree.path().join(file), file.as_bytes()).unwrap());
-    tree
-}
-
-/// Gives the length of the span in seconds.
-pub(super) fn seconds(span: rustic_core::jiff::Span) -> f64 {
-    span.total(rustic_core::jiff::Unit::Second).unwrap()
-}
-
 /// A tree of the fixture with one more file whose content is `content`, so that each save of a
 /// new content changes a few blobs.
 pub(super) fn changed_tree(content: &str) -> Scratch {
@@ -397,10 +308,6 @@ pub(super) async fn save_numbered(
         })
         .await;
 }
-
-/// The id of a snapshot file that no scope holds, as the content of a record of freed bytes.
-pub(super) const GONE_SNAPSHOT: &str =
-    "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// The longest time that a test waits for an operation or for the work of a store to end.
 pub(super) const LIMIT: Duration = Duration::from_secs(10);
@@ -537,23 +444,23 @@ pub(super) async fn mark_the_packs_of_a_hidden_snapshot(
     scope: &AgentSnapshots,
     grace: Duration,
 ) -> (Vec<String>, bool) {
-    let before = blobs(&*storage, &scope.0, "snapshots/").await;
+    let before = blobs(&*storage, scope.namespace(), "snapshots/").await;
     let no_prune = store(storage.clone(), policy(LONG_DEADLINE, NEVER, grace));
     no_prune
         .delete(scope, &[name("p-1")], &Unlimited)
         .await
         .unwrap();
     no_prune.shut_down().await;
-    let hidden = blobs(&*storage, &scope.0, "snapshots/").await;
+    let hidden = blobs(&*storage, scope.namespace(), "snapshots/").await;
     assert_eq!(hidden.len() + 1, before.len());
     let hidden_path = Path::new(&hidden[0]);
     let hidden_bytes = storage
-        .get_raw("test", "test", (*scope.0).clone(), hidden_path)
+        .get_raw("test", "test", scope.namespace().clone(), hidden_path)
         .await
         .unwrap()
         .unwrap();
     storage
-        .delete("test", "test", (*scope.0).clone(), hidden_path)
+        .delete("test", "test", scope.namespace().clone(), hidden_path)
         .await
         .unwrap();
     let marking = backend_of(storage.clone(), scope, LONG_DEADLINE);
@@ -574,7 +481,7 @@ pub(super) async fn mark_the_packs_of_a_hidden_snapshot(
         .put_raw(
             "test",
             "test",
-            (*scope.0).clone(),
+            scope.namespace().clone(),
             hidden_path,
             &hidden_bytes,
         )
@@ -590,7 +497,7 @@ pub(super) async fn ledger<S: BlobStorage + 'static>(
     read_ledger(
         &files_of(
             storage.clone(),
-            (*scope.0).clone(),
+            scope.namespace().clone(),
             Duration::from_secs(2),
             CancellationToken::new(),
         ),
@@ -598,26 +505,6 @@ pub(super) async fn ledger<S: BlobStorage + 'static>(
     )
     .await
     .unwrap()
-}
-
-/// Gives the sum of the bytes in the names of the records of freed bytes of the scope.
-pub(super) async fn freed<S: BlobStorage + 'static>(
-    storage: &Arc<S>,
-    scope: &AgentSnapshots,
-) -> u64 {
-    let listed = storage
-        .list_blobs_below(
-            "test",
-            "test",
-            (*scope.0).clone(),
-            Path::new("golem/prune-freed"),
-        )
-        .await
-        .unwrap();
-    listed
-        .iter()
-        .filter_map(|blob| parse_freed(blob.path.file_name()?.to_str()?))
-        .fold(0, u64::saturating_add)
 }
 
 /// Waits until the condition holds, or until [`LIMIT`] ends. Gives whether the condition holds.
@@ -648,103 +535,6 @@ pub(super) fn is_stopped<E: FailureOf>(error: &E) -> bool {
     error.stopped()
 }
 
-/// Counts the listings of the packs among the recorded calls.
-pub(super) fn data_listings(calls: &[(&'static str, String)]) -> usize {
-    calls
-        .iter()
-        .filter(|(op_label, _)| *op_label == "list_data")
-        .count()
-}
-
-/// Makes the ledger one entry with no marked packs and a last prune at the time, and writes a
-/// record of one freed byte.
-pub(super) async fn set_last_prune<S: BlobStorage + 'static>(
-    storage: &Arc<S>,
-    scope: &AgentSnapshots,
-    last_prune: golem_common::model::Timestamp,
-) {
-    storage
-        .put_raw(
-            "test",
-            "test",
-            (*scope.0).clone(),
-            Path::new("golem/prune-freed/1-test"),
-            GONE_SNAPSHOT.as_bytes(),
-        )
-        .await
-        .unwrap();
-    storage
-        .delete_dir("test", "test", (*scope.0).clone(), Path::new(LEDGERS_PATH))
-        .await
-        .unwrap();
-    put_ledger_entry(
-        storage,
-        scope,
-        &format!("{}-0-test", last_prune.to_millis()),
-    )
-    .await;
-}
-
-/// Makes the ledger one entry with the marked packs of `ledger` and a time before it by two hours,
-/// which is more than the grace period of each test and the margin for clock skew.
-pub(super) async fn age_ledger<S: BlobStorage + 'static>(
-    storage: &Arc<S>,
-    scope: &AgentSnapshots,
-    ledger: &PruneLedger,
-) {
-    let back = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap() + 2 * 3_600_000;
-    let aged = ledger
-        .last_prune
-        .map_or(0, |last| last.to_millis().saturating_sub(back));
-    storage
-        .delete_dir("test", "test", (*scope.0).clone(), Path::new(LEDGERS_PATH))
-        .await
-        .unwrap();
-    put_ledger_entry(
-        storage,
-        scope,
-        &format!("{aged}-{}-aged", u8::from(ledger.awaiting_removal)),
-    )
-    .await;
-}
-
-/// Writes a ledger entry with the name.
-pub(super) async fn put_ledger_entry<S: BlobStorage + 'static>(
-    storage: &Arc<S>,
-    scope: &AgentSnapshots,
-    name: &str,
-) {
-    storage
-        .put_raw(
-            "test",
-            "test",
-            (*scope.0).clone(),
-            &Path::new(LEDGERS_PATH).join(name),
-            b"",
-        )
-        .await
-        .unwrap();
-}
-
-/// Counts the listings of the snapshot files of a repository in `calls`.
-pub(super) fn snapshot_listings(calls: &[(&'static str, String)]) -> usize {
-    calls
-        .iter()
-        .filter(|(op_label, path)| *op_label == "list" && path.starts_with("snapshots"))
-        .count()
-}
-
-/// Counts the prunes among the recorded calls. A prune lists the packs, and no other step of a
-/// delete makes that call.
-/// How each prune of the store that failed since the last take failed.
-pub(super) fn failed_prunes(store: &RusticSnapshotStore) -> Vec<CallFailure> {
-    store
-        .take_failed_prunes()
-        .iter()
-        .map(call_failure)
-        .collect()
-}
-
 pub(super) fn prunes(calls: &[(&'static str, String)]) -> usize {
     calls
         .iter()
@@ -772,71 +562,6 @@ pub(super) async fn save_each(store: &RusticSnapshotStore, scope: &AgentSnapshot
         .await;
 }
 
-/// Moves each marker of the claims of the scope back by two hours and the margin, so no marker
-/// holds its ledger.
-pub(super) async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) {
-    let stale = golem_common::model::Timestamp::now_utc()
-        .to_millis()
-        .saturating_sub(2 * 3_600_000 + 2 * 60_000);
-    let markers = storage
-        .list_blobs_below(
-            "test",
-            "test",
-            (*scope.0).clone(),
-            Path::new("golem/prune-claims"),
-        )
-        .await
-        .unwrap()
-        .iter()
-        .filter_map(|blob| {
-            let entry = parse_claim_entry(blob.path.file_name()?.to_str()?)?;
-            match entry {
-                ClaimEntry::Marker(number, _) => Some((blob.path.clone(), number)),
-                ClaimEntry::Claim(_) => None,
-            }
-        })
-        .collect::<Vec<_>>();
-    futures::stream::iter(markers)
-        .for_each(|(path, number)| {
-            let (storage, scope) = (storage.clone(), scope.clone());
-            async move {
-                storage
-                    .delete("test", "test", (*scope.0).clone(), &path)
-                    .await
-                    .unwrap();
-                let aged = path
-                    .parent()
-                    .unwrap_or(Path::new(""))
-                    .join(format!("{number}@{stale}-aged"));
-                storage
-                    .put_raw("test", "test", (*scope.0).clone(), &aged, b"")
-                    .await
-                    .unwrap();
-            }
-        })
-        .await;
-}
-
-/// Tells whether the operation label is a call of a rustic backend.
-pub(super) fn is_backend_call(op_label: &str) -> bool {
-    matches!(
-        op_label,
-        "stat" | "list" | "read" | "read_range" | "write" | "delete"
-    )
-}
-
-/// Gives the entries of the claims of the scope.
-pub(super) async fn claim_entries(
-    storage: &ScriptedBlobStorage,
-    scope: &AgentSnapshots,
-) -> Vec<ClaimEntry> {
-    blobs(storage, &scope.0, "golem/prune-claims/")
-        .await
-        .iter()
-        .filter_map(|path| parse_claim_entry(Path::new(path).file_name()?.to_str()?))
-        .collect()
-}
-
 /// Gives the time in the name of each blob that the calls with the operation label wrote. The time
 /// is the number before the first `-` of the name, after the `@` of a marker.
 pub(super) fn written_times(calls: &[(&'static str, String)], op_label: &str) -> Box<[u64]> {
@@ -849,20 +574,6 @@ pub(super) fn written_times(calls: &[(&'static str, String)], op_label: &str) ->
             time.split('-').next()?.parse().ok()
         })
         .collect()
-}
-
-/// Gives the path of each record of freed bytes of the scope.
-pub(super) async fn records(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
-    blobs(storage, &scope.0, "golem/prune-freed/").await
-}
-
-/// Gives the number of markers of the claims of the scope.
-pub(super) async fn markers(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> usize {
-    claim_entries(storage, scope)
-        .await
-        .iter()
-        .filter(|entry| matches!(entry, ClaimEntry::Marker(..)))
-        .count()
 }
 
 /// A store over the shared storage whose index reads wait at the gate while `hold` is set, and the
@@ -945,83 +656,6 @@ pub(super) async fn snapshot_files(
     })
     .await
     .unwrap()
-}
-
-/// The operation label, the path, and the name and the nice value of the calling thread of each
-/// storage call.
-#[cfg(target_os = "linux")]
-pub(super) type NiceCalls = Arc<std::sync::Mutex<Vec<(String, String, String, i32)>>>;
-
-/// A storage that records the nice value of the thread of each call.
-#[cfg(target_os = "linux")]
-pub(super) fn nice_recording_storage() -> (Arc<ScriptedBlobStorage>, NiceCalls) {
-    let calls = NiceCalls::default();
-    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
-        let calls = calls.clone();
-        move |op_label, path| {
-            calls
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((
-                    op_label.to_string(),
-                    path.display().to_string(),
-                    std::thread::current()
-                        .name()
-                        .unwrap_or_default()
-                        .to_string(),
-                    crate::filesystem_snapshot::backend::rustic::cpu_priority::own_nice(),
-                ));
-            Script::Pass
-        }
-    });
-    (storage, calls)
-}
-
-/// Takes the recorded calls as the operation label, the path and the nice value.
-#[cfg(target_os = "linux")]
-pub(super) fn taken_calls(calls: &NiceCalls) -> Vec<(String, String, i32)> {
-    std::mem::take(
-        &mut *calls
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    )
-    .into_iter()
-    .map(|(op_label, path, _, nice)| (op_label, path, nice))
-    .collect()
-}
-
-/// Takes the recorded calls with the operation label and a path below the directory, as the path
-/// and the name of the thread of each call.
-#[cfg(target_os = "linux")]
-pub(super) fn taken_threads(
-    calls: &NiceCalls,
-    op_label: &str,
-    directory: &str,
-) -> Vec<(String, String)> {
-    std::mem::take(
-        &mut *calls
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    )
-    .into_iter()
-    .filter(|(op, path, _, _)| op == op_label && path.starts_with(directory))
-    .map(|(_, path, thread, _)| (path, thread))
-    .collect()
-}
-
-/// Gives the operation labels of the calls, and each call that does not run at nice 19.
-#[cfg(target_os = "linux")]
-pub(super) fn labels_and_calls_not_at_nice_19(
-    calls: &[(String, String, i32)],
-) -> (Vec<&str>, Vec<&(String, String, i32)>) {
-    let mut labels = calls
-        .iter()
-        .map(|(op_label, _, _)| op_label.as_str())
-        .collect::<Vec<_>>();
-    labels.sort_unstable();
-    labels.dedup();
-    let not_at_nice_19 = calls.iter().filter(|(_, _, nice)| *nice != 19).collect();
-    (labels, not_at_nice_19)
 }
 
 /// The runs of the tests of this module: three runs, with short waits.
@@ -1162,21 +796,6 @@ pub(super) fn calls_of(storage: &ScriptedBlobStorage, label: &str) -> usize {
         .count()
 }
 
-/// A storage over `inner` whose publish tries follow `script(n)` for the `n`-th try, counted from
-/// 1, and whose other calls pass.
-pub(super) fn scripted_publish(
-    inner: Arc<InMemoryBlobStorage>,
-    script: impl Fn(usize) -> Script + Send + Sync + 'static,
-) -> Arc<ScriptedBlobStorage> {
-    ScriptedBlobStorage::with_state(inner, 0usize, move |tries, op_label, _| {
-        if op_label == "publish" {
-            (script(tries + 1), tries + 1)
-        } else {
-            (Script::Pass, *tries)
-        }
-    })
-}
-
 /// A store over `inner` with the policy of the tests, which passes each call.
 pub(super) fn store_over(inner: &Arc<InMemoryBlobStorage>) -> Arc<RusticSnapshotStore> {
     store(inner.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO))
@@ -1198,15 +817,7 @@ pub(super) fn scripted_first_pack(
     })
 }
 
-/// Whether the storage saw a write of a pack.
-pub(super) fn wrote_a_pack(storage: &ScriptedBlobStorage) -> bool {
-    storage
-        .calls()
-        .iter()
-        .any(|(op_label, path)| *op_label == "write" && path.starts_with("data"))
-}
-
-/// Gives a mapping_rustic error whose source is the error, as mapping_rustic gives it to the store.
+/// Gives a rustic error whose source is the error, as rustic gives it to the store.
 pub(super) fn mapping_rustic(
     source: impl std::error::Error + Send + Sync + 'static,
 ) -> anyhow::Error {
@@ -1217,7 +828,7 @@ pub(super) fn mapping_rustic(
     ))
 }
 
-/// A blob call that failed with `failure`, as the backend gives it to mapping_rustic.
+/// A blob call that failed with `failure`, as the backend gives it to rustic.
 pub(super) fn mapping_failed_call(failure: anyhow::Error) -> anyhow::Error {
     mapping_rustic(BlobCallFailed::new(failure))
 }

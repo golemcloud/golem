@@ -25,7 +25,6 @@ use golem_service_base::storage::blob::{
     BlobFailure, BlobMissingError, BlobNameError, BlobRangeError,
 };
 use rustic_core::FileType;
-use rustic_core::Id;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
@@ -241,11 +240,6 @@ pub(super) fn rustic_storage_end(error: &anyhow::Error) -> Option<RunEnd> {
     })
 }
 
-/// Tells whether a range error of the blob storage is in the chain.
-fn is_range_error(error: &(dyn Error + 'static)) -> bool {
-    chain(error).any(|error| error.is::<BlobRangeError>())
-}
-
 /// Gives the path of the first [`FileMissing`] in the chain.
 pub(super) fn missing_file_path<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a Path> {
     chain(error).find_map(|error| {
@@ -253,11 +247,6 @@ pub(super) fn missing_file_path<'a>(error: &'a (dyn Error + 'static)) -> Option<
             .downcast_ref::<FileMissing>()
             .map(|missing| &*missing.path)
     })
-}
-
-/// Tells whether an error in the chain is [`FileMissing`] for a pack.
-fn is_pack_missing(error: &(dyn Error + 'static)) -> bool {
-    missing_file_path(error).is_some_and(|path| path.starts_with(FileType::Pack.dirname()))
 }
 
 /// The text with which rustic begins an error of the kind `InputOutput`.
@@ -269,7 +258,7 @@ const RUSTIC_LOCAL_IO: &str =
 /// the text of its cause, as `Os { code: N, .. }`. Such an error gives the kind of the code, or
 /// `Other` when its text has no code. An error of a blob call is not a local I/O error, so the
 /// caller reads the storage first.
-fn io_error_kind(error: &(dyn Error + 'static)) -> Option<std::io::ErrorKind> {
+pub(super) fn io_error_kind(error: &(dyn Error + 'static)) -> Option<std::io::ErrorKind> {
     chain(error)
         .find_map(|error| error.downcast_ref::<std::io::Error>())
         .map(std::io::Error::kind)
@@ -292,109 +281,10 @@ fn io_error_kind(error: &(dyn Error + 'static)) -> Option<std::io::ErrorKind> {
         })
 }
 
-/// The phase of a run of a restore in which a step failed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Phase {
-    /// A load of the repository, a read of the snapshots or of the index.
-    Load,
-    /// The check of the index for the whole tree, which writes nothing.
-    Check,
-    /// The write of the tree into the directory.
-    Write,
-}
-
-/// What the error of a failed step of a restore is.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum RestoreError {
-    /// A pack, with its id when the path names one, was gone at its read.
-    PackMissing(Option<Id>),
-    /// A file that is not a pack or the config was gone at its read: an index file, a key or a
-    /// snapshot file that a prune or a delete of all snapshots removed after the listing.
-    FileMissing(Box<Path>),
-    /// The config of the repository was gone at its read.
-    ConfigMissing,
-    Cancelled,
-    /// A storage call gave a failure that no try can fix; `range` for a range error.
-    Permanent {
-        range: bool,
-    },
-    /// A storage call failed after its tries.
-    CallFailed,
-    /// The local filesystem of the directory gave this kind of I/O error.
-    Destination(std::io::ErrorKind),
-    /// The index of the check does not hold a blob of the tree.
-    CheckFailed,
-    /// The data of the repository failed an integrity check.
-    Corrupt,
-}
-
-/// Classifies the error of a failed step of a restore in `phase`. The storage decides first: a
-/// missing file, then a failed storage call. A local I/O error in the check or the write is
-/// `Destination`. Any other error is `CheckFailed` in the check, where the index misses a blob of
-/// the tree, and `Corrupt` elsewhere: it comes from data that fails its integrity check, because
-/// the store reads only data of the repository and writes only into the directory.
-pub(super) fn restore_error(error: &anyhow::Error, phase: Phase) -> RestoreError {
-    let config = Path::new(super::repository_layout::CONFIG_PATH);
-    if is_pack_missing(error.as_ref()) {
-        return RestoreError::PackMissing(pack_of(error));
-    }
-    match missing_file_path(error.as_ref()) {
-        Some(path) if path == config => return RestoreError::ConfigMissing,
-        Some(path) => return RestoreError::FileMissing(path.into()),
-        None => {}
-    }
-    match rustic_storage_end(error) {
-        Some(RunEnd::Cancelled) => return RestoreError::Cancelled,
-        Some(RunEnd::Permanent) => {
-            return RestoreError::Permanent {
-                range: is_range_error(error.as_ref()),
-            };
-        }
-        Some(_) => return RestoreError::CallFailed,
-        None => {}
-    }
-    match (phase, io_error_kind(error.as_ref())) {
-        (Phase::Check | Phase::Write, Some(kind)) => RestoreError::Destination(kind),
-        (Phase::Check, None) => RestoreError::CheckFailed,
-        (Phase::Load, _) | (Phase::Write, None) => RestoreError::Corrupt,
-    }
-}
-
-/// Gives the id of the pack that a [`FileMissing`] of a pack names.
-fn pack_of(error: &anyhow::Error) -> Option<Id> {
-    missing_file_path(error.as_ref())?
-        .file_name()?
-        .to_str()
-        .and_then(|name| name.parse::<Id>().ok())
-}
-
-/// What the error of a failed backup of a save is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SaveFault {
-    /// The run ends this way.
-    Ended(RunEnd),
-    /// The local filesystem of the tree gave this kind of I/O error.
-    Source(std::io::ErrorKind),
-}
-
-/// Classifies the error of a failed backup of a save. The storage decides first: a failed storage
-/// call, then an index file that was gone at its read, which a new run can find again. A local I/O
-/// error is `Source`. Any other error is permanent.
-pub(super) fn save_fault(error: &anyhow::Error) -> SaveFault {
-    if let Some(end) = rustic_storage_end(error) {
-        return SaveFault::Ended(end);
-    }
-    if is_index_missing(error.as_ref()) {
-        return SaveFault::Ended(RunEnd::CallFailed);
-    }
-    match io_error_kind(error.as_ref()) {
-        Some(kind) => SaveFault::Source(kind),
-        None => SaveFault::Ended(RunEnd::Permanent),
-    }
-}
-
 /// Gives the error and each error in its chain of sources.
-fn chain<'a>(error: &'a (dyn Error + 'static)) -> impl Iterator<Item = &'a (dyn Error + 'static)> {
+pub(super) fn chain<'a>(
+    error: &'a (dyn Error + 'static),
+) -> impl Iterator<Item = &'a (dyn Error + 'static)> {
     std::iter::successors(Some(error), |&error| error.source())
 }
 

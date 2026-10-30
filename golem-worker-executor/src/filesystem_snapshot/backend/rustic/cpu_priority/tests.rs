@@ -14,20 +14,19 @@
 
 use crate::filesystem_snapshot::backend::rustic::RusticSnapshotStore;
 #[cfg(target_os = "linux")]
-use crate::filesystem_snapshot::backend::rustic::test_support::labels_and_calls_not_at_nice_19;
 use crate::filesystem_snapshot::backend::rustic::test_support::name;
 #[cfg(target_os = "linux")]
-use crate::filesystem_snapshot::backend::rustic::test_support::nice_recording_storage;
-#[cfg(target_os = "linux")]
-use crate::filesystem_snapshot::backend::rustic::test_support::taken_calls;
-#[cfg(target_os = "linux")]
-use crate::filesystem_snapshot::backend::rustic::test_support::taken_threads;
+use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
+    Script, ScriptedBlobStorage,
+};
 use crate::filesystem_snapshot::backend::rustic::test_support::{
     ALWAYS, LONG_DEADLINE, NEVER, config, fixture_tree,
 };
+
 use crate::filesystem_snapshot::backend::rustic::test_support::{
     one_file_tree, policy, restored_listing, save_each, store,
 };
+
 use crate::filesystem_snapshot::test_support::fixture::{Scratch, Spec, listing, write_tree};
 use crate::filesystem_snapshot::test_support::{never_cancelled, new_scope};
 use crate::filesystem_snapshot::{ChangeDetection, FilesystemSnapshotStore, Unlimited};
@@ -587,4 +586,77 @@ mod value_rules {
 
         assert_eq!(lowered.ok(), Some((Ok(()), LOW_PRIORITY)));
     }
+}
+
+/// The operation label, the path, and the name and the nice value of the calling thread of each
+/// storage call.
+#[cfg(target_os = "linux")]
+type NiceCalls = Arc<std::sync::Mutex<Vec<(String, String, String, i32)>>>;
+
+/// A storage that records the nice value of the thread of each call.
+#[cfg(target_os = "linux")]
+fn nice_recording_storage() -> (Arc<ScriptedBlobStorage>, NiceCalls) {
+    let calls = NiceCalls::default();
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let calls = calls.clone();
+        move |op_label, path| {
+            calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((
+                    op_label.to_string(),
+                    path.display().to_string(),
+                    std::thread::current()
+                        .name()
+                        .unwrap_or_default()
+                        .to_string(),
+                    crate::filesystem_snapshot::backend::rustic::cpu_priority::own_nice(),
+                ));
+            Script::Pass
+        }
+    });
+    (storage, calls)
+}
+
+/// Takes the recorded calls as the operation label, the path and the nice value.
+#[cfg(target_os = "linux")]
+fn taken_calls(calls: &NiceCalls) -> Vec<(String, String, i32)> {
+    std::mem::take(
+        &mut *calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+    .into_iter()
+    .map(|(op_label, path, _, nice)| (op_label, path, nice))
+    .collect()
+}
+
+/// Takes the recorded calls with the operation label and a path below the directory, as the path
+/// and the name of the thread of each call.
+#[cfg(target_os = "linux")]
+fn taken_threads(calls: &NiceCalls, op_label: &str, directory: &str) -> Vec<(String, String)> {
+    std::mem::take(
+        &mut *calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+    .into_iter()
+    .filter(|(op, path, _, _)| op == op_label && path.starts_with(directory))
+    .map(|(_, path, thread, _)| (path, thread))
+    .collect()
+}
+
+/// Gives the operation labels of the calls, and each call that does not run at nice 19.
+#[cfg(target_os = "linux")]
+fn labels_and_calls_not_at_nice_19(
+    calls: &[(String, String, i32)],
+) -> (Vec<&str>, Vec<&(String, String, i32)>) {
+    let mut labels = calls
+        .iter()
+        .map(|(op_label, _, _)| op_label.as_str())
+        .collect::<Vec<_>>();
+    labels.sort_unstable();
+    labels.dedup();
+    let not_at_nice_19 = calls.iter().filter(|(_, _, nice)| *nice != 19).collect();
+    (labels, not_at_nice_19)
 }

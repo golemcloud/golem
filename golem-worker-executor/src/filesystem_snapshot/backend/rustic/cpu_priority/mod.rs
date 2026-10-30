@@ -56,10 +56,10 @@ impl LowPriority {
     pub(super) fn run<T: Send + 'static>(
         self,
         name: &'static str,
-        work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+        task: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     ) -> anyhow::Result<T> {
         // The work waits in a slot, so the calling thread can still run it when no thread starts.
-        let slot = Arc::new(Mutex::new(Some(work)));
+        let slot = Arc::new(Mutex::new(Some(task)));
         let spawned = std::thread::Builder::new().name(name.to_string()).spawn({
             let slot = slot.clone();
             move || {
@@ -95,16 +95,16 @@ impl LowPriority {
     pub(super) fn in_own_pool<T: Send>(
         self,
         name: &'static str,
-        work: impl FnOnce() -> anyhow::Result<T> + Send,
+        task: impl FnOnce() -> anyhow::Result<T> + Send,
     ) -> anyhow::Result<T> {
         match (self.build_pool)(name, self.threads) {
-            Ok(pool) => pool.install(work),
+            Ok(pool) => pool.install(task),
             Err(error) => {
                 warn!(
                     error = %error,
                     "Failed to build the thread pool of filesystem snapshot work, so its parallel parts use the global pool"
                 );
-                work()
+                task()
             }
         }
     }
@@ -112,10 +112,10 @@ impl LowPriority {
 
 /// Takes the work out of the slot and runs it.
 fn run_taken<T, W: FnOnce() -> anyhow::Result<T>>(slot: &Mutex<Option<W>>) -> anyhow::Result<T> {
-    let work = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
-    work.map_or_else(
+    let task = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+    task.map_or_else(
         || Err(anyhow::anyhow!("the work already ran")),
-        |work| work(),
+        |task| task(),
     )
 }
 

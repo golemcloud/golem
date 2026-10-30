@@ -15,10 +15,8 @@
 //! The runtime and the tracker of the work that the store runs as a task, so that the work also
 //! ends when its caller stops waiting.
 
-use super::RusticSnapshotStore;
 use crate::blocking::BlockingTask;
 use crate::filesystem_snapshot::operation_drain::OperationLease;
-use std::path::Path;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
@@ -37,12 +35,12 @@ pub(super) struct Spawner {
 
 impl Spawner {
     /// Runs the work as a task that the tracker and the work of the incarnation count.
-    pub(super) fn spawn(&self, work: impl Future<Output = ()> + Send + 'static) -> JoinHandle<()> {
+    pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) -> JoinHandle<()> {
         let operation = self.operation.clone();
         self.tracker.spawn_on(
             async move {
                 let _operation = operation;
-                work.await
+                task.await
             },
             &self.runtime,
         )
@@ -55,27 +53,3 @@ pub(super) async fn run_blocking<R: Send + 'static>(
 ) -> anyhow::Result<R> {
     BlockingTask::Spawn.run(task).await?
 }
-
-impl RusticSnapshotStore {
-    /// Runs the check of a local path on a blocking thread. A thread that fails gives the error of
-    /// the path. The tracker counts the check until it ends, so `shut_down` waits for it, also when
-    /// the operation drops first.
-    pub(super) async fn check_path(
-        &self,
-        path: &Path,
-        check: impl FnOnce(&Path) -> std::io::Result<()> + Send + 'static,
-    ) -> std::io::Result<()> {
-        let path: Box<Path> = path.into();
-        let tracked = self.tracker.token();
-        BlockingTask::Spawn
-            .run(move || {
-                let _tracked = tracked;
-                check(&path)
-            })
-            .await
-            .map_err(std::io::Error::other)?
-    }
-}
-
-#[cfg(test)]
-mod tests;

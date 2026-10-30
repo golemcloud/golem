@@ -12,54 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::test_support::{at, ledger, new_files};
 use super::super::timing::CLOCK_SKEW_MARGIN;
 use super::*;
-use crate::filesystem_snapshot::backend::rustic::test_support::files_of;
 use crate::filesystem_snapshot::clock::SystemClock;
-use golem_common::model::environment::EnvironmentId;
-use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use pretty_assertions::assert_eq;
-use std::sync::Arc;
-use std::time::Duration;
 use test_r::{test, timeout};
-use uuid::Uuid;
-
-fn at(millis: u64) -> Timestamp {
-    Timestamp::from(millis)
-}
-
-fn ledger(last_prune_millis: Option<u64>, awaiting_removal: bool) -> PruneLedger {
-    PruneLedger {
-        last_prune: last_prune_millis.map(Timestamp::from),
-        awaiting_removal,
-    }
-}
-
-fn new_files() -> SnapshotFiles {
-    files_over(Arc::new(InMemoryBlobStorage::new()))
-}
-
-fn files_over(storage: Arc<dyn BlobStorage>) -> SnapshotFiles {
-    files_with_cancel(storage, tokio_util::sync::CancellationToken::new())
-}
-
-fn files_with_cancel(
-    storage: Arc<dyn BlobStorage>,
-    cancel: tokio_util::sync::CancellationToken,
-) -> SnapshotFiles {
-    files_of(
-        storage,
-        BlobStorageNamespace::InitialAgentFiles {
-            environment_id: EnvironmentId(Uuid::new_v4()),
-        },
-        DEADLINE,
-        cancel,
-    )
-}
-
-const DEADLINE: Duration = Duration::from_secs(2);
-
 #[test]
 fn a_ledger_entry_name_gives_the_end_time_and_the_marked_packs() {
     assert_eq!(

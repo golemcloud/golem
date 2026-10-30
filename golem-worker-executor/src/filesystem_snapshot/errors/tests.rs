@@ -50,8 +50,7 @@ fn a_name_and_the_errors_say_what_they_hold() {
     );
 }
 
-/// The old error of every method, `SnapshotStoreError`, had 16 bytes. Each error of the
-/// methods stays at that size.
+/// Each error of a store method fits within 16 bytes.
 #[test]
 fn each_error_of_the_store_has_at_most_16_bytes() {
     assert_eq!(

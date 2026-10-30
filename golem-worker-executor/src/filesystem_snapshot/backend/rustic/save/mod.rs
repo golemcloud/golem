@@ -12,24 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::RusticSnapshotStore;
 use super::blob_backend::BlobBackend;
 use super::blob_io::{LateWrites, lands_by, later};
 use super::call_execution::{
     Checked, Ended, LateWrite, OwnFile, Ran, RunEnd, Settle, Settled, answered_after,
 };
-use super::failure_classification::{SaveFault, is_index_missing, missing_file_path, save_fault};
+use super::execution::Execution;
+use super::failure_classification::{
+    io_error_kind, is_index_missing, missing_file_path, rustic_storage_end,
+};
 use super::publication::{Published, SnapshotStage, StagedSnapshot, publish};
 use super::repository::{RepositoryKey, open_existing, open_or_create};
 use super::snapshot_catalog::{
     has_name, named, scope_snapshots, scope_snapshots_except, snapshot_info,
 };
 use super::store_policy::{StorePolicy, store_backup_options};
+use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::clock::Clock;
-use crate::filesystem_snapshot::operation_drain::OperationLease;
-use crate::filesystem_snapshot::{
-    AgentSnapshots, ChangeDetection, SaveError, SnapshotInfo, SnapshotName, snapshot_time,
-};
+use crate::filesystem_snapshot::errors::SaveError;
+use crate::filesystem_snapshot::snapshot_name::SnapshotName;
+use crate::filesystem_snapshot::{ChangeDetection, SnapshotInfo, snapshot_time};
 use crate::metrics::filesystem_snapshots::StoredSource;
 use anyhow::Context;
 use golem_common::model::Timestamp;
@@ -48,6 +50,15 @@ use tokio_util::task::TaskTracker;
 use tracing::warn;
 
 pub(super) mod source_tree;
+
+/// Dependencies of a save's backup and publication.
+pub(super) struct Save<'a> {
+    pub(super) key: &'a RepositoryKey,
+    pub(super) policy: &'a StorePolicy,
+    pub(super) low_priority: super::cpu_priority::LowPriority,
+    pub(super) clock: &'a Arc<dyn Clock>,
+}
+
 /// How a save run ended, before its late writes are known.
 #[derive(Debug)]
 pub(super) enum SaveExit {
@@ -123,10 +134,10 @@ pub(super) fn ran_at_shutdown(exit: SaveExit) -> Ran<Result<SnapshotInfo, SaveEr
 /// Gives the settle of a save run that ended with `exit`: it waits until `run_calls`, which each
 /// holder of the blobs of the run counts, has no holder left, and then reads the two recorders.
 /// The wait has no time bound, so every try of the run has ended when the recorders are read; a
-/// warning names the save of `name` in `scope` when the wait takes longer than one `deadline`.
+/// warning names the save of `name` for `agent` when the wait takes longer than one `deadline`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn save_settle(
-    scope: AgentSnapshots,
+    agent: AgentSnapshots,
     name: SnapshotName,
     exit: SaveExit,
     may_land: bool,
@@ -141,7 +152,7 @@ pub(super) fn save_settle(
             let slow = async {
                 tokio::time::sleep(deadline).await;
                 warn!(
-                    snapshots = ?scope,
+                    snapshots = ?agent,
                     snapshot = %name,
                     deadline = ?deadline,
                     "A save of a filesystem snapshot still waits for the threads of its backup"
@@ -311,181 +322,203 @@ fn snapshot_zoned(time: Timestamp) -> anyhow::Result<Zoned> {
     Ok(SnapshotTime::from_millisecond(i64::try_from(time.to_millis())?)?.to_zoned(TimeZone::UTC))
 }
 
-impl RusticSnapshotStore {
-    /// One run of a save: the backup, then the publish of its snapshot file. A backup that has not
-    /// returned at `backup_end` is cancelled, and the run publishes nothing. The run then cancels
-    /// its token and gives the settle to the shell: the shell gives the slot back and waits until
-    /// every blob call of the run has ended, and then the run answers after its writes that can
-    /// still land.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn save_run(
-        &self,
-        work: &OperationLease,
-        scope: &AgentSnapshots,
-        name: &SnapshotName,
-        tree: &Path,
-        parent: Option<(SnapshotName, ChangeDetection)>,
-        cancel: &CancellationToken,
-        t0: Instant,
-    ) -> Ran<Result<SnapshotInfo, SaveError>> {
-        let (token, _guard) = self.run_token();
-        self.link_cancel(work, cancel, &token);
-        let run_calls = TaskTracker::new();
-        let backend_late = Arc::new(LateWrites::default());
-        let publish_late = Arc::new(LateWrites::default());
-        let stage = Arc::new(SnapshotStage::default());
-        let backend_files = self
-            .files(work, scope, &token)
-            .recording(backend_late.clone())
-            .held_by(run_calls.token());
-        let backend = match self.backend(backend_files) {
-            Ok(backend) => Arc::new(
-                backend
-                    .staging_in(stage.clone())
-                    .storing(StoredSource::Save),
-            ),
-            Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
-        };
-        let key = self.key.clone();
-        let policy = self.policy.clone();
-        let saved = name.clone();
-        let name = name.clone();
-        let tree: Box<Path> = tree.into();
-        let low_priority = self.low_priority;
-        let clock = self.clock.clone();
-        let mut backup = pin!(self.blocking(work, move || {
-            low_priority.run("fs-snap-save", move || {
-                Ok(stage_save_again_after_a_missing_index(
-                    &backend, &stage, &key, &policy, &name, &tree, parent, &*clock,
-                ))
-            })
-        }));
-        let backup_end = self.policy.backup_end(t0);
-        let staged = match backup_end {
-            Some(end) => {
-                tokio::select! {
-                    staged = &mut backup => Some(staged),
-                    () = tokio::time::sleep_until(tokio::time::Instant::from_std(end)) => None,
+/// One run of a save: the backup, then the publish of its snapshot file. A backup that has not
+/// returned at `backup_end` is cancelled, and the run publishes nothing. The run then cancels
+/// its token and gives the settle to the shell: the shell gives the slot back and waits until
+/// every blob call of the run has ended, and then the run answers after its writes that can
+/// still land.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run(
+    execution: &Execution<'_>,
+    save: Save<'_>,
+    agent: &AgentSnapshots,
+    name: &SnapshotName,
+    tree: &Path,
+    parent: Option<(SnapshotName, ChangeDetection)>,
+    cancel: &CancellationToken,
+    t0: Instant,
+) -> Ran<Result<SnapshotInfo, SaveError>> {
+    let (token, _guard) = execution.run_token();
+    execution.link_cancel(cancel, &token);
+    let run_calls = TaskTracker::new();
+    let backend_late = Arc::new(LateWrites::default());
+    let publish_late = Arc::new(LateWrites::default());
+    let stage = Arc::new(SnapshotStage::default());
+    let backend_files = execution
+        .files(agent, &token)
+        .recording(backend_late.clone())
+        .held_by(run_calls.token());
+    let backend = match execution.backend(backend_files) {
+        Ok(backend) => Arc::new(
+            backend
+                .staging_in(stage.clone())
+                .storing(StoredSource::Save),
+        ),
+        Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
+    };
+    let key = save.key.clone();
+    let policy = save.policy.clone();
+    let saved = name.clone();
+    let name = name.clone();
+    let tree: Box<Path> = tree.into();
+    let low_priority = save.low_priority;
+    let clock = Arc::clone(save.clock);
+    let mut backup = pin!(execution.blocking(move || {
+        low_priority.run("fs-snap-save", move || {
+            Ok(stage_save_again_after_a_missing_index(
+                &backend, &stage, &key, &policy, &name, &tree, parent, &*clock,
+            ))
+        })
+    }));
+    let backup_end = save.policy.backup_end(t0);
+    let staged = match backup_end {
+        Some(end) => {
+            tokio::select! {
+                staged = &mut backup => Some(staged),
+                () = tokio::time::sleep_until(tokio::time::Instant::from_std(end)) => None,
+            }
+        }
+        None => Some((&mut backup).await),
+    };
+    let (exit, backup_finished) = match staged {
+        None => {
+            // The backup did not end in time: the run stops it, and waits until the store reads
+            // the tree no more.
+            token.cancel();
+            let _ = backup.await;
+            (
+                SaveExit::Ended {
+                    end: RunEnd::BoundPassed,
+                    failure: anyhow::anyhow!(
+                        "the backup of the save would take longer than the filesystem snapshot store allows"
+                    ),
+                    staged: None,
+                },
+                false,
+            )
+        }
+        Some(staged) => {
+            let staged = staged.and_then(|staged| staged);
+            let backup_finished = matches!(staged, Ok(Some(_)));
+            // The backup has returned, so the store reads the tree no more. A cancel before
+            // this point publishes nothing, whatever the backup gave.
+            let exit = if cancel.is_cancelled() {
+                SaveExit::Ended {
+                    end: RunEnd::Cancelled,
+                    failure: anyhow::anyhow!(
+                        "the save of the filesystem snapshot was cancelled before its publish"
+                    ),
+                    staged: None,
                 }
-            }
-            None => Some((&mut backup).await),
-        };
-        let (exit, backup_finished) = match staged {
-            None => {
-                // The backup did not end in time: the run stops it, and waits until the store reads
-                // the tree no more.
-                token.cancel();
-                let _ = backup.await;
-                (
-                    SaveExit::Ended {
-                        end: RunEnd::BoundPassed,
-                        failure: anyhow::anyhow!(
-                            "the backup of the save would take longer than the filesystem snapshot store allows"
-                        ),
-                        staged: None,
-                    },
-                    false,
-                )
-            }
-            Some(staged) => {
-                let staged = staged.and_then(|staged| staged);
-                let backup_finished = matches!(staged, Ok(Some(_)));
-                // The backup has returned, so the store reads the tree no more. A cancel before
-                // this point publishes nothing, whatever the backup gave.
-                let exit = if cancel.is_cancelled() {
-                    SaveExit::Ended {
-                        end: RunEnd::Cancelled,
-                        failure: anyhow::anyhow!(
-                            "the save of the filesystem snapshot was cancelled before its publish"
-                        ),
-                        staged: None,
-                    }
-                } else {
-                    match staged {
-                        Ok(Some((staged, info))) => {
-                            let bound = self.policy.index_read_bound(t0);
-                            let files = self
-                                .files(work, scope, &self.root)
-                                .recording(publish_late.clone())
-                                .held_by(run_calls.token());
-                            match publish(&files, &staged, bound, cancel).await {
-                                Published::Written => SaveExit::Answered(Ok(info)),
-                                Published::NotWritten { end, failure } => SaveExit::Ended {
-                                    end,
-                                    failure,
-                                    staged: Some(OwnFile {
-                                        path: staged.path.clone(),
-                                        info,
-                                    }),
-                                },
-                            }
+            } else {
+                match staged {
+                    Ok(Some((staged, info))) => {
+                        let bound = save.policy.index_read_bound(t0);
+                        let files = execution
+                            .files(agent, execution.root())
+                            .recording(publish_late.clone())
+                            .held_by(run_calls.token());
+                        match publish(&files, &staged, bound, cancel).await {
+                            Published::Written => SaveExit::Answered(Ok(info)),
+                            Published::NotWritten { end, failure } => SaveExit::Ended {
+                                end,
+                                failure,
+                                staged: Some(OwnFile {
+                                    path: staged.path.clone(),
+                                    info,
+                                }),
+                            },
                         }
-                        Ok(None) => SaveExit::Answered(Err(SaveError::NameInUse)),
-                        Err(error) => save_failure(error),
                     }
-                };
-                (exit, backup_finished)
-            }
-        };
-        // No try of the run starts from here, and a try that runs ends at once.
-        token.cancel();
-        let recorded = RunLate {
-            backend: backend_late.latest(),
-            publish: publish_late.latest(),
-        };
-        Ran::Settling(save_settle(
-            scope.clone(),
-            saved,
-            exit,
-            settle_may_land(backup_finished, recorded),
-            run_calls,
-            backend_late,
-            publish_late,
-            self.policy.deadline,
-        ))
-    }
+                    Ok(None) => SaveExit::Answered(Err(SaveError::NameInUse)),
+                    Err(error) => save_failure(error),
+                }
+            };
+            (exit, backup_finished)
+        }
+    };
+    // No try of the run starts from here, and a try that runs ends at once.
+    token.cancel();
+    let recorded = RunLate {
+        backend: backend_late.latest(),
+        publish: publish_late.latest(),
+    };
+    Ran::Settling(save_settle(
+        agent.clone(),
+        saved,
+        exit,
+        settle_may_land(backup_finished, recorded),
+        run_calls,
+        backend_late,
+        publish_late,
+        execution.deadline(),
+    ))
+}
 
-    /// Checks the own name of a save after a publish that ended without an answer: the file that
-    /// the last publish staged, another snapshot file with the name, no such file, or a check that
-    /// could not read. It holds no slot and ends only at the shutdown.
-    pub(super) async fn own_name_check(
-        &self,
-        work: &OperationLease,
-        scope: &AgentSnapshots,
-        name: &SnapshotName,
-        own: OwnFile,
-    ) -> Checked {
-        let OwnFile { path, info } = own;
-        let files = self.files(work, scope, &self.root);
-        let listed = match files
-            .list_below("check_name", Path::new(FileType::Snapshot.dirname()))
-            .await
-        {
-            Ok(listed) => listed,
-            Err(_) => return Checked::Unreadable,
-        };
-        if listed.iter().any(|blob| *blob.path == *path) {
-            return Checked::Found(info);
-        }
-        let key = self.key.clone();
-        let name = name.clone();
-        let backend = match self.backend(files) {
-            Ok(backend) => Arc::new(backend),
-            Err(_) => return Checked::Unreadable,
-        };
-        let named = self
-            .blocking(work, move || {
-                Ok(match open_existing(backend.clone(), &key)? {
-                    Some(repository) => has_name(&scope_snapshots(&repository, &backend)?, &name),
-                    None => false,
-                })
+/// Checks the own name of a save after a publish that ended without an answer: the file that
+/// the last publish staged, another snapshot file with the name, no such file, or a check that
+/// could not read. It holds no slot and ends only at the shutdown.
+pub(super) async fn own_name_check(
+    execution: &Execution<'_>,
+    repository_key: &RepositoryKey,
+    agent: &AgentSnapshots,
+    name: &SnapshotName,
+    own: OwnFile,
+) -> Checked {
+    let OwnFile { path, info } = own;
+    let files = execution.files(agent, execution.root());
+    let listed = match files
+        .list_below("check_name", Path::new(FileType::Snapshot.dirname()))
+        .await
+    {
+        Ok(listed) => listed,
+        Err(_) => return Checked::Unreadable,
+    };
+    if listed.iter().any(|blob| *blob.path == *path) {
+        return Checked::Found(info);
+    }
+    let key = repository_key.clone();
+    let name = name.clone();
+    let backend = match execution.backend(files) {
+        Ok(backend) => Arc::new(backend),
+        Err(_) => return Checked::Unreadable,
+    };
+    let named = execution
+        .blocking(move || {
+            Ok(match open_existing(backend.clone(), &key)? {
+                Some(repository) => has_name(&scope_snapshots(&repository, &backend)?, &name),
+                None => false,
             })
-            .await;
-        match named {
-            Ok(true) => Checked::Other,
-            Ok(false) => Checked::Absent,
-            Err(_) => Checked::Unreadable,
-        }
+        })
+        .await;
+    match named {
+        Ok(true) => Checked::Other,
+        Ok(false) => Checked::Absent,
+        Err(_) => Checked::Unreadable,
+    }
+}
+/// What the error of a failed backup of a save is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SaveFault {
+    /// The run ends this way.
+    Ended(RunEnd),
+    /// The local filesystem of the tree gave this kind of I/O error.
+    Source(std::io::ErrorKind),
+}
+
+/// Classifies the error of a failed backup of a save. The storage decides first: a failed storage
+/// call, then an index file that was gone at its read, which a new run can find again. A local I/O
+/// error is `Source`. Any other error is permanent.
+fn save_fault(error: &anyhow::Error) -> SaveFault {
+    if let Some(end) = rustic_storage_end(error) {
+        return SaveFault::Ended(end);
+    }
+    if is_index_missing(error.as_ref()) {
+        return SaveFault::Ended(RunEnd::CallFailed);
+    }
+    match io_error_kind(error.as_ref()) {
+        Some(kind) => SaveFault::Source(kind),
+        None => SaveFault::Ended(RunEnd::Permanent),
     }
 }
 

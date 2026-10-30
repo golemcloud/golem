@@ -26,6 +26,7 @@ use crate::filesystem_snapshot::backend::rustic::test_support::{
     one_file_tree, policy, repository_fixture_tree, restored_listing, runs_policy, save_each,
     scope_with_a_prune_to_come, store, store_over, store_with_deadline,
 };
+
 use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::test_support::fixture::{Scratch, Spec, fixture, listing};
 use crate::filesystem_snapshot::test_support::{never_cancelled, new_scope};
@@ -297,11 +298,11 @@ async fn a_restore_of_a_name_whose_index_is_gone_gives_corrupt_after_a_check_tha
     let store = store_over(&inner);
     let scope = new_scope();
     save_each(&store, &scope, &["p-1"]).await;
-    let index_files = blobs(&*inner, &scope.0, "index/").await;
+    let index_files = blobs(&*inner, scope.namespace(), "index/").await;
     futures::future::join_all(
         index_files
             .iter()
-            .map(|path| inner.delete("test", "test", (*scope.0).clone(), Path::new(path))),
+            .map(|path| inner.delete("test", "test", scope.namespace().clone(), Path::new(path))),
     )
     .await
     .into_iter()
@@ -363,11 +364,11 @@ async fn a_restore_whose_marked_pack_is_gone_while_an_index_file_marks_it_gives_
     // lists each pack that was gone, as a marked pack, so the run did not race a prune, and the
     // answer is `Corrupt`.
     let (inner, scope, _tree, _, unused) = marked_dedup().await;
-    let packs = blobs(&*inner, &scope.0, "data/").await;
+    let packs = blobs(&*inner, scope.namespace(), "data/").await;
     futures::future::join_all(
         packs
             .iter()
-            .map(|path| inner.delete("test", "test", (*scope.0).clone(), Path::new(path))),
+            .map(|path| inner.delete("test", "test", scope.namespace().clone(), Path::new(path))),
     )
     .await
     .into_iter()
@@ -401,7 +402,7 @@ async fn a_marked_pack_after_a_load_that_missed_an_index_file_gives_the_whole_tr
     let (inner, scope, tree, _, unused) = marked_dedup().await;
     let gone = Path::new("index").join("00".repeat(32));
     inner
-        .put_raw("test", "test", (*scope.0).clone(), &gone, b"gone")
+        .put_raw("test", "test", scope.namespace().clone(), &gone, b"gone")
         .await
         .unwrap();
     let listings = AtomicUsize::new(0);
@@ -881,11 +882,11 @@ async fn a_delete_of_all_snapshots_before_the_index_is_loaded_again_gives_not_fo
 
 /// Deletes each blob of the scope, as a delete of all snapshots does.
 async fn delete_everything(inner: &InMemoryBlobStorage, scope: &AgentSnapshots) {
-    let paths = blobs(inner, &scope.0, "").await;
+    let paths = blobs(inner, scope.namespace(), "").await;
     futures::future::join_all(
         paths
             .iter()
-            .map(|path| inner.delete("test", "test", (*scope.0).clone(), Path::new(path))),
+            .map(|path| inner.delete("test", "test", scope.namespace().clone(), Path::new(path))),
     )
     .await
     .into_iter()
@@ -953,4 +954,170 @@ async fn restore_through_a_delete_of_all(
     delete_everything(inner, scope).await;
     storage.open_gate();
     tokio::time::timeout(LIMIT, restoring).await.unwrap()
+}
+
+mod failure_mapping {
+    use super::super::{Phase, RestoreError, restore_error};
+    use crate::filesystem_snapshot::backend::rustic::failure_classification::OperationCancelled;
+    use crate::filesystem_snapshot::backend::rustic::test_support::{
+        mapping_failed_call, mapping_local_io_without_source, mapping_missing, mapping_refused,
+        mapping_rustic,
+    };
+
+    use golem_service_base::storage::blob::{BlobNameError, BlobRangeError};
+    use pretty_assertions::assert_eq;
+    use rustic_core::{ErrorKind, Id, RusticError};
+    use std::io;
+    use std::path::Path;
+    use test_r::test;
+    #[test]
+    fn a_restore_error_is_read_from_the_storage_first_and_then_from_its_phase() {
+        let each_phase = |error: fn() -> anyhow::Error| {
+            [Phase::Load, Phase::Check, Phase::Write].map(|phase| restore_error(&error(), phase))
+        };
+        let pack = PACK.parse::<Id>().unwrap();
+
+        assert_eq!(
+            [
+                each_phase(|| mapping_missing(&format!("data/01/{PACK}"))),
+                each_phase(|| mapping_missing("data/01/not-an-id")),
+                each_phase(|| mapping_missing("config")),
+                each_phase(|| mapping_missing("index/0123")),
+                each_phase(|| mapping_failed_call(anyhow::Error::new(OperationCancelled))),
+                each_phase(|| mapping_failed_call(anyhow::Error::new(BlobRangeError {
+                    start: 4,
+                    end: 9
+                }))),
+                each_phase(|| {
+                    mapping_failed_call(anyhow::Error::new(BlobNameError::NotUtf8 {
+                        path: "x".into(),
+                    }))
+                }),
+                each_phase(|| mapping_failed_call(anyhow::anyhow!("the bucket gave 503"))),
+                each_phase(|| mapping_rustic(io::Error::new(
+                    io::ErrorKind::StorageFull,
+                    "no space"
+                ))),
+                each_phase(|| {
+                    anyhow::Error::new(RusticError::with_source(
+                        ErrorKind::InputOutput,
+                        "The restore cannot set the extended attributes of `file.txt`.",
+                        SettingXattrFailed(io::Error::from_raw_os_error(28)),
+                    ))
+                }),
+                each_phase(mapping_local_io_without_source),
+                each_phase(mapping_refused),
+            ],
+            [
+                [(); 3].map(|()| RestoreError::PackMissing(Some(pack))),
+                [
+                    RestoreError::PackMissing(None),
+                    RestoreError::PackMissing(None),
+                    RestoreError::PackMissing(None)
+                ],
+                [
+                    RestoreError::ConfigMissing,
+                    RestoreError::ConfigMissing,
+                    RestoreError::ConfigMissing
+                ],
+                [
+                    RestoreError::FileMissing(Path::new("index/0123").into()),
+                    RestoreError::FileMissing(Path::new("index/0123").into()),
+                    RestoreError::FileMissing(Path::new("index/0123").into()),
+                ],
+                [
+                    RestoreError::Cancelled,
+                    RestoreError::Cancelled,
+                    RestoreError::Cancelled
+                ],
+                [(); 3].map(|()| RestoreError::Permanent { range: true }),
+                [(); 3].map(|()| RestoreError::Permanent { range: false }),
+                [
+                    RestoreError::CallFailed,
+                    RestoreError::CallFailed,
+                    RestoreError::CallFailed
+                ],
+                [
+                    RestoreError::Corrupt,
+                    RestoreError::Destination(io::ErrorKind::StorageFull),
+                    RestoreError::Destination(io::ErrorKind::StorageFull),
+                ],
+                [
+                    RestoreError::Corrupt,
+                    RestoreError::Destination(io::ErrorKind::StorageFull),
+                    RestoreError::Destination(io::ErrorKind::StorageFull),
+                ],
+                [
+                    RestoreError::Corrupt,
+                    RestoreError::Destination(io::ErrorKind::PermissionDenied),
+                    RestoreError::Destination(io::ErrorKind::PermissionDenied),
+                ],
+                [
+                    RestoreError::Corrupt,
+                    RestoreError::CheckFailed,
+                    RestoreError::Corrupt
+                ],
+            ]
+        );
+    }
+
+    /// The error below the rustic error of a restore that cannot set an extended attribute, as the
+    /// fork gives it on ext4 for a user attribute of 6,000 bytes.
+    #[derive(Debug)]
+    struct SettingXattrFailed(io::Error);
+
+    impl std::fmt::Display for SettingXattrFailed {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                formatter,
+                "setting xattr `user.golem-test` on `\"/restore/file.txt\"` with `{:?}`",
+                self.0
+            )
+        }
+    }
+
+    impl std::error::Error for SettingXattrFailed {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    const PACK: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+}
+
+mod missing_paths {
+    use super::super::is_pack_missing;
+    use crate::filesystem_snapshot::backend::rustic::failure_classification::{
+        is_index_missing, missing_file_path,
+    };
+    use crate::filesystem_snapshot::backend::rustic::test_support::mapping_missing as missing;
+    use pretty_assertions::assert_eq;
+    use std::path::Path;
+    use test_r::test;
+    #[test]
+    fn a_missing_file_gives_its_path_and_its_directory() {
+        let index = missing("index/ab12");
+        let pack = missing("data/ab/ab12");
+
+        assert_eq!(
+            (
+                missing_file_path(index.as_ref()),
+                is_index_missing(index.as_ref()),
+                is_pack_missing(index.as_ref()),
+                missing_file_path(pack.as_ref()),
+                is_index_missing(pack.as_ref()),
+                is_pack_missing(pack.as_ref()),
+                missing_file_path(anyhow::anyhow!("other").as_ref()),
+            ),
+            (
+                Some(Path::new("index/ab12")),
+                true,
+                false,
+                Some(Path::new("data/ab/ab12")),
+                false,
+                true,
+                None,
+            )
+        );
+    }
 }

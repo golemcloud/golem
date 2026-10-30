@@ -243,7 +243,7 @@ pub(super) struct SnapshotFiles {
     late: Option<Arc<LateWrites>>,
     /// The share of the operation in the work of its incarnation, which each clone of the blobs
     /// holds, so a drain of the incarnation waits for each holder of the blobs.
-    _work: Option<OperationLease>,
+    _operation: Option<OperationLease>,
     /// A token of the tracker of one run, which each clone of the blobs holds, so the run can wait
     /// until no holder of its blobs is left, and so until no blob call of it runs or can start.
     _run: Option<TaskTrackerToken>,
@@ -269,16 +269,15 @@ impl SnapshotFiles {
             lease: None,
             tracker,
             late: None,
-            _work: None,
+            _operation: None,
             _run: None,
         }
     }
 
-    /// Gives the same blobs, which hold a share of the work `work` of the incarnation of the
-    /// operation.
-    pub(super) fn of_work(&self, work: &OperationLease) -> Self {
+    /// Gives the same blobs, which retain the operation's registration through `lease`.
+    pub(super) fn of_operation(&self, lease: &OperationLease) -> Self {
         Self {
-            _work: Some(work.clone()),
+            _operation: Some(lease.clone()),
             ..self.clone()
         }
     }

@@ -20,8 +20,10 @@
 //! take, run, wait and check gave, and at a take it looks at the shutdown first, then the cancel,
 //! then the limiter.
 
-use crate::filesystem_snapshot::{
-    Failed, RunSlots, Slot, SnapshotInfo, Withdrawal, WithdrawnCall, withdrawn_call,
+use crate::filesystem_snapshot::SnapshotInfo;
+use crate::filesystem_snapshot::errors::Failed;
+use crate::filesystem_snapshot::run_admission::{
+    RunSlots, Slot, Withdrawal, WithdrawnCall, withdrawn_call,
 };
 use golem_common::model::RetryConfig;
 use golem_common::retries::get_delay;

@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Existing monotonic lease, refresh, hold and wall-clock skew calculations.
+//! Monotonic lease, refresh, hold and wall-clock skew calculations.
 
 use golem_common::model::Timestamp;
 use std::time::Duration;
 
 /// How far the clock of another host can be ahead of the local clock. A time that is further
 /// ahead counts as missing.
-pub(in crate::filesystem_snapshot::backend::rustic) const CLOCK_SKEW_MARGIN: Duration =
-    Duration::from_secs(2 * 60);
+pub(super) const CLOCK_SKEW_MARGIN: Duration = Duration::from_secs(2 * 60);
 
 /// Tells whether the grace period passed at `now` since the time.
 pub(super) fn passed_since(time: Timestamp, now: Timestamp, grace: Duration) -> bool {

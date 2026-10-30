@@ -20,34 +20,32 @@ use crate::filesystem_snapshot::backend::rustic::call_execution::{
     OwnFile, Ran, RunEnd, Settle, Settled,
 };
 use crate::filesystem_snapshot::backend::rustic::failure_classification::OperationCancelled;
+use crate::filesystem_snapshot::backend::rustic::pruning::PruneSettings;
 use crate::filesystem_snapshot::backend::rustic::publication::PublishBound;
 use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
 use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::scope_snapshots;
-use crate::filesystem_snapshot::backend::rustic::store_policy::{PruneSettings, StorePolicy};
-#[cfg(unix)]
-use crate::filesystem_snapshot::backend::rustic::test_support::changed_at;
+use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::test_support::holding::holding_storage;
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
-#[cfg(unix)]
-use crate::filesystem_snapshot::backend::rustic::test_support::wait_past_change_times;
 use crate::filesystem_snapshot::backend::rustic::test_support::{
     LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, SHORT_DEADLINE, SHORT_WRITE_DEADLINE, SharedSlots,
     backend_of, blobs, calls_of,
 };
+use std::path::PathBuf;
+
 use crate::filesystem_snapshot::backend::rustic::test_support::{
-    copy_flat_tree, drop_when, dropped_within_limit, entries, eventually, failed_at_deadline,
-    fixture_tree, holding_index_reads, is_failed, key, ledger, listed_names, mapping_failed_call,
-    mapping_local_io_without_source, mapping_missing, mapping_refused, mapping_rustic, modified,
-    name, one_file_tree, policy, polled_until, refusing, repository_fixture_tree, restored_listing,
+    drop_when, dropped_within_limit, eventually, failed_at_deadline, fixture_tree,
+    holding_index_reads, is_failed, key, ledger, listed_names, mapping_failed_call,
+    mapping_local_io_without_source, mapping_missing, mapping_refused, mapping_rustic, name,
+    one_file_tree, policy, polled_until, refusing, repository_fixture_tree, restored_listing,
     runs_policy, save_each, save_numbered, scope_with_a_prune_to_come, scripted_first_pack,
-    scripted_publish, set_modified, snapshot_files, store, store_over, store_with_deadline,
-    stored_paths, three_file_tree,
+    snapshot_files, store, store_over, store_with_deadline, stored_paths,
 };
-use crate::filesystem_snapshot::backend::rustic::test_support::{
-    with_existing_repository, wrote_a_pack,
-};
+
+use crate::filesystem_snapshot::backend::rustic::test_support::with_existing_repository;
+
 use crate::filesystem_snapshot::test_support::fixture::{Scratch, Spec, listing, write_tree};
 use crate::filesystem_snapshot::test_support::{never_cancelled, new_scope};
 use crate::filesystem_snapshot::{
@@ -528,7 +526,9 @@ async fn a_save_whose_publish_landed_late_stays_saved() {
         (
             stat,
             names,
-            blobs(&*storage, &scope.0, "snapshots/").await.len(),
+            blobs(&*storage, scope.namespace(), "snapshots/")
+                .await
+                .len(),
             storage
                 .calls()
                 .iter()
@@ -636,7 +636,7 @@ async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_d
         "{saved:?}"
     );
     assert_eq!(
-        blobs(&*storage, &scope.0, "snapshots/").await,
+        blobs(&*storage, scope.namespace(), "snapshots/").await,
         Vec::<String>::new()
     );
 }
@@ -820,7 +820,7 @@ async fn a_publish_held_at_its_storage_call_ends_at_shut_down_and_the_save_answe
     let saved = tokio::time::timeout(LIMIT, saving).await;
     storage.open_gate();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let published = blobs(&*storage, &scope.0, "snapshots/").await;
+    let published = blobs(&*storage, scope.namespace(), "snapshots/").await;
 
     assert!(
         matches!(&saved, Ok(Ok(Err(SaveError::Stopped(_))))),
@@ -1111,7 +1111,10 @@ async fn a_save_of_a_relative_directory_path_gives_source_and_writes_nothing() {
         .await;
 
     assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
-    assert_eq!(blobs(&*storage, &scope.0, "").await, Vec::<String>::new());
+    assert_eq!(
+        blobs(&*storage, scope.namespace(), "").await,
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -1138,7 +1141,10 @@ async fn a_save_of_a_regular_file_gives_source_and_writes_nothing() {
         .await;
 
     assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
-    assert_eq!(blobs(&*storage, &scope.0, "").await, Vec::<String>::new());
+    assert_eq!(
+        blobs(&*storage, scope.namespace(), "").await,
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -1405,7 +1411,7 @@ async fn a_new_run_after_a_publish_began_answers_saved_when_the_publish_landed_l
             calls_of(&storage, "publish"),
             calls_of(&storage, "check_name"),
             slots.counts(),
-            blobs(&*inner, &scope.0, "snapshots/").await.len(),
+            blobs(&*inner, scope.namespace(), "snapshots/").await.len(),
             restored_listing(&store, &scope, &name("p-late")).await.ok(),
         ),
         (3, 1, (1, 0, 1, 0), 1, Some(listing(tree.path())))
@@ -1494,7 +1500,7 @@ async fn a_new_run_after_a_publish_began_saves_again_when_it_never_landed() {
             calls_of(&storage, "publish"),
             calls_of(&storage, "check_name"),
             slots.counts(),
-            blobs(&*inner, &scope.0, "snapshots/").await.len(),
+            blobs(&*inner, scope.namespace(), "snapshots/").await.len(),
             restored_listing(&store, &scope, &name("p-again"))
                 .await
                 .ok(),
@@ -1607,7 +1613,7 @@ async fn a_lost_shard_cancel_after_the_publish_began_waits_and_checks() {
         (
             calls_of(&storage, "publish"),
             calls_of(&storage, "check_name"),
-            blobs(&*inner, &scope.0, "snapshots/").await.len()
+            blobs(&*inner, scope.namespace(), "snapshots/").await.len()
         ),
         (1, 1, 1)
     );
@@ -1682,7 +1688,10 @@ async fn a_save_never_publishes_two_files_with_its_label() {
         .await;
 
     assert!(saved.is_ok(), "{saved:?}");
-    assert_eq!(blobs(&*inner, &scope.0, "snapshots/").await.len(), 1);
+    assert_eq!(
+        blobs(&*inner, scope.namespace(), "snapshots/").await.len(),
+        1
+    );
 }
 
 #[test]
@@ -1746,7 +1755,7 @@ async fn a_save_whose_backup_passes_its_end_answers_failed_and_publishes_nothing
     assert_eq!(
         (
             calls_of(&storage, "publish"),
-            blobs(&*storage, &scope.0, "snapshots/").await,
+            blobs(&*storage, scope.namespace(), "snapshots/").await,
             started_after_the_answer
         ),
         (0, Vec::<String>::new(), 0)
@@ -1994,7 +2003,7 @@ async fn a_save_whose_pack_write_is_held_past_the_end_of_its_backup_answers_fail
     assert_eq!(
         (
             calls_of(&storage, "publish"),
-            blobs(&*storage, &scope.0, "snapshots/").await
+            blobs(&*storage, scope.namespace(), "snapshots/").await
         ),
         (0, Vec::<String>::new())
     );
@@ -2505,7 +2514,7 @@ async fn a_save_whose_first_pack_lands_after_the_backup_failed(
             + Duration::from_secs(1),
     )
     .await;
-    Some((saved, blobs(&*inner, &scope.0, "").await))
+    Some((saved, blobs(&*inner, scope.namespace(), "").await))
 }
 
 /// Runs [`a_save_whose_first_pack_lands_after_the_backup_failed`] until an attempt sends the first
@@ -3031,11 +3040,16 @@ mod bounds {
                 .collect(),
             saved_well,
             second_read
-                .map(|read| writes_after_the_second_read(&save_events, &scope.0, read))
+                .map(|read| writes_after_the_second_read(&save_events, scope.namespace(), read))
                 .unwrap_or_default(),
-            t0.map(|t0| writes_after_the_bound(&save_events, &scope.0, t0))
+            t0.map(|t0| writes_after_the_bound(&save_events, scope.namespace(), t0))
                 .unwrap_or_default(),
-            calls_after_the_lease(&prune_events, &scope.0, refreshes_fail, marking_end),
+            calls_after_the_lease(
+                &prune_events,
+                scope.namespace(),
+                refreshes_fail,
+                marking_end,
+            ),
         ]
         .concat()
     }
@@ -3177,7 +3191,10 @@ async fn a_save_whose_backup_fails_with_a_pack_write_in_flight_answers_after_the
     tokio::time::sleep(Duration::from_secs(4)).await;
 
     assert!(sent_before_the_answer);
-    assert_eq!(blobs(&*inner, &scope.0, "").await, Vec::<String>::new());
+    assert_eq!(
+        blobs(&*inner, scope.namespace(), "").await,
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -3209,7 +3226,10 @@ async fn a_save_whose_lost_publish_try_lands_after_a_later_try_answers_only_afte
 
     assert!(saved.is_ok(), "{saved:?}");
     assert_eq!(sent_before_the_answer, 2);
-    assert_eq!(blobs(&*inner, &scope.0, "").await, Vec::<String>::new());
+    assert_eq!(
+        blobs(&*inner, scope.namespace(), "").await,
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -3283,4 +3303,108 @@ fn a_save_run_can_have_a_late_write_only_before_a_finished_backup_or_after_a_rec
         ],
         [false, true, true, true]
     );
+}
+
+/// Gives the modification time of the file.
+fn modified(path: &Path) -> std::time::SystemTime {
+    std::fs::metadata(path).unwrap().modified().unwrap()
+}
+
+/// Sets the modification time of the file.
+fn set_modified(path: &Path, time: std::time::SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(time)
+        .unwrap();
+}
+
+/// Copies each file of the flat tree `from` into the new directory `to`, with its modification
+/// time. Each copy is a new inode with a new change time, as a capture gives.
+fn copy_flat_tree(from: &Path, to: &Path) {
+    std::fs::read_dir(from).unwrap().for_each(|entry| {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        std::fs::copy(entry.path(), &target).unwrap();
+        set_modified(&target, modified(&entry.path()));
+    });
+}
+
+/// Gives the change time of the file as seconds and nanoseconds.
+#[cfg(unix)]
+fn changed_at(path: &Path) -> (i64, i64) {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(path).unwrap();
+    (metadata.ctime(), metadata.ctime_nsec())
+}
+
+/// The longest time that [`wait_past_change_times`] waits.
+#[cfg(unix)]
+const CHANGE_TIME_WAIT: Duration = Duration::from_secs(10);
+
+/// Waits until a file that changes now gets a later change time than each of the files.
+///
+/// The kernel takes the change time from a clock that moves in ticks of some milliseconds, so two
+/// changes within one tick get the same change time. The wait changes a probe file in its own
+/// directory until the change time of the probe is later than the latest change time of the
+/// files. It fails the test when that does not happen within [`CHANGE_TIME_WAIT`].
+#[cfg(unix)]
+fn wait_past_change_times(files: &[PathBuf]) {
+    let latest = files.iter().map(|file| changed_at(file)).max().unwrap();
+    let probe_directory = Scratch::new();
+    let probe = probe_directory.path().join("probe");
+    let started = std::time::Instant::now();
+    let passed = std::iter::repeat_with(|| {
+        std::fs::write(&probe, b"probe").unwrap();
+        changed_at(&probe)
+    })
+    .take_while(|_| started.elapsed() < CHANGE_TIME_WAIT)
+    .find(|probe_time| *probe_time > latest);
+    assert!(
+        passed.is_some(),
+        "the change time of a new change did not pass {latest:?} within {CHANGE_TIME_WAIT:?}"
+    );
+}
+
+/// Gives the path of each entry of the directory, in the order of the names.
+fn entries(directory: &Path) -> Vec<PathBuf> {
+    let mut paths = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+/// Writes a tree of three files into a new directory, and gives the directory.
+fn three_file_tree() -> Scratch {
+    let tree = Scratch::new();
+    ["a.txt", "b.txt", "c.txt"]
+        .iter()
+        .for_each(|file| std::fs::write(tree.path().join(file), file.as_bytes()).unwrap());
+    tree
+}
+
+/// A storage over `inner` whose publish tries follow `script(n)` for the `n`-th try, counted from
+/// 1, and whose other calls pass.
+fn scripted_publish(
+    inner: Arc<InMemoryBlobStorage>,
+    script: impl Fn(usize) -> Script + Send + Sync + 'static,
+) -> Arc<ScriptedBlobStorage> {
+    ScriptedBlobStorage::with_state(inner, 0usize, move |tries, op_label, _| {
+        if op_label == "publish" {
+            (script(tries + 1), tries + 1)
+        } else {
+            (Script::Pass, *tries)
+        }
+    })
+}
+
+/// Whether the storage saw a write of a pack.
+fn wrote_a_pack(storage: &ScriptedBlobStorage) -> bool {
+    storage
+        .calls()
+        .iter()
+        .any(|(op_label, path)| *op_label == "write" && path.starts_with("data"))
 }

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::test_support::{at, ledger};
 use super::super::timing::{CLOCK_SKEW_MARGIN, claim_hold};
 use super::*;
 use crate::filesystem_snapshot::backend::rustic::repository_layout::FREED_PATH;
 use pretty_assertions::assert_eq;
 use test_r::test;
-
 const TEN_PERCENT: Percent = Percent(10);
 
 const GRACE: Duration = Duration::from_secs(15 * 60);
@@ -30,17 +30,6 @@ const HELD_MILLIS: u64 = 15 * 60 * 1000 + 2 * 60 * 1000;
 const HOLD_MILLIS: u64 = HELD_MILLIS + 2 * 1000;
 
 const DEADLINE: Duration = Duration::from_secs(2);
-
-fn at(millis: u64) -> Timestamp {
-    Timestamp::from(millis)
-}
-
-fn ledger(last_prune_millis: Option<u64>, awaiting_removal: bool) -> PruneLedger {
-    PruneLedger {
-        last_prune: last_prune_millis.map(Timestamp::from),
-        awaiting_removal,
-    }
-}
 
 /// Gives one listed record of freed bytes whose name holds the bytes.
 fn named(bytes: u64) -> Box<[ListedFreed]> {

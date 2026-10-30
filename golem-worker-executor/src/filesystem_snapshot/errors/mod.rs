@@ -14,7 +14,7 @@
 
 //! Operation results and their error chains.
 
-use super::Withdrawal;
+use super::run_admission::Withdrawal;
 use std::fmt::{Display, Formatter};
 
 /// The store could not finish a call. A later call can succeed. The doc of each method names the

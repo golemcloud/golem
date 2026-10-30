@@ -26,12 +26,14 @@ mod tree;
 #[cfg(test)]
 mod tests;
 
+use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::clock::{Clock, SystemClock};
+use crate::filesystem_snapshot::errors::{CallError, Failed, ReadError, RestoreFailure, SaveError};
 use crate::filesystem_snapshot::operation_drain::OperationDrain;
+use crate::filesystem_snapshot::run_admission::{RunSlots, Slot, Withdrawal};
+use crate::filesystem_snapshot::snapshot_name::SnapshotName;
 use crate::filesystem_snapshot::{
-    AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore, ReadError,
-    RestoreFailure, RunSlots, SaveError, Slot, SnapshotInfo, SnapshotName, Withdrawal,
-    newest_first, snapshot_time,
+    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, newest_first, snapshot_time,
 };
 use async_trait::async_trait;
 use golem_common::model::Timestamp;

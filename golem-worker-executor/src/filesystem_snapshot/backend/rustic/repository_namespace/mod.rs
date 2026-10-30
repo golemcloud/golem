@@ -17,15 +17,16 @@
 //! These operations do not read the repository format. They only know the directories of the
 //! repository, its config file, and the ledger directory of the store.
 
-use super::RusticSnapshotStore;
 use super::blob_io::SnapshotFiles;
 use super::blob_io::{LateWrites, lands_by};
 use super::call_execution::{Ended, LateWrite, Ran, RunEnd, answered_after};
+use super::execution::Execution;
 use super::failure_classification::storage_end;
-use super::repository_layout::CONFIG_PATH;
-use super::repository_layout::LEDGERS_PATH;
-use crate::filesystem_snapshot::operation_drain::OperationLease;
-use crate::filesystem_snapshot::{AgentSnapshots, CallError};
+use super::repository_layout::{
+    CONFIG_PATH, DATA_PATH, INDEX_PATH, KEYS_PATH, LEDGERS_PATH, SNAPSHOTS_PATH,
+};
+use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
+use crate::filesystem_snapshot::errors::CallError;
 use crate::metrics::filesystem_snapshots::{self, RemovedSource, StoredSource};
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
@@ -36,16 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The directories of a repository in the order of a listing. A save writes them in the reverse
 /// order, and so does a copy, so a snapshot file always has its data.
-const LISTING_ORDER: [&str; 4] = [SNAPSHOTS_PATH, INDEX_PATH, "keys", DATA_PATH];
-
-/// The directory of the snapshot files of a repository.
-const SNAPSHOTS_PATH: &str = "snapshots";
-
-/// The directory of the index files of a repository.
-const INDEX_PATH: &str = "index";
-
-/// The directory of the packs of a repository.
-const DATA_PATH: &str = "data";
+const LISTING_ORDER: [&str; 4] = [SNAPSHOTS_PATH, INDEX_PATH, KEYS_PATH, DATA_PATH];
 
 /// The largest number of blobs of one directory that a copy copies at the same time.
 const COPY_CONCURRENCY: usize = 8;
@@ -385,49 +377,45 @@ pub(super) async fn delete_scope(files: &SnapshotFiles) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests;
 
-impl RusticSnapshotStore {
-    /// One run of a delete of all snapshots.
-    pub(super) async fn delete_all_run(
-        &self,
-        work: &OperationLease,
-        scope: &AgentSnapshots,
-    ) -> Ran<Result<(), CallError>> {
-        let (token, _guard) = self.run_token();
-        match delete_scope(&self.files(work, scope, &token)).await {
-            Ok(()) => Ran::Answered(Ok(())),
-            Err(error) => Ran::Ended(Ended::new(storage_end(&error), error)),
-        }
-    }
-
-    /// One run of a copy. `again` tells that an earlier run of the call ran. A write of the run
-    /// that ended without an answer gives the instant after which it landed or never lands.
-    pub(super) async fn copy_run(
-        &self,
-        works: &(OperationLease, OperationLease),
-        from: &AgentSnapshots,
-        to: &AgentSnapshots,
-        again: bool,
-    ) -> Ran<Result<(), CallError>> {
-        let (token, _guard) = self.run_token();
-        let late = Arc::new(LateWrites::default());
-        let copied = copy_scope(
-            &self.files(&works.0, from, &token).recording(late.clone()),
-            &self.files(&works.1, to, &token).recording(late.clone()),
-            again,
-        )
-        .await;
-        match copied {
-            Ok(()) => answered_after(Ok(()), lands_by(late.latest(), self.policy.deadline)),
-            Err(error) => Ran::Ended(Ended {
-                end: copy_end(&error),
-                failure: error.into_failure(),
-                late: lands_by(late.latest(), self.policy.deadline)
-                    .map(|until| LateWrite { until, own: None }),
-            }),
-        }
+/// One run of a delete of all snapshots.
+pub(super) async fn delete_all_run(
+    execution: &Execution<'_>,
+    agent: &AgentSnapshots,
+) -> Ran<Result<(), CallError>> {
+    let (token, _guard) = execution.run_token();
+    match delete_scope(&execution.files(agent, &token)).await {
+        Ok(()) => Ran::Answered(Ok(())),
+        Err(error) => Ran::Ended(Ended::new(storage_end(&error), error)),
     }
 }
 
+/// One run of a copy. `again` tells that an earlier run of the call ran. A write of the run
+/// that ended without an answer gives the instant after which it landed or never lands.
+pub(super) async fn copy_run(
+    from_execution: &Execution<'_>,
+    to_execution: &Execution<'_>,
+    from: &AgentSnapshots,
+    to: &AgentSnapshots,
+    again: bool,
+) -> Ran<Result<(), CallError>> {
+    let (token, _guard) = from_execution.run_token();
+    let late = Arc::new(LateWrites::default());
+    let copied = copy_scope(
+        &from_execution.files(from, &token).recording(late.clone()),
+        &to_execution.files(to, &token).recording(late.clone()),
+        again,
+    )
+    .await;
+    match copied {
+        Ok(()) => answered_after(Ok(()), lands_by(late.latest(), from_execution.deadline())),
+        Err(error) => Ran::Ended(Ended {
+            end: copy_end(&error),
+            failure: error.into_failure(),
+            late: lands_by(late.latest(), from_execution.deadline())
+                .map(|until| LateWrite { until, own: None }),
+        }),
+    }
+}
 /// Gives the end of a run of a copy whose error is `error`: a source blob that is gone, and a
 /// catch-up that did not end, run again; a failed storage call fails the run; and a name error
 /// cannot change.

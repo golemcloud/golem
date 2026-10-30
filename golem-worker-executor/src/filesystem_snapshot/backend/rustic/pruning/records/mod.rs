@@ -208,7 +208,7 @@ fn settle(records: &[FreedRecord], existing: &HashSet<Box<str>>) -> FreedRecords
 }
 
 /// Reads the freed bytes from the name of a record, `<bytes>-<unique part>`.
-pub(in crate::filesystem_snapshot::backend::rustic) fn parse_freed(name: &str) -> Option<u64> {
+pub(super) fn parse_freed(name: &str) -> Option<u64> {
     let (bytes, unique) = name.split_once('-')?;
     if unique.is_empty() {
         return None;

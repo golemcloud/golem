@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::RusticSnapshotStore;
 use super::blob_backend::BlobBackend;
-use super::call_execution::{Ended, Ran, RunEnd};
+use super::call_execution::Ran;
+use super::execution::{BackendRun, Execution};
 use super::failure_classification::{ended_by, is_file_missing, is_storage_failure};
 use super::repository::open_existing;
-use crate::filesystem_snapshot::operation_drain::OperationLease;
-use crate::filesystem_snapshot::{
-    AgentSnapshots, CallError, ReadError, SnapshotInfo, SnapshotName, newest_first,
-};
+use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
+use crate::filesystem_snapshot::errors::{CallError, ReadError};
+use crate::filesystem_snapshot::snapshot_name::SnapshotName;
+use crate::filesystem_snapshot::{SnapshotInfo, newest_first};
 use golem_common::model::Timestamp;
 use rustic_core::repofile::{SnapshotFile, SnapshotId};
 use rustic_core::{FileType, Open, Repository as RusticRepository};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::Arc;
 
 /// Reads each snapshot file of the repository, whose blobs `backend` reads. A failed storage call
 /// fails the read, a file that a delete removed after the listing is left out, and each other
@@ -157,66 +156,67 @@ pub(super) fn snapshot_info(snapshot: &SnapshotFile) -> Option<SnapshotInfo> {
     })
 }
 
-impl RusticSnapshotStore {
-    /// One run of a `stat`.
-    pub(super) async fn stat_run(
-        &self,
-        work: &OperationLease,
-        scope: &AgentSnapshots,
-        name: &SnapshotName,
-    ) -> Ran<Result<Option<SnapshotInfo>, ReadError>> {
-        let (token, _guard) = self.run_token();
-        let backend = match self.scope_backend(work, scope, &token) {
-            Ok(backend) => Arc::new(backend),
-            Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
-        };
-        let key = self.key.clone();
-        let name = name.clone();
-        match self
-            .blocking(work, move || {
-                Ok(match open_existing(backend.clone(), &key)? {
-                    Some(repository) => lookup(scope_snapshots(&repository, &backend)?, &name),
-                    None => Lookup::Missing,
-                })
+/// One run of a `stat`.
+pub(super) async fn stat_run(
+    execution: &Execution<'_>,
+    repository_key: &super::repository::RepositoryKey,
+    agent: &AgentSnapshots,
+    name: &SnapshotName,
+) -> Ran<Result<Option<SnapshotInfo>, ReadError>> {
+    let BackendRun {
+        token: _token,
+        guard: _guard,
+        backend,
+    } = match execution.begin_run(agent) {
+        Ok(run) => run,
+        Err(ended) => return Ran::Ended(ended),
+    };
+    let key = repository_key.clone();
+    let name = name.clone();
+    match execution
+        .blocking(move || {
+            Ok(match open_existing(backend.clone(), &key)? {
+                Some(repository) => lookup(scope_snapshots(&repository, &backend)?, &name),
+                None => Lookup::Missing,
             })
-            .await
-        {
-            Ok(Lookup::Found(_, info)) => Ran::Answered(Ok(Some(info))),
-            Ok(Lookup::Missing) => Ran::Answered(Ok(None)),
-            Ok(Lookup::Corrupt(error)) => Ran::Answered(Err(ReadError::Corrupt(error))),
-            Err(error) => Ran::Ended(ended_by(error)),
-        }
-    }
-
-    /// One run of a `list`.
-    pub(super) async fn list_run(
-        &self,
-        work: &OperationLease,
-        scope: &AgentSnapshots,
-    ) -> Ran<Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError>> {
-        let (token, _guard) = self.run_token();
-        let backend = match self.scope_backend(work, scope, &token) {
-            Ok(backend) => Arc::new(backend),
-            Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
-        };
-        let key = self.key.clone();
-        match self
-            .blocking(work, move || {
-                Ok(match open_existing(backend.clone(), &key)? {
-                    Some(repository) => {
-                        newest_first(listed(scope_snapshots(&repository, &backend)?))
-                    }
-                    None => Box::default(),
-                })
-            })
-            .await
-        {
-            Ok(listed) => Ran::Answered(Ok(listed)),
-            Err(error) => Ran::Ended(ended_by(error)),
-        }
+        })
+        .await
+    {
+        Ok(Lookup::Found(_, info)) => Ran::Answered(Ok(Some(info))),
+        Ok(Lookup::Missing) => Ran::Answered(Ok(None)),
+        Ok(Lookup::Corrupt(error)) => Ran::Answered(Err(ReadError::Corrupt(error))),
+        Err(error) => Ran::Ended(ended_by(error)),
     }
 }
 
+/// One run of a `list`.
+pub(super) async fn list_run(
+    execution: &Execution<'_>,
+    repository_key: &super::repository::RepositoryKey,
+    agent: &AgentSnapshots,
+) -> Ran<Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError>> {
+    let BackendRun {
+        token: _token,
+        guard: _guard,
+        backend,
+    } = match execution.begin_run(agent) {
+        Ok(run) => run,
+        Err(ended) => return Ran::Ended(ended),
+    };
+    let key = repository_key.clone();
+    match execution
+        .blocking(move || {
+            Ok(match open_existing(backend.clone(), &key)? {
+                Some(repository) => newest_first(listed(scope_snapshots(&repository, &backend)?)),
+                None => Box::default(),
+            })
+        })
+        .await
+    {
+        Ok(listed) => Ran::Answered(Ok(listed)),
+        Err(error) => Ran::Ended(ended_by(error)),
+    }
+}
 /// What the tree of a snapshot holds. The store keeps it as the description of the snapshot,
 /// because rustic counts a symlink as a file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

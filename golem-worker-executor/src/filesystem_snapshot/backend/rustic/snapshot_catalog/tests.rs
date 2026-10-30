@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use crate::filesystem_snapshot::backend::rustic::RusticSnapshotStore;
+use crate::filesystem_snapshot::backend::rustic::pruning::PruneSettings;
 use crate::filesystem_snapshot::backend::rustic::pruning::eligibility::Percent;
-use crate::filesystem_snapshot::backend::rustic::store_policy::{PruneSettings, StorePolicy};
+use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
@@ -22,6 +23,7 @@ use crate::filesystem_snapshot::backend::rustic::test_support::{
     LONG_DEADLINE, NEVER, is_failed, listed_names, name, one_file_tree, one_run, policy,
     publish_bound_for, repository_key, restored_listing, save_numbered, store, store_with_deadline,
 };
+
 use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::test_support::{never_cancelled, new_scope};
 use crate::filesystem_snapshot::{
@@ -207,7 +209,7 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
         .put_raw(
             "test",
             "test",
-            (*scope.0).clone(),
+            scope.namespace().clone(),
             Path::new(&format!("snapshots/{}", "ab".repeat(32))),
             b"not a snapshot",
         )
@@ -301,7 +303,7 @@ async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
         .put_raw(
             "test",
             "test",
-            (*scope.0).clone(),
+            scope.namespace().clone(),
             Path::new(&gone),
             b"listed",
         )

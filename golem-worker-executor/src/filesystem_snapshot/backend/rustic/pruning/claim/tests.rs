@@ -12,19 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::test_support::{at, files_over, files_with_cancel, ledger, new_files};
 use super::*;
 use crate::filesystem_snapshot::backend::rustic::blob_backend::{BlobBackend, KEPT_PACKS_LIMIT};
 use crate::filesystem_snapshot::backend::rustic::failure_classification::is_lease_expired;
 use crate::filesystem_snapshot::backend::rustic::pruning::timing::claim_hold;
 use crate::filesystem_snapshot::backend::rustic::repository_layout::LEDGERS_PATH;
-use crate::filesystem_snapshot::backend::rustic::test_support::files_of;
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
 use crate::filesystem_snapshot::clock::SystemClock;
-use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use pretty_assertions::assert_eq;
 use rustic_core::{FileType, ReadBackend};
 use std::path::PathBuf;
@@ -32,8 +30,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use test_r::{test, timeout};
-use uuid::Uuid;
-
 const GRACE: Duration = Duration::from_secs(15 * 60);
 
 /// The hold of a claim with the grace period and the deadline, in milliseconds: the grace
@@ -41,39 +37,6 @@ const GRACE: Duration = Duration::from_secs(15 * 60);
 const HOLD_MILLIS: u64 = HELD_MILLIS + 2 * 1000;
 
 const DEADLINE: Duration = Duration::from_secs(2);
-
-fn at(millis: u64) -> Timestamp {
-    Timestamp::from(millis)
-}
-
-fn ledger(last_prune_millis: Option<u64>, awaiting_removal: bool) -> PruneLedger {
-    PruneLedger {
-        last_prune: last_prune_millis.map(Timestamp::from),
-        awaiting_removal,
-    }
-}
-
-fn new_files() -> SnapshotFiles {
-    files_over(Arc::new(InMemoryBlobStorage::new()))
-}
-
-fn files_over(storage: Arc<dyn BlobStorage>) -> SnapshotFiles {
-    files_with_cancel(storage, tokio_util::sync::CancellationToken::new())
-}
-
-fn files_with_cancel(
-    storage: Arc<dyn BlobStorage>,
-    cancel: tokio_util::sync::CancellationToken,
-) -> SnapshotFiles {
-    files_of(
-        storage,
-        BlobStorageNamespace::InitialAgentFiles {
-            environment_id: EnvironmentId(Uuid::new_v4()),
-        },
-        DEADLINE,
-        cancel,
-    )
-}
 
 /// Refreshes the claim at each period until the first refresh write succeeds, and gives the
 /// instant after that write. It gives `None` when the refresh ends before a write succeeded.

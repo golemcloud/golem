@@ -31,7 +31,7 @@ fn works() -> OperationDrain {
 fn lone_work() -> Arc<OperationCohort> {
     Arc::new(OperationCohort {
         tracker: TaskTracker::new(),
-        works: std::sync::Weak::new(),
+        registry: std::sync::Weak::new(),
         agent: new_scope(),
         successor: std::sync::OnceLock::new(),
     })
@@ -85,8 +85,8 @@ fn the_operations_of_an_incarnation_share_one_work_and_others_do_not() {
 
     assert_eq!(
         (
-            Arc::ptr_eq(&first.work, &second.work),
-            Arc::ptr_eq(&first.work, &third.work),
+            Arc::ptr_eq(&first.cohort, &second.cohort),
+            Arc::ptr_eq(&first.cohort, &third.cohort),
             entries(&works),
         ),
         (true, false, 2)
@@ -122,8 +122,8 @@ fn an_end_of_an_old_cohort_never_removes_a_newer_entry() {
     assert_eq!(
         (
             while_old_runs,
-            own.is_some_and(|own| std::sync::Arc::ptr_eq(&own.work, &new.work)),
-            entry_is(&works, &agent, &new.work),
+            own.is_some_and(|own| std::sync::Arc::ptr_eq(&own.cohort, &new.cohort)),
+            entry_is(&works, &agent, &new.cohort),
         ),
         (false, true, true)
     );
@@ -176,7 +176,7 @@ async fn a_drain_waits_for_each_operation_that_began_before_it_and_for_none_afte
         (
             while_a_task_runs,
             ended,
-            entry_is(&works, &agent, &after.work)
+            entry_is(&works, &agent, &after.cohort)
         ),
         (false, true, true)
     );

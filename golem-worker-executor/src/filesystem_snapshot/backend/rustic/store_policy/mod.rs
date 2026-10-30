@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Configuration mapping and the store's existing safety bounds and rustic options.
+//! Configuration mapping and the store's safety bounds and rustic options.
 
+use super::pruning::PruneSettings;
 use super::pruning::eligibility::Percent;
 use super::pruning::timing::refresh_period;
 use super::publication::{PublishBound, backup_end, index_read_bound};
@@ -25,17 +26,6 @@ use rustic_core::repofile::SnapshotId;
 use rustic_core::{BackupOptions, DevIdOption, LocalSourceSaveOptions, RestoreOptions};
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
-
-/// The settings of one prune. Each prune also has fixed limits on unused data and repacking.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PruneSettings {
-    /// Whether a repack copies the blobs as they are. Without it, a repack decrypts,
-    /// decompresses, compresses and encrypts each blob that it keeps.
-    pub(super) fast_repack: bool,
-    /// How long a pack stays after a prune marks it for deletion. A later prune deletes a marked
-    /// pack when this time is over.
-    pub(super) keep_delete: Duration,
-}
 
 /// The share of the size of the repository that deleted snapshots must free before a delete prunes
 /// the scope. The threshold is 10% of the size, rounded down to a whole byte, so about 10%.

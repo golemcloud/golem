@@ -25,6 +25,7 @@ use crate::filesystem_snapshot::backend::rustic::test_support::{
     policy, polled_until, refusing, restored_listing, runs_policy, save_each, store, store_over,
     three_runs,
 };
+
 use crate::filesystem_snapshot::test_support::fixture::listing;
 use crate::filesystem_snapshot::test_support::{never_cancelled, new_scope};
 use crate::filesystem_snapshot::{CallError, FilesystemSnapshotStore, Unlimited};
@@ -76,7 +77,7 @@ async fn a_deleted_scope_holds_no_blob() {
         .delete(&scope, &[name("p-1")], &Unlimited)
         .await
         .unwrap();
-    let before = blobs(&*storage, &scope.0, "").await;
+    let before = blobs(&*storage, scope.namespace(), "").await;
 
     store.delete_all(&scope, &Unlimited).await.unwrap();
 
@@ -85,7 +86,7 @@ async fn a_deleted_scope_holds_no_blob() {
             before
                 .iter()
                 .any(|path| path.starts_with("golem/prune-ledgers/")),
-            blobs(&*storage, &scope.0, "").await
+            blobs(&*storage, scope.namespace(), "").await
         ),
         (true, Vec::<String>::new())
     );
@@ -122,14 +123,14 @@ async fn a_copy_whose_listed_index_file_is_gone_runs_again() {
             .any(|(op_label, path)| *op_label == "copy" && path.starts_with("index"))
     })
     .await;
-    let index_files = blobs(&*inner, &from.0, "index/").await;
+    let index_files = blobs(&*inner, from.namespace(), "index/").await;
 
     futures::stream::iter(&index_files)
         .for_each(|path| {
             let (inner, from) = (&inner, &from);
             async move {
                 inner
-                    .delete("test", "test", (*from.0).clone(), Path::new(path))
+                    .delete("test", "test", from.namespace().clone(), Path::new(path))
                     .await
                     .unwrap();
             }
@@ -148,7 +149,7 @@ async fn a_copy_whose_listed_index_file_is_gone_runs_again() {
                 .iter()
                 .filter(|(op_label, _)| *op_label == "copy_read")
                 .count(),
-            blobs(&*inner, &to.0, "index/").await
+            blobs(&*inner, to.namespace(), "index/").await
         ),
         (true, false, 2, Vec::<String>::new())
     );
@@ -177,8 +178,8 @@ async fn a_copy_leaves_out_a_snapshot_file_that_a_delete_removed_after_the_listi
     assert!(copied.is_ok(), "{copied:?}");
     assert_eq!(
         (
-            blobs(&*storage, &to.0, "config").await.len(),
-            blobs(&*storage, &to.0, "snapshots/").await
+            blobs(&*storage, to.namespace(), "config").await.len(),
+            blobs(&*storage, to.namespace(), "snapshots/").await
         ),
         (1, Vec::<String>::new())
     );
@@ -437,7 +438,7 @@ async fn a_copy_whose_later_run_fails_removes_the_config_that_an_earlier_run_wro
     assert_eq!(
         (
             calls_of(&storage, "copy_remove_config"),
-            blobs(&*inner, &to.0, "config").await
+            blobs(&*inner, to.namespace(), "config").await
         ),
         (2, Vec::<String>::new())
     );
@@ -455,14 +456,14 @@ async fn a_copy_whose_index_listing_tore_catches_up_and_every_target_snapshot_re
     let saving = store_over(&inner);
     save_each(&saving, &from, &["p-1"]).await;
     let before = [
-        blobs(&*inner, &from.0, "index/").await,
-        blobs(&*inner, &from.0, "data/").await,
+        blobs(&*inner, from.namespace(), "index/").await,
+        blobs(&*inner, from.namespace(), "data/").await,
     ]
     .concat();
     save_each(&saving, &from, &["p-2"]).await;
     let after = [
-        blobs(&*inner, &from.0, "index/").await,
-        blobs(&*inner, &from.0, "data/").await,
+        blobs(&*inner, from.namespace(), "index/").await,
+        blobs(&*inner, from.namespace(), "data/").await,
     ]
     .concat();
     let torn = AtomicUsize::new(0);
@@ -504,8 +505,8 @@ async fn a_copy_whose_index_listing_tore_catches_up_and_every_target_snapshot_re
     assert!(restored.iter().all(Option::is_some), "{restored:?}");
     assert_eq!(restored, expected);
     assert_eq!(
-        blobs(&*inner, &to.0, "index/").await,
-        blobs(&*inner, &from.0, "index/").await
+        blobs(&*inner, to.namespace(), "index/").await,
+        blobs(&*inner, from.namespace(), "index/").await
     );
 }
 
@@ -1435,7 +1436,7 @@ mod drains {
             waited,
             deleted_all,
             ended,
-            blobs(&*storage, &scope.0, "").await,
+            blobs(&*storage, scope.namespace(), "").await,
         )
     }
 

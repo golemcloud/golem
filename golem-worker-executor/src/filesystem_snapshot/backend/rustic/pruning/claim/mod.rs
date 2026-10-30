@@ -32,7 +32,6 @@
 use super::super::blob_io::{Lease, SnapshotFiles};
 use super::super::repository_layout::CLAIMS_PATH;
 use super::super::tracked_tasks::Spawner;
-use super::eligibility::PrunePolicy;
 use super::records::PruneLedger;
 use super::timing::{beyond_margin, lease_span, passed_since, refresh_period};
 use crate::filesystem_snapshot::clock::Clock;
@@ -272,19 +271,20 @@ impl Claim {
     pub(super) async fn take(
         files: &SnapshotFiles,
         name: ClaimName,
-        policy: &PrunePolicy,
+        grace: Duration,
+        deadline: Duration,
         clock: Arc<dyn Clock>,
         spawner: Spawner,
         tracked: TaskTrackerToken,
     ) -> anyhow::Result<Option<Claim>> {
-        let span = lease_span(policy.grace, policy.deadline);
+        let span = lease_span(grace, deadline);
         let (started, time) = marker_time(&*clock);
         // The state and `take_claim` both use the first marker.
         let first: Arc<Path> = marker_path(&name.directory, name.number, time).into();
         let claim = Claim {
             lease: Arc::new(Lease::until(started + span)),
             span,
-            refresh: refresh_period(policy.grace, policy.deadline),
+            refresh: refresh_period(grace, deadline),
             marked: started,
             state: Arc::new(Mutex::new(ClaimState::Marking {
                 markers: Markers {
@@ -404,9 +404,7 @@ impl ClaimEntry {
 }
 
 /// Reads the name of an entry of a claim directory.
-pub(in crate::filesystem_snapshot::backend::rustic) fn parse_claim_entry(
-    name: &str,
-) -> Option<ClaimEntry> {
+pub(super) fn parse_claim_entry(name: &str) -> Option<ClaimEntry> {
     match name.split_once('@') {
         None => name.parse().ok().map(ClaimEntry::Claim),
         Some((number, rest)) => {

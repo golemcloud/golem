@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::filesystem_snapshot::backend::rustic::pruning::test_support::freed;
 use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
 use crate::filesystem_snapshot::backend::rustic::test_support::{
-    LONG_DEADLINE, NEVER, blobs, calls_of, fixture_tree, freed, is_failed, listed_names, name,
-    one_file_tree, policy, save_each, snapshot_files, snapshot_listings, store, store_over,
+    LONG_DEADLINE, NEVER, blobs, calls_of, fixture_tree, is_failed, listed_names, name,
+    one_file_tree, policy, save_each, snapshot_files, store, store_over,
 };
+
 use crate::filesystem_snapshot::test_support::{never_cancelled, new_scope};
 use crate::filesystem_snapshot::{FilesystemSnapshotStore, Unlimited};
 use futures::StreamExt;
@@ -141,7 +143,7 @@ async fn a_delete_that_frees_nothing_writes_no_ledger() {
         .unwrap();
 
     assert_eq!(
-        blobs(&*storage, &scope.0, "golem/").await,
+        blobs(&*storage, scope.namespace(), "golem/").await,
         Vec::<String>::new()
     );
 }
@@ -216,4 +218,12 @@ async fn a_failed_freed_record_is_written_again_and_the_delete_forgets() {
         ),
         (2, vec!["p-2".to_string()])
     );
+}
+
+/// Counts the listings of the snapshot files of a repository in `calls`.
+fn snapshot_listings(calls: &[(&'static str, String)]) -> usize {
+    calls
+        .iter()
+        .filter(|(op_label, path)| *op_label == "list" && path.starts_with("snapshots"))
+        .count()
 }

@@ -20,6 +20,12 @@ use std::path::{Path, PathBuf};
 /// The path of the config file of a repository.
 pub(super) const CONFIG_PATH: &str = "config";
 
+/// The directory of the index files of a repository.
+pub(super) const INDEX_PATH: &str = "index";
+
+/// The directory of the key files of a repository.
+pub(super) const KEYS_PATH: &str = "keys";
+
 /// Gives the path of a file of the repository, relative to the root of the namespace.
 pub(super) fn file_path(tpe: FileType, id: &Id) -> RusticResult<Box<Path>> {
     let hex = id.to_hex();

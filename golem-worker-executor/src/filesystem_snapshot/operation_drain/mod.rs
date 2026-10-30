@@ -14,19 +14,18 @@
 
 //! Operation registration and the drain cutoff of a delete of all snapshots of an incarnation.
 //!
-//! Each operation of a store holds an [`OperationLease`] of its incarnation for its whole life,
-//! and each task that the operation starts holds a clone of it. So the tracker of an
-//! [`OperationCohort`] counts all the work of the incarnation that began before a drain, also the work
-//! that runs on after its caller stopped waiting. The store keeps only a weak entry of each
-//! incarnation, so the map holds the incarnations that have work alive.
+//! Each operation holds an [`OperationLease`] for its whole life, and each retained task holds a
+//! clone. An [`OperationCohort`] counts the operations and tasks registered between drain cutoffs,
+//! including tasks whose caller stopped waiting. The registry keeps weak entries, so it retains
+//! only incarnations with live cohorts.
 
-use crate::filesystem_snapshot::AgentSnapshots;
+use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
-/// The map of the weak entries of the work of each incarnation.
+/// The current cohort of each incarnation, held weakly.
 type Entries = HashMap<AgentSnapshots, Weak<OperationCohort>>;
 
 /// Registers operations by incarnation and establishes delete-all drain cutoffs.
@@ -35,72 +34,71 @@ pub(super) struct OperationDrain {
     entries: Arc<Mutex<Entries>>,
 }
 
-/// The work of one incarnation that began since its last drain.
+/// Operations registered for one incarnation between two drain cutoffs.
 #[derive(Debug)]
 struct OperationCohort {
     tracker: TaskTracker,
-    works: Weak<Mutex<Entries>>,
+    registry: Weak<Mutex<Entries>>,
     agent: AgentSnapshots,
-    /// The share in the work that a drain put in the place of this work. This work holds it for
-    /// as long as it lives, so a drain of the newer work waits for this work, also when the drain
-    /// that replaced this work was dropped.
+    /// Retains a registration in the successor cohort until this cohort ends. A later drain then
+    /// waits for this cohort even if the caller that established the earlier cutoff dropped.
     successor: OnceLock<OperationLease>,
 }
 
 impl Drop for OperationCohort {
     /// Removes the entry of the incarnation when [`ends_entry`] says so.
     fn drop(&mut self) {
-        if let Some(works) = self.works.upgrade() {
-            let mut works = works.lock().unwrap_or_else(PoisonError::into_inner);
-            if ends_entry(works.get(&self.agent), self) {
-                works.remove(&self.agent);
+        if let Some(registry) = self.registry.upgrade() {
+            let mut registry = registry.lock().unwrap_or_else(PoisonError::into_inner);
+            if ends_entry(registry.get(&self.agent), self) {
+                registry.remove(&self.agent);
             }
         }
     }
 }
 
-/// Whether the end of the work `this` removes the entry `entry` of its incarnation: only when the
-/// entry is still this work. So the end of an old work never removes a newer entry.
+/// Whether the end of the cohort `this` removes the entry `entry` of its incarnation: only when the
+/// entry is still this cohort. So the end of an old cohort never removes a newer entry.
 fn ends_entry(entry: Option<&Weak<OperationCohort>>, this: *const OperationCohort) -> bool {
     entry.is_some_and(|entry| std::ptr::eq(entry.as_ptr(), this))
 }
 
-/// The share of one operation, or of one task of it, in the work of its incarnation.
+/// The registration of an operation or retained task in its incarnation's cohort.
 #[derive(Debug)]
 pub(super) struct OperationLease {
-    work: Arc<OperationCohort>,
+    cohort: Arc<OperationCohort>,
     _token: TaskTrackerToken,
 }
 
 impl Clone for OperationLease {
     fn clone(&self) -> Self {
-        Self::of(Arc::clone(&self.work))
+        Self::of(Arc::clone(&self.cohort))
     }
 }
 
 impl OperationLease {
-    fn of(work: Arc<OperationCohort>) -> Self {
+    fn of(cohort: Arc<OperationCohort>) -> Self {
         Self {
-            _token: work.tracker.token(),
-            work,
+            _token: cohort.tracker.token(),
+            cohort,
         }
     }
 }
 
-/// Puts a new work of `agent` in the entries, and gives its share.
-fn new_work(
-    works: &Arc<Mutex<Entries>>,
+/// Installs a new cohort for `agent` and returns its first lease.
+fn new_cohort(
+    registry: &Arc<Mutex<Entries>>,
     entries: &mut Entries,
     agent: &AgentSnapshots,
 ) -> OperationLease {
-    let work = Arc::new(OperationCohort {
+    let cohort = Arc::new(OperationCohort {
         tracker: TaskTracker::new(),
-        works: Arc::downgrade(works),
+        registry: Arc::downgrade(registry),
         agent: agent.clone(),
         successor: OnceLock::new(),
     });
-    entries.insert(agent.clone(), Arc::downgrade(&work));
-    OperationLease::of(work)
+    entries.insert(agent.clone(), Arc::downgrade(&cohort));
+    OperationLease::of(cohort)
 }
 
 impl OperationDrain {
@@ -112,41 +110,37 @@ impl OperationDrain {
             .len()
     }
 
-    /// Gives the share of a new operation of `agent` in the work of its incarnation: the live work of
-    /// the entry, or a new work when the entry is gone. The share leaves the lock before it can drop,
-    /// so the `Drop` of a work never runs under the lock.
+    /// Registers an operation in the current cohort, or creates a cohort when the entry is gone.
+    /// The lease leaves the lock before it can drop, so no cohort drops under the map lock.
     pub(super) fn begin(&self, agent: &AgentSnapshots) -> OperationLease {
-        let works = &self.entries;
-        let mut entries = works.lock().unwrap_or_else(PoisonError::into_inner);
+        let registry = &self.entries;
+        let mut entries = registry.lock().unwrap_or_else(PoisonError::into_inner);
         match entries.get(agent).and_then(Weak::upgrade) {
-            Some(work) => OperationLease::of(work),
-            None => new_work(works, &mut entries, agent),
+            Some(cohort) => OperationLease::of(cohort),
+            None => new_cohort(registry, &mut entries, agent),
         }
     }
 
-    /// Waits until each work of the incarnation `agent` that began before the drain ends, and gives
-    /// the share of the drain in a new work of the incarnation. In one locked step, the drain takes
-    /// the old entry out, puts the new work in its place, and gives the old work a share in the new
-    /// work, which the old work holds until it ends. So a later drain waits for the old work, also
-    /// when the caller of this drain stops waiting. Work that begins after that step joins the new
-    /// work, which this drain does not wait for. The drain waits outside the lock.
+    /// Establishes a cutoff and waits for earlier registrations outside the map lock. The locked
+    /// step replaces the current cohort and gives it a lease on its successor. A later drain still
+    /// waits for that cohort if this caller drops. Operations registered after the cutoff join the
+    /// successor and do not delay this drain. The returned lease registers the drain there too.
     pub(super) async fn drain_before(&self, agent: &AgentSnapshots) -> OperationLease {
-        let works = &self.entries;
+        let registry = &self.entries;
         let (drained, own) = {
-            let mut entries = works.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut entries = registry.lock().unwrap_or_else(PoisonError::into_inner);
             let drained = entries.remove(agent).and_then(|entry| entry.upgrade());
-            let own = new_work(works, &mut entries, agent);
-            if let Some(work) = &drained {
-                // Only the drain that took the entry out sets the share, so the cell is empty. A
-                // refused share is a share of the new work, which `own` keeps alive, so its drop
-                // under the lock never drops a work.
-                let _ = work.successor.set(own.clone());
+            let own = new_cohort(registry, &mut entries, agent);
+            if let Some(cohort) = &drained {
+                // Only the drain that removed the entry sets this cell, so it is empty. If a lease
+                // is refused, `own` still keeps its cohort alive while that lease drops under the lock.
+                let _ = cohort.successor.set(own.clone());
             }
             (drained, own)
         };
-        if let Some(work) = drained {
-            work.tracker.close();
-            work.tracker.wait().await;
+        if let Some(cohort) = drained {
+            cohort.tracker.close();
+            cohort.tracker.wait().await;
         }
         own
     }

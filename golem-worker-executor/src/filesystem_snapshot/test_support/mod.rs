@@ -115,7 +115,6 @@ pub(crate) fn slots() -> CountingSlots {
 }
 
 /// The failure of an error of a call, for the tests that look at it.
-#[cfg(test)]
 pub(crate) trait FailureOf {
     /// Gives the cause of a `Failed` error, and `None` for each other error.
     fn failure(&self) -> Option<&anyhow::Error>;
@@ -124,7 +123,6 @@ pub(crate) trait FailureOf {
     fn stopped(&self) -> bool;
 }
 
-#[cfg(test)]
 impl FailureOf for CallError {
     fn failure(&self) -> Option<&anyhow::Error> {
         match self {
@@ -138,7 +136,6 @@ impl FailureOf for CallError {
     }
 }
 
-#[cfg(test)]
 impl FailureOf for SaveError {
     fn failure(&self) -> Option<&anyhow::Error> {
         match self {
@@ -152,7 +149,6 @@ impl FailureOf for SaveError {
     }
 }
 
-#[cfg(test)]
 impl FailureOf for RestoreFailure {
     fn failure(&self) -> Option<&anyhow::Error> {
         match self {
@@ -166,7 +162,6 @@ impl FailureOf for RestoreFailure {
     }
 }
 
-#[cfg(test)]
 impl FailureOf for ReadError {
     fn failure(&self) -> Option<&anyhow::Error> {
         match self {
@@ -181,7 +176,6 @@ impl FailureOf for ReadError {
 }
 
 /// A cancel of a save that never fires.
-#[cfg(test)]
 pub(crate) fn never_cancelled() -> &'static CancellationToken {
     static NEVER: std::sync::LazyLock<CancellationToken> =
         std::sync::LazyLock::new(CancellationToken::new);
@@ -190,11 +184,9 @@ pub(crate) fn never_cancelled() -> &'static CancellationToken {
 
 /// The times that a test store gives its saves: each new name gets a time ten minutes after the
 /// name before it, so that retention sees times far apart.
-#[cfg(test)]
 #[derive(Default)]
 pub(crate) struct SpacedTimes(Mutex<HashMap<Box<str>, Timestamp>>);
 
-#[cfg(test)]
 impl SpacedTimes {
     /// The time of the first save.
     pub(crate) const FIRST_MILLIS: u64 = 1_800_000_000_000;

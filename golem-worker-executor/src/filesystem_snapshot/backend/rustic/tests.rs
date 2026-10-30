@@ -302,7 +302,7 @@ async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
     cancel.cancel();
     let files = files_of(
         storage.clone(),
-        (*new_scope().0).clone(),
+        new_scope().namespace().clone(),
         LONG_DEADLINE,
         cancel,
     );
@@ -882,7 +882,7 @@ mod marked_packs {
 
     /// Gives the packs of the scope.
     async fn packs(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Box<[Box<str>]> {
-        blobs(storage, &scope.0, "data/")
+        blobs(storage, scope.namespace(), "data/")
             .await
             .into_iter()
             .map(String::into_boxed_str)
@@ -1573,7 +1573,7 @@ mod restore_prune_races {
             ],
         );
         save_tree(&store, &scope, &name("p-other"), other.path()).await;
-        *packs_of_other.lock().unwrap() = blobs(&*storage, &scope.0, "data/").await;
+        *packs_of_other.lock().unwrap() = blobs(&*storage, scope.namespace(), "data/").await;
         save_tree(&store, &scope, &name("p-kept"), kept.path()).await;
         armed.store(true, Ordering::SeqCst);
         let slots = CountedTakes::default();
@@ -1605,7 +1605,7 @@ mod restore_prune_races {
         write_tree(third.path(), &[("third.txt", file_of(b"third file"))]);
         save_tree(&later, &scope, &name("p-third"), third.path()).await;
         let deleted_third = later.delete(&scope, &[name("p-third")], &Unlimited).await;
-        let packs_after_the_prune = blobs(&*storage, &scope.0, "data/").await;
+        let packs_after_the_prune = blobs(&*storage, scope.namespace(), "data/").await;
         storage.open_gate();
         let restored = tokio::time::timeout(LIMIT, &mut restoring).await.unwrap();
         store.shut_down().await;
@@ -1632,7 +1632,7 @@ mod restore_prune_races {
 
 mod save_prune_ordering {
     use super::*;
-    use crate::filesystem_snapshot::backend::rustic::store_policy::PruneSettings;
+    use crate::filesystem_snapshot::backend::rustic::pruning::PruneSettings;
     use crate::filesystem_snapshot::backend::rustic::test_support::*;
     use crate::filesystem_snapshot::test_support::fixture::Listed;
     use pretty_assertions::assert_eq;
@@ -1781,4 +1781,46 @@ mod save_prune_ordering {
             ]
         );
     }
+}
+
+#[test]
+#[timeout("60s")]
+async fn shut_down_waits_for_the_check_of_a_local_path() {
+    // The check waits on its blocking thread until the test lets it go.
+    let store = store(
+        Arc::new(InMemoryBlobStorage::new()),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let tree = one_file_tree("checked");
+    let (reached_sender, reached) = std::sync::mpsc::channel::<()>();
+    let (open, opened) = std::sync::mpsc::channel::<()>();
+    let checking = AbortOnDropHandle::new(tokio::spawn({
+        let (store, path) = (store.clone(), tree.path().to_path_buf());
+        async move {
+            store
+                .check_path(&path, move |_| {
+                    let _ = reached_sender.send(());
+                    let _ = opened.recv();
+                    Ok(())
+                })
+                .await
+        }
+    }));
+    let reached = tokio::task::spawn_blocking(move || reached.recv_timeout(LIMIT).is_ok())
+        .await
+        .unwrap();
+
+    let shutting = store.shut_down();
+    tokio::pin!(shutting);
+    let waited = tokio::time::timeout(Duration::from_millis(200), &mut shutting)
+        .await
+        .is_err();
+    open.send(()).unwrap();
+    // A finished future must not be polled again, so the second wait runs only after a first wait
+    // that timed out.
+    let stopped = !waited || tokio::time::timeout(LIMIT, &mut shutting).await.is_ok();
+    let checked = tokio::time::timeout(LIMIT, checking).await;
+
+    assert!(matches!(&checked, Ok(Ok(Ok(())))), "{checked:?}");
+    assert_eq!((reached, waited, stopped), (true, true, true));
 }

@@ -13,16 +13,17 @@
 // limitations under the License.
 
 use super::{RepositoryKey, backup_options, open_existing, open_or_create, repository_options};
+use crate::filesystem_snapshot::backend::rustic::pruning::PruneSettings;
 use crate::filesystem_snapshot::backend::rustic::pruning::prune_options;
-use crate::filesystem_snapshot::backend::rustic::store_policy::PruneSettings;
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
 use crate::filesystem_snapshot::backend::rustic::test_support::{
     LIMIT, LONG_DEADLINE, NEVER, REPOSITORY_LIMIT, SHORT_WRITE_DEADLINE, backend_of, eventually,
     key, listed_names, name, one_file_tree, policy, polled_until, repository_fixture_tree,
-    repository_key, restored_listing, seconds, store, store_with_deadline, stored_paths,
+    repository_key, restored_listing, store, store_with_deadline, stored_paths,
 };
+
 use crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking;
 use crate::filesystem_snapshot::test_support::fixture::listing;
 use crate::filesystem_snapshot::test_support::{never_cancelled, new_scope};
@@ -472,4 +473,9 @@ mod time_zone {
             "the final stage of the executor image does not set `ENV TZ=UTC0`:\n{final_stage}"
         );
     }
+}
+
+/// Gives the length of the span in seconds.
+fn seconds(span: rustic_core::jiff::Span) -> f64 {
+    span.total(rustic_core::jiff::Unit::Second).unwrap()
 }

@@ -12,28 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{OperationCancelled, Phase, RestoreError, restore_error};
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
 use crate::filesystem_snapshot::backend::rustic::test_support::{
-    LIMIT, LONG_DEADLINE, NEVER, eventually, mapping_failed_call, mapping_local_io_without_source,
-    mapping_missing, mapping_refused, mapping_rustic, name, policy, save_each, store, store_over,
+    LIMIT, LONG_DEADLINE, NEVER, eventually, name, policy, save_each, store, store_over,
 };
+
 use crate::filesystem_snapshot::test_support::fixture::Scratch;
 use crate::filesystem_snapshot::test_support::new_scope;
 use crate::filesystem_snapshot::{FilesystemSnapshotStore, RestoreFailure, Unlimited};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-use golem_service_base::storage::blob::{BlobNameError, BlobRangeError};
 use pretty_assertions::assert_eq;
-use rustic_core::{ErrorKind, Id, RusticError};
-use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use test_r::{test, timeout};
-
 #[test]
 #[timeout("60s")]
 async fn the_text_of_a_local_io_error_of_the_fork_keeps_the_form_that_the_store_reads() {
@@ -95,152 +90,23 @@ async fn the_text_of_a_local_io_error_of_the_fork_keeps_the_form_that_the_store_
     }
 }
 
-#[test]
-fn a_restore_error_is_read_from_the_storage_first_and_then_from_its_phase() {
-    let each_phase = |error: fn() -> anyhow::Error| {
-        [Phase::Load, Phase::Check, Phase::Write].map(|phase| restore_error(&error(), phase))
-    };
-    let pack = PACK.parse::<Id>().unwrap();
-
-    assert_eq!(
-        [
-            each_phase(|| mapping_missing(&format!("data/01/{PACK}"))),
-            each_phase(|| mapping_missing("data/01/not-an-id")),
-            each_phase(|| mapping_missing("config")),
-            each_phase(|| mapping_missing("index/0123")),
-            each_phase(|| mapping_failed_call(anyhow::Error::new(OperationCancelled))),
-            each_phase(|| mapping_failed_call(anyhow::Error::new(BlobRangeError {
-                start: 4,
-                end: 9
-            }))),
-            each_phase(|| {
-                mapping_failed_call(anyhow::Error::new(BlobNameError::NotUtf8 {
-                    path: "x".into(),
-                }))
-            }),
-            each_phase(|| mapping_failed_call(anyhow::anyhow!("the bucket gave 503"))),
-            each_phase(|| mapping_rustic(io::Error::new(io::ErrorKind::StorageFull, "no space"))),
-            each_phase(|| {
-                anyhow::Error::new(RusticError::with_source(
-                    ErrorKind::InputOutput,
-                    "The restore cannot set the extended attributes of `file.txt`.",
-                    SettingXattrFailed(io::Error::from_raw_os_error(28)),
-                ))
-            }),
-            each_phase(mapping_local_io_without_source),
-            each_phase(mapping_refused),
-        ],
-        [
-            [(); 3].map(|()| RestoreError::PackMissing(Some(pack))),
-            [
-                RestoreError::PackMissing(None),
-                RestoreError::PackMissing(None),
-                RestoreError::PackMissing(None)
-            ],
-            [
-                RestoreError::ConfigMissing,
-                RestoreError::ConfigMissing,
-                RestoreError::ConfigMissing
-            ],
-            [
-                RestoreError::FileMissing(Path::new("index/0123").into()),
-                RestoreError::FileMissing(Path::new("index/0123").into()),
-                RestoreError::FileMissing(Path::new("index/0123").into()),
-            ],
-            [
-                RestoreError::Cancelled,
-                RestoreError::Cancelled,
-                RestoreError::Cancelled
-            ],
-            [(); 3].map(|()| RestoreError::Permanent { range: true }),
-            [(); 3].map(|()| RestoreError::Permanent { range: false }),
-            [
-                RestoreError::CallFailed,
-                RestoreError::CallFailed,
-                RestoreError::CallFailed
-            ],
-            [
-                RestoreError::Corrupt,
-                RestoreError::Destination(io::ErrorKind::StorageFull),
-                RestoreError::Destination(io::ErrorKind::StorageFull),
-            ],
-            [
-                RestoreError::Corrupt,
-                RestoreError::Destination(io::ErrorKind::StorageFull),
-                RestoreError::Destination(io::ErrorKind::StorageFull),
-            ],
-            [
-                RestoreError::Corrupt,
-                RestoreError::Destination(io::ErrorKind::PermissionDenied),
-                RestoreError::Destination(io::ErrorKind::PermissionDenied),
-            ],
-            [
-                RestoreError::Corrupt,
-                RestoreError::CheckFailed,
-                RestoreError::Corrupt
-            ],
-        ]
-    );
-}
-
-/// The error below the mapping_rustic error of a restore that cannot set an extended attribute, as the
-/// fork gives it on ext4 for a user attribute of 6,000 bytes.
-#[derive(Debug)]
-struct SettingXattrFailed(io::Error);
-
-impl std::fmt::Display for SettingXattrFailed {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "setting xattr `user.golem-test` on `\"/restore/file.txt\"` with `{:?}`",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for SettingXattrFailed {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-const PACK: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
 mod error_chains {
 
     use super::super::{
-        BlobCallFailed, CallFailure, ConfigExists, FileMissing, LeaseExpired, OperationCancelled,
-        call_failure, is_config_exists, is_index_missing, is_pack_missing, may_land,
-        missing_file_path, run_end, rustic_storage_end, storage_end,
+        CallFailure, ConfigExists, LeaseExpired, OperationCancelled, call_failure,
+        is_config_exists, may_land, run_end, rustic_storage_end, storage_end,
     };
     use crate::filesystem_snapshot::backend::rustic::call_execution::RunEnd;
+    use crate::filesystem_snapshot::backend::rustic::test_support::{
+        mapping_failed_call as failed_call, mapping_missing as missing, mapping_rustic as rustic,
+    };
     use golem_service_base::storage::blob::{
         BlobMissingError, BlobNameError, BlobRangeError, BlobRefusal, BlobRefusedError,
     };
     use pretty_assertions::assert_eq;
-    use rustic_core::{ErrorKind, RusticError};
     use std::io;
     use std::path::Path;
     use test_r::test;
-
-    /// Gives a rustic error whose source is the error, as rustic gives it to the store.
-    fn rustic(source: impl std::error::Error + Send + Sync + 'static) -> anyhow::Error {
-        anyhow::Error::new(RusticError::with_source(
-            ErrorKind::Backend,
-            "the operation failed",
-            source,
-        ))
-    }
-
-    fn failed_call(failure: anyhow::Error) -> anyhow::Error {
-        rustic(BlobCallFailed::new(failure))
-    }
-
-    fn missing(path: &str) -> anyhow::Error {
-        rustic(FileMissing {
-            path: Path::new(path).into(),
-        })
-    }
 
     async fn elapsed() -> anyhow::Error {
         anyhow::Error::new(
@@ -366,33 +232,6 @@ mod error_chains {
                 None,
                 None,
             ]
-        );
-    }
-
-    #[test]
-    fn a_missing_file_gives_its_path_and_its_directory() {
-        let index = missing("index/ab12");
-        let pack = missing("data/ab/ab12");
-
-        assert_eq!(
-            (
-                missing_file_path(index.as_ref()),
-                is_index_missing(index.as_ref()),
-                is_pack_missing(index.as_ref()),
-                missing_file_path(pack.as_ref()),
-                is_index_missing(pack.as_ref()),
-                is_pack_missing(pack.as_ref()),
-                missing_file_path(anyhow::anyhow!("other").as_ref()),
-            ),
-            (
-                Some(Path::new("index/ab12")),
-                true,
-                false,
-                Some(Path::new("data/ab/ab12")),
-                false,
-                true,
-                None,
-            )
         );
     }
 
