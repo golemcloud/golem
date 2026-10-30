@@ -33,6 +33,17 @@ use uuid::Uuid;
 /// storage, as another executor has.
 pub(crate) type OpenStore = Arc<dyn Fn() -> Arc<dyn FilesystemSnapshotStore> + Send + Sync>;
 
+/// A call retry script shared by the driver and retry-delay tests.
+pub(super) fn retry_script() -> golem_common::model::RetryConfig {
+    golem_common::model::RetryConfig {
+        max_attempts: 5,
+        min_delay: std::time::Duration::from_secs(2),
+        max_delay: std::time::Duration::from_secs(120),
+        multiplier: 4.0,
+        max_jitter_factor: None,
+    }
+}
+
 pub(super) fn new_scope() -> AgentSnapshots {
     AgentSnapshots::agent(
         &OwnedAgentId::new(

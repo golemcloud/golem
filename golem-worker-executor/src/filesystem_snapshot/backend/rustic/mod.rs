@@ -37,10 +37,6 @@ mod test_support;
 mod tests;
 mod tracked_tasks;
 
-#[cfg(any(test, feature = "test-utils"))]
-pub(crate) use call_execution::run_delay;
-
-use crate::blocking::BlockingTask;
 use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::clock::{Clock, SystemClock};
 use crate::filesystem_snapshot::errors::{CallError, ReadError, RestoreFailure, SaveError};
@@ -51,7 +47,7 @@ use crate::filesystem_snapshot::{ChangeDetection, FilesystemSnapshotStore, Snaps
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
 use async_trait::async_trait;
 use blob_backend::MAX_SNAPSHOT_FILE_READS;
-use call_execution::{Answers, Kind, OwnName, Shell};
+use call_execution::{Answers, CallDriver, CallMethod, OwnName};
 use cpu_priority::LowPriority;
 use golem_service_base::storage::blob::BlobStorage;
 use operation::{Operation, Resources};
@@ -235,16 +231,15 @@ impl RusticSnapshotStore {
         self.tracker.len()
     }
 
-    /// Gives the shell of a call of the method `kind` with the limiter `slots`, and the cancel of a
-    /// save.
-    fn shell<'a>(
+    /// Builds the call driver with its method, limiter and optional save cancellation.
+    fn driver<'a>(
         &'a self,
-        kind: Kind,
+        method: CallMethod,
         slots: &'a dyn RunSlots,
         cancel: Option<&'a CancellationToken>,
-    ) -> Shell<'a> {
-        Shell {
-            kind,
+    ) -> CallDriver<'a> {
+        CallDriver {
+            method,
             slots,
             root: &self.root,
             cancel,
@@ -270,10 +265,6 @@ impl RusticSnapshotStore {
                 deadline: self.policy.deadline,
                 tries: self.policy.in_call_tries(),
                 read_slots: &self.read_slots,
-                #[cfg(test)]
-                clear_hook: &self.clear_hook,
-                #[cfg(test)]
-                failed_prunes: &self.failed_prunes,
             },
         )
     }
@@ -297,12 +288,12 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         if self.root.is_cancelled() {
             return Err(SaveError::Stopped(Withdrawal::Stopped));
         }
-        self.check_path(tree, tree_is_valid)
+        tracked_tasks::check_local_path(&self.tracker, tree, tree_is_valid)
             .await
             .map_err(SaveError::Source)?;
         let parent = parent.map(|(parent, detection)| (parent.clone(), detection));
         let settings = self.policy.save_settings();
-        self.shell(Kind::Save, slots, Some(cancel))
+        self.driver(CallMethod::Save, slots, Some(cancel))
             .save(
                 save_answers(),
                 save_own_name(),
@@ -337,12 +328,21 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         if self.root.is_cancelled() {
             return Err(RestoreFailure::Stopped(Withdrawal::Stopped));
         }
-        self.check_path(into, destination_is_valid)
+        tracked_tasks::check_local_path(&self.tracker, into, destination_is_valid)
             .await
             .map_err(RestoreFailure::Destination)?;
-        self.shell(Kind::Restore, slots, None)
+        self.driver(CallMethod::Restore, slots, None)
             .call(restore_answers(), |_| {
-                restore::run(&operation, self.policy.restore_settings(), name, into)
+                restore::run(
+                    restore::Restore {
+                        operation: &operation,
+                        settings: self.policy.restore_settings(),
+                        #[cfg(test)]
+                        hook: &self.clear_hook,
+                    },
+                    name,
+                    into,
+                )
             })
             .await
     }
@@ -357,7 +357,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         }
         let lease = &self.begin_operation(agent);
         let operation = self.operation(lease);
-        self.shell(Kind::Stat, &Unlimited, None)
+        self.driver(CallMethod::Stat, &Unlimited, None)
             .call(read_answers(), |_| {
                 snapshot_catalog::stat_run(&operation, name)
             })
@@ -371,7 +371,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError> {
         let lease = &self.begin_operation(agent);
         let operation = self.operation(lease);
-        self.shell(Kind::List, slots, None)
+        self.driver(CallMethod::List, slots, None)
             .call(call_answers(), |_| snapshot_catalog::list_run(&operation))
             .await
     }
@@ -389,9 +389,17 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let names = &names;
         let lease = &self.begin_operation(agent);
         let operation = self.operation(lease);
-        self.shell(Kind::Delete, slots, None)
+        self.driver(CallMethod::Delete, slots, None)
             .call(call_answers(), |_| {
-                snapshot_deletion::delete_run(&operation, self.policy.prune_settings(), names)
+                snapshot_deletion::delete_run(
+                    snapshot_deletion::Deletion {
+                        operation: &operation,
+                        settings: self.policy.prune_settings(),
+                        #[cfg(test)]
+                        failed_prunes: &self.failed_prunes,
+                    },
+                    names,
+                )
             })
             .await
     }
@@ -409,7 +417,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             lease = self.operations.drain_before(agent) => lease,
         };
         let operation = self.operation(lease);
-        self.shell(Kind::DeleteAll, slots, None)
+        self.driver(CallMethod::DeleteAll, slots, None)
             .call(call_answers(), |_| {
                 repository_namespace::delete_all_run(&operation)
             })
@@ -425,7 +433,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let leases = &(self.begin_operation(from), self.begin_operation(to));
         let from_operation = self.operation(&leases.0);
         let to_operation = self.operation(&leases.1);
-        self.shell(Kind::Copy, slots, None)
+        self.driver(CallMethod::Copy, slots, None)
             .call(call_answers(), |start| {
                 repository_namespace::copy_run(&from_operation, &to_operation, start.number > 1)
             })
@@ -434,26 +442,5 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn shut_down(&self) {
         RusticSnapshotStore::shut_down(self).await
-    }
-}
-
-impl RusticSnapshotStore {
-    /// Runs the check of a local path on a blocking thread. A thread that fails gives the error of
-    /// the path. The tracker counts the check until it ends, so `shut_down` waits for it, also when
-    /// the operation drops first.
-    async fn check_path(
-        &self,
-        path: &Path,
-        check: impl FnOnce(&Path) -> std::io::Result<()> + Send + 'static,
-    ) -> std::io::Result<()> {
-        let path: Box<Path> = path.into();
-        let tracked = self.tracker.token();
-        BlockingTask::Spawn
-            .run(move || {
-                let _tracked = tracked;
-                check(&path)
-            })
-            .await
-            .map_err(std::io::Error::other)?
     }
 }

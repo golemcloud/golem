@@ -12,24 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::super::test_support::{at, ledger};
+use super::super::test_support::{DEADLINE, GRACE, HELD_MILLIS, HOLD_MILLIS, at, ledger};
 use super::super::timing::{CLOCK_SKEW_MARGIN, claim_hold};
 use super::*;
 use crate::filesystem_snapshot::backend::rustic::repository_layout::FREED_PATH;
 use pretty_assertions::assert_eq;
 use test_r::test;
 const TEN_PERCENT: Percent = Percent(10);
-
-const GRACE: Duration = Duration::from_secs(15 * 60);
-
-/// The grace period and the margin for clock skew, in milliseconds.
-const HELD_MILLIS: u64 = 15 * 60 * 1000 + 2 * 60 * 1000;
-
-/// The hold of a claim with the grace period and the deadline, in milliseconds: the grace
-/// period less one deadline, then the margin, then two deadlines.
-const HOLD_MILLIS: u64 = HELD_MILLIS + 2 * 1000;
-
-const DEADLINE: Duration = Duration::from_secs(2);
 
 /// Gives one listed record of freed bytes whose name holds the bytes.
 fn named(bytes: u64) -> Box<[ListedFreed]> {

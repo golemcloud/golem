@@ -33,13 +33,22 @@ fn added_packed_bytes(snapshot: &SnapshotFile) -> u64 {
         .map_or(0, |summary| summary.data_added_packed)
 }
 
+/// Inputs of a named deletion, with its test-only prune failure observations.
+pub(super) struct Deletion<'a> {
+    pub(super) operation: &'a Operation<'a>,
+    pub(super) settings: PruneSettings,
+    #[cfg(test)]
+    pub(super) failed_prunes: &'a std::sync::Mutex<Vec<anyhow::Error>>,
+}
+
 /// Records freed bytes before forgetting the snapshots, then prunes when due. A successful
 /// forget answers successfully even if the prune fails. The next delete can retry that prune.
 pub(super) async fn delete_run(
-    operation: &Operation<'_>,
-    settings: PruneSettings,
+    deletion: Deletion<'_>,
     names: &HashSet<Box<str>>,
 ) -> RunResult<Result<(), CallError>> {
+    let operation = deletion.operation;
+    let settings = deletion.settings;
     let mut run = operation.begin_run()?;
     let backend = run.take_backend();
     let names = names.clone();
@@ -109,7 +118,11 @@ pub(super) async fn delete_run(
             );
             filesystem_snapshots::record_prune(PruneOutcome::Failed, started.elapsed());
             #[cfg(test)]
-            operation.record_prune_failure(error);
+            deletion
+                .failed_prunes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(error);
         }
     }
     Ok(Ran::Answered(Ok(())))

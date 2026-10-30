@@ -17,9 +17,30 @@
 
 use crate::blocking::BlockingTask;
 use crate::filesystem_snapshot::operation_drain::OperationLease;
+use std::path::Path;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
+use tokio_util::task::task_tracker::TaskTrackerToken;
+
+/// Keeps cleanup registered until its retained tasks have entered the store tracker.
+pub(super) struct CleanupTasks {
+    spawner: Spawner,
+    _tracked: TaskTrackerToken,
+}
+
+impl CleanupTasks {
+    pub(super) fn new(spawner: Spawner, tracked: TaskTrackerToken) -> Self {
+        Self {
+            spawner,
+            _tracked: tracked,
+        }
+    }
+
+    pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) -> JoinHandle<()> {
+        self.spawner.spawn(task)
+    }
+}
 
 /// Runs work of the store as a task on a runtime that the store gave, and the tracker of the store
 /// and the work of the incarnation of the operation count the task. The cleanup of a release or a
@@ -60,4 +81,22 @@ pub(super) async fn run_blocking<R: Send + 'static>(
     task: impl FnOnce() -> anyhow::Result<R> + Send + 'static,
 ) -> anyhow::Result<R> {
     BlockingTask::Spawn.run(task).await?
+}
+
+/// Tracks a local path check through shutdown, including after its caller drops. These read-only
+/// checks belong to the store tracker, not the incarnation drain cohort.
+pub(super) async fn check_local_path(
+    tracker: &TaskTracker,
+    path: &Path,
+    check: impl FnOnce(&Path) -> std::io::Result<()> + Send + 'static,
+) -> std::io::Result<()> {
+    let path: Box<Path> = path.into();
+    let tracked = tracker.token();
+    BlockingTask::Spawn
+        .run(move || {
+            let _tracked = tracked;
+            check(&path)
+        })
+        .await
+        .map_err(std::io::Error::other)?
 }

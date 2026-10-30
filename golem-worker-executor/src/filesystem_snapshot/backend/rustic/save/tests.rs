@@ -2460,7 +2460,7 @@ async fn the_settle_of_a_save_reads_its_late_writes_only_after_every_holder_of_i
         );
 
     wait.await;
-    // The run is built before the test waits for the holder, as the shell builds it after the wait.
+    // The run is built before the test waits for the holder, as the driver builds it after the wait.
     let until = match finish(Settled::Waited) {
         Err(ended) => ended.late.map(|late| late.until),
         _ => None,
@@ -2794,7 +2794,7 @@ mod bounds {
     //! - the marking prune makes no storage call later than one lease span after the start of its
     //!   newest marker write that succeeded.
     //!
-    //! The sweep does not crash the executor at a step; the shell tests of the runs cover a stop at
+    //! The sweep does not crash the executor at a step; the driver tests of the runs cover a stop at
     //! each wait.
 
     use super::*;
@@ -2846,7 +2846,7 @@ mod bounds {
         }
     }
 
-    /// A limiter without a bound that keeps the instant of its first grant. The shell takes the
+    /// A limiter without a bound that keeps the instant of its first grant. The driver takes the
     /// instant of the first slot of a call after the grant, so this instant is not later.
     #[derive(Default)]
     struct FirstGrant(Mutex<Option<Instant>>);

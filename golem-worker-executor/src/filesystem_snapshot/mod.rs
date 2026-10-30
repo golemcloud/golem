@@ -30,6 +30,7 @@ mod backend;
 mod clock;
 mod errors;
 mod operation_drain;
+mod retry;
 mod run_admission;
 mod snapshot_name;
 #[cfg(test)]
@@ -43,9 +44,9 @@ pub(crate) use agent_snapshots::AgentSnapshots;
 #[cfg(any(test, feature = "test-utils"))]
 pub(crate) use backend::in_memory::InMemorySnapshotStore;
 use backend::rustic::RusticSnapshotStore;
-#[cfg(any(test, feature = "test-utils"))]
-pub(crate) use backend::rustic::run_delay;
 pub(crate) use errors::{CallError, Failed, ReadError, RestoreFailure, SaveError};
+#[cfg(any(test, feature = "test-utils"))]
+pub(crate) use retry::run_delay;
 pub(crate) use run_admission::{
     RunSlots, Slot, Unlimited, Withdrawal, WithdrawnCall, withdrawn_call,
 };

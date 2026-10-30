@@ -929,12 +929,12 @@ async fn a_delete_of_all_snapshots_before_the_index_is_loaded_again_gives_not_fo
 }
 
 /// Deletes each blob of the scope, as a delete of all snapshots does.
-async fn delete_everything(inner: &InMemoryBlobStorage, scope: &AgentSnapshots) {
-    let paths = blobs(inner, scope.namespace(), "").await;
+async fn delete_everything(inner: &InMemoryBlobStorage, agent: &AgentSnapshots) {
+    let paths = blobs(inner, agent.namespace(), "").await;
     futures::future::join_all(
         paths
             .iter()
-            .map(|path| inner.delete("test", "test", scope.namespace().clone(), Path::new(path))),
+            .map(|path| inner.delete("test", "test", agent.namespace().clone(), Path::new(path))),
     )
     .await
     .into_iter()
@@ -976,7 +976,7 @@ fn holding_the_third_open(
 async fn restore_through_a_delete_of_all(
     storage: &Arc<ScriptedBlobStorage>,
     inner: &InMemoryBlobStorage,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
 ) -> Result<SnapshotInfo, RestoreFailure> {
     let store = store(
         storage.clone(),
@@ -984,7 +984,7 @@ async fn restore_through_a_delete_of_all(
     );
     let into = Scratch::new();
     let restored_name = name("p-1");
-    let restoring = store.restore(scope, &restored_name, into.path(), &Unlimited);
+    let restoring = store.restore(agent, &restored_name, into.path(), &Unlimited);
     tokio::pin!(restoring);
     let reached = tokio::select! {
         biased;
@@ -999,7 +999,7 @@ async fn restore_through_a_delete_of_all(
         restored = &mut restoring => panic!("the restore ended before its third open: {restored:?}"),
     };
     assert!(reached);
-    delete_everything(inner, scope).await;
+    delete_everything(inner, agent).await;
     storage.open_gate();
     tokio::time::timeout(LIMIT, restoring).await.unwrap()
 }

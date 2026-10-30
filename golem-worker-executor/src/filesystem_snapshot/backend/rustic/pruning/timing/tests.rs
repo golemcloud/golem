@@ -12,13 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::test_support::{DEADLINE, GRACE};
 use super::*;
 use pretty_assertions::assert_eq;
 use test_r::test;
-
-const GRACE: Duration = Duration::from_secs(15 * 60);
-
-const DEADLINE: Duration = Duration::from_secs(2);
 
 const MILLI: Duration = Duration::from_millis(1);
 

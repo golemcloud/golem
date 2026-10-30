@@ -384,7 +384,7 @@ fn store_backup_options(
 
 /// One run of a save: the backup, then the publish of its snapshot file. A backup that has not
 /// returned at `backup_end` is cancelled, and the run publishes nothing. The run then cancels
-/// its token and gives the settle to the shell: the shell gives the slot back and waits until
+/// its token and gives the settle to the call driver: the driver gives the slot back and waits until
 /// every blob call of the run has ended, and then the run answers after its writes that can
 /// still land.
 #[allow(clippy::too_many_arguments)]

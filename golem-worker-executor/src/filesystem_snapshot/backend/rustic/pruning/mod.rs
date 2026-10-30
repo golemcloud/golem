@@ -137,22 +137,14 @@ pub(super) async fn when_due(
         DueCheck::NotDue => return Ok(PruneRan::Skipped(PruneSkip::NotDue)),
         DueCheck::Held => return Ok(PruneRan::Skipped(PruneSkip::ClaimedElsewhere)),
     };
-    // The token of the tracker comes before the check of the cancel, so either the delete sees
-    // a shut down and makes no more storage calls, or `shut_down` waits for the claim and for
-    // each call that the claim makes.
-    let tracked = operation.registration();
-    if operation.root().is_cancelled() {
-        anyhow::bail!("the filesystem snapshot store is shut down");
-    }
-    let spawner = operation.spawner()?;
+    let tasks = operation.cleanup_tasks()?;
     let Some(claim) = Claim::take(
         &files,
         due.claim,
         criteria.grace,
         criteria.deadline,
         Arc::clone(operation.clock()),
-        spawner,
-        tracked,
+        tasks,
     )
     .await?
     else {

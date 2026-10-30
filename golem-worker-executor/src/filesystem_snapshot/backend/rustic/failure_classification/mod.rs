@@ -153,7 +153,7 @@ pub(super) fn is_storage_failure(error: &(dyn Error + 'static)) -> bool {
 
 /// How one try of a blob call failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CallFailure {
+pub(super) enum CallFailure {
     /// The operation of the call was cancelled.
     Cancelled,
     /// The lease of the prune ran out.

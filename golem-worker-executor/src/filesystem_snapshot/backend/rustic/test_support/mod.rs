@@ -162,10 +162,10 @@ pub(super) fn repository_fixture_tree() -> Scratch {
 /// Gives the path of each blob of the scope, in the order of the paths.
 pub(super) async fn stored_paths(
     storage: &InMemoryBlobStorage,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
 ) -> Vec<String> {
     let mut paths = storage
-        .list_blobs_below("test", "test", scope.namespace().clone(), Path::new(""))
+        .list_blobs_below("test", "test", agent.namespace().clone(), Path::new(""))
         .await
         .unwrap()
         .iter()
@@ -178,11 +178,11 @@ pub(super) async fn stored_paths(
 /// Gives the id in hex of each pack of data blobs in the repository of the scope.
 pub(super) async fn data_packs(
     storage: &Arc<InMemoryBlobStorage>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
 ) -> Box<[Box<str>]> {
     with_existing_repository(
         storage.clone(),
-        scope,
+        agent,
         STORAGE_CALL_DEADLINE,
         |repository| {
             let indexes = repository
@@ -221,13 +221,13 @@ pub(super) async fn polled_until(bound: Duration, condition: impl Fn() -> bool) 
 /// calls wait for at most `deadline`.
 pub(super) fn backend_of(
     storage: Arc<dyn BlobStorage>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     deadline: Duration,
 ) -> Arc<BlobBackend> {
     Arc::new(BlobBackend::new(
         files_of(
             storage,
-            scope.namespace().clone(),
+            agent.namespace().clone(),
             deadline,
             CancellationToken::new(),
         ),
@@ -240,11 +240,11 @@ pub(super) fn backend_of(
 /// thread. Each call on the storage waits for at most `deadline`.
 pub(super) async fn with_existing_repository<R: Send + 'static>(
     storage: Arc<dyn BlobStorage>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     deadline: Duration,
     work: impl FnOnce(&RusticRepository<OpenStatus>) -> anyhow::Result<R> + Send + 'static,
 ) -> anyhow::Result<R> {
-    let backend = backend_of(storage, scope, deadline);
+    let backend = backend_of(storage, agent, deadline);
     run_blocking(move || {
         let repository =
             open_existing(backend, &repository_key())?.context("the scope has no repository")?;
@@ -290,7 +290,7 @@ pub(super) fn changed_tree(content: &str) -> Scratch {
 /// Saves the snapshots `p-<index>` for each index of `indexes`, each of its own content.
 pub(super) async fn save_numbered(
     store_with_deadline: &RusticSnapshotStore,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     indexes: std::ops::Range<usize>,
 ) {
     futures::stream::iter(indexes)
@@ -298,7 +298,7 @@ pub(super) async fn save_numbered(
             let tree = changed_tree(&format!("content {index}"));
             store_with_deadline
                 .save(
-                    scope,
+                    agent,
                     &name(&format!("p-{index}")),
                     tree.path(),
                     None,
@@ -398,20 +398,20 @@ pub(super) fn fixture_tree() -> Scratch {
 /// Restores the name into a new directory, and gives the listing of the directory.
 pub(super) async fn restored_listing(
     store: &RusticSnapshotStore,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     name: &SnapshotName,
 ) -> Result<Vec<Listed>, RestoreFailure> {
     let into = Scratch::new();
-    store.restore(scope, name, into.path(), &Unlimited).await?;
+    store.restore(agent, name, into.path(), &Unlimited).await?;
     Ok(listing(into.path()))
 }
 
 pub(super) async fn listed_names(
     store: &RusticSnapshotStore,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
 ) -> Vec<String> {
     store
-        .list(scope, &Unlimited)
+        .list(agent, &Unlimited)
         .await
         .unwrap()
         .iter()
@@ -443,29 +443,29 @@ pub(super) async fn blobs(
 /// snapshot files before the delete, and whether the prune found unused packs.
 pub(super) async fn mark_the_packs_of_a_hidden_snapshot(
     storage: Arc<dyn BlobStorage>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     grace: Duration,
 ) -> (Vec<String>, bool) {
-    let before = blobs(&*storage, scope.namespace(), "snapshots/").await;
+    let before = blobs(&*storage, agent.namespace(), "snapshots/").await;
     let no_prune = store(storage.clone(), policy(LONG_DEADLINE, NEVER, grace));
     no_prune
-        .delete(scope, &[name("p-1")], &Unlimited)
+        .delete(agent, &[name("p-1")], &Unlimited)
         .await
         .unwrap();
     no_prune.shut_down().await;
-    let hidden = blobs(&*storage, scope.namespace(), "snapshots/").await;
+    let hidden = blobs(&*storage, agent.namespace(), "snapshots/").await;
     assert_eq!(hidden.len() + 1, before.len());
     let hidden_path = Path::new(&hidden[0]);
     let hidden_bytes = storage
-        .get_raw("test", "test", scope.namespace().clone(), hidden_path)
+        .get_raw("test", "test", agent.namespace().clone(), hidden_path)
         .await
         .unwrap()
         .unwrap();
     storage
-        .delete("test", "test", scope.namespace().clone(), hidden_path)
+        .delete("test", "test", agent.namespace().clone(), hidden_path)
         .await
         .unwrap();
-    let marking = backend_of(storage.clone(), scope, LONG_DEADLINE);
+    let marking = backend_of(storage.clone(), agent, LONG_DEADLINE);
     let report =
         crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking(move || {
             crate::filesystem_snapshot::backend::rustic::pruning::prune(
@@ -484,7 +484,7 @@ pub(super) async fn mark_the_packs_of_a_hidden_snapshot(
         .put_raw(
             "test",
             "test",
-            scope.namespace().clone(),
+            agent.namespace().clone(),
             hidden_path,
             &hidden_bytes,
         )
@@ -495,12 +495,12 @@ pub(super) async fn mark_the_packs_of_a_hidden_snapshot(
 
 pub(super) async fn ledger<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
 ) -> PruneLedger {
     read_ledger(
         &files_of(
             storage.clone(),
-            scope.namespace().clone(),
+            agent.namespace().clone(),
             Duration::from_secs(2),
             CancellationToken::new(),
         ),
@@ -546,13 +546,13 @@ pub(super) fn prunes(calls: &[(&'static str, String)]) -> usize {
 }
 
 /// Saves a tree of one file with the content under each name.
-pub(super) async fn save_each(store: &RusticSnapshotStore, scope: &AgentSnapshots, names: &[&str]) {
+pub(super) async fn save_each(store: &RusticSnapshotStore, agent: &AgentSnapshots, names: &[&str]) {
     futures::stream::iter(names)
         .for_each(|text| async move {
             let tree = one_file_tree(text);
             store
                 .save(
-                    scope,
+                    agent,
                     &name(text),
                     tree.path(),
                     None,
@@ -650,9 +650,9 @@ pub(super) async fn scope_with_a_prune_to_come(
 /// Gives the snapshot files of the scope that the bridge reads, on a blocking thread.
 pub(super) async fn snapshot_files(
     storage: Arc<dyn BlobStorage>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
 ) -> Vec<rustic_core::repofile::SnapshotFile> {
-    let backend = backend_of(storage, scope, LONG_DEADLINE);
+    let backend = backend_of(storage, agent, LONG_DEADLINE);
     tokio::task::spawn_blocking(move || {
         let repository = open_existing(backend.clone(), &key()).unwrap().unwrap();
         repository_snapshots(&repository, &backend)

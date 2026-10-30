@@ -16,7 +16,6 @@ use super::{Operation, Resources};
 use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::backend::rustic::cpu_priority::LowPriority;
 use crate::filesystem_snapshot::backend::rustic::repository::RepositoryKey;
-use crate::filesystem_snapshot::backend::rustic::restore::destination::{ClearHook, NoHook};
 use crate::filesystem_snapshot::clock::{Clock, SystemClock};
 use crate::filesystem_snapshot::operation_drain::{OperationDrain, OperationLease};
 use crate::filesystem_snapshot::test_support::new_scope;
@@ -39,8 +38,6 @@ struct Fixture {
     agent: AgentSnapshots,
     key: RepositoryKey,
     clock: Arc<dyn Clock>,
-    clear_hook: Arc<dyn ClearHook>,
-    failed_prunes: std::sync::Mutex<Vec<anyhow::Error>>,
 }
 
 impl Fixture {
@@ -54,8 +51,6 @@ impl Fixture {
             agent: new_scope(),
             key: RepositoryKey::new([0; 64]),
             clock: Arc::new(SystemClock),
-            clear_hook: Arc::new(NoHook),
-            failed_prunes: std::sync::Mutex::default(),
         }
     }
 
@@ -72,8 +67,6 @@ impl Fixture {
                 deadline: Duration::from_secs(2),
                 tries: 1,
                 read_slots: &self.read_slots,
-                clear_hook: &self.clear_hook,
-                failed_prunes: &self.failed_prunes,
             },
         )
     }
@@ -160,4 +153,53 @@ async fn an_untransferred_backend_drops_before_its_run_is_cancelled() {
         observer.observed.load(std::sync::atomic::Ordering::SeqCst),
         0
     );
+}
+
+#[test]
+fn cleanup_checks_shutdown_before_capturing_a_runtime() {
+    std::thread::spawn(|| {
+        assert!(Handle::try_current().is_err());
+        let fixture = Fixture::new();
+        let lease = fixture.operations.begin(&fixture.agent);
+        let operation = fixture.operation(&lease);
+        fixture.root.cancel();
+
+        let error = operation
+            .cleanup_tasks()
+            .err()
+            .expect("shutdown must refuse cleanup creation");
+
+        assert_eq!(
+            error.to_string(),
+            "the filesystem snapshot store is shut down"
+        );
+        assert_eq!(fixture.tracker.len(), 0);
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+async fn cleanup_handoff_keeps_store_and_incarnation_registrations_until_the_task_ends() {
+    let fixture = Fixture::new();
+    let lease = fixture.operations.begin(&fixture.agent);
+    let tasks = fixture.operation(&lease).cleanup_tasks().unwrap();
+    assert_eq!(fixture.tracker.len(), 1);
+    let gate = CancellationToken::new();
+    let task = tasks.spawn({
+        let gate = gate.clone();
+        async move { gate.cancelled().await }
+    });
+    assert_eq!(fixture.tracker.len(), 2);
+    drop(tasks);
+    drop(lease);
+    assert_eq!(fixture.tracker.len(), 1);
+    let mut drained = std::pin::pin!(fixture.operations.drain_before(&fixture.agent));
+    assert!(futures::poll!(drained.as_mut()).is_pending());
+
+    gate.cancel();
+    task.await.unwrap();
+    let _drain_lease = drained.await;
+
+    assert_eq!(fixture.tracker.len(), 0);
 }

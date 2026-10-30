@@ -52,6 +52,14 @@ pub(super) struct RestoreSettings {
     pub(super) reader_threads: NonZeroUsize,
 }
 
+/// Inputs of a restore run. The clear hook observes only this operation's destination walk.
+pub(super) struct Restore<'a> {
+    pub(super) operation: &'a Operation<'a>,
+    pub(super) settings: RestoreSettings,
+    #[cfg(test)]
+    pub(super) hook: &'a Arc<dyn ClearHook>,
+}
+
 /// The most steps of one run of a restore. A run loads at most once more for each index file that
 /// its listings give, so a run that reaches this bound found new index files at each step.
 const MOST_RESTORE_STEPS: usize = 1024;
@@ -436,11 +444,12 @@ fn answer(outcome: Outcome, restoring: &mut Restoring) -> RestoreFailure {
 
 /// One run of a restore, as [`revalidation::next_step`] decides each step.
 pub(super) async fn run(
-    operation: &Operation<'_>,
-    settings: RestoreSettings,
+    restore: Restore<'_>,
     name: &SnapshotName,
     into: &Path,
 ) -> RunResult<Result<SnapshotInfo, RestoreFailure>> {
+    let operation = restore.operation;
+    let settings = restore.settings;
     let mut run_guard = operation.begin_run()?;
     let backend = run_guard.take_backend();
     let run = RestoreRun {
@@ -450,7 +459,7 @@ pub(super) async fn run(
         into: into.into(),
         options: restore_options(settings.reader_threads),
         #[cfg(test)]
-        hook: Arc::clone(operation.clear_hook()),
+        hook: Arc::clone(restore.hook),
     };
     // The index load of a restore uses rayon, so the restore runs in a pool of its own, with
     // the reader threads of a restore. The blocking thread starts the threads of that pool, so

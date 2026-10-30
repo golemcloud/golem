@@ -153,7 +153,7 @@ fn lower_own_priority() -> std::io::Result<()> {
 
 /// Gives the nice value of the calling thread.
 #[cfg(all(test, target_os = "linux"))]
-pub(super) fn own_nice() -> i32 {
+fn own_nice() -> i32 {
     // SAFETY: `gettid` has no preconditions.
     let thread = libc::id_t::try_from(unsafe { libc::gettid() }).unwrap();
     // SAFETY: `getpriority` only reads its arguments.

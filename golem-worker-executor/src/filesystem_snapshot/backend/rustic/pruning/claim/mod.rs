@@ -31,7 +31,7 @@
 
 use super::super::blob_io::{Lease, SnapshotFiles};
 use super::super::repository_layout::CLAIMS_PATH;
-use super::super::tracked_tasks::Spawner;
+use super::super::tracked_tasks::CleanupTasks;
 use super::records::PruneLedger;
 use super::timing::{beyond_margin, lease_span, passed_since, refresh_period};
 use crate::filesystem_snapshot::clock::Clock;
@@ -43,7 +43,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
-use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::warn;
 
 /// The markers of a claim that this delete keeps: the first marker, which `take_claim` also uses,
@@ -225,9 +224,8 @@ async fn write_final_marker(files: &SnapshotFiles, claim: &ClaimName, time: Time
 
 /// The claim of a prune that this delete holds.
 ///
-/// It exists before the write of the first marker. The spawner runs each cleanup that a drop or a
-/// release needs, and the token of the tracker that the claim holds stays until that task is
-/// counted, so `shut_down` waits for the claim and for each of its cleanups.
+/// It exists before the first marker write. The cleanup owner counts the claim until each cleanup
+/// needed by a drop or release has entered the store tracker. Shutdown therefore waits for both.
 pub(super) struct Claim {
     name: ClaimName,
     /// The lease of the prune. It ends one lease span after the `Instant` of the first marker. A
@@ -246,8 +244,7 @@ pub(super) struct Claim {
     files: SnapshotFiles,
     /// Gives the time of each marker.
     clock: Arc<dyn Clock>,
-    spawner: Spawner,
-    _tracked: TaskTrackerToken,
+    tasks: CleanupTasks,
 }
 
 /// The part of a claim that the blocking task of its prune holds.
@@ -274,8 +271,7 @@ impl Claim {
         grace: Duration,
         deadline: Duration,
         clock: Arc<dyn Clock>,
-        spawner: Spawner,
-        tracked: TaskTrackerToken,
+        tasks: CleanupTasks,
     ) -> anyhow::Result<Option<Claim>> {
         let span = lease_span(grace, deadline);
         let (started, time) = marker_time(&*clock);
@@ -294,8 +290,7 @@ impl Claim {
             })),
             files: files.detached(),
             clock,
-            spawner,
-            _tracked: tracked,
+            tasks,
             name,
         };
         let won = take_claim(files, &claim.name, &first).await?;
@@ -373,7 +368,7 @@ impl Claim {
     /// Runs the cleanup in a task of the spawner.
     fn spawn(&self, cleanup: Cleanup) -> JoinHandle<()> {
         let (files, name, clock) = (self.files.clone(), self.name.clone(), self.clock.clone());
-        self.spawner.spawn(async move {
+        self.tasks.spawn(async move {
             cleanup.run(&files, &name, &*clock).await;
         })
     }
@@ -503,7 +498,7 @@ fn marker_path(directory: &Path, number: u64, time: Timestamp) -> Box<Path> {
 
 /// Writes the marker at the path. The name is unique, so `AlreadyExists` means that an earlier try
 /// of this call wrote it.
-pub(super) async fn write_marker_at(
+async fn write_marker_at(
     files: &SnapshotFiles,
     op_label: &'static str,
     path: &Path,
@@ -528,7 +523,7 @@ async fn write_marker(
 /// Writes a marker of the claim. A write that succeeds and started before the end of the lease
 /// moves the end to `span` after the start of the write, when that is later. A write that started
 /// at or after the end does not move it.
-pub(super) async fn write_leased_marker(
+async fn write_leased_marker(
     files: &SnapshotFiles,
     op_label: &'static str,
     claim: &ClaimName,

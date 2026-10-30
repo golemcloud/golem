@@ -2499,24 +2499,34 @@ a runtime. The operation's fields are private. Its agent comes only from that le
 accepts no separate agent. Accessors expose the key, clock and priority; task and backend methods
 own registration. `BackendRun` keeps an untransferred backend before its cancellation guard in
 field order. Transferring the backend into a blocking task retains no extra backend owner.
+`Operation::cleanup_tasks` keeps the claim's shutdown registration and lease-backed spawner
+together. Registration still precedes the shutdown check, and runtime capture follows it.
+`tracked_tasks::check_local_path` counts read-only local checks through store shutdown, not
+incarnation drainage. These two lifetimes are distinct.
 `Operation::read_existing` opens and reads a repository in one tracked blocking task. It uses the
 caller's backend and starts no run or retry. Save keeps its cancellation link, per-run tracker and
 late-write recorders in its own setup order.
 `run_outcome` defines one `RunResult` for all operations: `Result<Ran<_>, Ended>`. An `Err` is the
 only run failure path. An `Ok` holds an answer or settlement; settlement returns the same result
-shape. `call_execution` drives runs and settlement. `clock` owns both wall and monotonic time.
+shape. `call_execution::CallDriver` drives runs and settlement, identified by `CallMethod`.
+`clock` provides the wall clock and a shared monotonic helper. The prune metric uses
+`std::time::Instant::now()` directly, so paused test clocks do not change its elapsed time.
+`retry` owns the delay calculation used by the driver and the feature-gated test limiters.
 `blob_io` is the single blob-call policy;
 `blob_backend` bridges blocking rustic calls to it. `save`, `restore`, `snapshot_catalog`,
 `snapshot_deletion` and `repository_namespace` own their operations. Save and restore also own
 their operation-specific failure classification, settings and rustic options. `store_policy`
 constructs `SaveSettings`, `RestoreSettings` and `PruneSettings` through matching factory methods.
-Restore owns its reader-thread count by value. Test observations use the borrowed resource input.
+Restore owns its reader-thread count by value. Restore and deletion inputs hold their own
+test observations; the generic operation resources do not depend on restore hooks.
 `pruning` owns its defaults, options, eligibility criteria, durable records, claims
 and timing. `tracked_tasks` retains the runtime supplied by each operation.
 Tests and single-consumer fixtures live beside their owners. The `test_support` modules hold
-shared fixtures; shared prune inputs live in `pruning/test_support`. The shared contract cases in
+shared fixtures; shared prune inputs and timing constants live in `pruning/test_support`. The shared contract cases in
 `filesystem_snapshot/tests.rs` register for both adapters and own their counting limiter. They
-use independent tree fixtures. `filesystem_snapshot/time_zone_tests.rs` checks the executor image.
+use independent tree fixtures and own their `one_file` and `files_and_bytes` helpers.
+The rustic root tests cover cross-operation races, shutdown and contract registration.
+`filesystem_snapshot/time_zone_tests.rs` checks the executor image.
 
 `StoreCalls` is the only owner of the store. The store takes a slot of its caller's limiter
 (`RunSlots`, `max_concurrent_uploads` for the uploads and deletes) for each run of a call, and

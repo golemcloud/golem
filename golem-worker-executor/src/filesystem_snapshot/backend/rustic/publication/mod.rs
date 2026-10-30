@@ -107,7 +107,7 @@ pub(super) fn backup_end(bound: Instant, deadline: Duration) -> Instant {
 /// time left of the window of the call and the time before `bound` less one deadline. Gives `None`
 /// when that is less than [`MIN_PUBLISH_TRY`]. Without a bound, the time left of the window cuts
 /// the try.
-pub(super) fn publish_try(
+fn publish_try(
     now: Instant,
     spent: Duration,
     bound: Option<Instant>,

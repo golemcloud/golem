@@ -106,7 +106,7 @@ fn each_prune_setting_goes_into_its_rustic_option() {
 /// which is more than the grace period of each test and the margin for clock skew.
 async fn age_ledger<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     ledger: &PruneLedger,
 ) {
     let back = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap() + 2 * 3_600_000;
@@ -117,14 +117,14 @@ async fn age_ledger<S: BlobStorage + 'static>(
         .delete_dir(
             "test",
             "test",
-            scope.namespace().clone(),
+            agent.namespace().clone(),
             Path::new(LEDGERS_PATH),
         )
         .await
         .unwrap();
     put_ledger_entry(
         storage,
-        scope,
+        agent,
         &format!("{aged}-{}-aged", u8::from(ledger.awaiting_removal)),
     )
     .await;
@@ -132,7 +132,7 @@ async fn age_ledger<S: BlobStorage + 'static>(
 
 /// Moves each marker of the claims of the scope back by two hours and the margin, so no marker
 /// holds its ledger.
-async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) {
+async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, agent: &AgentSnapshots) {
     let stale = golem_common::model::Timestamp::now_utc()
         .to_millis()
         .saturating_sub(2 * 3_600_000 + 2 * 60_000);
@@ -140,7 +140,7 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSna
         .list_blobs_below(
             "test",
             "test",
-            scope.namespace().clone(),
+            agent.namespace().clone(),
             Path::new("golem/prune-claims"),
         )
         .await
@@ -156,10 +156,10 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSna
         .collect::<Vec<_>>();
     futures::stream::iter(markers)
         .for_each(|(path, number)| {
-            let (storage, scope) = (storage.clone(), scope.clone());
+            let (storage, agent) = (storage.clone(), agent.clone());
             async move {
                 storage
-                    .delete("test", "test", scope.namespace().clone(), &path)
+                    .delete("test", "test", agent.namespace().clone(), &path)
                     .await
                     .unwrap();
                 let aged = path
@@ -167,7 +167,7 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSna
                     .unwrap_or(Path::new(""))
                     .join(format!("{number}@{stale}-aged"));
                 storage
-                    .put_raw("test", "test", scope.namespace().clone(), &aged, b"")
+                    .put_raw("test", "test", agent.namespace().clone(), &aged, b"")
                     .await
                     .unwrap();
             }
@@ -176,8 +176,8 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSna
 }
 
 /// Gives the entries of the claims of the scope.
-async fn claim_entries(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Vec<ClaimEntry> {
-    blobs(storage, scope.namespace(), "golem/prune-claims/")
+async fn claim_entries(storage: &ScriptedBlobStorage, agent: &AgentSnapshots) -> Vec<ClaimEntry> {
+    blobs(storage, agent.namespace(), "golem/prune-claims/")
         .await
         .iter()
         .filter_map(|path| parse_claim_entry(Path::new(path).file_name()?.to_str()?))
@@ -185,8 +185,8 @@ async fn claim_entries(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) ->
 }
 
 /// Gives the number of markers of the claims of the scope.
-async fn markers(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> usize {
-    claim_entries(storage, scope)
+async fn markers(storage: &ScriptedBlobStorage, agent: &AgentSnapshots) -> usize {
+    claim_entries(storage, agent)
         .await
         .iter()
         .filter(|entry| matches!(entry, ClaimEntry::Marker(..)))
@@ -196,14 +196,14 @@ async fn markers(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> usize
 /// Writes a ledger entry with the name.
 async fn put_ledger_entry<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     name: &str,
 ) {
     storage
         .put_raw(
             "test",
             "test",
-            scope.namespace().clone(),
+            agent.namespace().clone(),
             &Path::new(LEDGERS_PATH).join(name),
             b"",
         )
@@ -3404,8 +3404,8 @@ async fn the_claim_protocol_makes_one_store_try_for_each_call() {
 }
 
 /// Gives the path of each pack of the scope, in the order of the paths.
-async fn pack_paths(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
-    stored_paths(storage, scope)
+async fn pack_paths(storage: &InMemoryBlobStorage, agent: &AgentSnapshots) -> Vec<String> {
+    stored_paths(storage, agent)
         .await
         .into_iter()
         .filter(|path| path.starts_with("data/"))
@@ -3433,11 +3433,11 @@ fn named_file_tree(file: &'static str, content: &str) -> Scratch {
 /// blocking thread. Each call on the storage waits for at most `deadline`.
 async fn prune_with(
     storage: Arc<dyn BlobStorage>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     deadline: Duration,
     settings: PruneSettings,
 ) -> anyhow::Result<Option<PruneReport>> {
-    let backend = backend_of(storage, scope, deadline);
+    let backend = backend_of(storage, agent, deadline);
     run_blocking(move || {
         crate::filesystem_snapshot::backend::rustic::pruning::prune(
             backend,
@@ -3449,8 +3449,8 @@ async fn prune_with(
 }
 
 /// Gives the time of the newest marker of the claims of the scope.
-async fn claim_time(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Option<u64> {
-    blobs(storage, scope.namespace(), "golem/prune-claims/")
+async fn claim_time(storage: &ScriptedBlobStorage, agent: &AgentSnapshots) -> Option<u64> {
+    blobs(storage, agent.namespace(), "golem/prune-claims/")
         .await
         .iter()
         .filter_map(
@@ -4252,7 +4252,7 @@ mod schedules {
     /// Checks the rules on the end state of a case.
     async fn check(
         shared: &Arc<InMemoryBlobStorage>,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         schedule: &Schedule,
         log: &[Step],
         results: Vec<Result<Result<(), CallError>, tokio::task::JoinError>>,
@@ -4281,7 +4281,7 @@ mod schedules {
         if !failed && results.iter().any(|result| !matches!(result, Ok(Ok(())))) {
             return fail(&format!("a delete failed with no failed call: {results:?}"));
         }
-        let claims = blobs(&**shared, scope.namespace(), "golem/prune-claims/").await;
+        let claims = blobs(&**shared, agent.namespace(), "golem/prune-claims/").await;
         if !failed && !claims.is_empty() {
             return fail(&format!("claims stay: {claims:?}"));
         }
@@ -4309,9 +4309,9 @@ mod schedules {
                 "a delete made a final marker call after one that succeeded: {repeated:?}"
             ));
         }
-        let records = blobs(&**shared, scope.namespace(), "golem/prune-freed/").await;
-        let entries = blobs(&**shared, scope.namespace(), "golem/prune-ledgers/").await;
-        let ledger = ledger(shared, scope).await;
+        let records = blobs(&**shared, agent.namespace(), "golem/prune-freed/").await;
+        let entries = blobs(&**shared, agent.namespace(), "golem/prune-ledgers/").await;
+        let ledger = ledger(shared, agent).await;
         let written = |path: &str| {
             log.iter()
                 .find(|step| step.op_label == "write_freed" && step.effect && step.path == path)
@@ -4399,14 +4399,14 @@ fn data_listings(calls: &[(&'static str, String)]) -> usize {
 /// record of one freed byte.
 async fn set_last_prune<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     last_prune: golem_common::model::Timestamp,
 ) {
     storage
         .put_raw(
             "test",
             "test",
-            scope.namespace().clone(),
+            agent.namespace().clone(),
             Path::new("golem/prune-freed/1-test"),
             GONE_SNAPSHOT.as_bytes(),
         )
@@ -4416,14 +4416,14 @@ async fn set_last_prune<S: BlobStorage + 'static>(
         .delete_dir(
             "test",
             "test",
-            scope.namespace().clone(),
+            agent.namespace().clone(),
             Path::new(LEDGERS_PATH),
         )
         .await
         .unwrap();
     put_ledger_entry(
         storage,
-        scope,
+        agent,
         &format!("{}-0-test", last_prune.to_millis()),
     )
     .await;
@@ -4449,6 +4449,6 @@ fn is_backend_call(op_label: &str) -> bool {
 }
 
 /// Gives the path of each record of freed bytes of the scope.
-async fn records(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
-    blobs(storage, scope.namespace(), "golem/prune-freed/").await
+async fn records(storage: &InMemoryBlobStorage, agent: &AgentSnapshots) -> Vec<String> {
+    blobs(storage, agent.namespace(), "golem/prune-freed/").await
 }

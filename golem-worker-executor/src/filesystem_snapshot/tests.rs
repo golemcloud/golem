@@ -38,7 +38,7 @@
 //! ```
 
 use super::test_support::fixture::{
-    Listed, Scratch, Spec, files_and_bytes, fixture, listing, one_file, pattern, write_tree,
+    Listed, ListedKind, Scratch, Spec, fixture, listing, pattern, write_tree,
 };
 use super::test_support::{OpenStore, new_scope};
 use super::{
@@ -56,6 +56,28 @@ use std::time::Duration;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::test;
 use tokio_util::task::AbortOnDropHandle;
+
+/// Gives the number of regular files in the listing and the sum of their sizes.
+fn files_and_bytes(listed: &[Listed]) -> (u64, u64) {
+    listed
+        .iter()
+        .filter_map(|entry| match entry.kind {
+            ListedKind::File { size, .. } => Some(size),
+            ListedKind::Directory | ListedKind::Symlink(_) => None,
+        })
+        .fold((0, 0), |(files, bytes), size| (files + 1, bytes + size))
+}
+
+/// A tree of one file with the content.
+fn one_file(content: &str) -> Vec<(&'static str, Spec)> {
+    vec![(
+        "file.txt",
+        Spec::File {
+            content: Box::from(content.as_bytes()),
+            mode: 0o644,
+        },
+    )]
+}
 
 /// A limiter that counts its takes and the slots that live, and keeps the most slots that lived at
 /// once. With a withdrawal, each take gives it.
@@ -300,27 +322,27 @@ fn new_tree(entries: &[(&str, Spec)]) -> Scratch {
 /// info that the restore gave.
 async fn restored(
     store: &dyn FilesystemSnapshotStore,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     name: &SnapshotName,
 ) -> Result<(Vec<Listed>, SnapshotInfo), RestoreFailure> {
     let into = Scratch::new();
-    let info = store.restore(scope, name, into.path(), &slots()).await?;
+    let info = store.restore(agent, name, into.path(), &slots()).await?;
     Ok((listing(into.path()), info))
 }
 
 /// Gives the listing of the restored snapshot, or panics with the error of the restore.
 async fn restored_listing(
     store: &dyn FilesystemSnapshotStore,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     name: &SnapshotName,
 ) -> Vec<Listed> {
-    restored(store, scope, name).await.unwrap().0
+    restored(store, agent, name).await.unwrap().0
 }
 
 /// Gives the names of the listing of a scope, in the order of the listing.
-async fn listed_names(store: &dyn FilesystemSnapshotStore, scope: &AgentSnapshots) -> Vec<String> {
+async fn listed_names(store: &dyn FilesystemSnapshotStore, agent: &AgentSnapshots) -> Vec<String> {
     store
-        .list(scope, &slots())
+        .list(agent, &slots())
         .await
         .unwrap()
         .iter()

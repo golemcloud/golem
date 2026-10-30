@@ -16,7 +16,7 @@
 //!
 //! A call runs one or more times. Each run takes a slot of the limiter of the call before it
 //! starts, and frees the slot and all that it holds when it ends. [`next_run`] decides what the
-//! call does after each run, and [`Shell`] does what it decides. The shell only records what each
+//! call does after each run, and [`CallDriver`] does what it decides. The driver only records what each
 //! take, run, wait and check gave, and at a take it looks at the shutdown first, then the cancel,
 //! then the limiter.
 
@@ -24,20 +24,20 @@ use super::run_outcome::{Checked, OwnFile, Ran, RunEnd, RunResult, Settle, Settl
 use crate::filesystem_snapshot::SnapshotInfo;
 use crate::filesystem_snapshot::clock::monotonic_now as now;
 use crate::filesystem_snapshot::errors::Failed;
+use crate::filesystem_snapshot::retry::run_delay;
 use crate::filesystem_snapshot::run_admission::{
     RunSlots, Slot, Withdrawal, WithdrawnCall, withdrawn_call,
 };
 use golem_common::model::RetryConfig;
-use golem_common::retries::get_delay;
 use rand::Rng as _;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 /// The most runs of one call that end because another call of the agent made their work invalid.
 const MOST_RACE_RUNS: u32 = 8;
 
 /// The method of a call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Kind {
+pub(super) enum CallMethod {
     Save,
     Restore,
     Copy,
@@ -48,7 +48,7 @@ pub(super) enum Kind {
 }
 
 /// Where a call stands after its last step: how its last run ended, or what its last take or wait
-/// gave. Only the shell makes the states that are not the end of a run, so a run cannot give one.
+/// gave. Only the driver makes the states that are not the end of a run, so a run cannot give one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stand {
     /// A run gave the answer of the call.
@@ -75,7 +75,7 @@ struct Late {
 /// What the call saw before it decides its next step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RunSeen {
-    kind: Kind,
+    method: CallMethod,
     /// The runs that ended `CallFailed`, the last one included.
     failed_runs: u32,
     /// The runs that ended `RaceRunAgain`, the last one included.
@@ -164,14 +164,14 @@ fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> NextRun {
             NextRun::Answer(RunOutcome::TooLate)
         }
         (Stand::SlotTaken, _, _) => NextRun::Start,
-        (_, Some((until, None)), _) => match seen.kind {
-            Kind::Save => NextRun::WaitThenCheck(until),
-            Kind::Restore
-            | Kind::Copy
-            | Kind::Delete
-            | Kind::DeleteAll
-            | Kind::List
-            | Kind::Stat => NextRun::WaitThenRun {
+        (_, Some((until, None)), _) => match seen.method {
+            CallMethod::Save => NextRun::WaitThenCheck(until),
+            CallMethod::Restore
+            | CallMethod::Copy
+            | CallMethod::Delete
+            | CallMethod::DeleteAll
+            | CallMethod::List
+            | CallMethod::Stat => NextRun::WaitThenRun {
                 until,
                 after_failure: false,
             },
@@ -211,25 +211,6 @@ fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> NextRun {
     }
 }
 
-/// The wait before the next run after `failed_runs` runs failed, or `None` when no run follows.
-/// `jitter` is the jitter factor that the caller drew below the `max_jitter_factor` of `retry`:
-/// the wait grows by that part of itself, and stays at most the `max_delay` of `retry`. A jitter
-/// that is negative or not a number counts as none, and a wait too large for a [`Duration`] is
-/// the `max_delay`, so no jitter panics.
-pub(crate) fn run_delay(retry: &RetryConfig, failed_runs: u32, jitter: f64) -> Option<Duration> {
-    let without_jitter = RetryConfig {
-        max_jitter_factor: None,
-        ..retry.clone()
-    };
-    let base = get_delay(&without_jitter, failed_runs)?;
-    let grown = base.as_secs_f64() * (1.0 + jitter.max(0.0));
-    Some(
-        Duration::try_from_secs_f64(grown)
-            .unwrap_or(retry.max_delay)
-            .min(retry.max_delay),
-    )
-}
-
 /// Draws the jitter factor of a wait below the `max_jitter_factor` of `retry`. A factor of 0 or
 /// none gives no jitter.
 fn jitter(retry: &RetryConfig) -> f64 {
@@ -239,7 +220,7 @@ fn jitter(retry: &RetryConfig) -> f64 {
         .map_or(0.0, |factor| rand::rng().random_range(0.0..factor))
 }
 
-/// What a run gets from the shell.
+/// What a run gets from the driver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RunStart {
     /// The instant of the first slot of the call.
@@ -248,13 +229,13 @@ pub(super) struct RunStart {
     pub(super) number: u32,
 }
 
-/// How the shell gives a failure and a stop as the answer of one method.
+/// How the driver gives a failure and a stop as the answer of one method.
 pub(super) struct Answers<T> {
     pub(super) failed: fn(Failed) -> T,
     pub(super) stopped: fn(Withdrawal) -> T,
 }
 
-/// How the shell gives what the check of the own name of a save found as the answer of the save.
+/// How the driver gives what the check of the own name of a save found as the answer of the save.
 /// Only a save checks its own name.
 pub(super) struct OwnName<T> {
     pub(super) saved: fn(SnapshotInfo) -> T,
@@ -263,8 +244,8 @@ pub(super) struct OwnName<T> {
 
 /// The runs of one call: its method, its limiter, the root of the store, the cancel of a save, and
 /// the runs after a failed call.
-pub(super) struct Shell<'a> {
-    pub(super) kind: Kind,
+pub(super) struct CallDriver<'a> {
+    pub(super) method: CallMethod,
     pub(super) slots: &'a dyn RunSlots,
     /// Cancelled when the store shuts down.
     pub(super) root: &'a CancellationToken,
@@ -294,14 +275,14 @@ struct Calling<T> {
     answer: Option<T>,
 }
 
-/// The next step of the shell.
+/// The next step of the driver.
 enum Step {
     Take { immediate: bool },
     Run,
     Decide,
 }
 
-impl Shell<'_> {
+impl CallDriver<'_> {
     /// Runs a call that writes no snapshot file to its final answer. `run` does one run under a
     /// slot; it gets the instant of the first slot of the call and the number of the run.
     pub(super) async fn call<T, R, F>(&self, answers: Answers<T>, run: R) -> T
@@ -519,7 +500,7 @@ impl Shell<'_> {
         G: Future<Output = Checked>,
     {
         let seen = RunSeen {
-            kind: self.kind,
+            method: self.method,
             failed_runs: calling.failed_runs,
             races: calling.races,
             ran: calling.ran,

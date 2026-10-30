@@ -147,17 +147,6 @@ pub(in crate::filesystem_snapshot) fn mode_of(metadata: &Metadata) -> u32 {
     u32::from(metadata.permissions().readonly())
 }
 
-/// Gives the number of regular files in the listing and the sum of their sizes.
-pub(in crate::filesystem_snapshot) fn files_and_bytes(listed: &[Listed]) -> (u64, u64) {
-    listed
-        .iter()
-        .filter_map(|entry| match entry.kind {
-            ListedKind::File { size, .. } => Some(size),
-            ListedKind::Directory | ListedKind::Symlink(_) => None,
-        })
-        .fold((0, 0), |(files, bytes), size| (files + 1, bytes + size))
-}
-
 /// One entry of a tree that the suite writes.
 pub(in crate::filesystem_snapshot) enum Spec {
     Directory { mode: u32 },
@@ -378,15 +367,4 @@ pub(in crate::filesystem_snapshot) fn fixture() -> Vec<(&'static str, Spec)> {
             },
         ),
     ]
-}
-
-/// A tree of one file with the content.
-pub(in crate::filesystem_snapshot) fn one_file(content: &str) -> Vec<(&'static str, Spec)> {
-    vec![(
-        "file.txt",
-        Spec::File {
-            content: Box::from(content.as_bytes()),
-            mode: 0o644,
-        },
-    )]
 }

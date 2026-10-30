@@ -79,10 +79,10 @@ async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_
 }
 
 /// Gives the id in hex of each pack of tree blobs in the repository of the scope.
-async fn tree_packs(storage: &Arc<InMemoryBlobStorage>, scope: &AgentSnapshots) -> Box<[Box<str>]> {
+async fn tree_packs(storage: &Arc<InMemoryBlobStorage>, agent: &AgentSnapshots) -> Box<[Box<str>]> {
     with_existing_repository(
         storage.clone(),
-        scope,
+        agent,
         STORAGE_CALL_DEADLINE,
         |repository| {
             let indexes = repository

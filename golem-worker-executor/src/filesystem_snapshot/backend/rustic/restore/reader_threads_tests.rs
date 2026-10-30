@@ -100,12 +100,12 @@ async fn a_restore_reads_data_on_at_most_its_reader_threads() {
 /// restores that snapshot into the empty directory `into` with the options, on a blocking thread.
 async fn restore_named(
     storage: Arc<dyn BlobStorage>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
     name: &SnapshotName,
     into: &Path,
     options: RestoreOptions,
 ) -> anyhow::Result<()> {
-    let backend = backend_of(storage, scope, STORAGE_CALL_DEADLINE);
+    let backend = backend_of(storage, agent, STORAGE_CALL_DEADLINE);
     let (name, into) = (name.clone(), Box::<Path>::from(into));
     run_blocking(move || {
         let repository =

@@ -16,9 +16,10 @@ use super::super::run_outcome::{
     Checked, Ended, LateWrite, OwnFile, Ran, RunEnd, RunResult, Settle, Settled,
 };
 use super::{
-    Answers, Kind, Late, MOST_RACE_RUNS, NextRun, OwnName, RunOutcome, RunSeen, Shell, Stand,
-    jitter, next_run, run_delay,
+    Answers, CallDriver, CallMethod, Late, MOST_RACE_RUNS, NextRun, OwnName, RunOutcome, RunSeen,
+    Stand, jitter, next_run,
 };
+use crate::filesystem_snapshot::test_support::retry_script as retry;
 use crate::filesystem_snapshot::{Failed, RunSlots, Slot, SnapshotInfo, Withdrawal};
 use futures::future::BoxFuture;
 use golem_common::model::{RetryConfig, Timestamp};
@@ -28,15 +29,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use test_r::test;
 use tokio_util::sync::CancellationToken;
-fn retry() -> RetryConfig {
-    RetryConfig {
-        max_attempts: 5,
-        min_delay: Duration::from_secs(2),
-        max_delay: Duration::from_secs(120),
-        multiplier: 4.0,
-        max_jitter_factor: None,
-    }
-}
 
 fn info() -> SnapshotInfo {
     SnapshotInfo {
@@ -46,10 +38,10 @@ fn info() -> SnapshotInfo {
     }
 }
 
-/// What a call of `kind` saw when it stood at `stand`, with nothing else.
-fn seen(kind: Kind, stand: Stand, now: Instant) -> RunSeen {
+/// What a call of `method` saw when it stood at `stand`, with nothing else.
+fn seen(method: CallMethod, stand: Stand, now: Instant) -> RunSeen {
     RunSeen {
-        kind,
+        method,
         failed_runs: u32::from(stand == Stand::Ended(RunEnd::CallFailed)),
         races: u32::from(stand == Stand::Ended(RunEnd::RaceRunAgain)),
         ran: stand == Stand::Ended(RunEnd::CallFailed),
@@ -77,73 +69,85 @@ fn each_row_of_next_run_decides_in_its_fixed_order() {
             // 0: an answer with a late write waits for it.
             decide(RunSeen {
                 late: late(until, None),
-                ..seen(Kind::Copy, Stand::Answered, now)
+                ..seen(CallMethod::Copy, Stand::Answered, now)
             }),
             // 1: an answer comes first, also with a late write and a shutdown.
             decide(RunSeen {
                 late: late(until, None),
                 shut_down: true,
-                ..seen(Kind::Save, Stand::Answered, now)
+                ..seen(CallMethod::Save, Stand::Answered, now)
             }),
             // 2: a shutdown does not wait for a write that can still land.
             decide(RunSeen {
                 late: late(until, None),
                 withdrawn: Some(Withdrawal::Deadline),
                 shut_down: true,
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             // 3: a late write of a save is waited for and checked, before a withdrawal and a
             // cancel.
             decide(RunSeen {
                 late: late(until, None),
                 withdrawn: Some(Withdrawal::Stopped),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::Cancelled), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::Cancelled), now)
             }),
             // 3: a late write of a copy is waited for, before every terminal row.
             decide(RunSeen {
                 late: late(until, None),
-                ..seen(Kind::Copy, Stand::Ended(RunEnd::Permanent), now)
+                ..seen(CallMethod::Copy, Stand::Ended(RunEnd::Permanent), now)
             }),
             // 4 to 6: the check decides, before a withdrawal.
             decide(RunSeen {
                 late: late(until, Some(Checked::Found(info()))),
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 late: late(until, Some(Checked::Other)),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 late: late(until, Some(Checked::Unreadable)),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             // 7 to 9: a withdrawal.
             decide(RunSeen {
                 withdrawn: Some(Withdrawal::Stopped),
-                ..seen(Kind::Delete, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Delete, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Save, Stand::NotRun, now)
+                ..seen(CallMethod::Save, Stand::NotRun, now)
             }),
-            // 10: a cancel, in a run or at a take or a wait of the shell.
-            decide(seen(Kind::Save, Stand::Ended(RunEnd::Cancelled), now)),
-            decide(seen(Kind::Save, Stand::Cancelled, now)),
+            // 10: a cancel, in a run or at a take or a wait of the driver.
+            decide(seen(CallMethod::Save, Stand::Ended(RunEnd::Cancelled), now)),
+            decide(seen(CallMethod::Save, Stand::Cancelled, now)),
             // 11: a failed call runs again after the wait of the retries.
-            decide(seen(Kind::Delete, Stand::Ended(RunEnd::CallFailed), now)),
+            decide(seen(
+                CallMethod::Delete,
+                Stand::Ended(RunEnd::CallFailed),
+                now
+            )),
             // 12: other failures.
-            decide(seen(Kind::Save, Stand::Ended(RunEnd::Permanent), now)),
-            decide(seen(Kind::Save, Stand::Ended(RunEnd::BoundPassed), now)),
+            decide(seen(CallMethod::Save, Stand::Ended(RunEnd::Permanent), now)),
+            decide(seen(
+                CallMethod::Save,
+                Stand::Ended(RunEnd::BoundPassed),
+                now
+            )),
             // 13 and 14: races.
-            decide(seen(Kind::Restore, Stand::Ended(RunEnd::RaceRunAgain), now)),
+            decide(seen(
+                CallMethod::Restore,
+                Stand::Ended(RunEnd::RaceRunAgain),
+                now
+            )),
             decide(RunSeen {
                 races: MOST_RACE_RUNS,
-                ..seen(Kind::Restore, Stand::Ended(RunEnd::RaceRunAgain), now)
+                ..seen(CallMethod::Restore, Stand::Ended(RunEnd::RaceRunAgain), now)
             }),
         ],
         [
@@ -185,22 +189,22 @@ fn a_granted_slot_starts_its_run_only_before_the_end_of_the_backup_and_after_a_s
 
     assert_eq!(
         [
-            decide(seen(Kind::Save, Stand::SlotTaken, now)),
+            decide(seen(CallMethod::Save, Stand::SlotTaken, now)),
             decide(RunSeen {
                 backup_end: Some(now + Duration::from_millis(1)),
-                ..seen(Kind::Save, Stand::SlotTaken, now)
+                ..seen(CallMethod::Save, Stand::SlotTaken, now)
             }),
             decide(RunSeen {
                 backup_end: Some(now),
-                ..seen(Kind::Save, Stand::SlotTaken, now)
+                ..seen(CallMethod::Save, Stand::SlotTaken, now)
             }),
             decide(RunSeen {
                 shut_down: true,
-                ..seen(Kind::Save, Stand::SlotTaken, now)
+                ..seen(CallMethod::Save, Stand::SlotTaken, now)
             }),
             decide(RunSeen {
                 late: late(now + Duration::from_secs(60), None),
-                ..seen(Kind::Delete, Stand::SlotTaken, now)
+                ..seen(CallMethod::Delete, Stand::SlotTaken, now)
             }),
         ],
         [
@@ -223,27 +227,27 @@ fn a_failed_call_runs_again_only_within_the_retries_and_when_its_wait_ends_befor
         [
             decide(RunSeen {
                 failed_runs: 4,
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 failed_runs: 5,
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 backup_end: Some(now + Duration::from_millis(2001)),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 backup_end: Some(now + Duration::from_secs(2)),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 backup_end: Some(now + Duration::from_millis(1)),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 backup_end: Some(now),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
         ],
         [
@@ -274,16 +278,16 @@ fn only_the_wait_after_a_failed_run_tells_the_limiter() {
 
     assert_eq!(
         [
-            seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now),
+            seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now),
             RunSeen {
                 late: late(until, None),
-                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Save, Stand::Ended(RunEnd::CallFailed), now)
             },
             RunSeen {
                 late: late(until, None),
-                ..seen(Kind::Copy, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Copy, Stand::Ended(RunEnd::CallFailed), now)
             },
-            seen(Kind::Restore, Stand::Ended(RunEnd::RaceRunAgain), now),
+            seen(CallMethod::Restore, Stand::Ended(RunEnd::RaceRunAgain), now),
         ]
         .map(|seen| after_failure(next_run(&seen, &retry(), 0.0))),
         [Some(true), None, Some(false), None]
@@ -301,18 +305,18 @@ fn a_deadline_after_a_race_run_and_no_failed_run_gives_no_slot_and_after_races_t
             decide(RunSeen {
                 races: 2,
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Restore, Stand::NotRun, now)
+                ..seen(CallMethod::Restore, Stand::NotRun, now)
             }),
             decide(RunSeen {
                 races: 2,
                 failed_runs: 1,
                 ran: true,
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Restore, Stand::NotRun, now)
+                ..seen(CallMethod::Restore, Stand::NotRun, now)
             }),
             decide(RunSeen {
                 races: 3,
-                ..seen(Kind::Restore, Stand::Ended(RunEnd::CallFailed), now)
+                ..seen(CallMethod::Restore, Stand::Ended(RunEnd::CallFailed), now)
             }),
         ],
         [
@@ -322,68 +326,6 @@ fn a_deadline_after_a_race_run_and_no_failed_run_gives_no_slot_and_after_races_t
                 until: now + Duration::from_secs(2),
                 after_failure: true
             },
-        ]
-    );
-}
-
-#[test]
-fn only_a_failed_call_within_the_retries_gets_a_wait() {
-    let retry = RetryConfig {
-        max_attempts: 3,
-        ..retry()
-    };
-
-    assert_eq!(
-        [
-            run_delay(&retry, 1, 0.0),
-            run_delay(&retry, 2, 0.0),
-            run_delay(&retry, 3, 0.0),
-        ],
-        [
-            Some(Duration::from_secs(2)),
-            Some(Duration::from_secs(8)),
-            None
-        ]
-    );
-}
-
-#[test]
-fn a_jitter_that_is_negative_not_a_number_or_huge_never_panics() {
-    let retry = RetryConfig {
-        max_delay: Duration::from_secs(20),
-        max_jitter_factor: Some(1.0),
-        ..retry()
-    };
-
-    assert_eq!(
-        [-0.5, f64::NAN, 1e300, f64::INFINITY].map(|jitter| run_delay(&retry, 1, jitter)),
-        [
-            Some(Duration::from_secs(2)),
-            Some(Duration::from_secs(2)),
-            Some(Duration::from_secs(20)),
-            Some(Duration::from_secs(20)),
-        ]
-    );
-}
-
-#[test]
-fn the_drawn_jitter_grows_the_wait_up_to_the_largest_wait() {
-    let retry = RetryConfig {
-        max_delay: Duration::from_secs(20),
-        max_jitter_factor: Some(0.5),
-        ..retry()
-    };
-
-    assert_eq!(
-        [
-            run_delay(&retry, 1, 0.25),
-            run_delay(&retry, 2, 0.5),
-            run_delay(&retry, 3, 0.1),
-        ],
-        [
-            Some(Duration::from_millis(2500)),
-            Some(Duration::from_secs(12)),
-            Some(Duration::from_secs(20)),
         ]
     );
 }
@@ -403,7 +345,7 @@ fn a_jitter_is_drawn_below_a_positive_factor_and_is_zero_otherwise() {
     assert!(drawn.iter().any(|factor| *factor > 0.0));
 }
 
-/// A limiter that grants each take, records what the shell tells it, and withdraws the call after
+/// A limiter that grants each take, records what the driver tells it, and withdraws the call after
 /// `withdraw_after` takes.
 struct Recording {
     events: Mutex<Vec<&'static str>>,
@@ -504,8 +446,8 @@ fn the_shell_tells_its_limiter_before_a_wait_for_late_writes_and_before_a_wait_a
         let slots = Recording::new();
         let root = CancellationToken::new();
         let retry = retry();
-        let shell = Shell {
-            kind: Kind::Save,
+        let driver = CallDriver {
+            method: CallMethod::Save,
             slots: &slots,
             root: &root,
             cancel: None,
@@ -515,7 +457,7 @@ fn the_shell_tells_its_limiter_before_a_wait_for_late_writes_and_before_a_wait_a
         let checks = Mutex::new(Vec::new());
 
         // Run 1 loses a publish; the check finds nothing. Run 2 fails a call. Run 3 answers.
-        let answer = shell
+        let answer = driver
             .save(
                 answers(),
                 own_name(),
@@ -569,8 +511,8 @@ fn a_save_with_two_lost_publishes_waits_for_and_checks_each_and_answers_with_the
         let slots = Recording::new();
         let root = CancellationToken::new();
         let retry = retry();
-        let shell = Shell {
-            kind: Kind::Save,
+        let driver = CallDriver {
+            method: CallMethod::Save,
             slots: &slots,
             root: &root,
             cancel: None,
@@ -580,7 +522,7 @@ fn a_save_with_two_lost_publishes_waits_for_and_checks_each_and_answers_with_the
         let checks = Mutex::new(0u32);
         let started = super::now();
 
-        let answer = shell
+        let answer = driver
             .save(
                 answers(),
                 own_name(),
@@ -635,8 +577,8 @@ fn a_withdrawal_during_the_wait_after_a_failed_run_ends_the_call_and_a_shutdown_
         let slots = Recording::new();
         let root = CancellationToken::new();
         let retry = retry();
-        let shell = |kind| Shell {
-            kind,
+        let driver = |method| CallDriver {
+            method,
             slots: &slots,
             root: &root,
             cancel: None,
@@ -645,7 +587,7 @@ fn a_withdrawal_during_the_wait_after_a_failed_run_ends_the_call_and_a_shutdown_
         slots.withdraw.cancel();
         let checks = Mutex::new(0u32);
 
-        let withdrawn = shell(Kind::Delete)
+        let withdrawn = driver(CallMethod::Delete)
             .call(answers(), |_| async { ended(RunEnd::CallFailed, None) })
             .await;
         let stopping = root.clone();
@@ -654,7 +596,7 @@ fn a_withdrawal_during_the_wait_after_a_failed_run_ends_the_call_and_a_shutdown_
             stopping.cancel();
         });
         let started = tokio::time::Instant::now();
-        let shut_down = shell(Kind::Save)
+        let shut_down = driver(CallMethod::Save)
             .save(
                 answers(),
                 own_name(),
@@ -732,8 +674,8 @@ async fn settled_call(
 ) {
     let slots = SlotWatch::default();
     let retry = retry();
-    let shell = Shell {
-        kind: Kind::Save,
+    let driver = CallDriver {
+        method: CallMethod::Save,
         slots: &slots,
         root: &root,
         cancel: None,
@@ -741,7 +683,7 @@ async fn settled_call(
     };
     let gate = CancellationToken::new();
     let finished = Arc::new(Mutex::new(None::<Settled>));
-    let call = shell.save(
+    let call = driver.save(
         answers(),
         own_name(),
         |_| None,

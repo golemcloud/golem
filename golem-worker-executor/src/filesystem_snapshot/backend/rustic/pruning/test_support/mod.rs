@@ -27,7 +27,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
-const DEADLINE: Duration = Duration::from_secs(2);
+pub(super) const GRACE: Duration = Duration::from_secs(15 * 60);
+pub(super) const DEADLINE: Duration = Duration::from_secs(2);
+
+/// The grace period and the margin for clock skew, in milliseconds.
+pub(super) const HELD_MILLIS: u64 = 15 * 60 * 1000 + 2 * 60 * 1000;
+
+/// The grace period less one deadline, then the skew margin and two deadlines.
+pub(super) const HOLD_MILLIS: u64 = HELD_MILLIS + 2 * 1000;
 
 pub(super) fn at(millis: u64) -> Timestamp {
     Timestamp::from(millis)
@@ -65,13 +72,13 @@ pub(super) fn files_with_cancel(
 /// Gives the sum of the bytes in the names of the records of freed bytes of the scope.
 pub(in crate::filesystem_snapshot::backend::rustic) async fn freed<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &AgentSnapshots,
+    agent: &AgentSnapshots,
 ) -> u64 {
     let listed = storage
         .list_blobs_below(
             "test",
             "test",
-            scope.namespace().clone(),
+            agent.namespace().clone(),
             Path::new("golem/prune-freed"),
         )
         .await

@@ -21,10 +21,8 @@ use super::blob_backend::{BlobBackend, TREE_PACK_CACHE_LIMIT};
 use super::blob_io::SnapshotFiles;
 use super::cpu_priority::LowPriority;
 use super::repository::{RepositoryKey, open_existing};
-#[cfg(test)]
-use super::restore::destination::ClearHook;
 use super::run_outcome::{Ended, RunEnd};
-use super::tracked_tasks::{Spawner, run_blocking};
+use super::tracked_tasks::{CleanupTasks, Spawner, run_blocking};
 use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::clock::Clock;
 use crate::filesystem_snapshot::operation_drain::OperationLease;
@@ -37,7 +35,6 @@ use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
-use tokio_util::task::task_tracker::TaskTrackerToken;
 
 /// Borrowed inputs used only to construct an operation. Construction does not register work.
 pub(super) struct Resources<'a> {
@@ -50,10 +47,6 @@ pub(super) struct Resources<'a> {
     pub(super) deadline: Duration,
     pub(super) tries: u32,
     pub(super) read_slots: &'a Arc<Semaphore>,
-    #[cfg(test)]
-    pub(super) clear_hook: &'a Arc<dyn ClearHook>,
-    #[cfg(test)]
-    pub(super) failed_prunes: &'a std::sync::Mutex<Vec<anyhow::Error>>,
 }
 
 pub(super) struct Operation<'a> {
@@ -115,8 +108,14 @@ impl<'a> Operation<'a> {
         self.resources.low_priority
     }
 
-    pub(super) fn registration(&self) -> TaskTrackerToken {
-        self.resources.tracker.token()
+    /// Registers cleanup before checking shutdown, and captures its runtime only after that check.
+    /// The registration and lease-backed spawner remain one owner until cleanup is counted.
+    pub(super) fn cleanup_tasks(&self) -> anyhow::Result<CleanupTasks> {
+        let tracked = self.resources.tracker.token();
+        if self.root().is_cancelled() {
+            anyhow::bail!("the filesystem snapshot store is shut down");
+        }
+        Ok(CleanupTasks::new(self.spawner()?, tracked))
     }
 
     pub(super) fn run_token(&self) -> (CancellationToken, DropGuard) {
@@ -144,7 +143,7 @@ impl<'a> Operation<'a> {
             .reading_under(self.resources.read_slots.clone()))
     }
 
-    pub(super) fn spawner(&self) -> anyhow::Result<Spawner> {
+    fn spawner(&self) -> anyhow::Result<Spawner> {
         Ok(Spawner::new(
             self.resources.tracker.clone(),
             runtime()?,
@@ -207,20 +206,6 @@ impl<'a> Operation<'a> {
             read(repository, &backend)
         })
         .await
-    }
-
-    #[cfg(test)]
-    pub(super) fn clear_hook(&self) -> &Arc<dyn ClearHook> {
-        self.resources.clear_hook
-    }
-
-    #[cfg(test)]
-    pub(super) fn record_prune_failure(&self, error: anyhow::Error) {
-        self.resources
-            .failed_prunes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(error);
     }
 }
 

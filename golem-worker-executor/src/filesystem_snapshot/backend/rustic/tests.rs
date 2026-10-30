@@ -755,12 +755,12 @@ mod marked_packs {
     /// Saves the tree at `path` under `name`.
     async fn save_tree(
         store: &RusticSnapshotStore,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         path: &Path,
     ) -> Result<(), Box<str>> {
         store
-            .save(scope, name, path, None, never_cancelled(), &Unlimited)
+            .save(agent, name, path, None, never_cancelled(), &Unlimited)
             .await
             .map(|_| ())
             .map_err(|error| format!("the save of {name} gave {error:?}").into())
@@ -769,11 +769,11 @@ mod marked_packs {
     /// Deletes `name`.
     async fn delete_name(
         store: &RusticSnapshotStore,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<(), Box<str>> {
         store
-            .delete(scope, std::slice::from_ref(name), &Unlimited)
+            .delete(agent, std::slice::from_ref(name), &Unlimited)
             .await
             .map_err(|error| format!("the delete of {name} gave {error:?}").into())
     }
@@ -781,14 +781,14 @@ mod marked_packs {
     /// Restores `p-2`, and checks that the restore gives `tree` in its first run.
     async fn restore_whole(
         store: &RusticSnapshotStore,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         tree: &Path,
         when: &str,
     ) -> Result<(), Box<str>> {
         let takes = Takes::default();
         let into = Scratch::new();
         match store
-            .restore(scope, &name("p-2"), into.path(), &takes)
+            .restore(agent, &name("p-2"), into.path(), &takes)
             .await
         {
             Ok(_) if listing(into.path()) == listing(tree) && takes.count() == 1 => Ok(()),
@@ -802,8 +802,8 @@ mod marked_packs {
     }
 
     /// Gives the packs of the scope.
-    async fn packs(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Box<[Box<str>]> {
-        blobs(storage, scope.namespace(), "data/")
+    async fn packs(storage: &ScriptedBlobStorage, agent: &AgentSnapshots) -> Box<[Box<str>]> {
+        blobs(storage, agent.namespace(), "data/")
             .await
             .into_iter()
             .map(String::into_boxed_str)
@@ -812,8 +812,8 @@ mod marked_packs {
 
     /// Gives whether an index file of the scope marks a pack for deletion. The restore sweep starts
     /// with marked packs, which the prune of its race takes back, so only the save sweep counts them.
-    async fn any_marked(storage: Arc<ScriptedBlobStorage>, scope: &AgentSnapshots) -> bool {
-        let backend = backend_of(storage, scope, LONG_DEADLINE);
+    async fn any_marked(storage: Arc<ScriptedBlobStorage>, agent: &AgentSnapshots) -> bool {
+        let backend = backend_of(storage, agent, LONG_DEADLINE);
         crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking(move || {
             let repository = open_existing(backend, &key())?.expect("the repository is there");
             repository
@@ -965,11 +965,11 @@ mod marked_packs {
     async fn hide_while_marked(
         store: &RusticSnapshotStore,
         storage: &Arc<ScriptedBlobStorage>,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         tree: &Path,
     ) {
-        save_tree(store, scope, &name("p-2"), tree).await.unwrap();
-        let (_, unused) = mark_the_packs_of_a_hidden_snapshot(storage.clone(), scope, GRACE).await;
+        save_tree(store, agent, &name("p-2"), tree).await.unwrap();
+        let (_, unused) = mark_the_packs_of_a_hidden_snapshot(storage.clone(), agent, GRACE).await;
         assert!(unused);
     }
 
@@ -981,13 +981,13 @@ mod marked_packs {
         store: &RusticSnapshotStore,
         later: &RusticSnapshotStore,
         storage: &Arc<ScriptedBlobStorage>,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         tree: &Path,
         filler: &Path,
         packs_of_the_tree: &[Box<str>],
     ) -> Option<Box<str>> {
         let kept = |when: &'static str| async move {
-            let left = packs(storage, scope).await;
+            let left = packs(storage, agent).await;
             if packs_of_the_tree.iter().all(|pack| left.contains(pack)) {
                 Ok(())
             } else {
@@ -995,25 +995,25 @@ mod marked_packs {
             }
         };
         let steps = async {
-            restore_whole(store, scope, tree, "after the race").await?;
+            restore_whole(store, agent, tree, "after the race").await?;
             // A later prune, which sees `p-2`.
-            save_tree(later, scope, &name("p-4"), filler).await?;
-            delete_name(later, scope, &name("p-4")).await?;
+            save_tree(later, agent, &name("p-4"), filler).await?;
+            delete_name(later, agent, &name("p-4")).await?;
             kept("after a prune that sees p-2").await?;
-            restore_whole(store, scope, tree, "after a later prune").await?;
+            restore_whole(store, agent, tree, "after a later prune").await?;
             // The delete of `p-2`, whose prune marks the packs of the tree.
             let marking = store_ahead(storage.clone(), 4 * GRACE);
-            let marked = delete_name(&marking, scope, &name("p-2")).await;
+            let marked = delete_name(&marking, agent, &name("p-2")).await;
             marking.shut_down().await;
             marked?;
             kept("after the prune that marked them").await?;
             // The next prune, after the grace period, deletes them. rustic dates a mark with the clock
             // of the host, so this prune has no grace period in place of a clock that is ahead.
             let deleting = store_with_grace(storage.clone(), 6 * GRACE, Duration::ZERO);
-            let deleted = delete_name(&deleting, scope, &name("p-none")).await;
+            let deleted = delete_name(&deleting, agent, &name("p-none")).await;
             deleting.shut_down().await;
             deleted?;
-            let left = packs(storage, scope).await;
+            let left = packs(storage, agent).await;
             if packs_of_the_tree.iter().any(|pack| left.contains(pack)) {
                 Err(
                     "a pack of the tree stayed after a prune that sees no snapshot that uses it"
@@ -1337,12 +1337,12 @@ mod restore_prune_races {
     /// Saves the tree at `path` under `name`.
     async fn save_tree(
         store: &RusticSnapshotStore,
-        scope: &AgentSnapshots,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         path: &Path,
     ) {
         store
-            .save(scope, name, path, None, never_cancelled(), &Unlimited)
+            .save(agent, name, path, None, never_cancelled(), &Unlimited)
             .await
             .unwrap();
     }
@@ -1719,13 +1719,12 @@ async fn shut_down_waits_for_the_check_of_a_local_path() {
     let checking = AbortOnDropHandle::new(tokio::spawn({
         let (store, path) = (store.clone(), tree.path().to_path_buf());
         async move {
-            store
-                .check_path(&path, move |_| {
-                    let _ = reached_sender.send(());
-                    let _ = opened.recv();
-                    Ok(())
-                })
-                .await
+            super::tracked_tasks::check_local_path(&store.tracker, &path, move |_| {
+                let _ = reached_sender.send(());
+                let _ = opened.recv();
+                Ok(())
+            })
+            .await
         }
     }));
     let reached = tokio::task::spawn_blocking(move || reached.recv_timeout(LIMIT).is_ok())
