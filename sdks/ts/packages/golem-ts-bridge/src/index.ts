@@ -1466,7 +1466,8 @@ export class StreamingProtocolError extends Error {
 /**
  * A streaming call that could not reach the server within its reconnect window. `lastCause` is
  * the last failure: a `StreamingProtocolError` for a refused upgrade (`handshake-failed`) or a
- * retryable rejection, or an `Error` for a connection failure.
+ * retryable rejection, or an `Error` for a connection failure or a start or resume the server
+ * never answered.
  */
 export class StreamingUnreachableError extends Error {
   constructor(
@@ -3529,6 +3530,7 @@ class StreamingSession {
   private acceptedAt?: number;
   private reconnectDelayMs = 0;
   private lastFailure?: Error;
+  private answerTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly configuration: Configuration,
@@ -3732,6 +3734,7 @@ class StreamingSession {
         try {
           operationSent = true;
           socket.send(this.pendingOperation);
+          this.awaitAnswer(socket);
           resolveOnce();
         } catch (error) {
           operationSent = false;
@@ -3763,6 +3766,7 @@ class StreamingSession {
           rejectOnce(new RetryableStreamingConnectionError(error));
       });
       socket.on('close', () => {
+        clearTimeout(this.answerTimer);
         if (!operationSent) {
           if (!definitiveFailure)
             rejectOnce(
@@ -3812,6 +3816,30 @@ class StreamingSession {
         this.attemptFailed(cutShort ? (this.lastFailure ?? error.failure) : error.failure);
       }
     }
+  }
+
+  /**
+   * Fails the call once the reconnect window ends while the server has answered neither the start
+   * nor the resume sent on `socket`. An accepted operation waits without a deadline.
+   */
+  private awaitAnswer(socket: WebSocket): void {
+    const left = this.windowLeft();
+    if (left === undefined) return;
+    clearTimeout(this.answerTimer);
+    this.answerTimer = setTimeout(
+      () => {
+        if (this.socket !== socket || this.accepted || this.finished) return;
+        this.fail(
+          new StreamingUnreachableError(
+            this.endpoint().url,
+            this.reconnectWindowMs!,
+            new Error('the server answered neither the start nor the resume'),
+          ),
+        );
+        socket.terminate();
+      },
+      Math.max(0, left),
+    );
   }
 
   private windowLeft(): number | undefined {

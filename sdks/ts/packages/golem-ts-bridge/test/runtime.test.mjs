@@ -2856,6 +2856,28 @@ test('retryable rejections past the window are unreachable', async () => {
   }
 });
 
+test('a start the server never answers is unreachable after the window', async () => {
+  let connections = 0;
+  const local = await server(() => {
+    connections += 1;
+  });
+  try {
+    const started = Date.now();
+    const error = await plainMethod({ server: local.endpoint, reconnectWindowMs: 400 })().then(
+      () => assert.fail('an unanswered start succeeded'),
+      (error) => error,
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(error instanceof StreamingUnreachableError, String(error));
+    assert.equal(error.reconnectWindowMs, 400);
+    assert.match(error.lastCause.message, /answered neither the start nor the resume/);
+    assert.ok(elapsed >= 390 && elapsed < 3000, `gave up after ${elapsed} ms`);
+    assert.equal(connections, 1);
+  } finally {
+    await local.close();
+  }
+});
+
 test('a server that drops every start is unreachable after the window, with backoff', async () => {
   let connections = 0;
   const local = await server((socket) => {
