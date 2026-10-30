@@ -314,16 +314,16 @@ pub(all) struct KernelModule {
 /// The host currently accepts only `Agent` targets. `Account` and `App`
 /// targets fail with `PermissionError::NotPermitted`.
 pub(all) enum Holder {
-  Account(@types.Uuid)
-  App(@types.Uuid)
+  Account(@schema.Uuid)
+  App(@schema.Uuid)
   Agent(@types.AgentId)
 } derive(Eq, Debug)
 
 ///|
 fn Holder::to_raw(self : Holder) -> @raw.Holder {
   match self {
-    Account(uuid) => Account(uuid)
-    App(uuid) => App(uuid)
+    Account(uuid) => Account(uuid.to_wit())
+    App(uuid) => App(uuid.to_wit())
     Agent(agent_id) => Agent(agent_id)
   }
 }

@@ -172,7 +172,7 @@ async fn start_interrupting_websocket_proxy(
     (proxy_url, observed, handle)
 }
 
-async fn run_generated_driver(command: std::process::Command) -> std::process::Output {
+pub(super) async fn run_generated_driver(command: std::process::Command) -> std::process::Output {
     tokio::task::spawn_blocking(move || {
         let mut command = command;
         let program = Path::new(command.get_program())
@@ -202,7 +202,7 @@ async fn run_generated_driver(command: std::process::Command) -> std::process::O
     .unwrap()
 }
 
-fn assert_generated_driver(output: std::process::Output, language: &str, marker: &str) {
+pub(super) fn assert_generated_driver(output: std::process::Output, language: &str, marker: &str) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

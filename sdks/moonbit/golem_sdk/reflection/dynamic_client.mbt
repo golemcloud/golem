@@ -38,7 +38,7 @@ pub fn DynamicAgentClient::lookup(
 pub fn DynamicAgentClient::resume_phantom(
   type_name : String,
   constructor_value : @model.SchemaValue,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
 ) -> DynamicAgentClient raise ReflectError {
   DynamicAgentClient::from_agent_id(
     ParsedAgentId::create(
@@ -56,7 +56,7 @@ pub fn DynamicAgentClient::new_phantom(
   type_name : String,
   constructor_value : @model.SchemaValue,
 ) -> CreatedPhantomClient raise ReflectError {
-  let phantom_id = @apiHost.generate_idempotency_key()
+  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
   let agent_id = ParsedAgentId::create(
     type_name,
     constructor_value,
