@@ -49,11 +49,10 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio::sync::oneshot;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, FutureConsumer, FutureProducer, FutureReader, Resource, Source,
-    StreamReader,
+    Access, Accessor, FutureConsumer, FutureProducer, FutureReader, Resource, Source, StreamReader,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
-use wasmtime_wasi_http::p3::WasiHttp;
+use wasmtime_wasi_http::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::types;
 use wasmtime_wasi_http::p3::bindings::http::types::{
     ErrorCode, Headers, Request, RequestOptions, Trailers,
@@ -1322,7 +1321,8 @@ pub(super) fn start_transmission_recording<Ctx, U>(
     pending: Option<PendingHttpRequestBodyTransmission>,
     observational_owner: Option<OplogIndex>,
     invocation_id: InvocationIdSource,
-) where
+) -> wasmtime::Result<()>
+where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
@@ -1332,13 +1332,15 @@ pub(super) fn start_transmission_recording<Ctx, U>(
                 .tail_work_tracker()
                 .activity()
         });
-        store.spawn(HttpRequestBodyTransmissionTask::<Ctx>::new(
+        let task = HttpRequestBodyTransmissionTask::<Ctx>::new(
             pending,
             observational_owner,
             invocation_id,
             activity,
-        ));
+        );
+        store.spawn(async move |store| task.run(store).await)?;
     }
+    Ok(())
 }
 
 /// Fail the durable transmission task loudly on a durability-machinery error,
@@ -1422,12 +1424,11 @@ impl<Ctx> HttpRequestBodyTransmissionTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for HttpRequestBodyTransmissionTask<Ctx>
+impl<Ctx> HttpRequestBodyTransmissionTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: 'static>(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
         let Self {
             raw_rx,
             resolution_tx,
@@ -1572,12 +1573,14 @@ impl<Ctx> HttpRequestTransmissionPassthroughTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for HttpRequestTransmissionPassthroughTask<Ctx>
+impl<Ctx> HttpRequestTransmissionPassthroughTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: 'static,
 {
-    async fn run(self, _accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: 'static>(
+        self,
+        _accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         // Safe park: the raw value is a pure function of guest behaviour (a
         // guest-side `consume-body` or `drop`), and forwarding it writes no
         // durable entries.
@@ -1597,7 +1600,7 @@ where
 pub(super) fn detach_request_transmission_passthrough<Ctx: WorkerCtx, U: Send + 'static>(
     store: &mut Access<U, DurableP3<Ctx>>,
     request_rep: u32,
-) {
+) -> wasmtime::Result<()> {
     let pending = {
         let mut store_ctx = store.as_context_mut();
         let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
@@ -1612,10 +1615,10 @@ pub(super) fn detach_request_transmission_passthrough<Ctx: WorkerCtx, U: Send + 
                 .tail_work_tracker()
                 .activity()
         };
-        store.spawn(HttpRequestTransmissionPassthroughTask::<Ctx>::new(
-            pending, activity,
-        ));
+        let task = HttpRequestTransmissionPassthroughTask::<Ctx>::new(pending, activity);
+        store.spawn(async move |store| task.run(store).await)?;
     }
+    Ok(())
 }
 
 /// Renders the request URI of a serialized outgoing p3 HTTP request the same
@@ -1695,7 +1698,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
             "http::types::request",
             "consume-body",
         );
-        detach_request_transmission_passthrough::<Ctx, U>(&mut store, req.rep());
+        detach_request_transmission_passthrough::<Ctx, U>(&mut store, req.rep())?;
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostRequestWithStore<U>>::consume_body(store, req, fut)
     }
@@ -1706,7 +1709,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
             "http::types::request",
             "drop",
         );
-        detach_request_transmission_passthrough::<Ctx, U>(&mut store, req.rep());
+        detach_request_transmission_passthrough::<Ctx, U>(&mut store, req.rep())?;
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostRequestWithStore<U>>::drop(store, req)
     }

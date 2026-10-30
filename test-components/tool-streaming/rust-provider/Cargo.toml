@@ -14,5 +14,5 @@ path = "src/lib.rs"
 [dependencies]
 futures-concurrency = "7.6.3"
 golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0", features = ["async", "async-spawn"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "67b83d42c135db8c5c42bf26c53ec162bbdca5ea", version = "=0.63.0", features = ["async", "async-spawn"] }
 wasi = { version = "=0.14.7+wasi-0.2.4" }

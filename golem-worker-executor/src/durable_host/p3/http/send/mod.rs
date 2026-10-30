@@ -65,8 +65,8 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::AsContextMut;
 use wasmtime::component::{Accessor, Resource, TerminalConsumption};
-use wasmtime_wasi_http::P3PooledConnection;
-use wasmtime_wasi_http::p3::WasiHttp;
+use wasmtime_wasi_http::PooledConnection;
+use wasmtime_wasi_http::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::client;
 use wasmtime_wasi_http::p3::bindings::http::types::{ErrorCode, Request, Response};
 
@@ -193,7 +193,8 @@ where
     // Start admission itself can await a replay claim while the guest drops this send.
     // Keep request cleanup owned by the Store until either replay or live send takes it.
     let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
-    spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
+    spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx)
+        .map_err(HttpError::trap)?;
     let quota_request = host_request.clone();
     let mut handle =
         DurableCallSession::<P3HttpClientSend, P>::start_access_with_options_and_indexed_span(
@@ -389,12 +390,15 @@ where
                         // Spawns the demand-gated transmission recorder
                         // at the same point as the live path, so a demanded
                         // recording's `Start` is claimed where it was appended.
-                        start_transmission_recording::<Ctx, U>(
+                        if let Err(error) = start_transmission_recording::<Ctx, U>(
                             store,
                             pending_transmission,
                             observational_owner,
                             invocation_id,
-                        );
+                        ) {
+                            delivery.suppress();
+                            return Err(HttpError::trap(error));
+                        }
                         if delivery.is_replay_discarded() {
                             // The recorded run persisted this send's `End` but the guest
                             // dropped the send future before it returned. The recorded
@@ -424,12 +428,15 @@ where
                         // Spawns the demand-gated transmission recorder
                         // at the same point as the live path, so a demanded
                         // recording's `Start` is claimed where it was appended.
-                        start_transmission_recording::<Ctx, U>(
+                        if let Err(error) = start_transmission_recording::<Ctx, U>(
                             store,
                             pending_transmission,
                             observational_owner,
                             invocation_id,
-                        );
+                        ) {
+                            delivery.suppress();
+                            return Err(HttpError::trap(error));
+                        }
                         if delivery.is_replay_discarded() {
                             // The recorded run persisted this send's `End` but the guest
                             // dropped the send future before the error was returned. The
@@ -496,12 +503,15 @@ where
                         delivery.suppress();
                         return Err(HttpError::trap(error));
                     }
-                    start_transmission_recording::<Ctx, U>(
+                    if let Err(error) = start_transmission_recording::<Ctx, U>(
                         store,
                         pending_transmission,
                         observational_owner,
                         invocation_id,
-                    );
+                    ) {
+                        delivery.suppress();
+                        return Err(HttpError::trap(error));
+                    }
                     span.claim_closure();
                     send_terminal
                         .attach(store, delivery)
@@ -546,16 +556,21 @@ where
                     scan,
                     recovery,
                 ));
-                let request = build_rebuilt_request(
-                    &rebuild,
-                    &[],
-                    restored_body.as_ref().unwrap().replayer().boxed_unsync(),
-                )
-                .map_err(|error| {
-                    HttpError::trap(wasmtime::Error::from_anyhow(
-                        handle.trap(WorkerExecutorError::runtime(error)),
-                    ))
-                })?;
+                let request = store
+                    .with(|mut access| {
+                        let view = wasi_http_view::<Ctx, U>(access.data_mut());
+                        build_rebuilt_request(
+                            view.hooks,
+                            &rebuild,
+                            &[],
+                            restored_body.as_ref().unwrap().replayer().boxed_unsync(),
+                        )
+                    })
+                    .map_err(|error| {
+                        HttpError::trap(wasmtime::Error::from_anyhow(
+                            handle.trap(WorkerExecutorError::runtime(error)),
+                        ))
+                    })?;
                 req = store
                     .with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>)
                     .with(|mut access| access.get().table.push(request))
@@ -589,12 +604,15 @@ where
                 .await
                 .map_err(HttpError::trap)?;
         }
-        start_transmission_recording::<Ctx, U>(
+        if let Err(error) = start_transmission_recording::<Ctx, U>(
             store,
             pending_transmission,
             observational_owner,
             invocation_id,
-        );
+        ) {
+            delivery.suppress();
+            return Err(HttpError::trap(error));
+        }
         span.claim_closure();
         send_terminal
             .attach(store, delivery)
@@ -685,12 +703,15 @@ where
                     delivery.suppress();
                     return Err(HttpError::trap(error));
                 }
-                start_transmission_recording::<Ctx, U>(
+                if let Err(error) = start_transmission_recording::<Ctx, U>(
                     store,
                     pending_transmission,
                     observational_owner,
                     invocation_id,
-                );
+                ) {
+                    delivery.suppress();
+                    return Err(HttpError::trap(error));
+                }
                 // The guest-visible error return below still crosses Wasmtime's lowering
                 // and terminal-consumption boundary: hand the token to the terminal
                 // observer instead of consuming it here.
@@ -705,12 +726,15 @@ where
                 finish_p3_send_span::<Ctx, U>(store, &span)
                     .await
                     .map_err(HttpError::trap)?;
-                start_transmission_recording::<Ctx, U>(
+                if let Err(error) = start_transmission_recording::<Ctx, U>(
                     store,
                     pending_transmission,
                     observational_owner,
                     invocation_id,
-                );
+                ) {
+                    delivery.suppress();
+                    return Err(HttpError::trap(error));
+                }
                 delivery.delivered();
             }
             return Err(error_code.into());
@@ -1024,12 +1048,15 @@ where
             // deterministic point (right after the send `End`, mirrored by the
             // replay arm above): if the guest reads the transmission future,
             // the result is recorded here; otherwise no entries are written.
-            start_transmission_recording::<Ctx, U>(
+            if let Err(error) = start_transmission_recording::<Ctx, U>(
                 store,
                 pending_transmission,
                 observational_owner,
                 invocation_id,
-            );
+            ) {
+                delivery.suppress();
+                return Err(HttpError::trap(error));
+            }
             // Everything since the `End` was synchronous, so no tear window remains between
             // here and handing the token to Wasmtime's terminal observer, which settles it
             // when the guest actually consumes (or discards) the lowered response.
@@ -1125,12 +1152,15 @@ where
             // send consumed the request even on failure, so a demanded
             // transmission result — `Ok(())` from the dropped I/O wiring,
             // or a deterministic body-validation error — still resolves.
-            start_transmission_recording::<Ctx, U>(
+            if let Err(error) = start_transmission_recording::<Ctx, U>(
                 store,
                 pending_transmission,
                 observational_owner,
                 invocation_id,
-            );
+            ) {
+                delivery.suppress();
+                return Err(HttpError::trap(error));
+            }
             // The guest-visible error return below still crosses Wasmtime's lowering and
             // terminal-consumption boundary: hand the token to the terminal observer instead
             // of consuming it here.
@@ -1160,12 +1190,13 @@ pub(super) enum PhysicalSend<Ctx: WorkerCtx> {
 
 pub(super) struct PhysicalSendRequest<Ctx: WorkerCtx> {
     pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+    hooks: crate::durable_host::DurableHttpHooks,
     method: http::Method,
     uri: http::Uri,
     version: http::Version,
     headers: HeaderMap,
     body: DurableRequestBody,
-    options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+    options: Option<wasmtime_wasi_http::RequestOptions>,
     final_transmission_tx: oneshot::Sender<Result<(), ErrorCode>>,
     _phantom: PhantomData<fn() -> Ctx>,
 }

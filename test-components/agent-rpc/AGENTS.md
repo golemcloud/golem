@@ -240,6 +240,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-custom-snapshot-ts` | Enabling snapshotting and custom snapshot save/load functions |
 | `golem-retry-policies-ts` | Configuring semantic retry policies |
 | `golem-quota-ts` | Adding resource quotas (rate limiting, capacity, concurrency) |
+| `golem-permission-card-ts` | Managing permission cards: wallet, derive, inspect, revoke, install, and scope cards on RPC calls |
 | `golem-add-postgres-ts` | Connecting to PostgreSQL with `golem:rdbms/postgres` |
 | `golem-add-mysql-ts` | Connecting to MySQL with `golem:rdbms/mysql` |
 | `golem-add-ignite-ts` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` |
@@ -473,6 +474,15 @@ Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 - Sagas — `compensable(run, compensate)` steps composed with `fallibleSaga(...)` / `infallibleSaga(...)` for transactional compensation.
 - Promises (human-in-the-loop) — `createPromise()`, `await awaitPromise(id)`, `completePromise(id, bytes)`.
 
+**Custom durability is sequential-only.** `durable` supports properly nested calls and an async
+body that awaits host calls when no unrelated guest work runs during the wait. Do not overlap it
+with other promises or callbacks, including ordinary host calls: sibling effects can acquire the
+wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably detected.
+Await each nested operation; do not detach work. Stop and join outstanding work before the body
+exits, including on failure. `Promise.all` rejection does not join surviving siblings, and joining
+at the end does not make concurrent custom operations supported. Ordinary built-in durability is
+not subject to this restriction when no custom operation is active.
+
 ## Available Libraries
 
 - `@golemcloud/golem-ts-sdk` — the agent framework, schema markers, host helpers, typed keyvalue / blobstore / rdbms / websocket surfaces.
@@ -571,6 +581,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-config-moonbit` | Adding typed configuration to a MoonBit Golem agent |
 | `golem-add-secret-moonbit` | Adding secrets to MoonBit Golem agents |
 | `golem-quota-moonbit` | Adding resource quotas (rate limiting, capacity, concurrency) to MoonBit Golem agents using QuotaToken and reservations |
+| `golem-permission-card-moonbit` | Deriving, inspecting, revoking, and installing permission cards, and attaching scope cards to RPC calls |
 | `golem-retry-policies-moonbit` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `with_named_policy!`, and live CLI management |
 | `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
@@ -634,7 +645,7 @@ golem.yaml                        # Root application manifest
 moon.mod.json                     # Module definition (deps, preferred-target: wasm)
 moon.pkg                          # Root package config
 <component>/                      # Component package (each becomes a WASM component)
-  moon.pkg                        # Package config (imports, is-main, link exports)
+  moon.pkg                        # Package config (imports, foreign_library, link exports)
   counter.mbt                     # Agent definition
   golem_reexports.mbt             # Generated — re-exports WASM entry points from SDK
   golem_agents.mbt                # Generated — agent registration and RawAgent dispatch
@@ -667,7 +678,8 @@ All MoonBit identifiers are used **as-is** (matching the source code) when used 
 - Do NOT manually edit generated files (`golem_reexports.mbt`, `golem_agents.mbt`, `golem_derive.mbt`, `golem_clients.mbt`)
 - Do NOT manually edit files in `wit/` directories — they are managed by the SDK
 - `golem-temp/` and `_build/` are gitignored build artifacts
-- The `fn main {}` block must exist in the main package (can be empty)
+- Component packages use `pkgtype(kind: "foreign_library")` and must not contain `fn main`
+- Generated `fn init` registration runs at instantiation through the Wasm start section; there is no `_start` export
 - Multiple agents can coexist in the same package
 
 ## Coding Convention

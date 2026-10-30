@@ -96,7 +96,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use wasmtime::component::{
-    Accessor, AccessorTask, Destination, HasSelf, RuntimeActivityId, StreamProducer, StreamResult,
+    Accessor, Destination, HasSelf, RuntimeActivityId, StreamProducer, StreamResult,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 

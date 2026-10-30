@@ -236,7 +236,6 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 pub use durability::*;
@@ -288,7 +287,6 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use http_body_util::BodyExt;
-use http_body_util::combinators::UnsyncBoxBody;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -309,17 +307,14 @@ use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
 };
-use wasmtime_wasi_http::p3::RequestOptions;
-use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-use wasmtime_wasi_http::{HttpConnectionPool, WasiHttpCtx};
+use wasmtime_wasi_http::{HttpConnectionPool, RequestOptions, WasiHttpCtx};
 
 /// Hooks providing the custom HTTP request handling needed for durable
 /// execution. Stored on `DurableWorkerCtx` and exposed via `WasiHttpCtxView`
 /// for `wasmtime-wasi-http`.
+#[derive(Clone)]
 pub struct DurableHttpHooks {
-    /// Connection pool used for outgoing HTTP requests. Mirror of
-    /// `WasiHttpCtx::connection_pool` so that `WasiHttpHooks::send_request`
-    /// can construct the deferred future without re-borrowing `WasiHttpCtx`.
+    /// Connection pool used for outgoing HTTP requests.
     pub connection_pool: Option<HttpConnectionPool>,
     /// Shared replay flag that durable execution toggles when transitioning
     /// between live and replay modes. When `true`, outgoing HTTP requests are

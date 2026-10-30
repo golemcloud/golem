@@ -2,7 +2,6 @@ mod bindings {
     wit_bindgen::generate!({
         path: "wit",
         world: "delivery-order",
-        async: true,
     });
 
     use super::Component;

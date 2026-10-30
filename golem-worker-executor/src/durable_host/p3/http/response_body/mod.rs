@@ -67,16 +67,17 @@ use std::task::{Context, Poll};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tracing::debug;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, Destination, FutureProducer, FutureReader, Resource,
-    StreamProducer, StreamReader, StreamResult, TerminalConsumption,
+    Access, Accessor, Destination, FutureProducer, FutureReader, Resource, StreamProducer,
+    StreamReader, StreamResult, TerminalConsumption,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::FieldMap;
+use wasmtime_wasi_http::p3::HostBodyStreamProducer;
 use wasmtime_wasi_http::p3::bindings::http::types;
 use wasmtime_wasi_http::p3::bindings::http::types::{
     ErrorCode, Headers, Response, StatusCode, Trailers,
 };
-use wasmtime_wasi_http::p3::{HostBodyStreamProducer, WasiHttp, WasiHttpView};
+use wasmtime_wasi_http::{WasiHttp, WasiHttpView};
 
 mod consumer;
 mod producer;
@@ -212,23 +213,29 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // Recover the host body producer so we can drive and record the body
         // transfer ourselves. Responses obtained from `client.send` (live or
         // replayed) always carry a host-constructed body, so this succeeds.
-        let body =
-            match upstream_stream.try_into::<HostBodyStreamProducer<U>>(store.as_context_mut()) {
-                Ok(mut producer) => {
-                    let body = producer.take_body();
-                    // Dropping the now-empty producer resolves the upstream
-                    // trailers future (`Ok(None)`), which we discard below.
-                    drop(producer);
-                    body
-                }
-                Err(stream) => {
-                    // Guest-constructed response body (not from `send`): fall back
-                    // to the non-durable passthrough. No state was registered for
-                    // such responses (`response_state` is `None` here).
-                    debug_assert!(response_state.is_none());
-                    return Ok((stream, upstream_trailers));
-                }
-            };
+        let body = match upstream_stream.try_into::<HostBodyStreamProducer>(store.as_context_mut())
+        {
+            Ok(mut producer) => {
+                let body = producer.take_body();
+                // Dropping the now-empty producer resolves the upstream
+                // trailers future (`Ok(None)`), which we discard below.
+                drop(producer);
+                body
+            }
+            Err(stream) => {
+                // Guest-constructed response body (not from `send`): fall back
+                // to the non-durable passthrough. No state was registered for
+                // such responses (`response_state` is `None` here).
+                debug_assert!(response_state.is_none());
+                return Ok((stream, upstream_trailers));
+            }
+        };
+        let mut hooks = durable_worker_ctx::<Ctx, U>(store.as_context_mut().data_mut())
+            .http_hooks
+            .clone();
+        let body = body
+            .map_err(move |error| hooks.transport_error_to_p3(&error))
+            .boxed_unsync();
         // A consume-body inside a custom durable invocation is not claimed on replay, whichever
         // invocation observed the send, so it takes no ordinal from the root counter.
         let observed_by_custom_invocation = store
@@ -298,7 +305,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                 .tail_work_tracker()
                 .activity()
         };
-        store.spawn(HttpConsumeBodyTask::<Ctx>::new(
+        let task = HttpConsumeBodyTask::<Ctx>::new(
             body,
             demand_rx,
             demand_signal,
@@ -307,7 +314,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             response_state,
             invocation_id,
             activity,
-        ));
+        );
+        if let Err(err) = store.spawn(async move |accessor| task.run(accessor).await) {
+            let _ = trailers.close(store.as_context_mut());
+            let _ = stream.close(store.as_context_mut());
+            return Err(err);
+        }
         Ok((stream, trailers))
     }
 

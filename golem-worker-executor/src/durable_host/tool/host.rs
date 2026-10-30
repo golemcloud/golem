@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use wasmtime::component::Access;
+
 use super::{
     Accessor, AttachmentMemory, ByteStreamCloseCause, ByteStreamFailure, CallReplayOutcome,
     DurabilityHost, DurableCallSession, DurableFunctionType, DurableWorkerCtx, EntityCallMode,
@@ -217,33 +219,31 @@ pub(super) fn allocate_stdin<Ctx: WorkerCtx>(
 
 impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
     async fn create_stdin_from_stream(
-        accessor: &Accessor<U, Self>,
+        mut access: Access<'_, U, Self>,
         source: StreamReader<Result<Vec<u8>, ByteStreamFailure>>,
     ) -> anyhow::Result<Resource<ToolStdinEntry>> {
-        accessor.with(|mut access| {
-            let ctx = access.get();
-            let memory = AttachmentMemory::for_store(
-                ctx.public_state.worker().active_agents(),
-                ctx.state.is_live(),
-            );
-            let (producer, consumer, observer) =
-                attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
-            let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
-            let (items, received) = mpsc::unbounded_channel();
-            if let Err(error) =
-                source.pipe(&mut access, ToolStdinStreamConsumer::new(items, observer))
-            {
-                access.get().table().delete(stdin)?;
-                return Err(error.into());
-            }
-            access.spawn(ToolStdinStreamPumpTask::<Ctx> {
-                producer,
-                items: received,
-                source_cancel: None,
-                _ctx: std::marker::PhantomData,
-            });
-            Ok(stdin)
-        })
+        let ctx = access.get();
+        let memory = AttachmentMemory::for_store(
+            ctx.public_state.worker().active_agents(),
+            ctx.state.is_live(),
+        );
+        let (producer, consumer, observer) =
+            attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
+        let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
+        let (items, received) = mpsc::unbounded_channel();
+        if let Err(error) = source.pipe(&mut access, ToolStdinStreamConsumer::new(items, observer))
+        {
+            access.get().table().delete(stdin)?;
+            return Err(error.into());
+        }
+        let task = ToolStdinStreamPumpTask::<Ctx> {
+            producer,
+            items: received,
+            source_cancel: None,
+            _ctx: std::marker::PhantomData,
+        };
+        access.spawn(async move |access| task.run(access).await)?;
+        Ok(stdin)
     }
 
     async fn create_output(
@@ -394,7 +394,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
         let mut response_edge = None;
         if let Ok(input) = &attempt.input {
             let mut streams =
-                crate::durable_host::schema_value_stream::ExecutorProjectionStreams::new(accessor);
+                crate::durable_host::schema_value_stream::ExecutorProjectionStreams::new(accessor)?;
             match boundary::prepare_underlying_tool_call(
                 &underlying.position,
                 command_path.clone(),
@@ -529,7 +529,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
                 let mut streams =
                     crate::durable_host::schema_value_stream::ExecutorProjectionStreams::new(
                         &accessor,
-                    );
+                    )?;
                 boundary::project_underlying_tool_response(response, &edge, &mut streams)
             } else {
                 response

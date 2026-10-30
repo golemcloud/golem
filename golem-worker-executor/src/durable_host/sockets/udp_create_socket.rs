@@ -21,11 +21,11 @@ use wasmtime_wasi::p2::bindings::sockets::udp_create_socket::{Host, IpAddressFam
 use wasmtime_wasi::sockets::WasiSocketsView as _;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn create_udp_socket(
+    async fn create_udp_socket(
         &mut self,
         address_family: IpAddressFamily,
     ) -> Result<Resource<UdpSocket>, SocketError> {
         self.observe_function_call("sockets::udp_create_socket", "create_udp_socket");
-        Host::create_udp_socket(&mut self.as_wasi_view().sockets(), address_family)
+        Host::create_udp_socket(&mut self.as_wasi_view().sockets(), address_family).await
     }
 }

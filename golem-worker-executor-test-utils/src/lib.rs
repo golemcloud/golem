@@ -3428,8 +3428,8 @@ impl wasmtime_wasi::WasiView for TestWorkerCtx {
     }
 }
 
-impl wasmtime_wasi_http::p3::WasiHttpView for TestWorkerCtx {
-    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+impl wasmtime_wasi_http::WasiHttpView for TestWorkerCtx {
+    fn http(&mut self) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
         self.durable_ctx.as_wasi_http_view_p3()
     }
 }

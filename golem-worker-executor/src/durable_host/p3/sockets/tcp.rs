@@ -53,8 +53,8 @@ use tokio_util::sync::PollSender;
 use wasmtime::AsContextMut;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, Destination, FutureConsumer, FutureReader, Resource, Source,
-    StreamConsumer, StreamProducer, StreamReader, StreamResult,
+    Access, Accessor, Destination, FutureConsumer, FutureReader, Resource, Source, StreamConsumer,
+    StreamProducer, StreamReader, StreamResult,
 };
 use wasmtime_wasi::p3::bindings::sockets::types;
 use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
@@ -780,12 +780,14 @@ impl<Ctx> TcpSocketSendTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for TcpSocketSendTask<Ctx>
+impl<Ctx> TcpSocketSendTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: Send + 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: Send + 'static>(
+        self,
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         let TcpSocketSendTask {
             call,
             mode,
@@ -909,12 +911,14 @@ impl<Ctx> TcpSocketReceiveTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for TcpSocketReceiveTask<Ctx>
+impl<Ctx> TcpSocketReceiveTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: Send + 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: Send + 'static>(
+        self,
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         let scope = accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
                 .public_state
@@ -1478,8 +1482,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             .map_err(|error| types::ErrorCode::from(error).into())
     }
 
-    fn listen(
-        mut store: Access<U, Self>,
+    async fn listen(
+        mut store: Access<'_, U, Self>,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<StreamReader<Resource<TcpSocket>>> {
         observe_function_call_store::<Ctx, U>(
@@ -1489,7 +1493,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         );
         let store =
             Access::<U, WasiSockets>::new(store.as_context_mut(), wasi_sockets_view::<Ctx, U>);
-        <WasiSockets as types::HostTcpSocketWithStore<U>>::listen(store, socket)
+        <WasiSockets as types::HostTcpSocketWithStore<U>>::listen(store, socket).await
     }
 
     async fn send(
@@ -1551,12 +1555,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                     .tail_work_tracker()
                     .activity();
-                store.spawn(TcpSocketSendTask::<Ctx>::live(
-                    call,
-                    socket_result_rx,
-                    result_tx,
-                    activity,
-                ));
+                let task =
+                    TcpSocketSendTask::<Ctx>::live(call, socket_result_rx, result_tx, activity);
+                store.spawn(async move |store| task.run(store).await)?;
                 FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
             })
         } else {
@@ -1567,9 +1568,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                     .tail_work_tracker()
                     .activity();
-                store.spawn(TcpSocketSendTask::<Ctx>::replay(
-                    call, input_rx, result_tx, activity,
-                ));
+                let task = TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
+                store.spawn(async move |store| task.run(store).await)?;
                 FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
             })
         }
@@ -1625,14 +1625,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
                 .activity();
-            store.spawn(TcpSocketReceiveTask::<Ctx>::new(
+            let task = TcpSocketReceiveTask::<Ctx>::new(
                 socket,
                 demand_rx,
                 result_tx,
                 observational_owner,
                 invocation_id,
                 activity,
-            ));
+            );
+            store.spawn(async move |store| task.run(store).await)?;
             Ok((stream, future))
         })
     }

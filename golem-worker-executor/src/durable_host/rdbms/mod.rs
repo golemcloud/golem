@@ -70,7 +70,7 @@ pub(crate) async fn cleanup_trapped_transactions<Ctx: WorkerCtx>(
     }
 
     let mut transactions = Vec::new();
-    for entry in ctx.table().iter_mut() {
+    for (_, entry) in ctx.table().iter_mut() {
         if let Some(tx) = entry.downcast_ref::<RdbmsTransactionEntry<MysqlType>>() {
             transactions.push((tx.begin_index, Transaction::Mysql(tx.resource()?)));
         } else if let Some(tx) = entry.downcast_ref::<RdbmsTransactionEntry<PostgresType>>() {

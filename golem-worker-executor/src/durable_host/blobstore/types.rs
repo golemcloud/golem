@@ -26,8 +26,8 @@ use golem_common::model::oplog::{
 use wasmtime::AsContextMut;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, Destination, HasSelf, Resource, Source, StreamConsumer,
-    StreamProducer, StreamReader, StreamResult,
+    Access, Accessor, Destination, HasSelf, Resource, Source, StreamConsumer, StreamProducer,
+    StreamReader, StreamResult,
 };
 use wasmtime_wasi::IoView;
 
@@ -159,12 +159,11 @@ impl<Ctx> IncomingValueConsumeTask<Ctx> {
     }
 }
 
-impl<Ctx, T> AccessorTask<T, HasSelf<DurableWorkerCtx<Ctx>>> for IncomingValueConsumeTask<Ctx>
+impl<Ctx> IncomingValueConsumeTask<Ctx>
 where
     Ctx: WorkerCtx,
-    T: 'static,
 {
-    async fn run(
+    async fn run<T: 'static>(
         self,
         accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
@@ -365,14 +364,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
         let invocation_id = import_invocation_id(host.get(), observational_owner)?;
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let activity = host.get().tail_work_tracker().activity();
-        host.spawn(IncomingValueConsumeTask::<Ctx>::new(
+        let task = IncomingValueConsumeTask::<Ctx>::new(
             contents,
             result_tx,
             observational_owner,
             invocation_id,
             admission,
             activity,
-        ));
+        );
+        host.spawn(async move |host| task.run(host).await)?;
         Ok(Ok(StreamReader::new(
             &mut host,
             DeferredIncomingValueStreamProducer::new(result_rx),

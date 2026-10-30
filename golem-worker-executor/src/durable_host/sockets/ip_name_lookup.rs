@@ -57,9 +57,9 @@ impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
         HostResolveAddressStream::subscribe(&mut self.as_wasi_view().sockets(), self_)
     }
 
-    fn drop(&mut self, rep: Resource<ResolveAddressStream>) -> wasmtime::Result<()> {
+    async fn drop(&mut self, rep: Resource<ResolveAddressStream>) -> wasmtime::Result<()> {
         self.observe_function_call("sockets::ip_name_lookup::resolve_address_stream", "drop");
-        HostResolveAddressStream::drop(&mut self.as_wasi_view().sockets(), rep)
+        HostResolveAddressStream::drop(&mut self.as_wasi_view().sockets(), rep).await
     }
 }
 
@@ -146,8 +146,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         match result.result {
             Ok(addresses) => {
-                let addresses: Vec<IpAddress> = addresses.0.into_iter().map(|a| a.into()).collect();
-                let stream = ResolveAddressStream::Done(Ok(addresses.into_iter()));
+                let addresses = addresses.0.into_iter().map(|a| a.into()).collect();
+                let stream = ResolveAddressStream::from_addresses(addresses);
                 Ok(self.table().push(stream)?)
             }
             Err(err) => Err(err.into()),
@@ -162,24 +162,28 @@ async fn resolve_and_drain_addresses<Ctx: WorkerCtx>(
 ) -> Result<Vec<IpAddress>, SocketError> {
     let stream = Host::resolve_addresses(&mut ctx.as_wasi_view().sockets(), network, name).await?;
     let stream = ctx.table().delete(stream)?;
-    let addresses = drain_resolve_address_stream(stream).await?;
+    let addresses = drain_resolve_address_stream(ctx, stream).await?;
     Ok(addresses)
 }
 
-async fn drain_resolve_address_stream(
+async fn drain_resolve_address_stream<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
     mut stream: ResolveAddressStream,
 ) -> Result<Vec<IpAddress>, SocketError> {
     let mut addresses = Vec::new();
 
     stream.ready().await;
-    match stream {
-        ResolveAddressStream::Waiting(_) => return Err(ErrorCode::WouldBlock.into()), // should never happen because of ready() above
-        ResolveAddressStream::Done(iter) => {
-            let iter = iter?;
-            for address in iter {
-                addresses.push(address);
-            }
-        }
+    // Keep the stream locally owned, including on cancellation or a drain error.
+    let mut table = wasmtime::component::ResourceTable::new();
+    let resource = table.push(stream)?;
+    let mut view = ctx.as_wasi_view();
+    let mut sockets = view.sockets();
+    sockets.table = &mut table;
+    while let Some(address) = HostResolveAddressStream::resolve_next_address(
+        &mut sockets,
+        Resource::new_borrow(resource.rep()),
+    )? {
+        addresses.push(address);
     }
     Ok(addresses)
 }

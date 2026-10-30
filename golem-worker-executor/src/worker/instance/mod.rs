@@ -52,7 +52,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
-use wasmtime::{AsContextMut, CallHook, Store, StoreMemory, UpdateDeadline};
+use wasmtime::{AsContext, AsContextMut, CallHook, Store, StoreMemory, UpdateDeadline};
 
 fn resource_capacity_trap(
     agent_mode: golem_common::model::agent::AgentMode,
@@ -795,6 +795,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             match boundary {
                 CallHook::CallingHost => {
                     let custom_invocation_scope = store
+                        .as_context()
                         .guest_task_context::<CustomInvocationContext>()?
                         .as_deref()
                         .and_then(CustomInvocationContext::current);
@@ -809,7 +810,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 CallHook::CallingWasm | CallHook::ReturningFromWasm => {}
             }
             if fuel_metering {
-                let current = store.get_fuel()?;
+                let current = store.as_context().get_fuel()?;
                 if store
                     .data_mut()
                     .observe_fuel_execution(current, boundary.exiting_host())
@@ -821,7 +822,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         });
         store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
-            let current_level = store.get_fuel().unwrap_or(0);
+            let current_level = store.as_context().get_fuel().unwrap_or(0);
             let data_mut = store.data_mut();
             if let Err(error) = data_mut.ensure_fuel(current_level) {
                 warn!(error = ?error, "Resource capacity check failed");

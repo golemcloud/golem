@@ -560,8 +560,8 @@ impl wasmtime_wasi::WasiView for Context {
     }
 }
 
-impl wasmtime_wasi_http::p3::WasiHttpView for Context {
-    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+impl wasmtime_wasi_http::WasiHttpView for Context {
+    fn http(&mut self) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
         self.durable_ctx.as_wasi_http_view_p3()
     }
 }
@@ -1368,7 +1368,7 @@ pub(crate) mod tests {
     use golem_service_base::model::MonthlyResourcePolicy;
     use std::sync::Arc;
     use test_r::test;
-    use wasmtime::{AsContextMut, Config, Engine, Module, Store, UpdateDeadline};
+    use wasmtime::{AsContext, AsContextMut, Config, Engine, Module, Store, UpdateDeadline};
 
     struct FuelTestContext {
         tracker: Option<FuelTracker>,
@@ -1543,7 +1543,7 @@ pub(crate) mod tests {
             );
             store.set_fuel(u64::MAX).unwrap();
             store.call_hook(|mut store, boundary| {
-                let gauge = store.get_fuel()?;
+                let gauge = store.as_context().get_fuel()?;
                 let live = boundary.exiting_host() && store.data().live;
                 store.data_mut().usage.enter(gauge, live);
                 Ok(())
@@ -2112,7 +2112,7 @@ pub(crate) mod tests {
         );
         store.set_fuel(INITIAL)?;
         store.epoch_deadline_callback(|mut store| {
-            let current_level = store.get_fuel().unwrap_or(0);
+            let current_level = store.as_context().get_fuel().unwrap_or(0);
             store
                 .data_mut()
                 .ensure_fuel(current_level)
@@ -2220,7 +2220,7 @@ pub(crate) mod tests {
                 );
                 store.set_fuel(INITIAL)?;
                 store.epoch_deadline_callback(|mut store| {
-                    let current_level = store.get_fuel().unwrap_or(0);
+                    let current_level = store.as_context().get_fuel().unwrap_or(0);
                     store
                         .data_mut()
                         .ensure_fuel(current_level)
@@ -2285,7 +2285,7 @@ pub(crate) mod tests {
         );
         store.set_fuel(INITIAL)?;
         store.epoch_deadline_callback(|mut store| {
-            let current_level = store.get_fuel().unwrap_or(0);
+            let current_level = store.as_context().get_fuel().unwrap_or(0);
             store
                 .data_mut()
                 .ensure_fuel(current_level)

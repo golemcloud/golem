@@ -19,7 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wasi-fetch = "=0.2.0"
 wasip3 = "0.7"
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0", default-features = false, features = ["async", "macros"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "67b83d42c135db8c5c42bf26c53ec162bbdca5ea", version = "=0.63.0", default-features = false, features = ["async", "macros"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

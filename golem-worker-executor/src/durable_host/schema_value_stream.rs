@@ -45,7 +45,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use wasmtime::StoreContextMut;
-use wasmtime::component::{Accessor, AccessorTask, HasData, HasSelf, Resource, StreamReader};
+use wasmtime::component::{Access, Accessor, HasData, HasSelf, Resource, StreamReader};
 
 /// Returns whether a schema value contains a stream at any nesting depth.
 pub fn contains_stream(value: &SchemaValue) -> bool {
@@ -81,15 +81,13 @@ pub(crate) struct ExecutorProjectionStreams {
 
 struct ProjectionReceiveDispatcher(mpsc::UnboundedReceiver<DurableInputReceiveAdmission>);
 
-impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
-    for ProjectionReceiveDispatcher
-{
-    async fn run(
+impl ProjectionReceiveDispatcher {
+    async fn run<U: Send + 'static, Ctx: WorkerCtx>(
         mut self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
         while let Some(request) = self.0.recv().await {
-            accessor.spawn(request);
+            accessor.spawn(async move |accessor| request.run(accessor).await)?;
         }
         Ok(())
     }
@@ -105,10 +103,11 @@ impl ExecutorProjectionStreams {
 
     pub(crate) fn new<U: Send + 'static, Ctx: WorkerCtx>(
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    ) -> Self {
+    ) -> wasmtime::Result<Self> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        accessor.spawn(ProjectionReceiveDispatcher(receiver));
-        accessor.with(|mut access| {
+        let task = ProjectionReceiveDispatcher(receiver);
+        accessor.spawn(async move |accessor| task.run(accessor).await)?;
+        Ok(accessor.with(|mut access| {
             let ctx = access.get();
             Self {
                 capacity: ctx.live_stream_event_capacity(),
@@ -119,7 +118,7 @@ impl ExecutorProjectionStreams {
                     .expect("dropped-call event sender is always available"),
                 durable_receives: Some(sender),
             }
-        })
+        }))
     }
 
     #[cfg(test)]
@@ -618,7 +617,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 impl<T: WorkerCtx, Ctx: WorkerCtx> HostWithStore<T> for CoreTypesHost<Ctx> {
     async fn parse_uuid(
-        _accessor: &Accessor<T, Self>,
+        _access: Access<'_, T, Self>,
         uuid: String,
     ) -> anyhow::Result<Result<Uuid, String>> {
         Ok(uuid::Uuid::parse_str(&uuid)
@@ -626,7 +625,7 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostWithStore<T> for CoreTypesHost<Ctx> {
             .map_err(|error| error.to_string()))
     }
 
-    async fn uuid_to_string(_accessor: &Accessor<T, Self>, uuid: Uuid) -> anyhow::Result<String> {
+    async fn uuid_to_string(_access: Access<'_, T, Self>, uuid: Uuid) -> anyhow::Result<String> {
         let uuid: uuid::Uuid = uuid.into();
         Ok(uuid.to_string())
     }

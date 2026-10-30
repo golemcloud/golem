@@ -41,6 +41,10 @@ pub fn create_wasmtime_config(enable_fs_cache: bool) -> Config {
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);
     config.wasm_component_model_error_context(true);
+    config.wasm_gc(false);
+    config.wasm_function_references(false);
+    config.wasm_exceptions(false);
+    config.wasm_wide_arithmetic(false);
     config.wasm_threads(false);
     config.shared_memory(false);
     config.epoch_interruption(true);
@@ -141,5 +145,27 @@ mod tests {
             format!("{error:?}").contains("gc"),
             "expected a GC-proposal rejection, got: {error:?}"
         );
+    }
+
+    #[test]
+    fn additional_proposals_remain_disabled() -> anyhow::Result<()> {
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+        let mut enabled_config = create_wasmtime_config_without_fs_cache();
+        enabled_config
+            .wasm_function_references(true)
+            .wasm_exceptions(true)
+            .wasm_wide_arithmetic(true);
+        let enabled_engine = Engine::new(&enabled_config)?;
+
+        for module in [
+            "(module (type $f (func)) (func (param (ref null $f))))",
+            "(module (tag (param i32)))",
+            "(module (func (param i64 i64) (result i64 i64) local.get 0 local.get 1 i64.mul_wide_u))",
+        ] {
+            Module::new(&enabled_engine, module)?;
+            assert!(Module::new(&engine, module).is_err(), "accepted {module}");
+        }
+
+        Ok(())
     }
 }

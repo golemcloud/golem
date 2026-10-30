@@ -32,8 +32,8 @@ use tokio::sync::{mpsc, oneshot};
 use wasmtime::AsContextMut as _;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{
-    Accessor, AccessorTask, Destination, FutureReader, Resource, Source, StreamConsumer,
-    StreamProducer, StreamReader, StreamResult,
+    Access, Accessor, Destination, FutureReader, Resource, Source, StreamConsumer, StreamProducer,
+    StreamReader, StreamResult,
 };
 use wasmtime_wasi::cli::{StdinStream, WasiCliView};
 use wasmtime_wasi::p3::bindings::cli::types::ErrorCode;
@@ -303,12 +303,11 @@ struct StdioWriteTask<Ctx> {
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for StdioWriteTask<Ctx>
+impl<Ctx> StdioWriteTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: 'static>(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
         let Self {
             stream,
             mut chunks_rx,
@@ -394,8 +393,8 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
     .await;
 }
 
-async fn write_standard_stream_via_stream<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
+fn write_standard_stream_via_stream<Ctx, U>(
+    mut store: Access<'_, U, DurableP3<Ctx>>,
     data: StreamReader<u8>,
     stream: StandardStream,
 ) -> wasmtime::Result<FutureReader<Result<(), ErrorCode>>>
@@ -405,25 +404,24 @@ where
 {
     let (chunks_tx, chunks_rx) = mpsc::unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
-    accessor.with(|mut store| {
-        let interrupt = durable_worker_ctx::<Ctx, U>(store.data_mut()).create_interrupt_signal();
-        data.pipe(
-            &mut store,
-            CapturingOutputStreamConsumer::new(chunks_tx, interrupt),
-        )?;
-        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-            .tail_work_tracker()
-            .activity();
-        store.spawn(StdioWriteTask::<Ctx> {
-            stream,
-            chunks_rx,
-            result_tx,
-            activity,
-            _phantom: PhantomData,
-        });
-        let interrupt = durable_worker_ctx::<Ctx, U>(store.data_mut()).create_interrupt_signal();
-        FutureReader::new(&mut store, wait_stdio_task_result(result_rx, interrupt))
-    })
+    let interrupt = durable_worker_ctx::<Ctx, U>(store.data_mut()).create_interrupt_signal();
+    data.pipe(
+        &mut store,
+        CapturingOutputStreamConsumer::new(chunks_tx, interrupt),
+    )?;
+    let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+        .tail_work_tracker()
+        .activity();
+    let task = StdioWriteTask::<Ctx> {
+        stream,
+        chunks_rx,
+        result_tx,
+        activity,
+        _phantom: PhantomData,
+    };
+    store.spawn(async move |store| task.run(store).await)?;
+    let interrupt = durable_worker_ctx::<Ctx, U>(store.data_mut()).create_interrupt_signal();
+    FutureReader::new(&mut store, wait_stdio_task_result(result_rx, interrupt))
 }
 
 impl<Ctx: WorkerCtx> environment::Host for DurableP3View<'_, Ctx> {
@@ -497,38 +495,30 @@ impl<Ctx: WorkerCtx> stdin::Host for DurableP3View<'_, Ctx> {}
 
 impl<U: Send + 'static, Ctx: WorkerCtx> stdin::HostWithStore<U> for DurableP3<Ctx> {
     async fn read_via_stream(
-        accessor: &Accessor<U, Self>,
+        mut store: Access<'_, U, Self>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), ErrorCode>>)> {
-        accessor.with(|mut access| {
-            observe_function_call_store::<Ctx, U>(
-                access.data_mut(),
-                "cli::stdin",
-                "read-via-stream",
-            )
-        });
-        accessor.with(|mut store| {
-            let ctx = durable_worker_ctx::<Ctx, U>(store.data_mut());
-            if ctx.stdin.is_disabled() {
-                return Err(wasmtime::Error::msg("standard input is disabled"));
-            }
-            let rx = ctx.stdin.async_stream();
+        observe_function_call_store::<Ctx, U>(store.data_mut(), "cli::stdin", "read-via-stream");
+        let ctx = durable_worker_ctx::<Ctx, U>(store.data_mut());
+        if ctx.stdin.is_disabled() {
+            return Err(wasmtime::Error::msg("standard input is disabled"));
+        }
+        let rx = ctx.stdin.async_stream();
 
-            let (result_tx, result_rx) = oneshot::channel();
-            let stream = StreamReader::new(
-                &mut store,
-                StdinStreamProducer {
-                    rx: Box::into_pin(rx),
-                    result_tx: Some(result_tx),
-                },
-            )?;
-            let future = FutureReader::new(&mut store, async move {
-                wasmtime::error::Ok(match result_rx.await {
-                    Ok(error) => Err(error),
-                    Err(_) => Ok(()),
-                })
-            })?;
-            Ok((stream, future))
-        })
+        let (result_tx, result_rx) = oneshot::channel();
+        let stream = StreamReader::new(
+            &mut store,
+            StdinStreamProducer {
+                rx: Box::into_pin(rx),
+                result_tx: Some(result_tx),
+            },
+        )?;
+        let future = FutureReader::new(&mut store, async move {
+            wasmtime::error::Ok(match result_rx.await {
+                Ok(error) => Err(error),
+                Err(_) => Ok(()),
+            })
+        })?;
+        Ok((stream, future))
     }
 }
 
@@ -536,17 +526,11 @@ impl<Ctx: WorkerCtx> stdout::Host for DurableP3View<'_, Ctx> {}
 
 impl<U: Send + 'static, Ctx: WorkerCtx> stdout::HostWithStore<U> for DurableP3<Ctx> {
     async fn write_via_stream(
-        accessor: &Accessor<U, Self>,
+        mut store: Access<'_, U, Self>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), ErrorCode>>> {
-        accessor.with(|mut access| {
-            observe_function_call_store::<Ctx, U>(
-                access.data_mut(),
-                "cli::stdout",
-                "write-via-stream",
-            )
-        });
-        write_standard_stream_via_stream::<Ctx, U>(accessor, data, StandardStream::Stdout).await
+        observe_function_call_store::<Ctx, U>(store.data_mut(), "cli::stdout", "write-via-stream");
+        write_standard_stream_via_stream::<Ctx, U>(store, data, StandardStream::Stdout)
     }
 }
 
@@ -554,17 +538,11 @@ impl<Ctx: WorkerCtx> stderr::Host for DurableP3View<'_, Ctx> {}
 
 impl<U: Send + 'static, Ctx: WorkerCtx> stderr::HostWithStore<U> for DurableP3<Ctx> {
     async fn write_via_stream(
-        accessor: &Accessor<U, Self>,
+        mut store: Access<'_, U, Self>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), ErrorCode>>> {
-        accessor.with(|mut access| {
-            observe_function_call_store::<Ctx, U>(
-                access.data_mut(),
-                "cli::stderr",
-                "write-via-stream",
-            )
-        });
-        write_standard_stream_via_stream::<Ctx, U>(accessor, data, StandardStream::Stderr).await
+        observe_function_call_store::<Ctx, U>(store.data_mut(), "cli::stderr", "write-via-stream");
+        write_standard_stream_via_stream::<Ctx, U>(store, data, StandardStream::Stderr)
     }
 }
 

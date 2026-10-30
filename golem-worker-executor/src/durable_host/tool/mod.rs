@@ -238,8 +238,8 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context as TaskContext, Poll};
 use tokio::sync::{Notify, mpsc, oneshot};
 use wasmtime::component::{
-    Accessor, AccessorTask, HasData, HasSelf, Linker, Resource, Source, StreamConsumer,
-    StreamReader, StreamResult,
+    Accessor, HasData, HasSelf, Linker, Resource, Source, StreamConsumer, StreamReader,
+    StreamResult,
 };
 use wasmtime::{AsContextMut, Store, StoreContextMut};
 
@@ -453,9 +453,11 @@ struct ToolCaller<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> ToolCaller<Ctx> {
-    fn capture<U: Send + 'static>(accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>) -> Self {
-        let settlement = EntitySettlementContext::capture(accessor, accessor.getter());
-        accessor.with(|mut access| {
+    fn capture<U: Send + 'static>(
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> wasmtime::Result<Self> {
+        let settlement = EntitySettlementContext::capture(accessor, accessor.getter())?;
+        Ok(accessor.with(|mut access| {
             let ctx = access.get();
             Self {
                 settlement,
@@ -470,7 +472,7 @@ impl<Ctx: WorkerCtx> ToolCaller<Ctx> {
                 local_live: ctx.state.local_live_tail(),
                 suppressed: ctx.state.durability_is_suppressed(),
             }
-        })
+        }))
     }
 
     fn is_live(&self) -> bool {
