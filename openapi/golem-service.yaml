@@ -18756,6 +18756,7 @@ components:
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
           SnapshotConfirmed: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
+          SpanClosed: '#/components/schemas/PublicOplogEntry_r#SpanClosedParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -18814,6 +18815,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SpanClosedParams'
     PublicOplogEntryAttribution:
       discriminator:
         propertyName: type
@@ -19415,6 +19417,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#SnapshotParams'
+    PublicOplogEntry_r#SpanClosedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SpanClosed
+            type: string
+            enum:
+            - SpanClosed
+        required:
+        - type
+      - $ref: '#/components/schemas/r#SpanClosedParams'
     PublicOplogEntry_r#StartParams:
       allOf:
       - type: object
@@ -23129,6 +23143,21 @@ components:
       required:
       - timestamp
       - data
+    r#SpanClosedParams:
+      title: r#SpanClosedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        resourceStartIndex:
+          type: integer
+          format: uint64
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
+      required:
+      - timestamp
+      - spanFinished
     r#StartParams:
       title: r#StartParams
       type: object

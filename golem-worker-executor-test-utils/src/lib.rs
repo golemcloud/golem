@@ -14,7 +14,7 @@
 
 // `store_component_with` in `dsl_impl.rs` is an instrumented async fn whose
 // layout needs more depth than rustc's default of 128. On rustc 1.98 the
-// observed minimum is 129; 256 matches `golem-worker-executor/tests/lib.rs`.
+// observed minimum is 129; 256 matches `golem-worker-executor-tests/tests/lib.rs`.
 #![recursion_limit = "256"]
 
 pub mod agent_deployments_service;
@@ -4185,6 +4185,14 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn wrap_oplog_service(&self, service: Arc<dyn OplogService>) -> Arc<dyn OplogService> {
+        Arc::new(oplog_fixture::OplogFixtureService::new(
+            service,
+            self.additional_test_deps.clone(),
+            false,
+        ))
+    }
+
     fn capture_services(&self, services: &golem_worker_executor::services::All<TestWorkerCtx>) {
         *self.services.lock().unwrap() = Some(services.clone());
     }
@@ -4524,6 +4532,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         Arc::new(oplog_fixture::OplogFixtureService::new(
             service,
             self.test_oplog_deps.clone(),
+            true,
         ))
     }
 
@@ -9363,6 +9372,8 @@ impl Rpc for RecordingRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
@@ -9374,6 +9385,8 @@ impl Rpc for RecordingRpc {
                 self_stack,
                 config,
                 auth_ctx,
+                idempotency_key,
+                freshness_disposition,
             )
             .await
     }
@@ -9458,6 +9471,8 @@ impl Rpc for FailingRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
@@ -9469,6 +9484,8 @@ impl Rpc for FailingRpc {
                 self_stack,
                 config,
                 auth_ctx,
+                idempotency_key,
+                freshness_disposition,
             )
             .await
     }

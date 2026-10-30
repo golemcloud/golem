@@ -17,7 +17,7 @@ pub mod config;
 pub mod durable_host;
 pub(crate) mod filesystem_pressure;
 pub(crate) mod filesystem_snapshot;
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod filesystem_snapshot_testing;
 pub mod grpc;
 pub mod identity;

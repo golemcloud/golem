@@ -452,7 +452,7 @@ enum Source {
     ),
     /// A store that a test gives, with its upload settings. It bypasses the configuration, and
     /// its volume always has room.
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     Given(
         Arc<dyn FilesystemSnapshotStore>,
         FilesystemSnapshotUploadConfig,
@@ -470,7 +470,7 @@ impl StoreSource {
     }
 
     /// `store` with `settings`, on any storage mode and whatever the configuration says.
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn given(
         store: Arc<dyn FilesystemSnapshotStore>,
         settings: FilesystemSnapshotUploadConfig,
@@ -529,7 +529,7 @@ impl AgentFilesystemSnapshots {
                     ),
                 }
             }
-            #[cfg(feature = "test-utils")]
+            #[cfg(any(test, feature = "test-utils"))]
             Source::Given(store, settings) => Self::enabled(
                 StoreOf::Given(store),
                 settings,

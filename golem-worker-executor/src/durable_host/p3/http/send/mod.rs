@@ -44,9 +44,9 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpScheme,
 };
 use golem_common::model::oplog::{
-    AttributeMap, DeniablePair, DurableFunctionType, DurableInvocationId,
-    HostRequestP3HttpClientSend, HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex,
-    SpanFinished, SpanKind, SpanStarted,
+    AttributeMap, DeniablePair, DurableFunctionType, HostRequestP3HttpClientSend,
+    HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex, SpanFinished, SpanKind,
+    SpanStarted,
 };
 use golem_common::model::{NamedRetryPolicy, OwnedAgentId, RetryContext, RetryProperties};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -64,7 +64,7 @@ use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::AsContextMut;
-use wasmtime::component::{Accessor, AccessorTask, Resource, TerminalConsumption};
+use wasmtime::component::{Accessor, Resource, TerminalConsumption};
 use wasmtime_wasi_http::P3PooledConnection;
 use wasmtime_wasi_http::p3::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::client;
@@ -183,9 +183,7 @@ where
         crate::durable_host::concurrent::HttpSpanCleanupRecorder::new(
             durable_worker_ctx::<Ctx, U>(access.data_mut()),
             OplogIndex::INITIAL,
-            None,
             persisted,
-            invocation_id.reserved(),
         )
     });
     let lifecycle = Arc::new(P3SendSpanLifecycle::new(cleanup_recorder));
@@ -283,7 +281,7 @@ where
         }
     };
     if !handle.is_persisted() {
-        lifecycle.snapshot_started(send_start_index, observational_owner, span_started.clone());
+        lifecycle.snapshot_started(send_start_index, span_started.clone());
     }
     let span = store
         .with(|mut access| {
@@ -294,7 +292,6 @@ where
             Ok::<_, WorkerExecutorError>(P3HttpSendSpan {
                 span_id: span_started.span_id.clone(),
                 send_start_index,
-                invocation_id: invocation_id.reserved(),
                 persisted: handle.is_persisted(),
                 closure_claimed: lifecycle.closure_claimed.clone(),
             })
@@ -1186,8 +1183,6 @@ pub(crate) struct P3HttpSendSpan {
     /// owning agent's id and therefore changes when the oplog is forked to another agent), the
     /// `Start` index is part of the recorded oplog itself and survives fork/revert unchanged.
     pub(crate) send_start_index: OplogIndex,
-    /// The invocation id of the send. The span cleanup record of the send carries it.
-    pub(crate) invocation_id: Option<DurableInvocationId>,
     closure_claimed: Arc<AtomicBool>,
 }
 
@@ -1206,18 +1201,11 @@ struct P3SendSpanLifecycleState {
     started: Option<SpanStarted>,
     abandonment: Option<golem_common::model::Timestamp>,
     cleanup_submitted: bool,
-    replay_tx:
-        Option<oneshot::Sender<Option<crate::durable_host::concurrent::HttpSpanCleanupReplay>>>,
 }
 
 struct SendTerminalState {
     consumption: Option<TerminalConsumption>,
     delivery: Option<crate::durable_host::concurrent::CompletionDelivery>,
-}
-
-struct SpawnHttpCleanupReplay<Ctx> {
-    replay_rx: oneshot::Receiver<Option<crate::durable_host::concurrent::HttpSpanCleanupReplay>>,
-    _phantom: PhantomData<fn() -> Ctx>,
 }
 
 #[cfg(test)]

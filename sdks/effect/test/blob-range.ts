@@ -41,7 +41,7 @@
  * sends the result to the guest (`HostContainer::get_data` in
  * `golem-worker-executor/src/durable_host/blobstore/container.rs`).
  * The test `blobstore_get_data_outside_the_object_gives_the_guest_an_error`
- * in `golem-worker-executor/tests/blobstore.rs` asserts the same
+ * in `golem-worker-executor-tests/tests/blobstore.rs` asserts the same
  * message. The message says "blob" where this package says "object",
  * because the wording is the host's.
  *

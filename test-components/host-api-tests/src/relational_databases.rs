@@ -103,6 +103,139 @@ pub struct RelationalDatabasesImpl {
     _name: String,
 }
 
+#[agent_definition(snapshotting = "enabled")]
+pub trait TransactionDropTiming {
+    fn new(
+        address: String,
+        table: String,
+        live_early: bool,
+        restored_early: bool,
+        incomplete: bool,
+        mode: u32,
+    ) -> Self;
+    fn prepare(&self) -> golem_rust::PromiseId;
+    fn run(&self, promise: golem_rust::PromiseId);
+    fn inspect(&self) -> (bool, u64);
+    fn close_retained(&self) -> bool;
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TransactionDropTimingImpl {
+    address: String,
+    table: String,
+    live_early: bool,
+    restored_early: bool,
+    incomplete: bool,
+    mode: u32,
+    restored: bool,
+    #[serde(skip)]
+    snapshot_transaction:
+        std::cell::RefCell<Option<golem_rust::bindings::golem::rdbms::postgres::DbTransaction>>,
+    #[serde(skip)]
+    retained: std::cell::RefCell<Vec<golem_rust::bindings::golem::rdbms::postgres::DbTransaction>>,
+}
+
+#[agent_implementation]
+impl TransactionDropTiming for TransactionDropTimingImpl {
+    fn new(
+        address: String,
+        table: String,
+        live_early: bool,
+        restored_early: bool,
+        incomplete: bool,
+        mode: u32,
+    ) -> Self {
+        Self {
+            address,
+            table,
+            live_early,
+            restored_early,
+            incomplete,
+            mode,
+            restored: false,
+            snapshot_transaction: Default::default(),
+            retained: Default::default(),
+        }
+    }
+
+    fn prepare(&self) -> golem_rust::PromiseId {
+        let connection = PostgresDbConnection::open(&self.address).unwrap();
+        connection
+            .execute(&format!("CREATE TABLE {} (id INTEGER)", self.table), vec![])
+            .unwrap();
+        golem_rust::create_promise()
+    }
+
+    fn run(&self, promise: golem_rust::PromiseId) {
+        drop(self.snapshot_transaction.borrow_mut().take());
+        let connection = PostgresDbConnection::open(&self.address).unwrap();
+        let transaction = connection.begin_transaction().unwrap();
+        transaction
+            .execute(&format!("INSERT INTO {} VALUES (1)", self.table), vec![])
+            .unwrap();
+        let early = if self.restored {
+            self.restored_early
+        } else {
+            self.live_early
+        };
+        let mut transaction = Some(transaction);
+        if early {
+            drop(transaction.take());
+        }
+        // A positional call between the two release points forces the destructor to return
+        // before its recorded terminal is available when the restored heap drops early.
+        connection.query("SELECT 1", vec![]).unwrap();
+        if self.mode == 1 && self.restored {
+            self.retained.borrow_mut().push(transaction.take().unwrap());
+        }
+        if self.mode == 2 && !self.restored {
+            transaction.as_ref().unwrap().rollback().unwrap();
+        }
+        if !self.incomplete {
+            drop(transaction.take());
+        }
+        golem_rust::blocking_await_promise(&promise);
+        drop(transaction);
+    }
+
+    fn inspect(&self) -> (bool, u64) {
+        let connection = PostgresDbConnection::open(&self.address).unwrap();
+        let rows = connection
+            .query(&format!("SELECT id FROM {}", self.table), vec![])
+            .unwrap();
+        (self.restored, rows.rows.len() as u64)
+    }
+
+    fn close_retained(&self) -> bool {
+        let transaction = self.retained.borrow_mut().pop().unwrap();
+        matches!(
+            transaction.rollback(),
+            Err(golem_rust::bindings::golem::rdbms::postgres::Error::ResourceLost(_))
+        )
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let mut state: Self = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        state.restored = true;
+        if state.mode == 3 {
+            let connection =
+                PostgresDbConnection::open(&state.address).map_err(|error| error.to_string())?;
+            let transaction = connection
+                .begin_transaction()
+                .map_err(|error| error.to_string())?;
+            *state.snapshot_transaction.borrow_mut() = Some(transaction);
+        }
+        Ok(state)
+    }
+}
+
 fn get_mysql_db_url() -> Result<String, String> {
     std::env::var("DB_MYSQL_URL").map_err(|_| "DB_MYSQL_URL is not set".to_string())
 }

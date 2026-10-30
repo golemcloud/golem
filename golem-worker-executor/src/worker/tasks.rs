@@ -56,7 +56,7 @@ impl RuntimeAppendTasks {
 pub struct WorkerTasks(
     Arc<Inner>,
     Option<Weak<dyn Send + Sync>>,
-    #[cfg(feature = "test-utils")] Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(any(test, feature = "test-utils"))] Arc<std::sync::atomic::AtomicBool>,
 );
 
 #[derive(Default)]
@@ -94,7 +94,7 @@ impl WorkerTasks {
         Self(
             self.0.clone(),
             Some(Arc::downgrade(&worker)),
-            #[cfg(feature = "test-utils")]
+            #[cfg(any(test, feature = "test-utils"))]
             Arc::default(),
         )
     }
@@ -103,7 +103,7 @@ impl WorkerTasks {
         self.1.as_ref().and_then(Weak::upgrade)
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn test_refuse_next_metadata_admission(&self) {
         self.2.store(true, std::sync::atomic::Ordering::Release);
     }
@@ -156,7 +156,7 @@ impl WorkerTasks {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        #[cfg(feature = "test-utils")]
+        #[cfg(any(test, feature = "test-utils"))]
         if self.2.swap(false, std::sync::atomic::Ordering::AcqRel) {
             return Err("Injected metadata admission refusal");
         }

@@ -124,6 +124,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.RolledBackRemoteTransaction(p)  => s"rolled-back(${p.beginIndex})"
     case OplogEntry.Snapshot(ts, _, mime, fs)       => s"snapshot($ts,$mime,$fs)"
     case OplogEntry.SnapshotConfirmed(ts, fs)       => s"snapshot-confirmed($ts,$fs)"
+    case OplogEntry.SpanClosed(ts, idx, sf)         => s"span-closed($ts,$idx,${sf.outcome})"
     case OplogEntry.OplogProcessorCheckpoint(p)     => s"checkpoint(${p.confirmedUpTo})"
   }
 
@@ -172,6 +173,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry
         .Snapshot(ts, Array[Byte](1), "application/octet-stream", Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")),
       OplogEntry.SnapshotConfirmed(ts, "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"),
+      OplogEntry.SpanClosed(ts, Some(BigInt(7)), SpanFinished("span-1", ts, SpanOutcome.Completed)),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTyped), 1000L)),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, None, 0L)),
       OplogEntry.HostCall(
@@ -248,7 +250,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   def spec = suite("OplogApiCompileSpec")(
     test("all OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size == 40)
+      assertTrue(distinctTags.size == 41)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))

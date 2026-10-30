@@ -248,7 +248,12 @@ authorize direct pushes or merges to the selected target branch.
    Generated notes start at the highest earlier published stable Golem version,
    excluding SDK releases, shared crate releases, drafts, and prereleases.
    The workflow passes that tag explicitly because release tags on squash-merged
-   PR heads do not form an ancestor chain. Existing drafts keep their notes.
+   PR heads do not form an ancestor chain. It removes the previous preparation
+   PR from the generated list and includes the current preparation PR once.
+   It resolves each PR from its tagged head on `main` or the matching maintenance
+   branch. Other generated entries and the tag comparison stay unchanged.
+   Preparation stops if a tagged head does not identify one merged preparation PR.
+   Existing drafts keep their notes. Review the notes before publication.
    New drafts explicitly disable the Latest designation. Preparation never
    publishes the Golem draft.
 5. **Review and publish Golem.** Wait for successful preparation. Review the draft,

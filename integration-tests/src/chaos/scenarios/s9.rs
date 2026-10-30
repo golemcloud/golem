@@ -54,7 +54,7 @@
 //! 2`. The forward leg is now read from metadata, which leaves no trace; the
 //! running code is asked only at the very end, where nothing depends on it.
 //! See `an_automatic_update_rolls_an_agent_back_to_an_earlier_build` in
-//! `golem-worker-executor/tests/hot_update.rs` for the minimal reproduction.
+//! `golem-worker-executor-tests/tests/hot_update.rs` for the minimal reproduction.
 //!
 //! ## Why the forward leg is verified first
 //!

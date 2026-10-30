@@ -161,6 +161,8 @@ pub(super) async fn streaming_target_fingerprint<Ctx: WorkerCtx>(
     prepared: &PreparedRpcInvocation,
     remote_agent_id: &OwnedAgentId,
     auth_ctx: Option<&AuthCtx>,
+    idempotency_key: IdempotencyKey,
+    freshness_disposition: InvocationFreshnessDisposition,
 ) -> Result<(AgentFingerprint, Option<Box<dyn RpcDemand>>), Error> {
     if let Some(fingerprint) = ctx
         .table()
@@ -191,6 +193,8 @@ pub(super) async fn streaming_target_fingerprint<Ctx: WorkerCtx>(
             ctx.clone_as_inherited_stack(&prepared.connection_span_id),
             prepared.config.clone(),
             &auth_ctx,
+            prepared.is_ephemeral().then_some(idempotency_key),
+            freshness_disposition,
         )
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;

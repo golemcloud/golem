@@ -535,33 +535,43 @@ pub async fn fence_tool_operations_for_jump<Ctx: WorkerCtx>(
 pub(crate) async fn prepare_tool_parent_end<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     parent: crate::worker::owner_lane::OwnerInvocationId,
-) -> Result<(), WorkerExecutorError> {
-    store
+) -> Vec<anyhow::Error> {
+    let mut errors = Vec::new();
+    let drained = store
         .as_context_mut()
-        .run_concurrent(async move |accessor| -> Result<(), WorkerExecutorError> {
+        .run_concurrent(async move |accessor| {
             // Dropped acknowledgments leave accepted effects owned by the cleanup queue.
             // Join their publication before classifying output failures or closing the parent.
             crate::durable_host::concurrent::drain_dropped_call_events_access(accessor, |ctx| {
                 ctx.durable_ctx_mut()
             })
             .await
-            .map_err(|error| error.source)?;
-            let execution =
-                accessor.with(|mut access| access.data_mut().durable_ctx().owner_execution.clone());
-            prepare_tool_parent_end_owned(&execution, parent).await
+            .map_err(anyhow::Error::from)
         })
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        .await;
+    match drained {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => errors.push(error),
+        Err(error) => errors.push(error.into()),
+    }
+
+    // Closing is not restartable after registering part of a cohort. Retain the same
+    // future when a Store task fails, including when the preceding drain failed.
+    let execution = store.data().durable_ctx().owner_execution.clone();
+    drive_tool_finalization(
+        store,
+        async move { prepare_tool_parent_end_owned(&execution, parent).await },
+        errors,
+        classify_driver_failure::<Ctx>,
+    )
+    .await
 }
 
 pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     parent: crate::worker::owner_lane::OwnerInvocationId,
-) -> Result<(), WorkerExecutorError> {
-    use futures::FutureExt;
-
+) -> Vec<anyhow::Error> {
     let execution = store.data().durable_ctx().owner_execution.clone();
-    let operations = execution.tool_operations();
     let primary = store
         .data()
         .durable_ctx()
@@ -576,31 +586,69 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
                 .await?;
         }
         result
-    }
-    .boxed()
-    .shared();
+    };
+    drive_tool_finalization(
+        store,
+        settlement,
+        Vec::new(),
+        classify_driver_failure::<Ctx>,
+    )
+    .await
+}
+
+fn classify_driver_failure<Ctx: WorkerCtx>(
+    ctx: &Ctx,
+    error: &anyhow::Error,
+) -> futures::future::BoxFuture<'static, ()> {
+    let failure = durability::native_host_failure_ref(ctx.durable_ctx(), error);
+    Box::pin(async move {
+        failure.await;
+    })
+}
+
+async fn drive_tool_finalization<T: Send + 'static>(
+    store: &mut wasmtime::StoreContextMut<'_, T>,
+    finalization: impl Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,
+    mut errors: Vec<anyhow::Error>,
+    mut classify: impl FnMut(&T, &anyhow::Error) -> futures::future::BoxFuture<'static, ()> + Send,
+) -> Vec<anyhow::Error> {
+    use futures::FutureExt;
+
+    let mut classifications = errors
+        .iter()
+        .map(|error| classify(store.data(), error).shared())
+        .collect::<Vec<_>>();
+    let settlement = finalization.boxed().shared();
     loop {
         let pending = settlement.clone();
+        let pending_classifications = classifications.clone();
         match store
             .as_context_mut()
-            .run_concurrent(async move |_accessor| pending.await)
+            .run_concurrent(async move |_accessor| {
+                // Election can wait for a terminal whose continuation needs this Store.
+                // Retain each classification across Store errors, and do not let settlement
+                // close the operation before all observed failures have been classified.
+                for classification in pending_classifications {
+                    classification.await;
+                }
+                pending.await
+            })
             .await
         {
-            Ok(result) => return result,
+            Ok(result) => {
+                if let Err(error) = result {
+                    errors.push(error.into());
+                }
+                return errors;
+            }
             // A secondary task error must not strand a registered failure continuation,
             // even while election still waits for another terminal selection to settle.
-            Err(_) if operations.has_owner_failure() => {}
             // Cancelling an entity interrupts its guest; its accepted children still have to
             // resolve their own cancellation inside this Store before the parent settles.
-            Err(error)
-                if crate::worker::invocation::interrupt_kind_in(&error)
-                    == Some(InterruptKind::EntityCancellation) => {}
             Err(error) => {
-                return Err(durability::native_host_failure(
-                    store.data().durable_ctx(),
-                    error.into(),
-                )
-                .await);
+                let error = error.into();
+                classifications.push(classify(store.data(), &error).shared());
+                errors.push(error);
             }
         }
     }
@@ -735,4 +783,418 @@ where
         }
     }
     Ok(execution)
+}
+
+#[cfg(test)]
+mod finalization_tests {
+    use super::*;
+    use crate::durable_host::durability::{
+        DurableCallTrapContext, TerminalCallError, find_durable_call_trap_context,
+    };
+    use crate::workerctx::default::Context;
+    use golem_common::model::OplogIndex;
+    use golem_common::model::agent::AgentMode;
+    use test_r::{test, timeout};
+    use wasmtime::component::AccessorTask;
+
+    #[test]
+    #[timeout("10s")]
+    async fn finalization_of_committed_terminal_preserves_result_and_shard_loss() {
+        use golem_common::model::oplog::payload::types::{
+            SerializableEntityBodyExecution, SerializableToolOperationTerminal,
+            SerializableToolRpcError,
+        };
+
+        for cancelled in [false, true] {
+            let operation = operation::tests::replay_operation(2);
+            let terminal = Arc::new(SerializableToolOperationTerminal {
+                admission_refusal: None,
+                body_execution: SerializableEntityBodyExecution::Executed,
+                result: Err(SerializableToolRpcError::RemoteInternalError(
+                    "chosen result".into(),
+                )),
+            });
+            if cancelled {
+                assert!(operation.begin_cancel());
+            } else {
+                assert!(operation.begin_ordinary());
+            }
+            let mut config = wasmtime::Config::new();
+            config.concurrency_support(true);
+            let engine = wasmtime::Engine::new(&config).unwrap();
+            let mut store = wasmtime::Store::new(&engine, operation.clone());
+            let cleanup = async {
+                let errors = drive_tool_finalization(
+                    &mut store.as_context_mut(),
+                    async { Ok(()) },
+                    vec![
+                        anyhow!("cleanup failure"),
+                        anyhow::Error::new(WorkerExecutorError::oplog_fenced(
+                            golem_common::model::AgentId {
+                                component_id: golem_common::model::component::ComponentId::new(),
+                                agent_id: "Agent(owner)".into(),
+                            },
+                            1,
+                            Some(2),
+                        ))
+                        .context("fenced cleanup"),
+                        anyhow::Error::new(InterruptKind::EntityCancellation),
+                    ],
+                    |operation, error| {
+                        let classified = durability::native_host_failure_for_operation::<Context>(
+                            Some(operation.clone()),
+                            error,
+                            OplogIndex::INITIAL,
+                            AgentMode::Durable,
+                        );
+                        Box::pin(async move {
+                            classified.await;
+                        })
+                    },
+                )
+                .await;
+                assert_eq!(errors.len(), 3);
+                assert_eq!(errors[0].to_string(), "cleanup failure");
+                assert_eq!(errors[1].to_string(), "fenced cleanup");
+                // The retained HostedInstance classifies the collected errors again at
+                // its boundary. Neither pass may wait for the terminal's own caller.
+                durability::native_finalization_failures_for_operation::<Context>(
+                    Some(operation.clone()),
+                    errors,
+                    OplogIndex::INITIAL,
+                    AgentMode::Durable,
+                )
+                .await
+            };
+            let result = if cancelled {
+                operation.resolve_cancel_with_cleanup(cleanup).await
+            } else {
+                operation
+                    .resolve_ordinary_with_cleanup(terminal.clone(), cleanup)
+                    .await
+            };
+            assert!(matches!(
+                result,
+                Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::ShardLost,
+                })
+            ));
+            match operation.winner_if_active().unwrap() {
+                operation::ToolOperationWinner::Cancelled => assert!(cancelled),
+                operation::ToolOperationWinner::Ordinary { _terminal } => {
+                    assert!(!cancelled);
+                    assert!(Arc::ptr_eq(&_terminal, &terminal));
+                }
+                _ => panic!("cleanup replaced the committed terminal"),
+            }
+            operation.settle().await;
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn finalization_drives_pending_election_across_store_errors() {
+        use golem_common::model::oplog::payload::types::{
+            SerializableEntityBodyExecution, SerializableToolOperationTerminal,
+            SerializableToolRpcError,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        type Operation = operation::OwnerToolOperation;
+        struct FailTask(Arc<Notify>, anyhow::Error);
+        impl AccessorTask<Operation, HasSelf<Operation>> for FailTask {
+            async fn run(
+                self,
+                _: &Accessor<Operation, HasSelf<Operation>>,
+            ) -> wasmtime::Result<()> {
+                self.0.notified().await;
+                Err(wasmtime::Error::from_anyhow(self.1))
+            }
+        }
+        struct ResolveTask(Operation, Arc<Notify>);
+        impl AccessorTask<Operation, HasSelf<Operation>> for ResolveTask {
+            async fn run(
+                self,
+                _: &Accessor<Operation, HasSelf<Operation>>,
+            ) -> wasmtime::Result<()> {
+                self.1.notified().await;
+                self.0
+                    .resolve_ordinary(
+                        Arc::new(SerializableToolOperationTerminal {
+                            admission_refusal: None,
+                            body_execution: SerializableEntityBodyExecution::Executed,
+                            result: Err(SerializableToolRpcError::Cancelled),
+                        }),
+                        true,
+                    )
+                    .await;
+                Ok(())
+            }
+        }
+
+        for initial_error in [true, false] {
+            let owner = operation::OwnerToolOperations::new();
+            let make_operation = |start| {
+                let template = operation::tests::replay_operation(start);
+                owner
+                    .create(template.context().clone())
+                    .accept(template.invocation_id().unwrap())
+                    .unwrap()
+            };
+            let operation = make_operation(2);
+            let sibling = make_operation(3);
+            assert!(sibling.begin_ordinary());
+            let pending = Arc::new(Notify::new());
+            let release = Arc::new(Notify::new());
+            let completed = Arc::new(Notify::new());
+            let classifications = Arc::new(AtomicUsize::new(0));
+            let starts = Arc::new(AtomicUsize::new(0));
+            let mut config = wasmtime::Config::new();
+            config.concurrency_support(true);
+            let engine = wasmtime::Engine::new(&config).unwrap();
+            let mut store = wasmtime::Store::new(&engine, operation.clone());
+            let retry_from = OplogIndex::from_u64(7);
+            let failure = TerminalCallError::new(
+                WorkerExecutorError::runtime("first Store failure"),
+                DurableCallTrapContext { retry_from },
+            )
+            .into_marked_anyhow()
+            .context("original failure context");
+            let mut errors = Vec::new();
+            store
+                .run_concurrent(async |accessor| {
+                    accessor.spawn(ResolveTask(sibling.clone(), release.clone()));
+                    accessor.spawn(FailTask(
+                        pending.clone(),
+                        anyhow::Error::new(WorkerExecutorError::unexpected_oplog_entry(
+                            "secondary",
+                            "failure",
+                        )),
+                    ));
+                    if initial_error {
+                        errors.push(failure);
+                    } else {
+                        let ready = Arc::new(Notify::new());
+                        ready.notify_one();
+                        accessor.spawn(FailTask(ready, failure));
+                    }
+                })
+                .await
+                .unwrap();
+            let finalization_completed = completed.clone();
+            let finalization_classifications = classifications.clone();
+            let errors = drive_tool_finalization(
+                &mut store.as_context_mut(),
+                async move {
+                    if !initial_error {
+                        finalization_completed.notified().await;
+                    }
+                    assert_eq!(finalization_classifications.load(Ordering::SeqCst), 2);
+                    assert!(matches!(
+                        operation.winner_if_active(),
+                        Some(operation::ToolOperationWinner::Trap)
+                    ));
+                    operation.settle().await;
+                    Ok(())
+                },
+                errors,
+                |operation, error| {
+                    let secondary = error
+                        .root_cause()
+                        .downcast_ref::<WorkerExecutorError>()
+                        .is_some_and(|error| {
+                            matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. })
+                        });
+                    if secondary {
+                        // Only the Store failure observed while election is pending may
+                        // release the Store task which resolves the selecting terminal.
+                        release.notify_one();
+                    }
+                    let classification = durability::native_host_failure_for_operation::<Context>(
+                        Some(operation.clone()),
+                        error,
+                        OplogIndex::INITIAL,
+                        AgentMode::Durable,
+                    );
+                    let pending = pending.clone();
+                    let completed = completed.clone();
+                    let classifications = classifications.clone();
+                    let starts = starts.clone();
+                    Box::pin(async move {
+                        starts.fetch_add(1, Ordering::SeqCst);
+                        tokio::pin!(classification);
+                        std::future::poll_fn(|cx| {
+                            let result = classification.as_mut().poll(cx);
+                            if !secondary && result.is_pending() {
+                                pending.notify_one();
+                            }
+                            result
+                        })
+                        .await;
+                        if classifications.fetch_add(1, Ordering::SeqCst) == 1 {
+                            completed.notify_one();
+                        }
+                    })
+                },
+            )
+            .await;
+            assert_eq!(
+                starts.load(Ordering::SeqCst),
+                2,
+                "classification must not restart"
+            );
+            assert_eq!(errors.len(), 2);
+            assert_eq!(errors[0].to_string(), "original failure context");
+            assert_eq!(
+                find_durable_call_trap_context(&errors[0])
+                    .unwrap()
+                    .retry_from,
+                retry_from
+            );
+            assert!(matches!(
+                sibling.winner_if_active(),
+                Some(operation::ToolOperationWinner::Ordinary { .. })
+            ));
+            sibling.settle().await;
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn finalization_elects_store_failure_before_waiting_for_child_settlement() {
+        let child = OplogIndex::from_u64(2);
+        let operation = operation::tests::replay_operation(2);
+        let started = Arc::new(Notify::new());
+        type Operation = operation::OwnerToolOperation;
+        struct FailTask(Arc<Notify>);
+        impl AccessorTask<Operation, HasSelf<Operation>> for FailTask {
+            async fn run(
+                self,
+                _: &Accessor<Operation, HasSelf<Operation>>,
+            ) -> wasmtime::Result<()> {
+                self.0.notified().await;
+                Err(wasmtime::Error::from_anyhow(anyhow!(
+                    "secondary Store task"
+                )))
+            }
+        }
+
+        let mut config = wasmtime::Config::new();
+        config.concurrency_support(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let mut store = wasmtime::Store::new(&engine, operation.clone());
+        let task = FailTask(started.clone());
+        store
+            .run_concurrent(async move |accessor| accessor.spawn(task))
+            .await
+            .unwrap();
+        let failure = TerminalCallError::new(
+            WorkerExecutorError::unexpected_oplog_entry("observation", "disposal"),
+            DurableCallTrapContext { retry_from: child },
+        );
+        let errors = drive_tool_finalization(
+            &mut store.as_context_mut(),
+            async move {
+                // The speculative drain error must not have elected an owner failure.
+                assert!(matches!(
+                    operation.winner_if_active(),
+                    Some(operation::ToolOperationWinner::Open)
+                ));
+                let mut winner = operation.subscribe();
+                started.notify_one();
+                winner
+                    .wait_for(|winner| matches!(winner, operation::ToolOperationWinner::Trap))
+                    .await
+                    .unwrap();
+                operation.settle().await;
+                Ok(())
+            },
+            vec![failure.into()],
+            |operation, error| {
+                let classified = durability::native_host_failure_for_operation::<Context>(
+                    Some(operation.clone()),
+                    error,
+                    OplogIndex::INITIAL,
+                    AgentMode::Durable,
+                );
+                Box::pin(async move {
+                    classified.await;
+                })
+            },
+        )
+        .await;
+        assert_eq!(errors.len(), 2);
+        assert!(matches!(
+            errors[0].root_cause().downcast_ref::<WorkerExecutorError>(),
+            Some(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ));
+        assert_eq!(
+            find_durable_call_trap_context(&errors[0])
+                .unwrap()
+                .retry_from,
+            child
+        );
+        assert!(store.data().winner_if_active().is_none());
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn finalization_entity_boundary_keeps_shard_loss_after_closed_admission() {
+        let operation = operation::tests::replay_operation(2);
+        assert!(operation.select_trap(crate::model::TrapType::Exit).await);
+        let result = durability::native_finalization_failures_for_operation::<Context>(
+            Some(operation.clone()),
+            vec![
+                anyhow::Error::new(WorkerExecutorError::oplog_fenced(
+                    golem_common::model::AgentId {
+                        component_id: golem_common::model::component::ComponentId::new(),
+                        agent_id: "Agent(owner)".into(),
+                    },
+                    1,
+                    Some(2),
+                ))
+                .context("fenced cleanup"),
+                anyhow::Error::new(InterruptKind::EntityCancellation),
+            ],
+            OplogIndex::INITIAL,
+            AgentMode::Durable,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost
+            })
+        ));
+        operation.settle().await;
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn finalization_infrastructure_failures_do_not_elect_owner_failure() {
+        for error in [
+            WorkerExecutorError::unexpected_oplog_entry("observation", "disposal"),
+            WorkerExecutorError::recovery_required("retry read"),
+        ] {
+            let operation = operation::tests::replay_operation(2);
+            let result = durability::native_finalization_failures_for_operation::<Context>(
+                Some(operation.clone()),
+                vec![anyhow::Error::new(error)],
+                OplogIndex::INITIAL,
+                AgentMode::Durable,
+            )
+            .await;
+            assert!(matches!(
+                result,
+                Err(WorkerExecutorError::UnexpectedOplogEntry { .. }
+                    | WorkerExecutorError::RecoveryRequired { .. })
+            ));
+            assert!(matches!(
+                operation.winner_if_active(),
+                Some(operation::ToolOperationWinner::Open)
+            ));
+            assert!(operation.select_trap(crate::model::TrapType::Exit).await);
+            operation.settle().await;
+        }
+    }
 }
