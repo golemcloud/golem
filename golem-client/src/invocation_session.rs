@@ -125,6 +125,8 @@ pub enum SessionTransportError {
         code: PublicErrorCode,
         message: String,
     },
+    #[error("the server answered neither the start nor the resume")]
+    NotAnswered,
     #[error("invocation session endpoint {endpoint} was unreachable for {window:?}: {last_cause}")]
     Unreachable {
         endpoint: String,
@@ -1581,6 +1583,33 @@ impl ReconnectClock {
         );
     }
 
+    /// When the window ends unless the session makes progress before, and the window.
+    fn deadline(&self) -> Option<(tokio::time::Instant, Duration)> {
+        match self.policy {
+            ReconnectPolicy::Unlimited => None,
+            ReconnectPolicy::Within(window) => Some((self.progress + window, window)),
+        }
+    }
+
+    fn unreachable(&mut self, window: Duration) -> SessionTransportError {
+        SessionTransportError::Unreachable {
+            endpoint: self.endpoint.clone(),
+            window,
+            last_cause: Box::new(
+                self.last_cause
+                    .take()
+                    .unwrap_or(SessionTransportError::Closed),
+            ),
+        }
+    }
+
+    /// Fails once the window has passed while the server answered neither the pending start nor
+    /// the pending resume.
+    fn unanswered(&mut self, window: Duration) -> SessionTransportError {
+        self.last_cause = Some(SessionTransportError::NotAnswered);
+        self.unreachable(window)
+    }
+
     fn remaining(&self) -> Option<Duration> {
         match self.policy {
             ReconnectPolicy::Unlimited => None,
@@ -1597,15 +1626,7 @@ impl ReconnectClock {
         match (self.policy, self.remaining()) {
             (_, None) => Ok(CONNECT_ATTEMPT_TIMEOUT),
             (ReconnectPolicy::Within(window), Some(left)) if left.is_zero() => {
-                Err(SessionTransportError::Unreachable {
-                    endpoint: self.endpoint.clone(),
-                    window,
-                    last_cause: Box::new(
-                        self.last_cause
-                            .take()
-                            .unwrap_or(SessionTransportError::Closed),
-                    ),
-                })
+                Err(self.unreachable(window))
             }
             (_, Some(left)) => Ok(left.min(CONNECT_ATTEMPT_TIMEOUT)),
         }
@@ -1847,7 +1868,22 @@ impl InvocationSession {
         recover_transport: bool,
     ) -> Result<ReceivedFrame, SessionTransportError> {
         loop {
-            let mut frame = match self.transport.receive().await {
+            // A pending start or resume waits for its answer only until the window ends; an
+            // accepted operation waits without a deadline.
+            let deadline = match self.attachment_state {
+                AttachmentState::Pending { .. } => self.reconnect.deadline(),
+                _ => None,
+            };
+            let received = match deadline {
+                Some((deadline, window)) => {
+                    match tokio::time::timeout_at(deadline, self.transport.receive()).await {
+                        Ok(received) => received,
+                        Err(_) => return Err(self.reconnect.unanswered(window)),
+                    }
+                }
+                None => self.transport.receive().await,
+            };
+            let mut frame = match received {
                 Ok(frame) => frame,
                 Err(error) if recover_transport && is_transport_detach(&error) => {
                     self.recover(error).await?;
@@ -8569,6 +8605,41 @@ mod tests {
                 ..
             }
         ));
+        server.abort();
+    }
+
+    #[test]
+    async fn a_start_the_server_never_answers_is_unreachable_after_the_window() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_session(&listener).await;
+            receive_client_message(&mut socket).await;
+            while socket.next().await.is_some() {}
+        });
+        let started = tokio::time::Instant::now();
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Within(Duration::from_millis(400)),
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+        let error = match session.receive().await {
+            Ok(frame) => panic!("received {:?}", frame.frame()),
+            Err(error) => error,
+        };
+        let elapsed = started.elapsed();
+        let SessionTransportError::Unreachable {
+            window, last_cause, ..
+        } = error
+        else {
+            panic!("expected an unreachable error, got {error}")
+        };
+        assert_eq!(window, Duration::from_millis(400));
+        assert!(matches!(*last_cause, SessionTransportError::NotAnswered));
+        assert!(elapsed >= Duration::from_millis(400), "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
         server.abort();
     }
 
