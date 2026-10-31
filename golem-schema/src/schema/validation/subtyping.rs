@@ -350,7 +350,56 @@ pub fn is_equivalent_cross_graph(
     ty_b: &SchemaType,
 ) -> bool {
     let mut visited = HashSet::new();
-    equivalent(graph_a, ty_a, graph_b, ty_b, &mut visited)
+    equivalent(
+        graph_a,
+        ty_a,
+        graph_b,
+        ty_b,
+        Equivalence::Exact,
+        &mut visited,
+    )
+}
+
+/// Structural type equivalence across two graphs, except that a scalar of
+/// `refined` may carry the restrictions that a tool argument refinement adds
+/// to the matching scalar of `base`.
+///
+/// A tool argument refinement keeps the value representation of its base
+/// type, so a value of `refined` is also a value of `base`, with one
+/// exception: a refined `string` is published as `text`, and its value is a
+/// text value. The accepted differences are:
+///
+/// - `text` against `string`, when the text has no language restriction;
+/// - `text` against `text` with other length or regex restrictions, but the
+///   same language restriction;
+/// - a numeric type against the same numeric type with other bounds or unit;
+/// - `path` against `path` with another path spec;
+/// - `url` against `url` with other allowed schemes, but the same allowed
+///   hosts.
+///
+/// All other parts of the two types must be equivalent as in
+/// [`is_equivalent_cross_graph`].
+pub fn is_refinement_cross_graph(
+    refined_graph: &SchemaGraph,
+    refined: &SchemaType,
+    base_graph: &SchemaGraph,
+    base: &SchemaType,
+) -> bool {
+    let mut visited = HashSet::new();
+    equivalent(
+        refined_graph,
+        refined,
+        base_graph,
+        base,
+        Equivalence::Refinement,
+        &mut visited,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Equivalence {
+    Exact,
+    Refinement,
 }
 
 fn equivalent(
@@ -358,6 +407,7 @@ fn equivalent(
     a: &SchemaType,
     graph_b: &SchemaGraph,
     b: &SchemaType,
+    mode: Equivalence,
     visited: &mut HashSet<(TypeId, TypeId)>,
 ) -> bool {
     // Resolve refs on both sides while tracking the pair to detect cycles.
@@ -371,6 +421,12 @@ fn equivalent(
         && !visited.insert((ka, kb))
     {
         return true;
+    }
+
+    if mode == Equivalence::Refinement
+        && let Some(refinement) = refinement_of(a_resolved, b_resolved)
+    {
+        return refinement;
     }
 
     match (a_resolved, b_resolved) {
@@ -496,7 +552,8 @@ fn equivalent(
         (SchemaType::Record { fields: a, .. }, SchemaType::Record { fields: b, .. }) => {
             a.len() == b.len()
                 && a.iter().zip(b.iter()).all(|(af, bf)| {
-                    af.name == bf.name && equivalent(graph_a, &af.body, graph_b, &bf.body, visited)
+                    af.name == bf.name
+                        && equivalent(graph_a, &af.body, graph_b, &bf.body, mode, visited)
                 })
         }
 
@@ -507,7 +564,9 @@ fn equivalent(
                     ac.name == bc.name
                         && match (&ac.payload, &bc.payload) {
                             (None, None) => true,
-                            (Some(ap), Some(bp)) => equivalent(graph_a, ap, graph_b, bp, visited),
+                            (Some(ap), Some(bp)) => {
+                                equivalent(graph_a, ap, graph_b, bp, mode, visited)
+                            }
                             _ => false,
                         }
                 })
@@ -522,11 +581,11 @@ fn equivalent(
             a.len() == b.len()
                 && a.iter()
                     .zip(b.iter())
-                    .all(|(ae, be)| equivalent(graph_a, ae, graph_b, be, visited))
+                    .all(|(ae, be)| equivalent(graph_a, ae, graph_b, be, mode, visited))
         }
 
         (SchemaType::List { element: a, .. }, SchemaType::List { element: b, .. }) => {
-            equivalent(graph_a, a, graph_b, b, visited)
+            equivalent(graph_a, a, graph_b, b, mode, visited)
         }
         (
             SchemaType::FixedList {
@@ -539,7 +598,7 @@ fn equivalent(
                 length: nb,
                 ..
             },
-        ) => na == nb && equivalent(graph_a, a, graph_b, b, visited),
+        ) => na == nb && equivalent(graph_a, a, graph_b, b, mode, visited),
         (
             SchemaType::Map {
                 key: ak, value: av, ..
@@ -548,22 +607,22 @@ fn equivalent(
                 key: bk, value: bv, ..
             },
         ) => {
-            equivalent(graph_a, ak, graph_b, bk, visited)
-                && equivalent(graph_a, av, graph_b, bv, visited)
+            equivalent(graph_a, ak, graph_b, bk, mode, visited)
+                && equivalent(graph_a, av, graph_b, bv, mode, visited)
         }
 
         (SchemaType::Option { inner: a, .. }, SchemaType::Option { inner: b, .. }) => {
-            equivalent(graph_a, a, graph_b, b, visited)
+            equivalent(graph_a, a, graph_b, b, mode, visited)
         }
         (SchemaType::Result { spec: a, .. }, SchemaType::Result { spec: b, .. }) => {
             let ok_ok = match (&a.ok, &b.ok) {
                 (None, None) => true,
-                (Some(ax), Some(bx)) => equivalent(graph_a, ax, graph_b, bx, visited),
+                (Some(ax), Some(bx)) => equivalent(graph_a, ax, graph_b, bx, mode, visited),
                 _ => false,
             };
             let err_ok = match (&a.err, &b.err) {
                 (None, None) => true,
-                (Some(ax), Some(bx)) => equivalent(graph_a, ax, graph_b, bx, visited),
+                (Some(ax), Some(bx)) => equivalent(graph_a, ax, graph_b, bx, mode, visited),
                 _ => false,
             };
             ok_ok && err_ok
@@ -573,7 +632,8 @@ fn equivalent(
         // compared recursively so refs in `inner` resolve like every other
         // nested schema type.
         (SchemaType::Secret { spec: a, .. }, SchemaType::Secret { spec: b, .. }) => {
-            a.category == b.category && equivalent(graph_a, &a.inner, graph_b, &b.inner, visited)
+            a.category == b.category
+                && equivalent(graph_a, &a.inner, graph_b, &b.inner, mode, visited)
         }
         (SchemaType::QuotaToken { spec: a, .. }, SchemaType::QuotaToken { spec: b, .. }) => a == b,
         (
@@ -590,7 +650,14 @@ fn equivalent(
                         .find(|ab| ab.tag == b_branch.tag)
                         .map(|ab| {
                             ab.discriminator == b_branch.discriminator
-                                && equivalent(graph_a, &ab.body, graph_b, &b_branch.body, visited)
+                                && equivalent(
+                                    graph_a,
+                                    &ab.body,
+                                    graph_b,
+                                    &b_branch.body,
+                                    mode,
+                                    visited,
+                                )
                         })
                         .unwrap_or(false)
                 })
@@ -604,20 +671,53 @@ fn equivalent(
         (SchemaType::Future { inner: a, .. }, SchemaType::Future { inner: b, .. }) => {
             match (a, b) {
                 (None, None) => true,
-                (Some(ai), Some(bi)) => equivalent(graph_a, ai, graph_b, bi, visited),
+                (Some(ai), Some(bi)) => equivalent(graph_a, ai, graph_b, bi, mode, visited),
                 _ => false,
             }
         }
         (SchemaType::Stream { inner: a, .. }, SchemaType::Stream { inner: b, .. }) => {
             match (a, b) {
                 (None, None) => true,
-                (Some(ai), Some(bi)) => equivalent(graph_a, ai, graph_b, bi, visited),
+                (Some(ai), Some(bi)) => equivalent(graph_a, ai, graph_b, bi, mode, visited),
                 _ => false,
             }
         }
 
         // Mismatched kinds (post-resolution) are not equivalent.
         _ => false,
+    }
+}
+
+/// The scalar rules of [`is_refinement_cross_graph`]. Returns `None` when the
+/// pair is not a scalar pair that a tool argument refinement can produce.
+fn refinement_of(refined: &SchemaType, base: &SchemaType) -> Option<bool> {
+    match (refined, base) {
+        (SchemaType::Text { restrictions, .. }, SchemaType::String { .. }) => {
+            Some(restrictions.languages.is_none())
+        }
+        (
+            SchemaType::Text {
+                restrictions: refined,
+                ..
+            },
+            SchemaType::Text {
+                restrictions: base, ..
+            },
+        ) => Some(refined.languages == base.languages),
+        (SchemaType::Path { .. }, SchemaType::Path { .. }) => Some(true),
+        (
+            SchemaType::Url {
+                restrictions: refined,
+                ..
+            },
+            SchemaType::Url {
+                restrictions: base, ..
+            },
+        ) => Some(refined.allowed_hosts == base.allowed_hosts),
+        _ => match (refined.numeric_repr(), base.numeric_repr()) {
+            (Some(refined), Some(base)) => Some(refined == base),
+            _ => None,
+        },
     }
 }
 

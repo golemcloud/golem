@@ -596,8 +596,10 @@ impl FromSchema for String {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
             SchemaValue::String(s) => Ok(s.clone()),
+            // Text-refined tool arguments retain String as their Rust type.
+            SchemaValue::Text(p) => Ok(p.text.clone()),
             other => Err(FromSchemaError::shape_mismatch(
-                "string",
+                "string or text",
                 value_kind(other),
                 "String",
             )),
