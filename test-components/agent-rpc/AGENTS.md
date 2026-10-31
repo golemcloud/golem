@@ -642,7 +642,8 @@ Only customize when the *strategy* needs to change (different backoff, give-up c
 
 ```
 golem.yaml                        # Root application manifest
-moon.mod.json                     # Module definition (deps, preferred-target: wasm)
+moon.mod                          # Module definition (import, preferred_target = "wasm")
+moon.work                         # Application and local dependency module directories
 moon.pkg                          # Root package config
 <component>/                      # Component package (each becomes a WASM component)
   moon.pkg                        # Package config (imports, foreign_library, link exports)
@@ -696,6 +697,10 @@ All MoonBit identifiers are used **as-is** (matching the source code) when used 
 - `moon info` — regenerate `.mbti` interface files
 - Run `moon fmt` for changed MoonBit source and `moon info` when public interfaces change
 - Start with tests for the affected package or file; use all tests for broad or unclear impact
+- Add local modules, including generated bridges, to `moon.work`; declare their module imports in `moon.mod` and package imports in `moon.pkg`
+- The application name sets the generated module name and workspace artifact directory under `_build/wasm/<profile>/build/<module-name>/`; component namespaces may differ
+- Golem prepares dependency sources with `moon tree --package --target wasm`; do not use no-argument `moon install`
+- Published code generation uses pinned `moonx golemcloud/golem_sdk_tools/cmd@<version> --`; that release needs a registry prebuilt Wasm asset. Local SDK overrides use the sibling tools checkout instead
 
 ## Running Golem CLI commands non-interactively
 
