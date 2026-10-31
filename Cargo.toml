@@ -334,7 +334,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs", rev = "61928b2bbf79450adc2c9668c43eba6277f33320", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs", rev = "36ba6fc9bb03265706c2845bee0a217fe3766513", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"
