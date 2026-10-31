@@ -436,6 +436,26 @@ const OUTPUT_CRASH_CUT_OUTPUT: &[u8] = b"held:stdout-firststdout-last|stderr-fir
 const CRASH_CUT_CHECKPOINT: &str = "after-both-partial";
 const CRASH_CUT_EFFECT: &str = "dual-reconstruct-after-both-partial";
 
+/// Reaching the checkpoint runs, and after a crash replays, the JavaScript tools component and
+/// its Node process, which takes far longer than a Rust provider on a loaded runner.
+const CRASH_CUT_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(90);
+
+async fn next_crash_cut_checkpoint(
+    checkpoints: &mut tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
+    phase: &str,
+) -> anyhow::Result<CrashCheckpointArrival> {
+    let arrival = tokio::time::timeout(CRASH_CUT_CHECKPOINT_TIMEOUT, checkpoints.recv())
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("timed out waiting for `{CRASH_CUT_CHECKPOINT}` checkpoint {phase}")
+        })?
+        .ok_or_else(|| {
+            anyhow::anyhow!("checkpoint server stopped before `{CRASH_CUT_CHECKPOINT}` {phase}")
+        })?;
+    assert_eq!(arrival.name, CRASH_CUT_CHECKPOINT);
+    Ok(arrival)
+}
+
 const FOLLOW_UP_SCRIPT: &str = r#"
 const { spawnSync } = require('node:child_process');
 const result = spawnSync('streaming', ['dual-reconstruct', 'redaction-terminals'], { encoding: 'utf8' });
@@ -583,7 +603,7 @@ async fn crash_during_pending_tool_attachments(
         );
     };
     assert_eq!(effect.as_deref(), Some(CRASH_CUT_EFFECT));
-    let original = next_crash_checkpoint(&mut checkpoints, CRASH_CUT_CHECKPOINT).await?;
+    let original = next_crash_cut_checkpoint(&mut checkpoints, "before the crash").await?;
     let recorded_before =
         persist_pending_tool_attachments(&executor, &worker, &owner, open_stdin).await?;
 
@@ -591,7 +611,7 @@ async fn crash_during_pending_tool_attachments(
     drop(original.release);
     // Replay re-executes the JavaScript process and its calls up to the same checkpoint. The
     // interrupted gate read fails there, so the provider announces the checkpoint again.
-    let replayed = next_crash_checkpoint(&mut checkpoints, CRASH_CUT_CHECKPOINT).await?;
+    let replayed = next_crash_cut_checkpoint(&mut checkpoints, "during replay").await?;
     assert!(
         tokio::time::timeout(Duration::from_millis(200), effects.recv())
             .await
