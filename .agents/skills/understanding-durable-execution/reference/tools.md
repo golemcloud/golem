@@ -635,7 +635,8 @@ causal invocation boundaries" while filesystem-incapable invocations get an imme
 permit. A synchronous call from a body back into its blocked owner must pass
 `OwnerLane::ensure_synchronous_owner_call` and is otherwise rejected with `WouldDeadlock` instead
 of hanging; asynchronous owner calls are allowed. `permanent_tool_guest_trap` in
-`worker/invocation.rs` isolates only its fixed Wasm instruction-trap allowlist. Typed quotas,
+`worker/invocation.rs` isolates only its fixed Wasm instruction-trap allowlist and uncaught Wasm
+exceptions. Typed quotas,
 policy exhaustion, `WorkerOutOfMemory`, infrastructure and lifecycle failures retain owner
 recovery even when the retry decision is exhausted. Supervisors independent of the caller Store
 cancel a failed parent's descendants, preserving selected outcomes and unrelated siblings.

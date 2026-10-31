@@ -70,18 +70,20 @@ pub(super) enum LinearMemoryEnumerationError {
     Overflow,
 }
 
-pub(super) fn allocated_linear_memory_bytes<T>(
+/// Sums the unshared linear memories and the GC heap of the store. Golem accounts both the same
+/// way, so this is the total that the memory tracker reconciles to.
+pub(super) fn allocated_memory_bytes<T>(
     store: &Store<T>,
 ) -> Result<u64, LinearMemoryEnumerationError> {
-    store
-        .linear_memories()
-        .iter()
-        .try_fold(0u64, |allocated_bytes, memory| match memory {
+    store.linear_memories().iter().try_fold(
+        store.gc_heap_capacity() as u64,
+        |allocated_bytes, memory| match memory {
             StoreMemory::Unshared(memory) => allocated_bytes
                 .checked_add(memory.data_size(store) as u64)
                 .ok_or(LinearMemoryEnumerationError::Overflow),
             StoreMemory::Shared(_) => Err(LinearMemoryEnumerationError::Shared),
-        })
+        },
+    )
 }
 
 struct StoreFuelGuard<Ctx: crate::workerctx::FuelManagement + 'static> {
@@ -891,7 +893,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let tracker = durable.linear_memory_tracker();
         let limit = durable.max_linear_memory_size();
         let allocated_bytes =
-            allocated_linear_memory_bytes(&hosted.store).map_err(|error| match error {
+            allocated_memory_bytes(&hosted.store).map_err(|error| match error {
                 LinearMemoryEnumerationError::Shared => super::shared_linear_memory_error(&owner),
                 LinearMemoryEnumerationError::Overflow => {
                     WorkerExecutorError::runtime("linear-memory allocation total overflowed")

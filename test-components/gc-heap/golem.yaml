@@ -1,0 +1,61 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+
+manifestVersion: 1.6.0
+
+app: gc-heap
+
+includes:
+- ../golem-test-components-common.yaml
+
+componentTemplates:
+  # Composes the Rust agent with the WAT component in `gc-probe`, which satisfies its
+  # `golem-it:gc-probe/heap` import.
+  rust-gc-probe:
+    presets:
+      debug:
+        build:
+        - command: wasm-tools parse gc-probe/gc_probe.wat -o "{{ cargoTarget }}/gc-probe.wasm"
+          sources:
+          - gc-probe/gc_probe.wat
+          targets:
+          - "{{ cargoTarget }}/gc-probe.wasm"
+        - command: wasm-tools compose "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm" -d "{{ cargoTarget }}/gc-probe.wasm" -o "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm"
+          sources:
+          - "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
+          - "{{ cargoTarget }}/gc-probe.wasm"
+          targets:
+          - "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm"
+        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm"
+      release:
+        build:
+        - command: wasm-tools parse gc-probe/gc_probe.wat -o "{{ cargoTarget }}/gc-probe.wasm"
+          sources:
+          - gc-probe/gc_probe.wat
+          targets:
+          - "{{ cargoTarget }}/gc-probe.wasm"
+        - command: wasm-tools compose "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm" -d "{{ cargoTarget }}/gc-probe.wasm" -o "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm"
+          sources:
+          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+          - "{{ cargoTarget }}/gc-probe.wasm"
+          targets:
+          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm"
+        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm"
+
+components:
+  golem-it:gc-heap:
+    dir: "."
+    templates: rust, rust-gc-probe, rust-test-component
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

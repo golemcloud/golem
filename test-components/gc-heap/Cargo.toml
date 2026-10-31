@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "golem_it_gc_heap"
+version = "0.0.1"
+edition = "2024"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+# Must be the exact wit-bindgen version golem-rust generates the export glue with.
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "67b83d42c135db8c5c42bf26c53ec162bbdca5ea", version = "=0.63.0" }

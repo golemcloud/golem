@@ -303,7 +303,7 @@ use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
+use wasmtime::{AsContext, AsContextMut, Store};
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
 };
@@ -415,16 +415,14 @@ pub(crate) struct PrimaryInvocationBody {
     permit: Option<OwnerInvocationPermit>,
 }
 
-/// Golem's memory accounting covers guest linear memory only.
+/// Golem accounts every Wasmtime memory the same way: guest linear memories and the GC heaps
+/// that Wasmtime grows for the GC proposal through the same limiter callbacks
+/// (`MemoryKind::GcHeap`). GC heap growth takes an admission grant, counts toward the agent's
+/// memory limit and plan quotas, and records a `GrowMemory` hint.
 ///
-/// Wasmtime also grows its internal GC heaps through the same limiter
-/// callbacks, tagged `MemoryKind::GcHeap`. That capacity belongs to the
-/// collector rather than to memory the guest declared, so it is admitted
-/// without taking a grant and correspondingly never releases one. Golem's
-/// engine config leaves the GC proposal disabled (see
-/// `golem_common::wasmtime_config`), so no store should allocate a GC heap in
-/// the first place; the arm is here so that enabling it does not silently start
-/// billing collector capacity as guest memory.
+/// GC heap growth depends on collector timing, so replay can grow differently than the live run
+/// did. Growth is not a checked oplog fact: while the tracker is reconciling, growth writes no
+/// hint and prepaid startup bytes are not counted twice.
 pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
     fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Ctx>;
 
@@ -433,24 +431,15 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
-        kind: MemoryKind,
     ) -> impl Future<Output = wasmtime::Result<bool>> + Send {
         let ctx = self.durable_worker_ctx();
         async move {
-            match kind {
-                MemoryKind::LinearMemory => {
-                    ctx.admit_unshared_memory_growth(current, desired, maximum)
-                        .await
-                }
-                MemoryKind::GcHeap => Ok(true),
-            }
+            ctx.admit_unshared_memory_growth(current, desired, maximum)
+                .await
         }
     }
 
-    fn durable_memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) -> bool {
-        if kind != MemoryKind::LinearMemory {
-            return false;
-        }
+    fn durable_memory_grown(&mut self, current: usize, desired: usize) -> bool {
         let delta = desired.saturating_sub(current) as u64;
         if delta > 0 {
             self.durable_worker_ctx().increase_memory(delta);
@@ -460,10 +449,8 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
         }
     }
 
-    fn durable_memory_grow_failed(&mut self, kind: MemoryKind) -> wasmtime::Result<()> {
-        if kind == MemoryKind::LinearMemory {
-            self.durable_worker_ctx().unshared_memory_growth_failed();
-        }
+    fn durable_memory_grow_failed(&mut self) -> wasmtime::Result<()> {
+        self.durable_worker_ctx().unshared_memory_growth_failed();
         Ok(())
     }
 }

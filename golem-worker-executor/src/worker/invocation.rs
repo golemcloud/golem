@@ -555,7 +555,8 @@ pub(crate) enum GuestCallSettlementError {
     Infrastructure(WorkerExecutorError),
 }
 
-/// Permanent guest instruction failures that a tool boundary can record as its own terminal.
+/// Permanent guest instruction failures and uncaught wasm exceptions that a tool boundary can
+/// record as its own terminal.
 /// Host-call markers take precedence over an underlying Wasmtime trap. A Wasm backtrace alone
 /// does not establish guest origin. Keep the allowlist aligned with `TrapType::from_error`.
 pub(crate) fn permanent_tool_guest_trap(error: &wasmtime::Error) -> Option<String> {
@@ -573,29 +574,31 @@ pub(crate) fn permanent_tool_guest_trap(error: &wasmtime::Error) -> Option<Strin
         return None;
     }
 
-    match error.root_cause().downcast_ref::<wasmtime::Trap>() {
+    let permanent = matches!(
+        error.root_cause().downcast_ref::<wasmtime::Trap>(),
         Some(
             wasmtime::Trap::StackOverflow
-            | wasmtime::Trap::UnreachableCodeReached
-            | wasmtime::Trap::MemoryOutOfBounds
-            | wasmtime::Trap::TableOutOfBounds
-            | wasmtime::Trap::IndirectCallToNull
-            | wasmtime::Trap::BadSignature
-            | wasmtime::Trap::IntegerOverflow
-            | wasmtime::Trap::IntegerDivisionByZero
-            | wasmtime::Trap::BadConversionToInteger
-            | wasmtime::Trap::HeapMisaligned
-            | wasmtime::Trap::NullReference
-            | wasmtime::Trap::AtomicWaitNonSharedMemory,
-        ) => Some(
-            error
-                .chain()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(": "),
-        ),
-        _ => None,
-    }
+                | wasmtime::Trap::UnreachableCodeReached
+                | wasmtime::Trap::MemoryOutOfBounds
+                | wasmtime::Trap::TableOutOfBounds
+                | wasmtime::Trap::IndirectCallToNull
+                | wasmtime::Trap::BadSignature
+                | wasmtime::Trap::IntegerOverflow
+                | wasmtime::Trap::IntegerDivisionByZero
+                | wasmtime::Trap::BadConversionToInteger
+                | wasmtime::Trap::HeapMisaligned
+                | wasmtime::Trap::NullReference
+                | wasmtime::Trap::AtomicWaitNonSharedMemory
+                | wasmtime::Trap::UncaughtException,
+        )
+    ) || error.root_cause().is::<wasmtime::ThrownException>();
+    permanent.then(|| {
+        error
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ")
+    })
 }
 
 fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {

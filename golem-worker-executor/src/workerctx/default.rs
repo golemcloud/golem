@@ -765,12 +765,11 @@ impl ResourceLimiterAsync for Context {
             self.get_max_memory()
         );
 
-        self.durable_memory_growing(current, desired, maximum, kind)
-            .await
+        self.durable_memory_growing(current, desired, maximum).await
     }
 
-    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
-        if self.durable_memory_grown(current, desired, kind) {
+    fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {
+        if self.durable_memory_grown(current, desired) {
             record_allocated_memory(self.durable_ctx.total_linear_memory_size() as usize);
         }
     }
@@ -778,9 +777,9 @@ impl ResourceLimiterAsync for Context {
     fn memory_grow_failed(
         &mut self,
         _error: wasmtime::Error,
-        kind: MemoryKind,
+        _kind: MemoryKind,
     ) -> wasmtime::Result<()> {
-        self.durable_memory_grow_failed(kind)
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(
