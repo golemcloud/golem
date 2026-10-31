@@ -212,9 +212,9 @@ rather than replaced by a recorded result.
   under the original `Start` index.
 - Trapped replay also rebuilds shared filesystem effects and partial stdout, then validates the
   exact terminal and descendants. `permanent_tool_guest_trap` in `worker/invocation.rs` accepts
-  only fixed Wasm instruction traps, not typed quotas, exhausted host policy, OOM, infrastructure
-  or lifecycle failures, regardless of retry exhaustion. Physical Store destruction retains the
-  original `Ctx` for cleanup. Supervisors independent of the caller Store cancel a failed parent's
+  only fixed Wasm instruction traps and uncaught Wasm exceptions, not typed quotas, exhausted host
+  policy, OOM, infrastructure or lifecycle failures, regardless of retry exhaustion. Physical Store
+  destruction retains the original `Ctx` for cleanup. Supervisors independent of the caller Store cancel a failed parent's
   descendants, preserve selected outcomes and unrelated siblings, and settle before result release.
   Stream completion is independent: a completed stream does not become failed with the result.
 - An entity Store's liveness is its own (`store_is_live`): `ReplayingCompleted` is never live;

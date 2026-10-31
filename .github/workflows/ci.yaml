@@ -1659,8 +1659,10 @@ jobs:
         run: ./scripts/regen-bindings.sh
         working-directory: sdks/moonbit/golem_sdk
 
+      # MoonBit fixtures embed and encode their components; the Rust gc-heap fixture parses and
+      # composes a WAT component.
       - name: Install wasm-tools
-        if: matrix.chunk.needs-moonbit
+        if: matrix.chunk.needs-moonbit || startsWith(matrix.chunk.name, 'rust-')
         run: cargo binstall --force --locked wasm-tools@1.248.0
 
       - name: Restore built TS SDK
