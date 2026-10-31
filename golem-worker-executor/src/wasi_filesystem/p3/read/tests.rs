@@ -28,7 +28,7 @@ struct ReadProducerFixture {
 
 impl ReadProducerFixture {
     async fn new(contents: Bytes) -> Self {
-        use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+        use crate::filesystem::sandbox::SandboxFilesystemProvisioning;
         use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
         use crate::services::agent_filesystem::{
             ResolvedStorageLimits, bind_resource_usage_metering, create_fresh,

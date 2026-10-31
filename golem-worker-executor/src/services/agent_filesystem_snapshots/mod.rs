@@ -36,13 +36,13 @@ mod store_calls;
 mod tests;
 mod transitions;
 
+use crate::filesystem::volume::FilesystemVolume;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::filesystem_snapshot::FilesystemSnapshotStore;
 use crate::filesystem_snapshot::{
     AgentSnapshots, ChangeDetection, InvalidSnapshotName, ReadError, SaveError, SnapshotInfo,
     SnapshotName,
 };
-use crate::sandbox_filesystem::FilesystemVolume;
 use crate::services::agent_filesystem::FilesystemCapture;
 use crate::services::golem_config::{
     DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT, FilesystemPressureConfig,
@@ -392,7 +392,7 @@ impl VolumeRoom {
     async fn has_room(&self) -> bool {
         match self {
             Self::Pressure { volume, pressure } => {
-                let space = crate::sandbox_filesystem::observe_space(volume)
+                let space = crate::filesystem::volume::observe_space(volume)
                     .await
                     .inspect_err(|error| {
                         tracing::warn!(error = %error, "Failed to observe the free space of the volume")
@@ -921,6 +921,13 @@ impl AgentFilesystemSnapshots {
     async fn shut_down(&self) {
         if let Some(core) = &self.core {
             core.calls.shut_down().await;
+        }
+    }
+
+    /// Joins the existing shutdown owner without stopping the store a second time.
+    pub(crate) async fn wait_for_shutdown(&self) {
+        if let Some(core) = &self.core {
+            core.calls.wait_for_shutdown().await;
         }
     }
 }

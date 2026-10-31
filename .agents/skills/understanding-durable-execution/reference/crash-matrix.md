@@ -145,7 +145,7 @@ owns the one replay/tool-generation reset. Acceptance and typed notification are
 | `SnapshotBased` update pending across a crash | Save hook already ran and payload is recorded; the new instance must be live at `prepare_instance`, then `finalize_pending_snapshot_update` loads it | Recorded snapshot payload |
 | Snapshot requested at an unsafe boundary | Rejected with the blocking `SnapshotBoundaryConditions` reason; never partially taken | Boundary predicate |
 
-## Filesystem snapshot clean-up (`worker/mod.rs` delete and revert, `services/worker.rs` recovery, `services/worker_fork.rs`, `filesystem_snapshot/rustic/store`)
+## Filesystem snapshot clean-up (`worker/mod.rs` delete and revert, `services/worker.rs` recovery, `services/worker_fork.rs`, `filesystem_snapshot/backend/rustic/repository_namespace`, `filesystem_snapshot/backend/rustic/snapshot_deletion`)
 
 | Crash window | Reconstruction behaviour | Durable fact |
 |---|---|---|

@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
+use crate::filesystem::sandbox::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::filesystem_snapshot::AgentSnapshots;
 use crate::model::{LookupResult, TrapType};
-use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
     CaptureError, CaptureOutcome, DeleteFailure, InitialFilesCheck, LimitTransition,
     ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem, TreeMark, WholeCapture,

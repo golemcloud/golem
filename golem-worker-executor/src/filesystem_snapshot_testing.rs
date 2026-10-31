@@ -745,7 +745,7 @@ mod tests {
                 &SnapshotName::new("p-00000000-0000-4000-8000-000000000001").unwrap(),
                 Path::new("/no-tree"),
                 None,
-                crate::filesystem_snapshot::never_cancelled(),
+                crate::filesystem_snapshot::test_support::never_cancelled(),
                 &slots,
             )
             .await;

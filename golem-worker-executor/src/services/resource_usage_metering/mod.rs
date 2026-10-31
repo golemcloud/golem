@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::sandbox_filesystem::{AgentAccounting, FilesystemStorageError};
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::sandbox::FilesystemStorageError;
+use crate::filesystem::volume::AgentAccounting;
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::byte_time_accumulator::{
@@ -1079,10 +1081,10 @@ impl WindowShared {
         let timeout_at = observation.active.started_at.instant + timeout;
         tokio::select! {
             result = &mut observation.receiver => PeriodicAttempt::Completed(result.unwrap_or_else(|_| {
-                Err(FilesystemStorageError::verification(
+                Err(FilesystemStorageError::from(OperationContext::verification(
                     "observe filesystem usage task completion",
-                    std::path::Path::new("<resource-usage-meter>"),
-                ))
+                    None,
+                )))
             })),
             () = self.clock.sleep_until(timeout_at) => PeriodicAttempt::TimedOut,
         }
