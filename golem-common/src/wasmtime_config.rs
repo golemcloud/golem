@@ -45,9 +45,9 @@ pub fn create_wasmtime_config(enable_fs_cache: bool) -> Config {
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);
     config.wasm_component_model_error_context(true);
-    config.wasm_gc(false);
-    config.wasm_function_references(false);
-    config.wasm_exceptions(false);
+    config.wasm_gc(true);
+    config.wasm_function_references(true);
+    config.wasm_exceptions(true);
     config.wasm_wide_arithmetic(false);
     config.wasm_threads(false);
     config.shared_memory(false);
@@ -85,7 +85,7 @@ mod tests {
     use super::*;
     use test_r::test;
     use wasmtime::component::Component;
-    use wasmtime::{Engine, Module, OptLevel};
+    use wasmtime::{Engine, Instance, Module, OptLevel, Store, ThrownException};
 
     #[test]
     fn precompiled_components_are_compatible_across_engines() -> anyhow::Result<()> {
@@ -131,44 +131,75 @@ mod tests {
         Ok(())
     }
 
-    /// Golem leaves the WebAssembly GC proposal disabled, so Wasmtime never allocates a GC
-    /// heap and `MemoryKind::GcHeap` never reaches a resource limiter.
-    ///
-    /// `DurableResourceLimiter` in golem-worker-executor relies on that: it admits GC heap
-    /// growth without taking a linear-memory admission grant, because the collector's capacity
-    /// is not memory the guest declared and Golem's per-agent memory accounting is keyed to
-    /// guest linear memory. Enabling GC would make this test fail, which is the point -- that
-    /// accounting decision has to be revisited before agents can allocate GC objects.
     #[test]
-    fn gc_proposal_is_disabled() {
-        let engine = Engine::new(&create_wasmtime_config_without_fs_cache()).unwrap();
-        // A `struct` type definition is only valid with the GC proposal enabled.
-        let error = Module::new(&engine, "(module (type (struct (field i32))))")
-            .expect_err("the GC proposal is expected to be disabled");
-        assert!(
-            format!("{error:?}").contains("gc"),
-            "expected a GC-proposal rejection, got: {error:?}"
-        );
+    fn gc_function_references_and_exceptions_validate() -> anyhow::Result<()> {
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+        Module::new(
+            &engine,
+            r#"
+            (module
+              (type $point (struct (field i32)))
+              (type $f (func))
+              (tag $e (param i32))
+              (func $noop (type $f))
+              (elem declare func $noop)
+              (func (export "run") (result i32)
+                (call_ref $f (ref.func $noop))
+                (block $caught (result i32)
+                  (try_table (catch $e $caught)
+                    (throw $e (struct.get $point 0 (struct.new $point (i32.const 7)))))
+                  (i32.const 0))))
+            "#,
+        )?;
+        Ok(())
     }
 
     #[test]
-    fn additional_proposals_remain_disabled() -> anyhow::Result<()> {
+    fn exceptions_are_caught_in_guest_and_escaping_exceptions_trap() -> anyhow::Result<()> {
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+        let module = Module::new(
+            &engine,
+            r#"
+            (module
+              (tag $e (param i32))
+              (func (export "caught") (result i32)
+                (block $handler (result i32)
+                  (try_table (catch $e $handler)
+                    (throw $e (i32.const 42)))
+                  (i32.const 0)))
+              (func (export "escaping") (result i32)
+                (throw $e (i32.const 1))))
+            "#,
+        )?;
+        let mut store = Store::new(&engine, ());
+        store.set_fuel(u64::MAX)?;
+        store.set_epoch_deadline(u64::MAX);
+        let instance = Instance::new(&mut store, &module, &[])?;
+
+        let caught = instance.get_typed_func::<(), i32>(&mut store, "caught")?;
+        assert_eq!(caught.call(&mut store, ())?, 42);
+
+        let escaping = instance.get_typed_func::<(), i32>(&mut store, "escaping")?;
+        let error = escaping
+            .call(&mut store, ())
+            .expect_err("an exception escaping the export must fail the call");
+        assert!(
+            error.is::<ThrownException>(),
+            "expected an uncaught exception, got: {error:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wide_arithmetic_remains_disabled() -> anyhow::Result<()> {
         let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
         let mut enabled_config = create_wasmtime_config_without_fs_cache();
-        enabled_config
-            .wasm_function_references(true)
-            .wasm_exceptions(true)
-            .wasm_wide_arithmetic(true);
+        enabled_config.wasm_wide_arithmetic(true);
         let enabled_engine = Engine::new(&enabled_config)?;
 
-        for module in [
-            "(module (type $f (func)) (func (param (ref null $f))))",
-            "(module (tag (param i32)))",
-            "(module (func (param i64 i64) (result i64 i64) local.get 0 local.get 1 i64.mul_wide_u))",
-        ] {
-            Module::new(&enabled_engine, module)?;
-            assert!(Module::new(&engine, module).is_err(), "accepted {module}");
-        }
+        let module = "(module (func (param i64 i64) (result i64 i64) local.get 0 local.get 1 i64.mul_wide_u))";
+        Module::new(&enabled_engine, module)?;
+        assert!(Module::new(&engine, module).is_err(), "accepted {module}");
 
         Ok(())
     }

@@ -42,6 +42,7 @@ pub mod filesystem_inspection;
 pub mod filesystem_snapshots;
 pub mod fork;
 pub mod fuel;
+pub mod gc_heap;
 pub mod hot_update;
 pub mod http;
 pub mod ignite_service;
@@ -457,6 +458,12 @@ test_component!(
     "large_dynamic_memory",
     "scalability_large_dynamic_memory_release",
     "scalability:large-dynamic-memory"
+);
+test_component!(
+    gc_heap,
+    "gc_heap",
+    "golem_it_gc_heap_release",
+    "golem-it:gc-heap"
 );
 test_component!(
     large_initial_memory,

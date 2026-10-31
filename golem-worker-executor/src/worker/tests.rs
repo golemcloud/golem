@@ -881,9 +881,35 @@ fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
     let mut store = Store::new(&engine, ());
     wasmtime::Instance::new(&mut store, &module, &[])?;
 
+    assert_eq!(instance::allocated_memory_bytes(&store), Ok(6 * 65_536));
+    Ok(())
+}
+
+#[test]
+fn allocated_memory_includes_the_gc_heap_allocated_during_instantiation() -> anyhow::Result<()> {
+    let engine = wasmtime::Engine::new(
+        &golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache(),
+    )?;
+    let module = wasmtime::Module::new(
+        &engine,
+        r#"(module
+                (type $arr (array (mut i32)))
+                (global $keep (mut (ref null $arr)) (ref.null $arr))
+                (memory 1)
+                (func $init (global.set $keep (array.new_default $arr (i32.const 1024))))
+                (start $init)
+            )"#,
+    )?;
+    let mut store = Store::new(&engine, ());
+    store.set_fuel(u64::MAX)?;
+    store.set_epoch_deadline(u64::MAX);
+    wasmtime::Instance::new(&mut store, &module, &[])?;
+
+    let gc_heap = store.gc_heap_capacity() as u64;
+    assert!(gc_heap > 0, "the start function must allocate a GC heap");
     assert_eq!(
-        instance::allocated_linear_memory_bytes(&store),
-        Ok(6 * 65_536)
+        instance::allocated_memory_bytes(&store),
+        Ok(65_536 + gc_heap)
     );
     Ok(())
 }

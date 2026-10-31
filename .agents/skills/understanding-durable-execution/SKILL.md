@@ -2887,7 +2887,7 @@ cursor (`OwnerExecution`, `worker/instance/mod.rs`).
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
   every completed body has validated (`primary_publication_requires_completed_reconstruction_validation`).
 - `worker/invocation.rs::permanent_tool_guest_trap` isolates only its fixed Wasm
-  instruction-trap allowlist. The tool terminal has `body_execution: Trapped` and
+  instruction-trap allowlist and uncaught Wasm exceptions. The tool terminal has `body_execution: Trapped` and
   `RemoteInternalError`. Typed quotas, policy exhaustion, `WorkerOutOfMemory`, infrastructure
   and lifecycle failures retain owner recovery even when the retry decision is exhausted.
   Physical Wasmtime Store destruction retains the original `Ctx` for cleanup. Supervisors

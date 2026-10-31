@@ -4067,20 +4067,19 @@ impl ResourceLimiterAsync for TestWorkerCtx {
                 return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
             }
         }
-        self.durable_memory_growing(current, desired, maximum, kind)
-            .await
+        self.durable_memory_growing(current, desired, maximum).await
     }
 
-    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
-        self.durable_memory_grown(current, desired, kind);
+    fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {
+        self.durable_memory_grown(current, desired);
     }
 
     fn memory_grow_failed(
         &mut self,
         _error: wasmtime::Error,
-        kind: MemoryKind,
+        _kind: MemoryKind,
     ) -> wasmtime::Result<()> {
-        self.durable_memory_grow_failed(kind)
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(
