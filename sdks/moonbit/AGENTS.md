@@ -40,8 +40,9 @@ share a layered architecture:
 sdks/moonbit/
 ├── AGENTS.md                          # This file
 ├── release.sh                         # Release/dev mode toggle script
+├── moon.work                          # Local SDK, tools and example module directories
 ├── golem_sdk/                         # The SDK library (published as golemcloud/golem_sdk)
-│   ├── moon.mod.json                  # Module: golemcloud/golem_sdk (preferred-target: wasm)
+│   ├── moon.mod                       # Module: golemcloud/golem_sdk (preferred_target = "wasm")
 │   ├── moon.pkg                       # Root package
 │   ├── README.mbt.md                  # User-facing readme (also the published readme)
 │   ├── scripts/
@@ -111,8 +112,8 @@ sdks/moonbit/
 │   │   └── scope_card/                # Raw scope-card borrowing for the RPC clients
 │   ├── filesystem/                    # Filesystem helpers
 │   └── ffi/                           # Shared FFI helpers
-├── golem_sdk_tools/                   # Code generation tools (native CLI, not WASM)
-│   ├── moon.mod.json                  # Module: golemcloud/golem_sdk_tools (deps: moonbitlang/x, /parser, /formatter)
+├── golem_sdk_tools/                   # Code generation CLI (local moon run or published moonx)
+│   ├── moon.mod                       # Module: golemcloud/golem_sdk_tools (imports: moonbitlang/x, /parser, /lexer)
 │   ├── lib/                           # Library package
 │   │   ├── mbti.mbt                   # Parser for .mbt source files (extracts pub fn signatures)
 │   │   ├── reexports.mbt             # AST construction: generates reexport wrapper functions
@@ -130,13 +131,13 @@ sdks/moonbit/
 │   └── cmd/
 │       └── main.mbt                   # `reexports` and `agents` subcommands
 └── golem_sdk_example1/                # Example consumer project (also the user template)
-    ├── moon.mod.json                  # Module: golemcloud/golem_sdk_example1 (deps on local golem_sdk)
+    ├── moon.mod                       # Module: golemcloud/golem_sdk_example1 (SDK resolved through moon.work)
     ├── golem.yaml                     # Golem application manifest with the codegen+build pipeline
     ├── README.mbt.md
     ├── wit/                           # Example world (core/types@2.0.0, agent/guest@2.0.0)
     └── golem_moonbit_examples/        # The component package (8 example agents)
-        ├── moon.pkg                   # is-main, WASM export link config (auto-managed by tools)
-        ├── counter.mbt               # Counter (state, snapshotting, fn main {})
+        ├── moon.pkg                   # foreign_library, WASM export link config (auto-managed by tools)
+        ├── counter.mbt               # Counter (state and snapshotting; no fn main)
         ├── task_manager.mbt          # TaskManager + Priority/TaskInfo (#derive.golem_schema)
         ├── config_agent.mbt          # ConfiguredAgent + #derive.config + @config.Secret
         ├── http_agent.mbt            # WeatherAgent (HTTP mount + endpoints)
@@ -169,7 +170,7 @@ and Golem's additional outline-lift, named-memory-lowering, export-disambiguatio
 emission changes, 64 KiB component byte-stream batching, and shared export ABI lifting and lowering
 for types used across exported interfaces.
 The SDK requires these Golem-specific generator changes, not the stock release.
-The installer pins the same Git revision as Golem's Rust consumers.
+The installer pins a Git revision of that branch, including MoonBit-specific generator fixes.
 Use MoonBit 0.10.18 or newer. Current-task cancellation is a signal that bypasses
 ordinary `catch` clauses; put resource cleanup in `defer` or `errdefer`. A waiter
 observes another task's cancellation as the ordinary `TaskCancelled` error.
@@ -605,11 +606,11 @@ moon run cmd -- agents <project-root> --component-dir <component-dir>
 
 # In golem_sdk_example1/ (the example/template):
 moon check --target wasm
-moon build --target wasm --release
+moon build --target wasm --release --target-dir _build
 # Component link (release):
-wasm-tools component embed wit \
-  _build/wasm/release/build/golem_moonbit_examples/golem_moonbit_examples.wasm \
-  --encoding utf16 --output _build/wasm/release/golem_moonbit_examples.embed.wasm
+wasm-tools component embed ../golem_sdk/wit \
+  _build/wasm/release/build/golemcloud/golem_sdk_example1/golem_moonbit_examples/golem_moonbit_examples.wasm \
+  --world agent-guest --encoding utf16 --output _build/wasm/release/golem_moonbit_examples.embed.wasm
 wasm-tools component new \
   _build/wasm/release/golem_moonbit_examples.embed.wasm \
   --output _build/wasm/release/golem_moonbit_examples.agent.wasm
@@ -623,8 +624,8 @@ The example's `golem.yaml` drives the same pipeline (codegen → `moon build` �
 ## Release Script
 
 `sdks/moonbit/release.sh` toggles `golem_sdk_example1` between **development mode** (the local SDK
-selected through `moon.work`, relative tool paths) and **release/template mode** (versioned mooncakes deps; tools run from
-`.mooncakes/`).
+selected through `moon.work`, relative tool paths) and **release/template mode** (versioned
+mooncakes imports; tools run through a pinned `moonx` package).
 
 ```sh
 ./release.sh 0.1.0              # same version for SDK and tools
@@ -632,10 +633,15 @@ selected through `moon.work`, relative tool paths) and **release/template mode**
 ./release.sh --dev             # revert to the local workspace SDK for in-repo development
 ```
 
-Release mode rewrites the example's `moon.mod.json` (workspace SDK version → release version; adds `bin-deps` with
-`golemcloud/golem_sdk_tools`) and the tool/SDK paths in `golem.yaml`, producing a standalone template
-that depends only on mooncakes. Both `golemcloud/golem_sdk` and `golemcloud/golem_sdk_tools` must be
-published to mooncakes.io for the release template to work.
+Release mode rewrites the SDK import in the example's `moon.mod` and the tool/SDK paths in
+`golem.yaml`. It changes tool commands to `moonx golemcloud/golem_sdk_tools/cmd@<version> --` and
+uses standalone artifact paths for a copied example outside this workspace. It does not publish
+anything. Both modules must be published to mooncakes.io, and the tools release must include the
+prebuilt Wasm asset required by `moonx`. Do not add `bin-deps` or run no-argument `moon install`.
+
+CLI-generated applications include their own `moon.work` and use workspace artifact paths. Keep
+local SDK and bridge module directories in that workspace, with module imports in `moon.mod` and
+package imports in `moon.pkg`. Golem prepares sources with `moon tree --package --target wasm`.
 
 ## Coding Conventions
 
@@ -652,7 +658,7 @@ published to mooncakes.io for the release template to work.
 
 ## Important Technical Notes
 
-- The SDK library targets **WASM only** (`preferred-target: wasm` in `moon.mod.json`).
+- The SDK library targets **WASM only** (`preferred_target = "wasm"` in `moon.mod`).
 - String encoding is **UTF-16** (passed to `wasm-tools component embed --encoding utf16`).
 - Memory management uses `mbt_ffi_malloc`/`mbt_ffi_free` for WASM linear memory; MoonBit's GC manages
   MoonBit objects. `mbt_ffi_cabi_realloc` in `gen/ffi.mbt` is the Component Model canonical ABI

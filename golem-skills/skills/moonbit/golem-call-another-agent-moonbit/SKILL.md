@@ -80,13 +80,14 @@ To create multiple distinct instances with the same constructor parameters, use 
 
 MoonBit does **not** currently support putting an agent definition in a shared package and importing its generated client from two separate components. `#derive.agent` describes the concrete implementation type, and `golem_sdk_tools agents` emits the registration, dispatch, and client code together in the component package.
 
-Use an internal guest bridge instead. Given a provider component `example:weather` containing `WeatherAgent`, declare the caller's dependency in `golem.yaml`:
+Use an internal guest bridge instead. The provider must build before the bridge exists. This
+example uses a TypeScript provider `example:weather` containing `WeatherAgent` and a MoonBit caller:
 
 ```yaml
 components:
   example:weather:
     dir: weather
-    templates: moonbit
+    templates: ts
   example:caller:
     dir: caller
     templates: moonbit
@@ -96,18 +97,27 @@ components:
 ```
 
 `golem build` generates `golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client`. The
-generated module intentionally still contains `moon.mod.json`; do not rename or edit it.
+generated module contains `moon.mod` and `moon.work`; do not edit these generated files.
 
-An application using current `moon.mod` would normally put that generated module and the
-application in `moon.work`, import `weather-agent-guest-client@0.0.1` from `moon.mod`, and import its
-client package from `moon.pkg`. This is **not currently a drop-in Golem build setup**: multiple
-workspace members add the module name to Moon's output path, while Golem's stock MoonBit build
-template embeds the single-module path. Use this bridge only after providing workspace-aware debug
-and release build/embed overrides in `golem.yaml`; otherwise the build will not find the component
-WASM. Do not revert the application to legacy `moon.mod.json` merely to add a path dependency.
+Add the generated module directory to the application's `moon.work`, preserving any existing
+local SDK member:
 
-With that custom build integration in place, import the generated client package from the caller's
-`moon.pkg`:
+```moonbit
+members = [
+  ".",
+  "golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client",
+]
+```
+
+Add `"weather-agent-guest-client@0.0.1"` to the imports in the application's `moon.mod`. The
+workspace resolves that module locally. The stock Golem MoonBit template uses workspace artifact
+paths based on the application name, so the caller needs no custom build or embed commands.
+Component namespaces do not need to match the application name.
+
+For a MoonBit provider, use an independently buildable module and workspace. A provider in the
+caller's workspace cannot resolve a bridge member that has not been generated yet.
+
+Import the generated client package from the caller's `moon.pkg`:
 
 ```moonbit
 import {

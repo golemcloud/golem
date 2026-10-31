@@ -268,7 +268,7 @@ With default paths, dependencies generate under
 | Effect | `bash-tool-guest-client.ts`; exported `client` | Source alias and include pattern; use the Effect SDK |
 | Rust | `Cargo.toml`, `src/lib.rs`; `bash_tool_guest_client::BashClient::new()` | Local Cargo path dependency |
 | Scala | sbt project; `golem.bridge.client.bash.BashClient()` | Include the generated Scala sources in the consumer build |
-| MoonBit | `moon.mod.json`, `client/moon.pkg`, `client/client.mbt`; `@bash.BashClient::new()` | Local module dependency and `bash-tool-guest-client/client` package import |
+| MoonBit | `moon.mod`, `moon.work`, `client/moon.pkg`, `client/client.mbt`; `@bash.BashClient::new()` | Add the generated module to the application's `moon.work`, import `bash-tool-guest-client@0.0.1` in `moon.mod`, and import `bash-tool-guest-client/client` in `moon.pkg` |
 | Go | Go module `golem.local/bridge/bash-tool-guest-client`; `bash.Run.Call(func(a *bash.RunArgs) { a.Script = ... })` | `require` and `replace` of the generated module in the consumer's `go.mod` |
 
 Use the language's call-tool guide for invocation and error handling:
