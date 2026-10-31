@@ -44,6 +44,38 @@ Recipient patterns restrict where authority can flow. They can identify:
 
 For installation, at least one lower-positive, upper-positive, or upper-negative grant must cover the target agent. Only grants whose recipient pattern covers the holder contribute to that holder's effective permissions; matching lower-negative grants alone do not make a card installable.
 
+## Relational database grants
+
+The `rdbms` permission class uses the environment as its owner. Ordinary table grants use the
+`query` or `mutate` verb and a three-component resource, `database.schema.table`:
+
+```text
+rdbms(?env) @ ?agent : query : mydb.public.notes
+rdbms(?env) @ ?agent : mutate : mydb.public.*
+```
+
+Each component can be `*`; for example, `mydb.*.*` covers all schemas and tables in `mydb`.
+Golem analyzes SQL first and checks all extracted table targets. Reads need `query`; writes,
+supported table DDL, index creation, and table locks need `mutate`. Starting a transaction
+currently requires both verbs on `mydb.*.*`.
+
+Unsupported SQL needs a separate, explicit capability:
+
+```text
+rdbms(?env) @ ?agent : unanalyzed : database(mydb)
+```
+
+Only the explicit `unanalyzed` verb paired with a `database(...)` resource grants this
+capability. Wildcard verbs, wildcard table grants, and the default agent card do not grant it.
+Prefer a concrete database name. The explicit `unanalyzed : database(*)` form covers all connection
+databases. Account root cards carry this broad authority so an account can derive scoped grants;
+automatic environment and agent defaults do not grant it to agents. It permits fallback only when
+SQL analysis is unsupported, not when a successfully analyzed statement lacks table permission.
+
+The database name selects the connection database, not a guarantee that arbitrary SQL affects only
+that database. Database-role privileges still apply. See [SQL permissions and analysis](/v1.6/develop/rdbms#sql-permissions-and-analysis)
+for supported statements, errors, and migration guidance.
+
 ## Where cards come from
 
 Golem manages several kinds of cards:

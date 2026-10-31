@@ -10,6 +10,154 @@ The currently supported databases are:
 - MySQL
 - Apache Ignite 2
 
+## SQL permissions and analysis
+
+Golem analyzes each SQL statement before it sends the statement to the database. It checks every
+directly identified table target against the agent's [permission cards](/next/develop/cards#relational-database-grants).
+Ordinary grants use `database.schema.table` resources, with `*` allowed in each component:
+
+```text
+rdbms(?env) @ ?agent : query : mydb.public.notes
+rdbms(?env) @ ?agent : mutate : mydb.public.notes
+```
+
+`query` permits reads; `mutate` permits writes, table DDL, and table locks. These verbs describe the
+SQL operation, not the API method: a write through `query` still needs `mutate`. Statements that
+read one table and write another need permission for both targets.
+
+The analyzer supports these statement kinds when it can determine their table targets:
+
+- `SELECT`, including joins, subqueries, and common table expressions (CTEs).
+- `INSERT`, `UPDATE`, `DELETE`, and `MERGE`, including reads from source tables.
+- `CREATE TABLE`, supported `ALTER TABLE` operations, `DROP TABLE`, and `TRUNCATE`.
+- `CREATE INDEX` and `LOCK TABLE`, which require `mutate` on the affected tables.
+- `SELECT ... FOR UPDATE` and `SELECT ... FOR SHARE`, which require `mutate` on the locked tables.
+  An `OF` clause selects those tables through their names or aliases.
+- PostgreSQL `ON CONFLICT (columns) WHERE predicate`, when the predicate contains no subquery.
+
+CTE names are local to their SQL scope, not database table targets. Reads and writes inside CTEs
+still require the corresponding grants on the underlying tables. Supported table DDL can also
+require `query` on source or referenced tables, for example in `CREATE TABLE ... AS SELECT`.
+Support for a statement kind does not mean that every dialect-specific clause is supported.
+Send one statement per call.
+
+### PostgreSQL relation names
+
+For analyzed PostgreSQL statements, an unqualified physical relation name means the `public`
+schema, not the session's `search_path`. Golem qualifies these names in executable SQL so that
+execution uses the same relation namespace as the permission check. This includes read and write
+targets, created tables, index target tables, and foreign-key references. For example,
+`SELECT * FROM notes` reads `public.notes`, and `CREATE TABLE notes (...)` creates `public.notes`.
+Use an explicit schema to select another namespace. Explicit schemas remain explicit.
+
+CTE references, aliases, column names, and comments are not relation targets and remain unchanged.
+A PostgreSQL `RENAME` destination stays in the source relation's schema; it does not default to
+`public`. Golem does not issue session `SET` commands to implement this contract.
+
+### Unsupported SQL
+
+Not all SQL can be analyzed. For example, `CREATE SCHEMA` and `CREATE EXTENSION` do not have ordinary
+table targets. Table functions, derived `VALUES` tables, `SELECT INTO`, `CREATE VIEW`, `EXPLAIN`, and
+`CALL` are also unsupported. PostgreSQL temporary `CREATE TABLE` requires explicit `unanalyzed`
+authority rather than deterministic relation qualification. Row locks require a plain `SELECT` with direct table references;
+`OF` must name one unqualified table name or alias per lock clause, not a CTE. Locks through derived
+tables, `FOR NO KEY UPDATE`, and `FOR KEY SHARE` are not supported.
+Unquoted PostgreSQL relation-modifier `ONLY` forms in `SELECT`, `UPDATE`, and `DELETE` require
+explicit `unanalyzed` authority. Supported `LOCK TABLE ONLY` remains available with ordinary grants.
+Parsing or target-analysis failures are denied before execution unless the agent
+has an explicit grant for unanalyzed SQL on the connection's database:
+
+```text
+rdbms(?env) @ ?agent : unanalyzed : database(mydb)
+```
+
+This capability requires the explicit `unanalyzed` verb and a `database(...)` resource.
+It is not included in the default agent card, wildcard table grants such as `mydb.*.*`, or wildcard
+verbs. Prefer a concrete database name. `unanalyzed : database(*)` deliberately covers every
+connection database; it is not a table wildcard. Grant this capability only to trusted code that
+needs unsupported SQL.
+
+Golem always attempts analysis first, even with this grant. If analysis succeeds, every table
+target must pass the ordinary `query` or `mutate` permission check. Insufficient table permission
+is a denial, not a reason to fall back to `unanalyzed`. Only unsupported analysis permits the
+explicit database-scoped fallback. Permission and analysis denials surface as query-execution
+failures; inspect the error message to distinguish an unsupported statement from a missing grant.
+The fallback executes the original SQL without deterministic namespace rewriting.
+An unanalyzed grant does not make invalid SQL valid: the database can still reject it.
+
+<Callout type="warning">
+  `database(mydb)` scopes the fallback to a connection whose database is `mydb`. It does not prove
+  that arbitrary SQL affects only that database. The database role still enforces its privileges.
+  Use a least-privilege database role; do not treat this grant as table-level isolation.
+</Callout>
+
+### Executable expressions and the database trust boundary
+
+A statement is not safe to analyze merely because it has no table references. A function call
+such as `SELECT protected_reader()` can read or change database data. Explicit function calls,
+custom operators, and casts must belong to the deliberately supported expression subset;
+unresolved or unsupported forms require `unanalyzed`. The same rule applies inside nested
+statements and partial-index conflict predicates. Explicit operator classes and index access
+methods must also be supported; an ordinary table grant does not authorize arbitrary executable
+implementations selected by index DDL.
+
+The supported PostgreSQL exceptions include zero-argument `pg_catalog.now()` and casts to
+`pg_catalog.regclass` or `pg_catalog.uuid` from a string literal or a parameter with the built-in
+text type. Golem qualifies unqualified `now()`, `::regclass`, and `::uuid` before execution. A custom-typed
+parameter does not qualify for these cast exceptions, even if the database can convert it.
+Bare built-in PostgreSQL `DEFAULT CURRENT_TIMESTAMP` also works with ordinary grants, alongside
+`now()`. This does not authorize every timestamp routine or form.
+For approved `regclass` casts, Golem normalizes one-part string literals offline into safely
+escaped `E'public.name'` literals. Explicitly schema-qualified literals remain unchanged. Keeping
+these casts constant preserves PostgreSQL early OID binding, stored constraints after table
+renames, and index predicate immutability. Only built-in text parameter placeholders use a trusted
+`pg_catalog.regexp_match` expression to detect dots outside double quotes, then
+`pg_catalog.format('public.%s', input)` to prefix one-part names at runtime. Offline literals use
+the same quote/dot boundary rule. Both follow PostgreSQL's leading-quote rule: a double quote starts
+quoting only at the beginning of a name part. Explicit multi-part input remains unchanged. Both forms preserve
+native `regclass` spelling, including unquoted `migration-log`, rather than enforce SQL identifier
+grammar. They also preserve quoted case and explicit schemas. Golem changes
+only executable SQL: the original bound parameters and the durable SQL request remain unchanged.
+Literal and built-in text parameter normalization recognize exactly PostgreSQL scanner whitespace:
+ASCII space, tab, LF, CR, vertical tab, and form feed. Unicode whitespace remains part of an unquoted name.
+Ordinary MySQL `NOW()` uses the built-in `CURRENT_TIMESTAMP` form. Other explicit routines,
+casts, operator classes, and index access methods require `unanalyzed` unless supported.
+
+Ordinary grants authorize directly identified relations and supported expressions. They do not
+enumerate all indirect effects of the database objects involved. A view can read other tables;
+triggers, defaults, policies, constraints, cascades, index expressions, and custom types can run
+database code. Database administrators must control these objects and trusted routines. Use a
+least-privilege database role as well as permission cards. The analyzer is not a sandbox for
+arbitrary server-side code. In particular, ordinary operator syntax can invoke routines selected
+by custom parameter or column types; those types and their implicit operations remain trusted.
+
+The database namespace is also trusted administrator-controlled configuration. Administrators
+must control the schemas in the session's `search_path` and prevent untrusted objects from
+shadowing built-in types or routines. This applies to connection options and session changes,
+not only to the SQL submitted by the agent. Golem does not enforce a safe `search_path`.
+
+SQLx can issue internal metadata queries that do not pass through Golem's SQL analyzer. For
+example, its type discovery uses `oid::regtype::text`; a shadow `text` domain can run a constraint
+function during that query. Catalog qualification of the guest statement does not protect these
+driver queries. Permission cards do not isolate an agent from a hostile database namespace,
+even when its submitted statement belongs to the supported subset or has no table targets.
+
+### Transactions and migrations
+
+Starting a transaction currently requires both `query` and `mutate` on `mydb.*.*`, even when the
+transaction only reads or touches one table. Statements inside the transaction are still analyzed
+and authorized individually. An `unanalyzed` grant does not replace the transaction-start grants.
+
+Normal migrations that create or alter tables, create indexes, lock tables, or update migration
+tracking rows should use ordinary grants. Give the migration agent access to its tracking table
+and every application table it reads or changes. Add `unanalyzed` only if a required statement
+cannot be analyzed, such as `CREATE EXTENSION`, after reviewing its effects and database role.
+
+The Effect adapter works with `Migrator` from `effect/sql` through the canonical `SqlClient`
+service. This path does not automatically grant broad permissions or bypass SQL analysis. See
+the [Effect PostgreSQL guide](/next/how-to-guides/effect/golem-add-postgres-effect) for adapter setup.
+PostgreSQL `regclass` results, including Migrator's table-existence check, use the API's OID representation.
+
 <details>
     <summary>See selected API types and signatures</summary>
 

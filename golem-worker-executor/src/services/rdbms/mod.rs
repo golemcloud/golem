@@ -53,6 +53,11 @@ pub trait RdbmsType: Debug + Display + Default + PartialEq + Clone + Send {
         + TryFrom<SerializableDbValue, Error = String>
         + 'static;
 
+    /// Whether the encoder advertises the engine's built-in text type, not a named custom type.
+    fn is_builtin_text_parameter(_value: &Self::DbValue) -> bool {
+        false
+    }
+
     fn durability_connection_interface() -> &'static str;
     fn durability_transaction_interface() -> &'static str;
     fn durability_result_stream_interface() -> &'static str;

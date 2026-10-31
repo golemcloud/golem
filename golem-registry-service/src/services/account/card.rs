@@ -35,7 +35,7 @@ use golem_common::model::card::{
     EnvironmentRetryPolicyResourcePattern, EnvironmentSecuritySchemeResourcePattern,
     EnvironmentToolGrantResourcePattern, EnvironmentToolMiddlewareGrantResourcePattern,
     FilesystemResourcePattern, KvResourcePattern, NetworkResourcePattern, OplogResourcePattern,
-    PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, SecretResourcePattern,
+    PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, RdbmsVerb, SecretResourcePattern,
     SystemResourcePattern, SystemVerb, ToolResourcePattern,
 };
 
@@ -317,6 +317,14 @@ fn add_account_grants(
             recipient: RecipientPattern::Any,
             resource: RdbmsResourcePattern::any(),
         }),
+        PermissionPattern::Rdbms(ClassPermissionPattern {
+            verb: Some(RdbmsVerb::Unanalyzed),
+            owner: environment_owner.clone(),
+            recipient: RecipientPattern::Any,
+            resource: RdbmsResourcePattern::Database {
+                database: "*".to_string(),
+            },
+        }),
         PermissionPattern::Secret(ClassPermissionPattern {
             verb: None,
             owner: environment_owner,
@@ -372,7 +380,7 @@ fn add_account_grants(
 mod tests {
     use super::account_root_card_record;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::card::{Card, PermissionPattern};
+    use golem_common::model::card::{Card, DelegationSurface, PermissionPattern, parse_permission};
     use test_r::test;
 
     #[test]
@@ -392,6 +400,26 @@ mod tests {
             card.lower_positive
                 .iter()
                 .any(|grant| matches!(grant, PermissionPattern::EnvironmentToolGrant(_)))
+        );
+
+        let delegation = DelegationSurface::from_cards(&[card]);
+        let scoped = parse_permission(
+            "rdbms(tool-owner@example.com/shop/prod) @ tool-owner@example.com/shop/prod/migrations/Migrator : unanalyzed : database(orders)",
+        )
+        .unwrap();
+        assert!(
+            delegation
+                .validate_attenuation(&[scoped], &[], &[], &[])
+                .is_ok()
+        );
+        let other_account = parse_permission(
+            "rdbms(other@example.com/shop/prod) @ * : unanalyzed : database(orders)",
+        )
+        .unwrap();
+        assert!(
+            delegation
+                .validate_attenuation(&[other_account], &[], &[], &[])
+                .is_err()
         );
     }
 }
