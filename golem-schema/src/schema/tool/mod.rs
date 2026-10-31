@@ -43,6 +43,7 @@ pub mod argv;
 pub mod canonical;
 pub mod compatibility;
 pub mod constraints;
+pub mod process;
 mod process_exit_status;
 pub use process_exit_status::ProcessExitStatus;
 #[cfg(feature = "full")]

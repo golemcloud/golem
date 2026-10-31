@@ -29,7 +29,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.13"
+  WASM_RQUICKJS_VERSION: "f99d44c0f7f9597e5bb8f2f0ec1acef858f56888"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -141,6 +141,10 @@ jobs:
           java-version: 21
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
+      - name: Setup Node.js (for the tool-process adapter tests)
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
       - uses: ./.github/actions/restore-binaries
         with:
           disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}

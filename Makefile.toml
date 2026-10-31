@@ -1125,7 +1125,7 @@ dependencies = ["merge-openapi", "diff-openapi", "check-docs-openapi"]
 
 [tasks.unit-tests-and-checks]
 description = "Runs unit tests and source drift checks in one cargo-make invocation"
-dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-builtin-artifacts", "check-wit", "unit-tests"]
+dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-builtin-artifacts", "check-wit", "test-javascript-tool-process-backend", "unit-tests"]
 
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
@@ -2378,6 +2378,11 @@ cd builtin-tools/bash
 exec --fail-on-error cargo deny check sources
 cd ../..
 '''
+
+[tasks.test-javascript-tool-process-backend]
+description = "Tests the JavaScript tool-process adapter and native transport facade"
+command = "node"
+args = ["--test", "sdks/javascript/tool-process-backend.test.mjs", "sdks/javascript/tool-process-host.test.mjs", "sdks/javascript/tool-process-template.test.mjs"]
 
 [tasks.builtin-javascript-typescript-build]
 private = true
