@@ -1472,7 +1472,7 @@ async fn a_written_periodic_record_that_uploads_its_capture_asks_for_its_confirm
 #[derive(Default)]
 struct SpacedStore {
     memory: crate::filesystem_snapshot::InMemorySnapshotStore,
-    times: crate::filesystem_snapshot::SpacedTimes,
+    times: crate::filesystem_snapshot::test_support::SpacedTimes,
     deleted: watch::Sender<Vec<Box<str>>>,
 }
 
@@ -1619,7 +1619,7 @@ async fn update_retention_with(
                 name,
                 tree.path(),
                 None,
-                crate::filesystem_snapshot::never_cancelled(),
+                crate::filesystem_snapshot::test_support::never_cancelled(),
                 &crate::filesystem_snapshot::Unlimited,
             )
         },

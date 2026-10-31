@@ -15,9 +15,10 @@
 use super::fork::Copied;
 use super::store_calls::StoreOf;
 use super::*;
+use crate::filesystem_snapshot::test_support::SpacedTimes;
 use crate::filesystem_snapshot::{
     CallError, Failed, FilesystemSnapshotStore, InMemorySnapshotStore, ReadError, RestoreFailure,
-    RunSlots, SpacedTimes, Unlimited, Withdrawal,
+    RunSlots, Unlimited, Withdrawal,
 };
 use crate::services::agent_filesystem::{RestoreClass, RestoreTree};
 use crate::services::golem_config::FilesystemSnapshotUploadValues;

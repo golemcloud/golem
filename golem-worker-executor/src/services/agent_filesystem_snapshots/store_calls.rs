@@ -403,7 +403,7 @@ impl StoreCalls {
     ) -> Self {
         let store = match store {
             StoreOf::Blob(storage, config) => {
-                crate::filesystem_snapshot::store(storage, config, StoreKey(()))
+                crate::filesystem_snapshot::create_store(storage, config, StoreKey(()))
             }
             #[cfg(any(test, feature = "test-utils"))]
             StoreOf::Given(store) => store,
