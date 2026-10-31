@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Best-effort prune orchestration after successful named-snapshot deletion.
+//! Prune eligibility, claim ownership, repository pruning and durable protocol records.
+//!
+//! Named deletion owns best-effort outcome handling, including logging and outcome metrics.
 
-pub(super) mod claim;
+mod claim;
 pub(super) mod eligibility;
 pub(super) mod records;
 #[cfg(test)]
@@ -278,7 +280,7 @@ pub(super) struct PruneReport {
 /// is over. It marks the packs that no snapshot uses. It repacks the packs that hold both used and
 /// unused blobs, within [`MAX_UNUSED`] and [`MAX_REPACK`]. The result is `None` when the scope has
 /// no repository.
-pub(super) fn prune(
+fn prune(
     backend: Arc<BlobBackend>,
     key: &RepositoryKey,
     settings: &PruneSettings,

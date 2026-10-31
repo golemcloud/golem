@@ -2506,17 +2506,21 @@ The in-memory backend remains available only for tests and `test-utils`.
 `backend/rustic/mod.rs` owns the concrete rustic backend, construction, shutdown and operation
 routing. Operations are free functions with explicit dependencies. `operation::Operation::new`
 borrows the lease and a named `Resources` input without acquiring a tracker token or capturing
-a runtime. The operation's fields are private. Its agent comes only from that lease, and `files`
+a runtime. `Resources` is explicit borrowed wiring rather than a store reference or store trait.
+The operation's fields are private. Its agent comes only from that lease, and `files`
 accepts no separate agent. Accessors expose the key, clock and priority; task and backend methods
 own registration. `BackendRun` keeps an untransferred backend before its cancellation guard in
 field order. Transferring the backend into a blocking task retains no extra backend owner.
-`Operation::cleanup_tasks` keeps the claim's shutdown registration and lease-backed spawner
-together. Registration still precedes the shutdown check, and runtime capture follows it.
+Its private backend `Option` records the one-way transfer, not an optional run mode.
+`Operation::cleanup_tasks` creates one `CleanupTasks` owner for the shutdown registration, tracker,
+runtime and incarnation lease. It spawns directly through the tracker. Registration still precedes
+the shutdown check, and runtime capture follows it.
 `tracked_tasks::check_local_path` counts read-only local checks through store shutdown, not
 incarnation drainage. These two lifetimes are distinct.
 `Operation::read_existing` opens and reads a repository in one tracked blocking task. It uses the
 caller's backend and starts no run or retry. Save keeps its cancellation link, per-run tracker and
-late-write recorders in its own setup order.
+late-write recorders in its own setup order. `SaveRun` owns backup inputs across missing-index
+retries; `SaveSettlement` owns the outcome and recorders while late writes settle.
 `run_outcome` defines one `RunResult` for all operations: `Result<Ran<_>, Ended>`. An `Err` is the
 only run failure path. An `Ok` holds an answer or settlement; settlement returns the same result
 shape. `call_execution::CallDriver` drives runs and settlement, identified by `CallMethod`.
@@ -2532,10 +2536,13 @@ Restore owns its reader-thread count by value. Restore and deletion inputs hold 
 test observations; the generic operation resources do not depend on restore hooks.
 `pruning` owns its defaults, options, eligibility criteria, durable records, claims
 and timing. `tracked_tasks` retains the runtime supplied by each operation.
+Direct repository pruning is private in production; shared race fixtures use the test-only
+`pruning::test_support::prune_repository` entry.
 Tests and single-consumer fixtures live beside their owners. The `test_support` modules hold
 shared fixtures; shared prune inputs and timing constants live in `pruning/test_support`. The shared contract cases in
 `filesystem_snapshot/tests.rs` register for both adapters and own their counting limiter. They
 use independent tree fixtures and own their `one_file` and `files_and_bytes` helpers.
+The rustic shared fixtures have one fixture-tree builder, one default key and one 10-second limit.
 The rustic root tests cover cross-operation races, shutdown and contract registration.
 `filesystem_snapshot/time_zone_tests.rs` checks the executor image.
 

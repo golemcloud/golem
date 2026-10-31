@@ -40,9 +40,9 @@ use crate::filesystem_snapshot::backend::rustic::test_support::{
     drop_when, dropped_within_limit, eventually, failed_at_deadline, fixture_tree,
     holding_index_reads, is_failed, key, ledger, listed_names, mapping_failed_call,
     mapping_local_io_without_source, mapping_missing, mapping_refused, mapping_rustic, name,
-    one_file_tree, policy, polled_until, refusing, repository_fixture_tree, restored_listing,
-    runs_policy, save_each, save_numbered, scope_with_a_prune_to_come, snapshot_files, store,
-    store_over, store_with_deadline, stored_paths,
+    one_file_tree, policy, polled_until, refusing, restored_listing, runs_policy, save_each,
+    save_numbered, scope_with_a_prune_to_come, snapshot_files, store, store_over,
+    store_with_deadline, stored_paths,
 };
 
 use crate::filesystem_snapshot::backend::rustic::test_support::with_existing_repository;
@@ -280,7 +280,7 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
         op_label == "write" && path.starts_with("data")
     });
     let store_with_deadline = store_with_deadline(storage, SHORT_DEADLINE);
-    let tree = repository_fixture_tree();
+    let tree = fixture_tree();
 
     // The held pack write never answers, so only the cut of its try at the deadline lets the save
     // answer. The limit only tells a save that waits for the write from one that answers.
@@ -315,7 +315,7 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
 async fn a_save_cancelled_before_its_publish_publishes_nothing() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
-    let tree = repository_fixture_tree();
+    let tree = fixture_tree();
     store_with_deadline(inner.clone(), STORAGE_CALL_DEADLINE)
         .save(
             &scope,
@@ -389,7 +389,7 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
         }
     });
     let store_with_deadline = store_with_deadline(storage, Duration::from_secs(2));
-    let tree = repository_fixture_tree();
+    let tree = fixture_tree();
     let into = Scratch::new();
     let opener = tokio::spawn(async move {
         held.notified().await;
@@ -2444,20 +2444,20 @@ async fn the_settle_of_a_save_reads_its_late_writes_only_after_every_holder_of_i
         })
     };
     let Settle { wait, finish, .. } =
-        crate::filesystem_snapshot::backend::rustic::save::save_settle(
-            new_scope(),
-            name("p-00000000-0000-4000-8000-0000000000ab"),
-            crate::filesystem_snapshot::backend::rustic::save::SaveExit::Ended {
+        crate::filesystem_snapshot::backend::rustic::save::save_settle(super::SaveSettlement {
+            agent: new_scope(),
+            name: name("p-00000000-0000-4000-8000-0000000000ab"),
+            exit: crate::filesystem_snapshot::backend::rustic::save::SaveExit::Ended {
                 end: RunEnd::CallFailed,
                 failure: anyhow::anyhow!("the backup failed"),
                 staged: None,
             },
-            true,
+            may_land: true,
             run_calls,
             backend_late,
-            Arc::new(LateWrites::default()),
+            publish_late: Arc::new(LateWrites::default()),
             deadline,
-        );
+        });
 
     wait.await;
     // The run is built before the test waits for the holder, as the driver builds it after the wait.
@@ -2479,18 +2479,19 @@ async fn the_settle_of_a_save_waits_for_a_holder_of_its_blobs_past_one_deadline_
     let run_calls = tokio_util::task::TaskTracker::new();
     let _held = run_calls.token();
     let saved = name("p-00000000-0000-4000-8000-0000000000aa");
-    let Settle { wait, .. } = crate::filesystem_snapshot::backend::rustic::save::save_settle(
-        new_scope(),
-        saved.clone(),
-        crate::filesystem_snapshot::backend::rustic::save::SaveExit::Answered(Err(
-            SaveError::NameInUse,
-        )),
-        true,
-        run_calls,
-        Arc::new(LateWrites::default()),
-        Arc::new(LateWrites::default()),
-        Duration::from_millis(100),
-    );
+    let Settle { wait, .. } =
+        crate::filesystem_snapshot::backend::rustic::save::save_settle(super::SaveSettlement {
+            agent: new_scope(),
+            name: saved.clone(),
+            exit: crate::filesystem_snapshot::backend::rustic::save::SaveExit::Answered(Err(
+                SaveError::NameInUse,
+            )),
+            may_land: true,
+            run_calls,
+            backend_late: Arc::new(LateWrites::default()),
+            publish_late: Arc::new(LateWrites::default()),
+            deadline: Duration::from_millis(100),
+        });
     let captured = Captured::default();
     let writer = captured.clone();
     let subscriber = tracing_subscriber::fmt()

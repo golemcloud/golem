@@ -74,15 +74,11 @@ pub(super) mod scripted;
 /// The deadline of each call in the tests that hold a call.
 pub(super) const SHORT_DEADLINE: Duration = Duration::from_millis(200);
 
-/// The longest time that a test waits for an operation, or for the threads of an operation to
-/// stop.
-pub(super) const REPOSITORY_LIMIT: Duration = Duration::from_secs(10);
-
 /// The longest time that a test waits for an operation to reach a call, or to answer when only a
 /// store that never answers would take longer. A save, a forget or a prune runs on a blocking
 /// thread, and a save or a prune also runs at nice 19. So on a busy host, such as one that runs
 /// four copies of the tests at once, a save, a restore or a prune of the fixture tree can take
-/// longer than [`REPOSITORY_LIMIT`] before it reaches its first blob call or gives its answer. A wait to this limit ends as soon
+/// longer than [`LIMIT`] before it reaches its first blob call or gives its answer. A wait to this limit ends as soon
 /// as its condition holds, so it costs no time on a quiet host. Each test that waits this long has
 /// a timeout of 120 s, which covers its setup, this wait and its later steps.
 pub(super) const REACH_LIMIT: Duration = Duration::from_secs(45);
@@ -110,10 +106,6 @@ pub(super) fn one_run() -> golem_common::model::RetryConfig {
     }
 }
 
-pub(super) fn repository_key() -> RepositoryKey {
-    RepositoryKey::new(std::array::from_fn(|index| index as u8))
-}
-
 /// Gives the publish bound of a test store: on when the configuration would allow the deadline and
 /// the grace period, that is a deadline of at least the shortest publish try and at most an eighth
 /// of the grace period, and off otherwise.
@@ -134,7 +126,7 @@ pub(super) fn store_with_deadline(
 ) -> RusticSnapshotStore {
     RusticSnapshotStore::with_policy(
         storage,
-        repository_key(),
+        key(),
         StorePolicy {
             deadline,
             save_threads: None,
@@ -150,13 +142,6 @@ pub(super) fn store_with_deadline(
         },
         Arc::new(SystemClock),
     )
-}
-
-/// Writes the fixture of the contract suite into a new directory, and gives the directory.
-pub(super) fn repository_fixture_tree() -> Scratch {
-    let tree = Scratch::new();
-    write_tree(tree.path(), &fixture());
-    tree
 }
 
 /// Gives the path of each blob of the scope, in the order of the paths.
@@ -246,8 +231,7 @@ pub(super) async fn with_existing_repository<R: Send + 'static>(
 ) -> anyhow::Result<R> {
     let backend = backend_of(storage, agent, deadline);
     run_blocking(move || {
-        let repository =
-            open_existing(backend, &repository_key())?.context("the scope has no repository")?;
+        let repository = open_existing(backend, &key())?.context("the scope has no repository")?;
         work(&repository)
     })
     .await
@@ -274,15 +258,13 @@ pub(super) fn failed_at_deadline<T, E: FailureOf>(
 /// Tells whether the storage is dropped within the limit. The storage is dropped only when each
 /// thread that held a copy of it has ended.
 pub(super) async fn dropped_within_limit(dropped: oneshot::Receiver<()>) -> bool {
-    tokio::time::timeout(REPOSITORY_LIMIT, dropped)
-        .await
-        .is_ok()
+    tokio::time::timeout(LIMIT, dropped).await.is_ok()
 }
 
 /// A tree of the fixture with one more file whose content is `content`, so that each save of a
 /// new content changes a few blobs.
 pub(super) fn changed_tree(content: &str) -> Scratch {
-    let tree = repository_fixture_tree();
+    let tree = fixture_tree();
     std::fs::write(tree.path().join("changing.txt"), content).unwrap();
     tree
 }
@@ -468,7 +450,7 @@ pub(super) async fn mark_the_packs_of_a_hidden_snapshot(
     let marking = backend_of(storage.clone(), agent, LONG_DEADLINE);
     let report =
         crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking(move || {
-            crate::filesystem_snapshot::backend::rustic::pruning::prune(
+            crate::filesystem_snapshot::backend::rustic::pruning::test_support::prune_repository(
                 marking,
                 &key(),
                 &PruneSettings {
@@ -663,7 +645,7 @@ pub(super) async fn snapshot_files(
     .unwrap()
 }
 
-/// The runs of the tests of this module: three runs, with short waits.
+/// Three retry runs with short waits for store tests.
 pub(super) fn three_runs() -> RetryConfig {
     RetryConfig {
         max_attempts: 3,
@@ -674,7 +656,7 @@ pub(super) fn three_runs() -> RetryConfig {
     }
 }
 
-/// The policy of the tests of this module: a deadline of `deadline`, three runs, and the tries of
+/// A store test policy with the deadline `deadline`, three runs, and the tries of
 /// `tries`.
 pub(super) fn runs_policy(deadline: Duration, tries: u32) -> StorePolicy {
     StorePolicy {

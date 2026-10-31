@@ -23,8 +23,8 @@ use crate::filesystem_snapshot::backend::rustic::test_support::{
     ALWAYS, LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, SHORT_DEADLINE, SharedSlots, blobs, calls_of,
     data_packs, dropped_within_limit, eventually, failed_at_deadline, fixture_tree,
     holding_index_reads, is_failed, key, ledger, mark_the_packs_of_a_hidden_snapshot, name,
-    one_file_tree, policy, repository_fixture_tree, restored_listing, runs_policy, save_each,
-    scope_with_a_prune_to_come, store, store_over, store_with_deadline,
+    one_file_tree, policy, restored_listing, runs_policy, save_each, scope_with_a_prune_to_come,
+    store, store_over, store_with_deadline,
 };
 
 use crate::filesystem_snapshot::clock::SystemClock;
@@ -98,7 +98,7 @@ fn restore_options_are_strict_and_use_the_reader_thread_count() {
 async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
-    let tree = repository_fixture_tree();
+    let tree = fixture_tree();
     store_with_deadline(inner.clone(), STORAGE_CALL_DEADLINE)
         .save(
             &scope,

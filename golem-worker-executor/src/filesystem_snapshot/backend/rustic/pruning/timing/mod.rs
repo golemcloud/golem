@@ -70,10 +70,7 @@ pub(in crate::filesystem_snapshot::backend::rustic) fn lease_span(
 /// out, and that write can land up to one more deadline later. So a prune whose lease ran out stops
 /// before another delete can take its claim, and the next prune waits a full hold from its final
 /// marker.
-pub(in crate::filesystem_snapshot::backend::rustic) fn claim_hold(
-    grace: Duration,
-    deadline: Duration,
-) -> Duration {
+pub(super) fn claim_hold(grace: Duration, deadline: Duration) -> Duration {
     lease_bound(grace, deadline)
         .saturating_add(CLOCK_SKEW_MARGIN)
         .saturating_add(deadline.saturating_mul(2))

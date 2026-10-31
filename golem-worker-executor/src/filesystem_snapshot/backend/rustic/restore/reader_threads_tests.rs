@@ -15,7 +15,7 @@
 use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
 use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::named;
 use crate::filesystem_snapshot::backend::rustic::test_support::{
-    backend_of, name, repository_key, store_with_deadline,
+    backend_of, key, name, store_with_deadline,
 };
 use crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking;
 use crate::filesystem_snapshot::test_support::fixture::{Scratch, listing};
@@ -108,8 +108,7 @@ async fn restore_named(
     let backend = backend_of(storage, agent, STORAGE_CALL_DEADLINE);
     let (name, into) = (name.clone(), Box::<Path>::from(into));
     run_blocking(move || {
-        let repository =
-            open_existing(backend, &repository_key())?.context("the scope has no repository")?;
+        let repository = open_existing(backend, &key())?.context("the scope has no repository")?;
         let snapshots = repository.get_all_snapshots()?;
         let snapshot = named(&snapshots, &name).context("no snapshot has the name")?;
         restore_snapshot(repository, snapshot, &into, &options)

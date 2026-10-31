@@ -22,7 +22,7 @@ use super::blob_io::SnapshotFiles;
 use super::cpu_priority::LowPriority;
 use super::repository::{RepositoryKey, open_existing};
 use super::run_outcome::{Ended, RunEnd};
-use super::tracked_tasks::{CleanupTasks, Spawner, run_blocking};
+use super::tracked_tasks::{CleanupTasks, run_blocking};
 use crate::filesystem_snapshot::agent_snapshots::AgentSnapshots;
 use crate::filesystem_snapshot::clock::Clock;
 use crate::filesystem_snapshot::operation_drain::OperationLease;
@@ -36,7 +36,8 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 
-/// Borrowed inputs used only to construct an operation. Construction does not register work.
+/// Named borrowed inputs keep the operation independent of the store type. Construction does
+/// not register work.
 pub(super) struct Resources<'a> {
     pub(super) storage: &'a Arc<dyn BlobStorage>,
     pub(super) root: &'a CancellationToken,
@@ -56,6 +57,7 @@ pub(super) struct Operation<'a> {
 
 /// Owns cleanup in field order: an untransferred backend, then cancellation, then the token.
 pub(super) struct BackendRun {
+    /// Present until transfer into a task. The cancellation guard remains after transfer.
     backend: Option<Arc<BlobBackend>>,
     _guard: DropGuard,
     token: CancellationToken,
@@ -115,7 +117,12 @@ impl<'a> Operation<'a> {
         if self.root().is_cancelled() {
             anyhow::bail!("the filesystem snapshot store is shut down");
         }
-        Ok(CleanupTasks::new(self.spawner()?, tracked))
+        Ok(CleanupTasks::new(
+            self.resources.tracker.clone(),
+            runtime()?,
+            self.lease.clone(),
+            tracked,
+        ))
     }
 
     pub(super) fn run_token(&self) -> (CancellationToken, DropGuard) {
@@ -141,14 +148,6 @@ impl<'a> Operation<'a> {
         Ok(BlobBackend::new(files, runtime()?, TREE_PACK_CACHE_LIMIT)
             .tracked_by(self.resources.tracker.token())
             .reading_under(self.resources.read_slots.clone()))
-    }
-
-    fn spawner(&self) -> anyhow::Result<Spawner> {
-        Ok(Spawner::new(
-            self.resources.tracker.clone(),
-            runtime()?,
-            self.lease.clone(),
-        ))
     }
 
     pub(super) async fn blocking<T: Send + 'static>(

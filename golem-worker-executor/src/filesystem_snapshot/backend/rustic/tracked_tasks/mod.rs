@@ -23,43 +23,27 @@ use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
-/// Keeps cleanup registered until its retained tasks have entered the store tracker.
+/// Keeps cleanup registered until its retained tasks enter the store tracker, and retains the
+/// runtime and incarnation lease that those tasks need. A drop never looks up a runtime.
 pub(super) struct CleanupTasks {
-    spawner: Spawner,
+    tracker: TaskTracker,
+    runtime: Handle,
+    lease: OperationLease,
     _tracked: TaskTrackerToken,
 }
 
 impl CleanupTasks {
-    pub(super) fn new(spawner: Spawner, tracked: TaskTrackerToken) -> Self {
-        Self {
-            spawner,
-            _tracked: tracked,
-        }
-    }
-
-    pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) -> JoinHandle<()> {
-        self.spawner.spawn(task)
-    }
-}
-
-/// Runs work of the store as a task on a runtime that the store gave, and the tracker of the store
-/// and the work of the incarnation of the operation count the task. The cleanup of a release or a
-/// drop of a claim runs through it, so no drop looks up a runtime. When the runtime is gone, the
-/// task does not run.
-#[derive(Clone, Debug)]
-pub(super) struct Spawner {
-    tracker: TaskTracker,
-    runtime: Handle,
-    /// The work of the incarnation of the operation that made the spawner.
-    lease: OperationLease,
-}
-
-impl Spawner {
-    pub(super) fn new(tracker: TaskTracker, runtime: Handle, lease: OperationLease) -> Self {
+    pub(super) fn new(
+        tracker: TaskTracker,
+        runtime: Handle,
+        lease: OperationLease,
+        tracked: TaskTrackerToken,
+    ) -> Self {
         Self {
             tracker,
             runtime,
             lease,
+            _tracked: tracked,
         }
     }
 

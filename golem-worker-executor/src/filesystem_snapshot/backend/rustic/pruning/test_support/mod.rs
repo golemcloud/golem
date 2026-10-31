@@ -27,6 +27,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+/// Runs a repository prune directly for shared race fixtures without a deletion's claim gate.
+pub(in crate::filesystem_snapshot::backend::rustic) fn prune_repository(
+    backend: Arc<super::super::blob_backend::BlobBackend>,
+    key: &super::super::repository::RepositoryKey,
+    settings: &super::PruneSettings,
+) -> anyhow::Result<Option<super::PruneReport>> {
+    super::prune(backend, key, settings)
+}
+
 pub(super) const GRACE: Duration = Duration::from_secs(15 * 60);
 pub(super) const DEADLINE: Duration = Duration::from_secs(2);
 

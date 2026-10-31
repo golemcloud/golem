@@ -17,9 +17,9 @@ use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
 use crate::filesystem_snapshot::backend::rustic::test_support::{
-    LONG_DEADLINE, NEVER, REPOSITORY_LIMIT, SHORT_WRITE_DEADLINE, backend_of, eventually, key,
-    listed_names, name, one_file_tree, policy, polled_until, repository_fixture_tree,
-    repository_key, restored_listing, store, store_with_deadline, stored_paths,
+    LIMIT, LONG_DEADLINE, NEVER, SHORT_WRITE_DEADLINE, backend_of, eventually, fixture_tree, key,
+    listed_names, name, one_file_tree, policy, polled_until, restored_listing, store,
+    store_with_deadline, stored_paths,
 };
 
 use crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking;
@@ -41,7 +41,7 @@ async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_
     let storage = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
     let store_with_deadline = store_with_deadline(storage.clone(), STORAGE_CALL_DEADLINE);
-    let tree = repository_fixture_tree();
+    let tree = fixture_tree();
 
     store_with_deadline
         .save(
@@ -107,7 +107,7 @@ async fn a_create_whose_config_write_finds_the_config_of_another_writer_opens_th
         |storage: Arc<dyn BlobStorage>| backend_of(storage, &scope, STORAGE_CALL_DEADLINE);
     let loser = backend(losing.clone());
     let lost = tokio::task::spawn_blocking(move || {
-        open_or_create(loser, &repository_key()).map(|repository| repository.config().id)
+        open_or_create(loser, &key()).map(|repository| repository.config().id)
     });
     let held = polled_until(Duration::from_secs(10), || {
         losing
@@ -118,10 +118,9 @@ async fn a_create_whose_config_write_finds_the_config_of_another_writer_opens_th
     .await;
 
     let winner = backend(shared.clone());
-    let won =
-        run_blocking(move || Ok(open_or_create(winner, &repository_key())?.config().id)).await;
+    let won = run_blocking(move || Ok(open_or_create(winner, &key())?.config().id)).await;
     losing.open_gate();
-    let lost = tokio::time::timeout(REPOSITORY_LIMIT, lost).await;
+    let lost = tokio::time::timeout(LIMIT, lost).await;
 
     let won = won.unwrap();
     let lost = lost

@@ -385,7 +385,7 @@ impl Drop for Claim {
 /// An entry of a claim directory that a listing found: a claim `<n>`, or a marker
 /// `<n>@<ms>-<random>` with the time at which a delete wrote it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::filesystem_snapshot::backend::rustic) enum ClaimEntry {
+pub(super) enum ClaimEntry {
     Claim(u64),
     Marker(u64, Timestamp),
 }

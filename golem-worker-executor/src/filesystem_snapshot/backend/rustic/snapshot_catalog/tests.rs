@@ -20,8 +20,8 @@ use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
 use crate::filesystem_snapshot::backend::rustic::test_support::{
-    LONG_DEADLINE, NEVER, is_failed, listed_names, name, one_file_tree, one_run, policy,
-    publish_bound_for, repository_key, restored_listing, save_numbered, store, store_with_deadline,
+    LONG_DEADLINE, NEVER, is_failed, key, listed_names, name, one_file_tree, one_run, policy,
+    publish_bound_for, restored_listing, save_numbered, store, store_with_deadline,
 };
 
 use crate::filesystem_snapshot::clock::SystemClock;
@@ -136,7 +136,7 @@ async fn a_read_ahead_that_fails_reads_no_file_twice_and_starts_no_new_read() {
     });
     let store_with_deadline = RusticSnapshotStore::with_policy(
         storage.clone(),
-        repository_key(),
+        key(),
         StorePolicy {
             deadline: STORAGE_CALL_DEADLINE,
             save_threads: None,

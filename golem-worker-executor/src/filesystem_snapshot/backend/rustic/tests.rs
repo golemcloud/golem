@@ -1653,7 +1653,7 @@ mod save_prune_ordering {
         // prune runs on the repository directly.
         let next = backend_of(inner.clone(), &scope, LONG_DEADLINE);
         crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking(move || {
-            crate::filesystem_snapshot::backend::rustic::pruning::prune(
+            crate::filesystem_snapshot::backend::rustic::pruning::test_support::prune_repository(
                 next,
                 &key(),
                 &PruneSettings {

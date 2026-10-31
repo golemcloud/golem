@@ -33,9 +33,8 @@ use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
 use crate::filesystem_snapshot::backend::rustic::test_support::{
     ALWAYS, LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, SHORT_DEADLINE, backend_of, blobs, calls_of,
     data_packs, dropped_within_limit, eventually, fixture_tree, key, ledger, listed_names, name,
-    one_file_tree, policy, polled_until, prunes, repository_fixture_tree, repository_key,
-    restored_listing, save_each, snapshot_files, store, store_over, store_with_deadline,
-    stored_paths, written_times,
+    one_file_tree, policy, polled_until, prunes, restored_listing, save_each, snapshot_files,
+    store, store_over, store_with_deadline, stored_paths, written_times,
 };
 
 use crate::filesystem_snapshot::backend::rustic::tracked_tasks::run_blocking;
@@ -216,7 +215,7 @@ async fn put_ledger_entry<S: BlobStorage + 'static>(
 async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
-    let tree = repository_fixture_tree();
+    let tree = fixture_tree();
     store_with_deadline(inner.clone(), STORAGE_CALL_DEADLINE)
         .save(
             &scope,
@@ -3439,11 +3438,7 @@ async fn prune_with(
 ) -> anyhow::Result<Option<PruneReport>> {
     let backend = backend_of(storage, agent, deadline);
     run_blocking(move || {
-        crate::filesystem_snapshot::backend::rustic::pruning::prune(
-            backend,
-            &repository_key(),
-            &settings,
-        )
+        crate::filesystem_snapshot::backend::rustic::pruning::prune(backend, &key(), &settings)
     })
     .await
 }

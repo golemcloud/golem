@@ -102,7 +102,7 @@ pub(in crate::filesystem_snapshot::backend::rustic) async fn read_ledger(
 }
 
 /// Writes a new ledger entry for a prune that ended at `ended`.
-pub(in crate::filesystem_snapshot::backend::rustic) async fn write_ledger(
+pub(super) async fn write_ledger(
     files: &SnapshotFiles,
     ended: Timestamp,
     awaiting_removal: bool,
@@ -121,10 +121,7 @@ pub(in crate::filesystem_snapshot::backend::rustic) async fn write_ledger(
 
 /// Deletes each ledger entry that is older than the entry of the prune that ended at `ended`. A
 /// failure gives a warning, because an older entry is never the newest.
-pub(in crate::filesystem_snapshot::backend::rustic) async fn remove_older_ledgers(
-    files: &SnapshotFiles,
-    ended: Timestamp,
-) {
+pub(super) async fn remove_older_ledgers(files: &SnapshotFiles, ended: Timestamp) {
     let listed = match files
         .list_below("list_ledgers", Path::new(LEDGERS_PATH))
         .await

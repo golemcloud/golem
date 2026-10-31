@@ -159,12 +159,8 @@ fn ran_at_shutdown(exit: SaveExit) -> RunResult<Result<SnapshotInfo, SaveError>>
     }
 }
 
-/// Gives the settle of a save run that ended with `exit`: it waits until `run_calls`, which each
-/// holder of the blobs of the run counts, has no holder left, and then reads the two recorders.
-/// The wait has no time bound, so every try of the run has ended when the recorders are read; a
-/// warning names the save of `name` for `agent` when the wait takes longer than one `deadline`.
-#[allow(clippy::too_many_arguments)]
-fn save_settle(
+/// The outcome and retained work of a save that must settle before answering.
+struct SaveSettlement {
     agent: AgentSnapshots,
     name: SnapshotName,
     exit: SaveExit,
@@ -173,7 +169,21 @@ fn save_settle(
     backend_late: Arc<LateWrites>,
     publish_late: Arc<LateWrites>,
     deadline: Duration,
-) -> Settle<Result<SnapshotInfo, SaveError>> {
+}
+
+/// Waits until every holder of the run's blobs has ended, then reads its late-write recorders.
+/// The wait has no bound; a slow wait logs the agent, snapshot name and storage deadline.
+fn save_settle(settlement: SaveSettlement) -> Settle<Result<SnapshotInfo, SaveError>> {
+    let SaveSettlement {
+        agent,
+        name,
+        exit,
+        may_land,
+        run_calls,
+        backend_late,
+        publish_late,
+        deadline,
+    } = settlement;
     Settle {
         wait: Box::pin(async move {
             run_calls.close();
@@ -223,115 +233,105 @@ fn save_failure(error: anyhow::Error) -> SaveExit {
     }
 }
 
-/// Runs [`stage_save`] again with an empty stage after a listed index file was gone at its read,
-/// once for each such file. A file that is gone in two loads ends the backup with its error.
-#[allow(clippy::too_many_arguments)]
-fn stage_save_again_after_a_missing_index(
-    backend: &Arc<BlobBackend>,
-    stage: &SnapshotStage,
-    key: &RepositoryKey,
-    settings: &SaveSettings,
-    name: &SnapshotName,
-    tree: &Path,
+/// Owns the repository, source and clock inputs throughout one blocking save backup.
+struct SaveRun {
+    backend: Arc<BlobBackend>,
+    stage: Arc<SnapshotStage>,
+    key: RepositoryKey,
+    settings: SaveSettings,
+    name: SnapshotName,
+    tree: Box<Path>,
     parent: Option<(SnapshotName, ChangeDetection)>,
-    clock: &dyn Clock,
-) -> anyhow::Result<Option<(StagedSnapshot, SnapshotInfo)>> {
-    let attempt = |missed: HashSet<Box<Path>>| {
-        let _ = stage.take();
-        match stage_save(
-            backend.clone(),
-            stage,
-            key,
-            settings,
-            name,
-            tree,
-            parent.clone(),
-            clock,
-        ) {
-            Err(error) if is_index_missing(error.as_ref()) => {
-                match missing_file_path(error.as_ref()).map(Box::<Path>::from) {
-                    Some(path) if !missed.contains(&path) => ControlFlow::Continue(
-                        missed.into_iter().chain(std::iter::once(path)).collect(),
-                    ),
-                    _ => ControlFlow::Break(Err(error)),
-                }
-            }
-            result => ControlFlow::Break(result),
-        }
-    };
-    match std::iter::repeat(()).try_fold(HashSet::new(), |missed, ()| attempt(missed)) {
-        ControlFlow::Break(result) => result,
-        ControlFlow::Continue(_) => Err(anyhow::anyhow!("the backup ended without an answer")),
-    }
+    clock: Arc<dyn Clock>,
 }
 
-/// Backs up the tree with the snapshot file in the stage, and gives the staged file with the info
-/// of the snapshot. The result is `None` when a snapshot of the scope already has the name. The
-/// parent is the snapshot that [`super::snapshot_catalog::lookup`] finds for its name, and a name without a snapshot
-/// gives no parent. The backup dedups only against the packs that an index file lists.
-fn stage_save(
-    backend: Arc<BlobBackend>,
-    stage: &SnapshotStage,
-    key: &RepositoryKey,
-    settings: &SaveSettings,
-    name: &SnapshotName,
-    tree: &Path,
-    parent: Option<(SnapshotName, ChangeDetection)>,
-    clock: &dyn Clock,
-) -> anyhow::Result<Option<(StagedSnapshot, SnapshotInfo)>> {
-    // The init of the fork checks the config a second time before its write, so a save that loses
-    // the race to create the repository can fail at that check with an error that is not
-    // `ConfigExists`. A config that is there after the error is the repository of the winner.
-    let repository = match open_or_create(backend.clone(), key) {
-        Ok(repository) => repository,
-        Err(error) => open_existing(backend.clone(), key)
-            .ok()
-            .flatten()
-            .ok_or(error)?,
-    };
-    let (before, listed) = repository_snapshots_except(&repository, &backend, &HashSet::new())?;
-    if has_name(&before, name) {
-        return Ok(None);
+impl SaveRun {
+    /// Stages again after a listed index file was gone at its read, once for each such file.
+    /// A file that is gone in two loads ends the backup with its error.
+    fn stage_again_after_a_missing_index(
+        &self,
+    ) -> anyhow::Result<Option<(StagedSnapshot, SnapshotInfo)>> {
+        let attempt = |missed: HashSet<Box<Path>>| {
+            let _ = self.stage.take();
+            match self.stage_save() {
+                Err(error) if is_index_missing(error.as_ref()) => {
+                    match missing_file_path(error.as_ref()).map(Box::<Path>::from) {
+                        Some(path) if !missed.contains(&path) => ControlFlow::Continue(
+                            missed.into_iter().chain(std::iter::once(path)).collect(),
+                        ),
+                        _ => ControlFlow::Break(Err(error)),
+                    }
+                }
+                result => ControlFlow::Break(result),
+            }
+        };
+        match std::iter::repeat(()).try_fold(HashSet::new(), |missed, ()| attempt(missed)) {
+            ControlFlow::Break(result) => result,
+            ControlFlow::Continue(_) => Err(anyhow::anyhow!("the backup ended without an answer")),
+        }
     }
-    let parent = parent.and_then(|(parent, detection)| {
-        named(&before.readable, &parent).map(|snapshot| (snapshot.id, detection))
-    });
-    let newest = before
-        .readable
-        .iter()
-        .filter_map(snapshot_info)
-        .map(|info| info.created_at)
-        .max();
-    let created_at = snapshot_time(whole_millis_from(clock.now()), newest);
-    let (tree, content) = source_tree::read(tree)?;
-    let snapshot = SnapshotOptions::default()
-        .label(name.as_str().to_string())
-        .time(snapshot_zoned(created_at)?)
-        .description(serde_json::to_string(&content)?)
-        .to_snapshot()?;
-    let repository = repository.to_indexed_ids()?;
-    repository.backup(
-        &store_backup_options(settings, parent),
-        &PathList::from_iter(Some(tree)),
-        snapshot,
-    )?;
-    let staged = stage
-        .take()
-        .context("the backup gave no snapshot file to the stage")?;
-    // Only a file that is new since the first read can have the name now: a late publish of an
-    // earlier attempt of the same job. So the save reads only those files again.
-    let (since, _) = repository_snapshots_except(&repository, &backend, &listed)?;
-    if has_name(&since, name) {
-        return Ok(None);
+
+    /// Backs up the tree into the stage and returns its snapshot info. An occupied name returns
+    /// `None`. The named readable snapshot supplies the parent; an absent name supplies none.
+    /// Deduplication uses only packs listed by an index file.
+    fn stage_save(&self) -> anyhow::Result<Option<(StagedSnapshot, SnapshotInfo)>> {
+        let backend = self.backend.clone();
+        let parent = self.parent.clone();
+        // The init of the fork checks the config a second time before its write, so a save that loses
+        // the race to create the repository can fail at that check with an error that is not
+        // `ConfigExists`. A config that is there after the error is the repository of the winner.
+        let repository = match open_or_create(backend.clone(), &self.key) {
+            Ok(repository) => repository,
+            Err(error) => open_existing(backend.clone(), &self.key)
+                .ok()
+                .flatten()
+                .ok_or(error)?,
+        };
+        let (before, listed) = repository_snapshots_except(&repository, &backend, &HashSet::new())?;
+        if has_name(&before, &self.name) {
+            return Ok(None);
+        }
+        let parent = parent.and_then(|(parent, detection)| {
+            named(&before.readable, &parent).map(|snapshot| (snapshot.id, detection))
+        });
+        let newest = before
+            .readable
+            .iter()
+            .filter_map(snapshot_info)
+            .map(|info| info.created_at)
+            .max();
+        let created_at = snapshot_time(whole_millis_from(self.clock.now()), newest);
+        let (tree, content) = source_tree::read(&self.tree)?;
+        let snapshot = SnapshotOptions::default()
+            .label(self.name.as_str().to_string())
+            .time(snapshot_zoned(created_at)?)
+            .description(serde_json::to_string(&content)?)
+            .to_snapshot()?;
+        let repository = repository.to_indexed_ids()?;
+        repository.backup(
+            &store_backup_options(&self.settings, parent),
+            &PathList::from_iter(Some(tree)),
+            snapshot,
+        )?;
+        let staged = self
+            .stage
+            .take()
+            .context("the backup gave no snapshot file to the stage")?;
+        // Only a file that is new since the first read can have the name now: a late publish of an
+        // earlier attempt of the same job. So the save reads only those files again.
+        let (since, _) = repository_snapshots_except(&repository, &backend, &listed)?;
+        if has_name(&since, &self.name) {
+            return Ok(None);
+        }
+        Ok(Some((
+            staged,
+            SnapshotInfo {
+                created_at,
+                files: content.files,
+                bytes: content.bytes,
+            },
+        )))
     }
-    Ok(Some((
-        staged,
-        SnapshotInfo {
-            created_at,
-            files: content.files,
-            bytes: content.bytes,
-        },
-    )))
 }
 
 /// Gives the first time in whole milliseconds that is not before the time. A snapshot keeps its
@@ -387,7 +387,6 @@ fn store_backup_options(
 /// its token and gives the settle to the call driver: the driver gives the slot back and waits until
 /// every blob call of the run has ended, and then the run answers after its writes that can
 /// still land.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn run(
     operation: &Operation<'_>,
     settings: SaveSettings,
@@ -421,11 +420,19 @@ pub(super) async fn run(
     let tree: Box<Path> = tree.into();
     let low_priority = operation.low_priority();
     let clock = Arc::clone(operation.clock());
+    let save = SaveRun {
+        backend,
+        stage,
+        key,
+        settings,
+        name,
+        tree,
+        parent,
+        clock,
+    };
     let mut backup = pin!(operation.blocking(move || {
         low_priority.run("fs-snap-save", move || {
-            Ok(stage_save_again_after_a_missing_index(
-                &backend, &stage, &key, &settings, &name, &tree, parent, &*clock,
-            ))
+            Ok(save.stage_again_after_a_missing_index())
         })
     }));
     let backup_end = settings.backup_end(t0, operation.deadline());
@@ -501,16 +508,16 @@ pub(super) async fn run(
         backend: backend_late.latest(),
         publish: publish_late.latest(),
     };
-    Ok(Ran::Settling(save_settle(
-        operation.agent().clone(),
-        saved,
+    Ok(Ran::Settling(save_settle(SaveSettlement {
+        agent: operation.agent().clone(),
+        name: saved,
         exit,
-        settle_may_land(backup_finished, recorded),
+        may_land: settle_may_land(backup_finished, recorded),
         run_calls,
         backend_late,
         publish_late,
-        operation.deadline(),
-    )))
+        deadline: operation.deadline(),
+    })))
 }
 
 /// Checks the own name of a save after a publish that ended without an answer: the file that
