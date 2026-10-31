@@ -411,7 +411,7 @@
    }
   },
   "real traj: find files grep -i": {
-   "script": "d9084020d6cc27f1",
+   "script": "095baec4921605a6",
    "status": 0,
    "stderr": {
     "text": ""
