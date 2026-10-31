@@ -6609,8 +6609,8 @@ async fn every_protected_rdbms_transaction_import_enforces_permissions(
                 "rdbms(?env) @ * : mutate : postgres.blocked.denied_table",
                 "rdbms(?env) @ * : query : blocked.blocked.denied_table",
                 "rdbms(?env) @ * : mutate : blocked.blocked.denied_table",
-                "rdbms(?env) @ * : query : default.blocked.denied_table",
-                "rdbms(?env) @ * : mutate : default.blocked.denied_table",
+                "rdbms(?env) @ * : query : default.BLOCKED.DENIED_TABLE",
+                "rdbms(?env) @ * : mutate : default.BLOCKED.DENIED_TABLE",
             ] {
                 config
                     .initial_permissions
