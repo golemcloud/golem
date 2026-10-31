@@ -351,41 +351,46 @@ impl MoonBitBridgeGenerator {
     // --- Project files ------------------------------------------------------
 
     fn write_module_file(&self) -> anyhow::Result<()> {
-        let mod_json = match self.mode {
+        self.write_module_file_with_name(&self.module_name())
+    }
+
+    fn write_module_file_with_name(&self, module: &str) -> anyhow::Result<()> {
+        let manifest = match self.mode {
             MoonBitBridgeMode::ExternalRest => formatdoc! {r#"
-                {{
-                  "name": "{module}",
-                  "version": "0.0.1",
-                  "deps": {{
-                    "moonbitlang/async": "{async_version}"
-                  }}
+                name = "{module}"
+                version = "0.0.1"
+                preferred_target = "native"
+                import {{
+                  "moonbitlang/async@{async_version}",
                 }}
                 "#,
-                module = self.module_name(),
                 async_version = moonbit_dep::ASYNC_VERSION,
             },
             MoonBitBridgeMode::GuestWasmRpc => {
-                let sdk_dep = if self.testing {
-                    let sdk_path = workspace_root()?.join("sdks/moonbit/golem_sdk");
-                    serde_json::json!({ "path": sdk_path })
-                } else {
-                    serde_json::from_str(&sdk_overrides()?.moonbit_sdk_dep())
-                        .context("failed to parse MoonBit SDK dependency override")?
-                };
-                let manifest = serde_json::json!({
-                    "name": self.module_name(),
-                    "version": "0.0.1",
-                    "deps": {
-                        "golemcloud/golem_sdk": sdk_dep,
-                    },
-                    "preferred-target": "wasm",
-                });
-                serde_json::to_string_pretty(&manifest)
-                    .context("failed to serialize generated MoonBit module manifest")?
-                    + "\n"
+                let mut overrides = sdk_overrides()?.clone();
+                if self.testing {
+                    overrides.moonbit_sdk_path = Some(
+                        workspace_root()?
+                            .join("sdks/moonbit/golem_sdk")
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                }
+                fs::write_str(
+                    self.target_path.join("moon.work"),
+                    overrides.moonbit_workspace(),
+                )?;
+                formatdoc! {r#"
+                    name = "{module}"
+                    version = "0.0.1"
+                    preferred_target = "wasm"
+                    import {{
+                      {sdk_dep},
+                    }}
+                    "#, sdk_dep = overrides.moonbit_sdk_dep()}
             }
         };
-        fs::write_str(self.target_path.join("moon.mod.json"), mod_json)?;
+        fs::write_str(self.target_path.join("moon.mod"), manifest)?;
         Ok(())
     }
 
@@ -612,7 +617,19 @@ impl MoonBitBridgeGenerator {
                 bail!("Unexpected non-composite type reached write_type_definition: {other:?}")
             }
         }
+        if !derives.is_empty() {
+            self.write_type_extensions(writer, name);
+        }
         Ok(())
+    }
+
+    fn write_type_extensions(&self, writer: &mut MoonBitWriter, name: &str) {
+        if self.mode == MoonBitBridgeMode::ExternalRest {
+            writer.blank();
+            writer.line(format!("pub extend {name} with Debug::{{to_repr}}"));
+        }
+        writer.blank();
+        writer.line(format!("pub extend {name} with Eq::{{equal, not_equal}}"));
     }
 
     fn type_derives(&self) -> &'static str {
@@ -720,6 +737,9 @@ impl MoonBitBridgeGenerator {
                 }
             }
             writer.line(format!("}} {derives}"));
+            if !derives.is_empty() {
+                self.write_type_extensions(writer, &mm.name);
+            }
             writer.blank();
 
             // encode
@@ -795,15 +815,24 @@ impl MoonBitBridgeGenerator {
     fn write_guest_codec_support(&self, writer: &mut MoonBitWriter) {
         let source = r#"pub(all) suberror CodecError { CodecError(String) } derive(Debug, Eq)
 
+pub extend CodecError with Debug::{to_repr}
+pub extend CodecError with Eq::{equal, not_equal}
+
 pub(all) enum UnstructuredText {
   Inline(String, String?)
   Url(String)
 } derive(Debug, Eq)
 
+pub extend UnstructuredText with Debug::{to_repr}
+pub extend UnstructuredText with Eq::{equal, not_equal}
+
 pub(all) enum UnstructuredBinary {
   Inline(FixedArray[Byte], String?)
   Url(String)
 } derive(Debug, Eq)
+
+pub extend UnstructuredBinary with Debug::{to_repr}
+pub extend UnstructuredBinary with Eq::{equal, not_equal}
 
 fn[T] codec_mismatch(expected : String, value : @model.SchemaValue) -> T raise {
   raise CodecError("Expected " + expected + ", got " + repr(value))
@@ -3987,7 +4016,7 @@ mod tests {
         assert!(!client.contains("@types."));
         assert!(!client.contains("trigger_exchange"));
         assert!(!client.contains("schedule_exchange"));
-        let manifest = std::fs::read_to_string(target.join("moon.mod.json")).unwrap();
-        assert!(manifest.contains("\"moonbitlang/async\": \"0.21.2\""));
+        let manifest = std::fs::read_to_string(target.join("moon.mod")).unwrap();
+        assert!(manifest.contains("\"moonbitlang/async@0.21.2\""));
     }
 }

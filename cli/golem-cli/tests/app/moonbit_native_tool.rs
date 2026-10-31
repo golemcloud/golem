@@ -1,7 +1,6 @@
 use crate::app::{TestContext, cmd, flag};
 use golem_cli::{fs, versions};
 use indoc::{formatdoc, indoc};
-use serde_json::{Value, json};
 use test_r::{test, timeout};
 
 #[test]
@@ -84,17 +83,11 @@ async fn moonbit_ambient_native_client_executes_through_golem() {
     )
     .unwrap();
 
-    let moon_mod_path = ctx.cwd_path_join("moon.mod.json");
-    let mut moon_mod: Value =
-        serde_json::from_str(&fs::read_to_string(&moon_mod_path).unwrap()).unwrap();
-    moon_mod["deps"]["native-conformance-tool-guest-client"] = json!({
-        "path": "golem-temp/bridge-sdk/moonbit/internal/native-conformance-tool-guest-client"
-    });
-    fs::write_str(
-        &moon_mod_path,
-        serde_json::to_string_pretty(&moon_mod).unwrap() + "\n",
-    )
-    .unwrap();
+    super::add_moonbit_local_dependency(
+        &ctx,
+        "native-conformance-tool-guest-client",
+        "golem-temp/bridge-sdk/moonbit/internal/native-conformance-tool-guest-client",
+    );
 
     let consumer_pkg_path = ctx.cwd_path_join("consumer/moon.pkg");
     let consumer_pkg = fs::read_to_string(&consumer_pkg_path).unwrap();
@@ -191,11 +184,6 @@ async fn moonbit_ambient_native_client_executes_through_golem() {
                 Ok(_) => "unexpected-success"
               }
             }
-
-            ///|
-            fn main {
-
-            }
         "#},
     )
     .unwrap();
@@ -249,7 +237,7 @@ async fn moonbit_ambient_native_client_executes_through_golem() {
     assert!(build.success_or_dump());
     assert!(
         ctx.cwd_path_join(
-            "golem-temp/bridge-sdk/moonbit/internal/native-conformance-tool-guest-client/moon.mod.json"
+            "golem-temp/bridge-sdk/moonbit/internal/native-conformance-tool-guest-client/moon.mod"
         )
         .is_file()
     );

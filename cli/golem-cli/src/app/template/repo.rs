@@ -547,12 +547,22 @@ mod tests {
 
     #[test]
     fn moonbit_embed_commands_run_from_app_root() {
-        let template_source = TEMPLATES_DIR
-            .get_file("moonbit/common-on-demand/golem.yaml")
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("common");
+        AppTemplateRepo::get(false)
             .unwrap()
-            .contents_utf8()
+            .common_on_demand_template(GuestLanguage::MoonBit)
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .generate(
+                &golem_common::model::application::ApplicationName("demo".into()),
+                dir.path(),
+                &target,
+            )
             .unwrap();
-        let application = Application::from_yaml_str(template_source).unwrap();
+        let template_source = std::fs::read_to_string(target.join("golem.yaml")).unwrap();
+        let application = Application::from_yaml_str(&template_source).unwrap();
 
         let expected_commands = [
             ("moonbit", "debug", "agent-guest"),
@@ -600,6 +610,31 @@ mod tests {
                 Some("{{ appRootDir }}"),
                 "{template_name}.{preset_name}"
             );
+            let core_wasm = embed_command
+                .sources
+                .iter()
+                .find(|source| source.contains("_build"))
+                .unwrap();
+            for package in [
+                "demo.wasm",
+                "counter/counter.wasm",
+                "nested/counter/counter.wasm",
+            ] {
+                let rendered = minijinja::Environment::new()
+                    .render_str(
+                        core_wasm,
+                        minijinja::context! {
+                            appRootDir => "/app",
+                            componentName => "another-namespace:counter",
+                            moonbitBuildPackagePath => package,
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(
+                    rendered,
+                    format!("/app/_build/wasm/{preset_name}/build/demo/{package}")
+                );
+            }
         }
     }
 

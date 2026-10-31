@@ -132,15 +132,11 @@ async fn moonbit_guest_streams_context() -> TestContext {
             }
         }
     "#}).unwrap();
-    let manifest = ctx.cwd_path_join("moon.mod.json");
-    let mut module: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
-    module["deps"]["stream-provider-guest-client"] = serde_json::json!({"path": "golem-temp/bridge-sdk/moonbit/internal/stream-provider-guest-client"});
-    fs::write_str(
-        &manifest,
-        serde_json::to_string_pretty(&module).unwrap() + "\n",
-    )
-    .unwrap();
+    super::add_moonbit_local_dependency(
+        &ctx,
+        "stream-provider-guest-client",
+        "golem-temp/bridge-sdk/moonbit/internal/stream-provider-guest-client",
+    );
     let manifest = ctx.cwd_path_join("consumer/moon.pkg");
     let package = fs::read_to_string(&manifest).unwrap().replace(
         "import {",
@@ -229,7 +225,6 @@ async fn moonbit_guest_streams_context() -> TestContext {
             "ok:" + remote.status()
           })
         }
-        fn main {}
     "#},
     )
     .unwrap();

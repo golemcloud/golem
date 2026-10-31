@@ -24,23 +24,23 @@
 pub(all) enum SchemaValue {
   // Primitives
   BoolValue(Bool)
-  S8Value(Int)
-  S16Value(Int)
-  S32Value(Int)
+  S8Value(Int32)
+  S16Value(Int32)
+  S32Value(Int32)
   S64Value(Int64)
-  U8Value(Int)
-  U16Value(Int)
-  U32Value(UInt)
+  U8Value(Int32)
+  U16Value(Int32)
+  U32Value(UInt32)
   U64Value(UInt64)
   F32Value(Float)
   F64Value(Double)
-  CharValue(Int)
+  CharValue(Int32)
   StringValue(String)
   UuidValue(String)
   // Structural composites
   RecordValue(Array[SchemaValue])
-  VariantValue(Int, SchemaValue?)
-  EnumValue(Int)
+  VariantValue(Int32, SchemaValue?)
+  EnumValue(Int32)
   FlagsValue(Array[Bool])
   TupleValue(Array[SchemaValue])
   ListValue(Array[SchemaValue])
@@ -55,11 +55,17 @@ pub(all) enum SchemaValue {
   UrlValue(String)
   DatetimeValue(String)
   DurationValue(Int64)
-  QuantityValue(Int64, Int, String)
+  QuantityValue(Int64, Int32, String)
   StreamReferenceValue(String?, String?)
   // Discriminated union
   UnionValue(String, SchemaValue)
 } derive(Debug, Eq)
+
+///|
+pub extend SchemaValue with Debug::{to_repr}
+
+///|
+pub extend SchemaValue with Eq::{equal, not_equal}
 
 ///|
 /// An entry of a [SchemaValue::MapValue].
@@ -69,8 +75,20 @@ pub(all) struct SchemaMapEntry {
 } derive(Debug, Eq)
 
 ///|
+pub extend SchemaMapEntry with Debug::{to_repr}
+
+///|
+pub extend SchemaMapEntry with Eq::{equal, not_equal}
+
+///|
 /// Result payload: exactly one of ok/err, each optionally carrying a value.
 pub(all) enum SchemaResult {
   ResultOk(SchemaValue?)
   ResultErr(SchemaValue?)
 } derive(Debug, Eq)
+
+///|
+pub extend SchemaResult with Debug::{to_repr}
+
+///|
+pub extend SchemaResult with Eq::{equal, not_equal}

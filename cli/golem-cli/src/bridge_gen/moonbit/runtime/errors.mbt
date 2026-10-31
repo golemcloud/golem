@@ -15,4 +15,12 @@
 ///|
 /// Error raised by the generated bridge client and its runtime on a wire-shape
 /// mismatch, a failed HTTP request, or a protocol decoding failure.
-pub(all) suberror BridgeError { BridgeError(String) } derive(Debug, Eq)
+pub(all) suberror BridgeError {
+  BridgeError(String)
+} derive(Debug, Eq)
+
+///|
+pub extend BridgeError with Debug::{to_repr}
+
+///|
+pub extend BridgeError with Eq::{equal, not_equal}

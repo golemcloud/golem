@@ -936,6 +936,7 @@ fn preload_app(
             Application::preload_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
                 .and_then(|application_preload| {
                     ValidatedResult::from_result(ensure_on_demand_commons(
+                        &application_preload.application_name.value,
                         &referenced_template_names,
                         dev_mode,
                     ))
@@ -976,6 +977,7 @@ fn preload_app(
 }
 
 fn ensure_on_demand_commons(
+    application_name: &ApplicationName,
     referenced_template_names: &BTreeSet<String>,
     dev_mode: bool,
 ) -> anyhow::Result<Vec<app_raw::ApplicationWithSource>> {
@@ -987,7 +989,7 @@ fn ensure_on_demand_commons(
         if let Some(template) = app_template_repo.common_on_demand_template(language)? {
             let app_dir = std::env::current_dir()?;
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
-            template.generate(&app_dir, &target_dir)?;
+            template.generate(application_name, &app_dir, &target_dir)?;
             let golem_yaml_path = target_dir.join("golem.yaml");
             if golem_yaml_path.exists() {
                 on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(

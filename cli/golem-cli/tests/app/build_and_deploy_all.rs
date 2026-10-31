@@ -395,11 +395,11 @@ fn assert_multi_component_layout(app_root: &std::path::Path, language: GuestLang
                 !has_mbt_at_root,
                 "expected multi-component MoonBit layout: no *.mbt files should remain at the app root"
             );
-            // moon.mod.json MUST stay at the app root; it is the module-level
+            // moon.mod MUST stay at the app root; it is the module-level
             // descriptor and pairs with the per-package moon.pkg files.
             assert!(
-                app_root.join("moon.mod.json").exists(),
-                "expected multi-component MoonBit layout: moon.mod.json should remain at the app root"
+                app_root.join("moon.mod").exists(),
+                "expected multi-component MoonBit layout: moon.mod should remain at the app root"
             );
         }
         GuestLanguage::Go => {

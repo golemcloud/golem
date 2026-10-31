@@ -35,8 +35,3 @@ pub async fn combined_audit(
     invocation.stdin(),
   )
 }
-
-///|
-fn main {
-
-}

@@ -29,22 +29,19 @@ fn setup_app(ctx: &mut TestContext) {
     ctx.cd(APP_NAME);
 
     let overrides = sdk_overrides().unwrap();
-    let module_path = ctx.cwd_path_join("moon.mod.json");
-    let mut module: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&module_path).unwrap()).unwrap();
-    module["deps"]["golemcloud/golem_sdk"] =
-        serde_json::from_str(&overrides.moonbit_sdk_dep()).unwrap();
-    let tools_dependencies = overrides.moonbit_sdk_tools_bin_deps();
-    if !tools_dependencies.is_empty() {
-        let tools: serde_json::Value =
-            serde_json::from_str(&format!("{{\"deps\":{{}}{tools_dependencies}}}")).unwrap();
-        module["bin-deps"] = tools["bin-deps"].clone();
-    } else {
-        module.as_object_mut().unwrap().remove("bin-deps");
-    }
+    let module_path = ctx.cwd_path_join("moon.mod");
+    let module = std::fs::read_to_string(&module_path).unwrap();
     std::fs::write(
         module_path,
-        serde_json::to_string_pretty(&module).unwrap() + "\n",
+        format!(
+            "{module}\nimport {{\n  {},\n}}\n",
+            overrides.moonbit_sdk_dep()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        ctx.cwd_path_join("moon.work"),
+        overrides.moonbit_workspace(),
     )
     .unwrap();
 }
@@ -157,6 +154,8 @@ fn assert_component_contracts(ctx: &TestContext, profile: &str) {
 
 fn assert_default_package(path: &Path) {
     let package = std::fs::read_to_string(path).unwrap();
+    assert!(package.contains("pkgtype(kind: \"foreign_library\")"));
+    assert!(!package.contains("\"is-main\": true"));
     assert!(
         package.contains("/gen\" @gen"),
         "{} does not import the default generated package:\n{package}",
