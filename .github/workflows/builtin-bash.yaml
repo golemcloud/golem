@@ -104,7 +104,7 @@ jobs:
       # the HTTP clients need threads for their test servers, so those stay native.
       - name: Run unit tests as WASM
         env:
-          CARGO_TARGET_WASM32_WASIP2_RUNNER: "wasmtime run -Sp3 -Shttp -Wcomponent-model-async=y --dir /tmp::/tmp"
+          CARGO_TARGET_WASM32_WASIP2_RUNNER: "wasmtime run -Sp3 -Shttp -Wcomponent-model-async=y -Wmax-wasm-stack=1048576 -Wasync-stack-size=2621440 --dir /tmp::/tmp"
         run: cargo test --manifest-path builtin-tools/bash/Cargo.toml --locked --target wasm32-wasip2 -p bash-shell -p whttp --lib
 
       - name: Run the conformance matrix against its goldens

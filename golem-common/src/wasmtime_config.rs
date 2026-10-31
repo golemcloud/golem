@@ -37,6 +37,10 @@ impl Hasher for ArtifactFingerprintHasher {
 pub fn create_wasmtime_config(enable_fs_cache: bool) -> Config {
     let mut config = Config::default();
 
+    // Wasmtime 50 needs this budget for the Bash tool's bounded recursion. Keep the
+    // default 1.5 MiB of additional fiber stack available to host functions.
+    config.max_wasm_stack(1024 * 1024);
+    config.async_stack_size(2560 * 1024);
     config.wasm_multi_value(true);
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);

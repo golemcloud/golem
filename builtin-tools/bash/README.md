@@ -536,7 +536,8 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   it refuses ends the transfer with curl's status 60 and a message that says `--insecure` is
   unsupported.
 - **Nesting.** Function calls, compound commands, `$( )`, `eval`, `source` and `sh -c` share
-  Wasmtime's 512 KiB native stack and a 4 MiB WASM stack. Nesting deeper than they can hold ends
+  Golem's 1 MiB native Wasm stack and a 4 MiB linear-memory stack. The standalone conformance
+  runner uses the same native stack budget. Nesting deeper than they can hold ends
   the script as exceeding `FUNCNEST` does in bash, with
   `f: maximum function nesting level exceeded (N): deeper nesting is unsupported in bash-tool`
   (status 1; inside `$( )` only that substitution ends). A function that recurses through one
