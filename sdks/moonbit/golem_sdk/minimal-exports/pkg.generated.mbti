@@ -2,25 +2,25 @@
 package "golemcloud/golem_sdk/minimal-exports"
 
 // Values
-pub fn callback(Int, Int, Int) -> Int
+pub fn callback(Int32, Int32, Int32) -> Int32
 
-pub fn definition() -> Int
+pub fn definition() -> Int32
 
-pub fn discover() -> Int
+pub fn discover() -> Int32
 
-pub fn get(Int, Int) -> Int
+pub fn get(Int32, Int32) -> Int32
 
-pub fn invoke(Int) -> Int
+pub fn invoke(Int32) -> Int32
 
-pub fn load(Int, Int, Int, Int) -> Int
+pub fn load(Int32, Int32, Int32, Int32) -> Int32
 
-pub fn post_definition(Int) -> Unit
+pub fn post_definition(Int32) -> Unit
 
-pub fn post_discover(Int) -> Unit
+pub fn post_discover(Int32) -> Unit
 
-pub fn post_get(Int) -> Unit
+pub fn post_get(Int32) -> Unit
 
-pub fn save() -> Int
+pub fn save() -> Int32
 
 // Errors
 

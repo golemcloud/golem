@@ -89,7 +89,11 @@ Copy the [`golem_sdk_example1`](https://github.com/golemcloud/moonbit-sdk/tree/m
 #### `golem_moonbit_examples/moon.pkg` (now your renamed directory)
 - The `import` and `link` sections are auto-managed by the `reexports` codegen tool — no manual changes needed; they will be regenerated on first `golem build`
 
-After these changes, run `moon install` to download dependencies, then `golem build` to build.
+After these changes, run `golem build --yes`. Golem prepares dependency sources with
+`moon tree --package --target wasm` before code generation. Declare module imports in `moon.mod`
+and local modules in `moon.work`; do not use no-argument `moon install`. Published code generation
+runs the pinned `golemcloud/golem_sdk_tools/cmd` package through `moonx`, which requires that
+release's prebuilt Wasm asset in the registry.
 
 MoonBit Golem SDK 0.5.x requires Golem CLI 1.6.0 or newer.
 

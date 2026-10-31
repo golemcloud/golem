@@ -39,8 +39,13 @@ pub(all) suberror PermissionError {
   InvalidOwner(String)
   InvalidRecipient(String)
 } derive(Eq, @debug.Debug)
+pub fn PermissionError::equal(Self, Self) -> Bool
 pub fn PermissionError::kind(Self) -> String
 pub fn PermissionError::message(Self) -> String
+pub fn PermissionError::not_equal(Self, Self) -> Bool
+pub fn PermissionError::output(Self, &Logger) -> Unit
+pub fn PermissionError::to_repr(Self) -> @debug.Repr
+pub fn PermissionError::to_string(Self) -> String
 pub impl Show for PermissionError
 
 // Types and methods
@@ -50,11 +55,22 @@ pub(all) struct Bounds {
   upper_positive : Array[PatternGrant]
   upper_negative : Array[PatternGrant]
 } derive(Eq, @debug.Debug)
+pub fn Bounds::equal(Self, Self) -> Bool
 pub fn Bounds::new(lower_positive? : Array[PatternGrant], lower_negative? : Array[PatternGrant], upper_positive? : Array[PatternGrant], upper_negative? : Array[PatternGrant]) -> Self
+pub fn Bounds::not_equal(Self, Self) -> Bool
+pub fn Bounds::to_repr(Self) -> @debug.Repr
 
 pub struct CardId {
   // private fields
 }
+pub fn CardId::equal(Self, Self) -> Bool
+pub fn CardId::hash(Self) -> Int32
+pub fn CardId::hash_combine(Self, Hasher) -> Unit
+pub fn CardId::not_equal(Self, Self) -> Bool
+pub fn CardId::output(Self, &Logger) -> Unit
+pub fn CardId::to_json(Self) -> Json
+pub fn CardId::to_repr(Self) -> @debug.Repr
+pub fn CardId::to_string(Self) -> String
 pub impl Eq for CardId
 pub impl Hash for CardId
 pub impl Show for CardId
@@ -67,24 +83,36 @@ pub(all) struct CardView {
   upper_positive : Array[PatternGrant]
   upper_negative : Array[PatternGrant]
 } derive(Eq, @debug.Debug)
+pub fn CardView::equal(Self, Self) -> Bool
+pub fn CardView::not_equal(Self, Self) -> Bool
+pub fn CardView::to_repr(Self) -> @debug.Repr
 
 pub(all) enum Holder {
   Account(@types.Uuid)
   App(@types.Uuid)
   Agent(@types.AgentId)
 } derive(Eq, @debug.Debug)
+pub fn Holder::equal(Self, Self) -> Bool
+pub fn Holder::not_equal(Self, Self) -> Bool
+pub fn Holder::to_repr(Self) -> @debug.Repr
 
 pub(all) struct KernelModule {
   class_name : String
   verbs : Array[String]
 } derive(Eq, @debug.Debug)
+pub fn KernelModule::equal(Self, Self) -> Bool
+pub fn KernelModule::not_equal(Self, Self) -> Bool
+pub fn KernelModule::to_repr(Self) -> @debug.Repr
 
 pub struct Lifespan {
   // private fields
 } derive(Eq, @debug.Debug)
+pub fn Lifespan::equal(Self, Self) -> Bool
 pub fn Lifespan::from_duration(@schema.Duration) -> Self raise PermissionError
 pub fn Lifespan::iso8601(String) -> Self
+pub fn Lifespan::not_equal(Self, Self) -> Bool
 pub fn Lifespan::to_iso8601(Self) -> String
+pub fn Lifespan::to_repr(Self) -> @debug.Repr
 
 pub(all) struct PatternGrant {
   class : String
@@ -93,19 +121,35 @@ pub(all) struct PatternGrant {
   verb : String
   resource_id : String
 } derive(Eq, Hash, @debug.Debug)
+pub fn PatternGrant::equal(Self, Self) -> Bool
+pub fn PatternGrant::hash(Self) -> Int32
+pub fn PatternGrant::hash_combine(Self, Hasher) -> Unit
+pub fn PatternGrant::not_equal(Self, Self) -> Bool
+pub fn PatternGrant::to_repr(Self) -> @debug.Repr
 
 pub struct PermissionCard {
   // private fields
 }
+pub fn PermissionCard::append_result_payload(Self, @schema.WireEncoder) -> Int32? raise @schema.WireError
+pub fn PermissionCard::append_result_type(@schema.WireTypeEncoder) -> Int32?
+pub fn PermissionCard::append_wire(Self, @schema.WireEncoder) -> Int32 raise @schema.WireError
+pub fn PermissionCard::append_wire_type(@schema.WireTypeEncoder) -> Int32
 pub fn PermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> PersistentCard raise PermissionError
 pub fn PermissionCard::drop(Self) -> Unit
 pub fn PermissionCard::expires_at(Self) -> Timestamp?
+pub fn PermissionCard::from_value(@schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
 pub fn PermissionCard::id(Self) -> CardId
 pub fn PermissionCard::inspect(Self) -> CardView raise PermissionError
 pub fn PermissionCard::install(Self, Holder) -> Unit raise PermissionError
 pub fn PermissionCard::is_moved(Self) -> Bool
 pub fn PermissionCard::parents(Self) -> Array[CardId]
-pub fn PermissionCard::revoke(Self) -> UInt raise PermissionError
+pub fn PermissionCard::read_result_payload(@schema.WireReader, Int32?) -> Self raise @schema.WireError
+pub fn PermissionCard::read_wire(@schema.WireReader, Int32) -> Self raise @schema.WireError
+pub fn PermissionCard::register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
+pub fn PermissionCard::release_wire(Self, @schema.WireReleaser) -> Unit
+pub fn PermissionCard::revoke(Self) -> UInt32 raise PermissionError
+pub fn PermissionCard::to_value(Self) -> @schema_model.SchemaValue
+pub fn PermissionCard::type_id() -> String
 pub impl @schema.FromSchema for PermissionCard
 pub impl @schema.FromWire for PermissionCard
 pub impl @schema.IntoSchema for PermissionCard
@@ -124,20 +168,31 @@ pub fn PersistentCard::inspect(Self) -> CardView raise PermissionError
 pub fn PersistentCard::install(Self, Holder) -> Unit raise PermissionError
 pub fn PersistentCard::is_moved(Self) -> Bool
 pub fn PersistentCard::parents(Self) -> Array[CardId]
-pub fn PersistentCard::revoke(Self) -> UInt raise PermissionError
+pub fn PersistentCard::revoke(Self) -> UInt32 raise PermissionError
 
 pub struct PolymorphicPermissionCard {
   // private fields
 }
+pub fn PolymorphicPermissionCard::append_result_payload(Self, @schema.WireEncoder) -> Int32? raise @schema.WireError
+pub fn PolymorphicPermissionCard::append_result_type(@schema.WireTypeEncoder) -> Int32?
+pub fn PolymorphicPermissionCard::append_wire(Self, @schema.WireEncoder) -> Int32 raise @schema.WireError
+pub fn PolymorphicPermissionCard::append_wire_type(@schema.WireTypeEncoder) -> Int32
 pub fn PolymorphicPermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> PersistentCard raise PermissionError
 pub fn PolymorphicPermissionCard::drop(Self) -> Unit
 pub fn PolymorphicPermissionCard::expires_at(Self) -> Timestamp?
+pub fn PolymorphicPermissionCard::from_value(@schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
 pub fn PolymorphicPermissionCard::id(Self) -> CardId
 pub fn PolymorphicPermissionCard::inspect(Self) -> CardView raise PermissionError
 pub fn PolymorphicPermissionCard::install(Self, Holder) -> Unit raise PermissionError
 pub fn PolymorphicPermissionCard::is_moved(Self) -> Bool
 pub fn PolymorphicPermissionCard::parents(Self) -> Array[CardId]
-pub fn PolymorphicPermissionCard::revoke(Self) -> UInt raise PermissionError
+pub fn PolymorphicPermissionCard::read_result_payload(@schema.WireReader, Int32?) -> Self raise @schema.WireError
+pub fn PolymorphicPermissionCard::read_wire(@schema.WireReader, Int32) -> Self raise @schema.WireError
+pub fn PolymorphicPermissionCard::register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
+pub fn PolymorphicPermissionCard::release_wire(Self, @schema.WireReleaser) -> Unit
+pub fn PolymorphicPermissionCard::revoke(Self) -> UInt32 raise PermissionError
+pub fn PolymorphicPermissionCard::to_value(Self) -> @schema_model.SchemaValue
+pub fn PolymorphicPermissionCard::type_id() -> String
 pub impl @schema.FromSchema for PolymorphicPermissionCard
 pub impl @schema.FromWire for PolymorphicPermissionCard
 pub impl @schema.IntoSchema for PolymorphicPermissionCard
@@ -156,8 +211,16 @@ pub fn ScopeCard::parents(Self) -> Array[CardId]
 
 pub(all) struct Timestamp {
   seconds : Int64
-  nanoseconds : UInt
+  nanoseconds : UInt32
 } derive(Compare, Eq, @debug.Debug)
+pub fn Timestamp::compare(Self, Self) -> Int32
+pub fn Timestamp::equal(Self, Self) -> Bool
+pub fn Timestamp::not_equal(Self, Self) -> Bool
+pub fn Timestamp::op_ge(Self, Self) -> Bool
+pub fn Timestamp::op_gt(Self, Self) -> Bool
+pub fn Timestamp::op_le(Self, Self) -> Bool
+pub fn Timestamp::op_lt(Self, Self) -> Bool
+pub fn Timestamp::to_repr(Self) -> @debug.Repr
 
 pub enum WalletCard {
   Concrete(PermissionCard)
@@ -170,6 +233,9 @@ pub(all) struct WalletVersionToken {
   wallet_id_hash : Bytes
   generation : UInt64
 } derive(Eq, @debug.Debug)
+pub fn WalletVersionToken::equal(Self, Self) -> Bool
+pub fn WalletVersionToken::not_equal(Self, Self) -> Bool
+pub fn WalletVersionToken::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 

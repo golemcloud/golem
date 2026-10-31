@@ -28,6 +28,12 @@ pub(all) struct SchemaType {
 } derive(Debug, Eq)
 
 ///|
+pub extend SchemaType with Debug::{to_repr}
+
+///|
+pub extend SchemaType with Eq::{equal, not_equal}
+
+///|
 /// The structural body of a recursive schema type. Recursive positions hold
 /// nested `SchemaType`s directly (the flat carrier holds indices instead).
 pub(all) enum SchemaTypeBody {
@@ -54,7 +60,7 @@ pub(all) enum SchemaTypeBody {
   Flags(Array[String])
   Tuple(Array[SchemaType])
   List(SchemaType)
-  FixedList(SchemaType, UInt)
+  FixedList(SchemaType, UInt32)
   Map(SchemaType, SchemaType)
   Option(SchemaType)
   // ok, err (each optional: unit ok/err omit the payload)
@@ -80,6 +86,12 @@ pub(all) enum SchemaTypeBody {
 } derive(Debug, Eq)
 
 ///|
+pub extend SchemaTypeBody with Debug::{to_repr}
+
+///|
+pub extend SchemaTypeBody with Eq::{equal, not_equal}
+
+///|
 pub(all) struct NamedFieldType {
   name : String
   body : SchemaType
@@ -87,11 +99,23 @@ pub(all) struct NamedFieldType {
 } derive(Debug, Eq)
 
 ///|
+pub extend NamedFieldType with Debug::{to_repr}
+
+///|
+pub extend NamedFieldType with Eq::{equal, not_equal}
+
+///|
 pub(all) struct VariantCaseType {
   name : String
   payload : SchemaType?
   metadata : @types.MetadataEnvelope
 } derive(Debug, Eq)
+
+///|
+pub extend VariantCaseType with Debug::{to_repr}
+
+///|
+pub extend VariantCaseType with Eq::{equal, not_equal}
 
 ///|
 pub(all) struct UnionBranch {
@@ -103,11 +127,23 @@ pub(all) struct UnionBranch {
 } derive(Debug, Eq)
 
 ///|
+pub extend UnionBranch with Debug::{to_repr}
+
+///|
+pub extend UnionBranch with Eq::{equal, not_equal}
+
+///|
 pub(all) struct SecretSpec {
   /// Revealed payload type carried by this secret handle.
   inner : SchemaType
   category : String?
 } derive(Debug, Eq)
+
+///|
+pub extend SecretSpec with Debug::{to_repr}
+
+///|
+pub extend SecretSpec with Eq::{equal, not_equal}
 
 // ============================================================
 // Schema graph (recursive, self-contained)
@@ -124,6 +160,12 @@ pub(all) struct SchemaTypeDef {
 } derive(Debug, Eq)
 
 ///|
+pub extend SchemaTypeDef with Debug::{to_repr}
+
+///|
+pub extend SchemaTypeDef with Eq::{equal, not_equal}
+
+///|
 /// A self-contained schema graph: an ordered registry of named definitions
 /// plus a root type. `Ref(id)` bodies reference the `defs` entry with that
 /// `id`. Definition order is the first-seen / commit order produced by the
@@ -133,6 +175,12 @@ pub(all) struct SchemaGraph {
   defs : Array[SchemaTypeDef]
   root : SchemaType
 } derive(Debug, Eq)
+
+///|
+pub extend SchemaGraph with Debug::{to_repr}
+
+///|
+pub extend SchemaGraph with Eq::{equal, not_equal}
 
 // ============================================================
 // Schema value (recursive)
@@ -144,13 +192,13 @@ pub(all) struct SchemaGraph {
 pub(all) enum SchemaValue {
   // Primitives
   Bool(Bool)
-  S8(Int)
-  S16(Int)
-  S32(Int)
+  S8(Int32)
+  S16(Int32)
+  S32(Int32)
   S64(Int64)
   U8(Byte)
-  U16(UInt)
-  U32(UInt)
+  U16(UInt32)
+  U32(UInt32)
   U64(UInt64)
   F32(Float)
   F64(Double)
@@ -159,8 +207,8 @@ pub(all) enum SchemaValue {
   // Structural composites
   Record(Array[SchemaValue])
   // case index, optional payload
-  Variant(UInt, SchemaValue?)
-  Enum(UInt)
+  Variant(UInt32, SchemaValue?)
+  Enum(UInt32)
   Flags(Array[Bool])
   Tuple(Array[SchemaValue])
   List(Array[SchemaValue])
@@ -195,10 +243,22 @@ pub(all) enum SchemaValue {
 } derive(Debug, Eq)
 
 ///|
+pub extend SchemaValue with Debug::{to_repr}
+
+///|
+pub extend SchemaValue with Eq::{equal, not_equal}
+
+///|
 pub(all) struct SchemaMapEntry {
   key : SchemaValue
   value : SchemaValue
 } derive(Debug, Eq)
+
+///|
+pub extend SchemaMapEntry with Debug::{to_repr}
+
+///|
+pub extend SchemaMapEntry with Eq::{equal, not_equal}
 
 // ============================================================
 // Wire carrier (recursive)
@@ -211,6 +271,12 @@ pub(all) struct TypedSchemaValue {
   graph : SchemaGraph
   value : SchemaValue
 } derive(Debug, Eq)
+
+///|
+pub extend TypedSchemaValue with Debug::{to_repr}
+
+///|
+pub extend TypedSchemaValue with Eq::{equal, not_equal}
 
 ///|
 /// Host-provided cleanup for owned resources rejected at a schema-value
@@ -306,7 +372,7 @@ pub fn empty_metadata() -> @types.MetadataEnvelope {
 /// Wrap a body into a `SchemaType` node, defaulting to empty metadata.
 pub fn schema_type(
   body : SchemaTypeBody,
-  metadata? : @types.MetadataEnvelope = empty_metadata(),
+  metadata~ : @types.MetadataEnvelope = empty_metadata(),
 ) -> SchemaType {
   { body, metadata, }
 }
@@ -316,7 +382,7 @@ pub fn schema_type(
 pub fn field(
   name : String,
   body : SchemaType,
-  metadata? : @types.MetadataEnvelope = empty_metadata(),
+  metadata~ : @types.MetadataEnvelope = empty_metadata(),
 ) -> NamedFieldType {
   { name, body, metadata, }
 }
@@ -326,7 +392,7 @@ pub fn field(
 pub fn variant_case(
   name : String,
   payload? : SchemaType,
-  metadata? : @types.MetadataEnvelope = empty_metadata(),
+  metadata~ : @types.MetadataEnvelope = empty_metadata(),
 ) -> VariantCaseType {
   { name, payload, metadata, }
 }

@@ -5,3 +5,9 @@ pub(all) suberror ToolStreamError {
   ResourceExhausted
   Failed(String)
 } derive(Debug, Eq)
+
+///|
+pub extend ToolStreamError with Debug::{to_repr}
+
+///|
+pub extend ToolStreamError with Eq::{equal, not_equal}

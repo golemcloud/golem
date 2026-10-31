@@ -33,7 +33,10 @@ pub fn take_scope(ScopeCardHandle) -> @types.PermissionCard?
 pub struct GuestPermissionCardHandle {
   // private fields
 }
+pub fn GuestPermissionCardHandle::equal(Self, Self) -> Bool
 pub fn GuestPermissionCardHandle::is_present(Self) -> Bool
+pub fn GuestPermissionCardHandle::not_equal(Self, Self) -> Bool
+pub fn GuestPermissionCardHandle::to_repr(Self) -> @debug.Repr
 pub impl Eq for GuestPermissionCardHandle
 pub impl @debug.Debug for GuestPermissionCardHandle
 

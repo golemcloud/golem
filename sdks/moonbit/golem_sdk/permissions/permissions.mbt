@@ -41,6 +41,15 @@ pub(all) suberror PermissionError {
 } derive(Eq, Debug)
 
 ///|
+pub extend PermissionError with Eq::{equal, not_equal}
+
+///|
+pub extend PermissionError with Debug::{to_repr}
+
+///|
+pub extend PermissionError with Show::{output, to_string}
+
+///|
 /// The WIT case name of the error, for example `"not-permitted"`.
 pub fn PermissionError::kind(self : PermissionError) -> String {
   match self {
@@ -125,6 +134,15 @@ pub(all) struct PatternGrant {
 } derive(Eq, Hash, Debug)
 
 ///|
+pub extend PatternGrant with Eq::{equal, not_equal}
+
+///|
+pub extend PatternGrant with Hash::{hash, hash_combine}
+
+///|
+pub extend PatternGrant with Debug::{to_repr}
+
+///|
 fn PatternGrant::to_raw(self : PatternGrant) -> @raw.PatternGrant {
   {
     class: self.class,
@@ -166,6 +184,12 @@ pub(all) struct CardView {
 } derive(Eq, Debug)
 
 ///|
+pub extend CardView with Eq::{equal, not_equal}
+
+///|
+pub extend CardView with Debug::{to_repr}
+
+///|
 /// The requested lattice of a derivation.
 ///
 /// For `PermissionCard::derive_child` the positive lists name the parent grants
@@ -180,12 +204,18 @@ pub(all) struct Bounds {
 } derive(Eq, Debug)
 
 ///|
+pub extend Bounds with Eq::{equal, not_equal}
+
+///|
+pub extend Bounds with Debug::{to_repr}
+
+///|
 /// Builds a `Bounds` value; an omitted list is empty.
 pub fn Bounds::new(
-  lower_positive? : Array[PatternGrant] = [],
-  lower_negative? : Array[PatternGrant] = [],
-  upper_positive? : Array[PatternGrant] = [],
-  upper_negative? : Array[PatternGrant] = [],
+  lower_positive~ : Array[PatternGrant] = [],
+  lower_negative~ : Array[PatternGrant] = [],
+  upper_positive~ : Array[PatternGrant] = [],
+  upper_negative~ : Array[PatternGrant] = [],
 ) -> Bounds {
   { lower_positive, lower_negative, upper_positive, upper_negative, }
 }
@@ -199,6 +229,12 @@ pub fn Bounds::new(
 pub struct Lifespan {
   priv iso_8601 : String
 } derive(Eq, Debug)
+
+///|
+pub extend Lifespan with Eq::{equal, not_equal}
+
+///|
+pub extend Lifespan with Debug::{to_repr}
 
 ///|
 /// A lifespan from an ISO-8601 duration string. The host validates the value.
@@ -291,8 +327,17 @@ fn duration_to_iso8601(magnitude : UInt64) -> String {
 /// A point in time as seconds and nanoseconds since the Unix epoch.
 pub(all) struct Timestamp {
   seconds : Int64
-  nanoseconds : UInt
+  nanoseconds : UInt32
 } derive(Eq, Compare, Debug)
+
+///|
+pub extend Timestamp with Eq::{equal, not_equal}
+
+///|
+pub extend Timestamp with Compare::{compare, op_lt, op_le, op_gt, op_ge}
+
+///|
+pub extend Timestamp with Debug::{to_repr}
 
 ///|
 /// A token that changes whenever the set of cards in the wallet changes.
@@ -302,11 +347,23 @@ pub(all) struct WalletVersionToken {
 } derive(Eq, Debug)
 
 ///|
+pub extend WalletVersionToken with Eq::{equal, not_equal}
+
+///|
+pub extend WalletVersionToken with Debug::{to_repr}
+
+///|
 /// A resource class known to the permission kernel, with its verbs.
 pub(all) struct KernelModule {
   class_name : String
   verbs : Array[String]
 } derive(Eq, Debug)
+
+///|
+pub extend KernelModule with Eq::{equal, not_equal}
+
+///|
+pub extend KernelModule with Debug::{to_repr}
 
 ///|
 /// The holder that receives an installed card.
@@ -318,6 +375,12 @@ pub(all) enum Holder {
   App(@types.Uuid)
   Agent(@types.AgentId)
 } derive(Eq, Debug)
+
+///|
+pub extend Holder with Eq::{equal, not_equal}
+
+///|
+pub extend Holder with Debug::{to_repr}
 
 ///|
 fn Holder::to_raw(self : Holder) -> @raw.Holder {
@@ -338,6 +401,21 @@ fn Holder::to_raw(self : Holder) -> @raw.Holder {
 pub struct CardId {
   priv uuid : @types.Uuid
 }
+
+///|
+pub extend CardId with Eq::{equal, not_equal}
+
+///|
+pub extend CardId with Hash::{hash, hash_combine}
+
+///|
+pub extend CardId with Debug::{to_repr}
+
+///|
+pub extend CardId with Show::{output, to_string}
+
+///|
+pub extend CardId with ToJson::{to_json}
 
 ///|
 const REDACTED_CARD_ID : String = "CardId(<redacted>)"
@@ -531,7 +609,7 @@ pub fn PermissionCard::derive_child(
 /// drops the handle in both cases.
 pub fn PermissionCard::revoke(
   self : PermissionCard,
-) -> UInt raise PermissionError {
+) -> UInt32 raise PermissionError {
   lift_result(@rawRevoke.revoke_card(take_held(self.handle)))
 }
 
@@ -653,7 +731,7 @@ pub fn PolymorphicPermissionCard::derive_child(
 /// drops the handle in both cases.
 pub fn PolymorphicPermissionCard::revoke(
   self : PolymorphicPermissionCard,
-) -> UInt raise PermissionError {
+) -> UInt32 raise PermissionError {
   lift_result(@rawRevoke.revoke_card(take_held(self.handle)))
 }
 
@@ -896,8 +974,8 @@ pub fn ScopeCard::drop(self : ScopeCard) -> Unit {
 pub fn derive_scope(
   parents : Array[PermissionCard],
   bounds : Bounds,
-  template_parents? : Array[PolymorphicPermissionCard] = [],
-  scope_parents? : Array[ScopeCard] = [],
+  template_parents~ : Array[PolymorphicPermissionCard] = [],
+  scope_parents~ : Array[ScopeCard] = [],
 ) -> ScopeCard raise PermissionError {
   let raw_parents = parents.map(PermissionCard::borrow_raw)
   for template_parent in template_parents {

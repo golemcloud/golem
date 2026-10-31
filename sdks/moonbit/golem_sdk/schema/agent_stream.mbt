@@ -12,6 +12,25 @@ pub(all) struct AgentStream[T] {
 }
 
 ///|
+pub extend AgentStream with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend AgentStream with FromSchema::{from_value}
+
+///|
+pub extend AgentStream with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend AgentStream with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend AgentStream with WireSchema::{append_wire_type, append_result_type}
+
+///|
 /// The writable endpoint of a typed agent stream.
 #warnings("-unused_type_variable")
 pub struct AgentStreamWriter[T] {
@@ -31,6 +50,12 @@ pub(all) enum AgentStreamWriteOutcome {
 } derive(Debug, Eq)
 
 ///|
+pub extend AgentStreamWriteOutcome with Debug::{to_repr}
+
+///|
+pub extend AgentStreamWriteOutcome with Eq::{equal, not_equal}
+
+///|
 /// Failures specific to consuming a typed agent stream. Canonical operation
 /// cancellation is propagated unchanged rather than wrapped in this error.
 pub suberror AgentStreamReadError {
@@ -45,6 +70,12 @@ pub suberror AgentStreamReadError {
   /// Direct wire decoding rejected the declared item shape or ownership.
   DirectDecode(WireError)
 } derive(Debug, Eq)
+
+///|
+pub extend AgentStreamReadError with Debug::{to_repr}
+
+///|
+pub extend AgentStreamReadError with Eq::{equal, not_equal}
 
 ///|
 fn[T] AgentStream::from_reader(

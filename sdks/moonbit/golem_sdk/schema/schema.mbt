@@ -45,12 +45,18 @@ pub suberror FromSchemaError {
   /// The expected value shape does not match what was provided.
   ShapeMismatch(expected~ : String, actual~ : String, context~ : String)
   /// A variant or enum case index is out of range.
-  OutOfRange(index~ : UInt, len~ : UInt, context~ : String)
+  OutOfRange(index~ : UInt32, len~ : UInt32, context~ : String)
   /// A union tag was not matched by any branch.
   UnknownUnionTag(String)
   /// Free-form error message produced by generated decoders.
   Custom(String)
 } derive(Debug, Eq)
+
+///|
+pub extend FromSchemaError with Debug::{to_repr}
+
+///|
+pub extend FromSchemaError with Eq::{equal, not_equal}
 
 ///|
 /// Construct a `ShapeMismatch` error.
@@ -65,8 +71,8 @@ pub fn FromSchemaError::shape_mismatch(
 ///|
 /// Construct an `OutOfRange` error.
 pub fn FromSchemaError::out_of_range(
-  index : UInt,
-  len : UInt,
+  index : UInt32,
+  len : UInt32,
   context : String,
 ) -> FromSchemaError {
   OutOfRange(index~, len~, context~)

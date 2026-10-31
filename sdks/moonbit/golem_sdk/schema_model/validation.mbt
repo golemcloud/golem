@@ -64,6 +64,12 @@ pub suberror SchemaError {
   NullableNesting(inner~ : String)
 } derive(Debug, Eq)
 
+///|
+pub extend SchemaError with Debug::{to_repr}
+
+///|
+pub extend SchemaError with Eq::{equal, not_equal}
+
 // ============================================================
 // Driver
 // ============================================================
@@ -680,7 +686,7 @@ fn classify_discriminator_pair(
 ///|
 fn discriminator_classification_kind(
   value : DiscriminatorPairClassification,
-) -> Int {
+) -> Int32 {
   match value {
     Reject(_) => 0
     Disjoint => 1
@@ -692,7 +698,7 @@ fn discriminator_classification_kind(
 test "discriminator_pair_classification_matches_portable_matrix" {
   let fe = (name, literal) => @types.FieldEquals({ field_name: name, literal, })
   let cases : Array[
-    (String, @types.DiscriminatorRule, @types.DiscriminatorRule, Int),
+    (String, @types.DiscriminatorRule, @types.DiscriminatorRule, Int32),
   ] = [
     ("prefix_prefix_nested_reject", @types.Prefix("a"), @types.Prefix("ab"), 0),
     ("prefix_prefix_disjoint", @types.Prefix("a"), @types.Prefix("b"), 1),

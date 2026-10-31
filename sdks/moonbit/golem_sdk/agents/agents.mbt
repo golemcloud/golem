@@ -68,11 +68,23 @@ pub(all) enum SnapshotData {
 } derive(Debug, Eq)
 
 ///|
+pub extend SnapshotData with Debug::{to_repr}
+
+///|
+pub extend SnapshotData with Eq::{equal, not_equal}
+
+///|
 /// Indicates the serialization format used for snapshots.
 pub(all) enum SnapshotFormat {
   Json
   Binary
 } derive(Debug, Eq)
+
+///|
+pub extend SnapshotFormat with Debug::{to_repr}
+
+///|
+pub extend SnapshotFormat with Eq::{equal, not_equal}
 
 ///|
 /// Result of constructing an agent, containing the raw dispatch interface
@@ -98,7 +110,7 @@ pub(all) struct SnapshotRestoreContext {
 /// Decodes an identity field from the ambient agent ID.
 pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(
   self : SnapshotRestoreContext,
-  index : Int,
+  index : Int32,
 ) -> T raise @common.AgentError {
   decode_snapshot_identity_field(self.identity_fields, index)
 }
@@ -167,6 +179,7 @@ fn finish_restoration(
 
 ///|
 /// Constructs an agent and sets it as the current instance.
+#warnings("-result_error_return")
 pub async fn construct_and_set_instance(
   agent_type : String,
   input : @types.SchemaValueTree,

@@ -49,7 +49,7 @@ fn provider_output_from_callbacks(
   ],
   drop_callback : () -> Unit,
 ) -> ProviderOutput {
-  let state = @ref.new({
+  let state = Ref({
     write_callback,
     finish_callback,
     fail_callback,
@@ -268,6 +268,8 @@ async fn ProviderOutput::complete(
 
 ///|
 #doc(hidden)
+// Ordinary failures select Failed; cancellation keeps the Cancelled reason.
+#warnings("-fragile_catch_all")
 pub async fn invoke_with_output(
   output : ProviderOutput,
   invoke : async () -> Result[@toolCommon.InvocationResult, @types.ToolError],

@@ -9,6 +9,12 @@ pub(all) enum RpcError {
 } derive(Eq, Debug)
 
 ///|
+pub extend RpcError with Eq::{equal, not_equal}
+
+///|
+pub extend RpcError with Debug::{to_repr}
+
+///|
 pub(all) enum ToolError[E] {
   Rpc(RpcError)
   RemoteTool(RemoteToolError)
@@ -24,6 +30,12 @@ pub(all) enum RemoteToolError {
   ConstraintViolation(String)
   InvalidResult(String)
 } derive(Eq, Debug)
+
+///|
+pub extend RemoteToolError with Eq::{equal, not_equal}
+
+///|
+pub extend RemoteToolError with Debug::{to_repr}
 
 ///|
 fn release_optional_value(

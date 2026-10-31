@@ -4,6 +4,31 @@ pub(all) struct Path {
 } derive(Debug, Eq)
 
 ///|
+pub extend Path with Debug::{to_repr}
+
+///|
+pub extend Path with Eq::{equal, not_equal}
+
+///|
+pub extend Path with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Path with FromSchema::{from_value}
+
+///|
+pub extend Path with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Path with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Path with WireSchema::{append_wire_type, append_result_type}
+
+///|
 pub fn Path::new(value : String) -> Path {
   { value, }
 }
@@ -14,6 +39,27 @@ pub(all) struct Url {
 } derive(Debug, Eq)
 
 ///|
+pub extend Url with Debug::{to_repr}
+
+///|
+pub extend Url with Eq::{equal, not_equal}
+
+///|
+pub extend Url with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Url with FromSchema::{from_value}
+
+///|
+pub extend Url with IntoWire::{append_wire, append_result_payload, release_wire}
+
+///|
+pub extend Url with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Url with WireSchema::{append_wire_type, append_result_type}
+
+///|
 pub fn Url::new(value : String) -> Url {
   { value, }
 }
@@ -22,8 +68,8 @@ pub fn Url::new(value : String) -> Url {
 pub(open) trait TextSpec {
   fn type_id() -> String
   fn languages() -> Array[String]
-  fn min_length() -> UInt?
-  fn max_length() -> UInt?
+  fn min_length() -> UInt32?
+  fn max_length() -> UInt32?
   fn regex() -> String?
 }
 
@@ -33,6 +79,31 @@ pub struct Text[S] {
   value : String
   language : String?
 } derive(Debug, Eq)
+
+///|
+pub extend Text with Debug::{to_repr}
+
+///|
+pub extend Text with Eq::{equal, not_equal}
+
+///|
+pub extend Text with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Text with FromSchema::{from_value}
+
+///|
+pub extend Text with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Text with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Text with WireSchema::{append_wire_type, append_result_type}
 
 ///|
 pub fn[S] Text::new(value : String, language? : String) -> Text[S] {
@@ -55,6 +126,31 @@ pub(all) struct Duration {
 } derive(Debug, Eq)
 
 ///|
+pub extend Duration with Debug::{to_repr}
+
+///|
+pub extend Duration with Eq::{equal, not_equal}
+
+///|
+pub extend Duration with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Duration with FromSchema::{from_value}
+
+///|
+pub extend Duration with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Duration with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Duration with WireSchema::{append_wire_type, append_result_type}
+
+///|
 pub fn Duration::new(nanoseconds : Int64) -> Duration {
   { nanoseconds, }
 }
@@ -70,9 +166,34 @@ pub(open) trait QuantityUnit {
 #warnings("-unused_type_variable")
 pub struct Quantity[U] {
   mantissa : Int64
-  scale : Int
+  scale : Int32
   unit : String
 } derive(Debug, Eq)
+
+///|
+pub extend Quantity with Debug::{to_repr}
+
+///|
+pub extend Quantity with Eq::{equal, not_equal}
+
+///|
+pub extend Quantity with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Quantity with FromSchema::{from_value}
+
+///|
+pub extend Quantity with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Quantity with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Quantity with WireSchema::{append_wire_type, append_result_type}
 
 ///|
 pub fn[U : QuantityUnit] unit_allowed(_tag : TypeTag[U], unit : String) -> Bool {
@@ -87,7 +208,7 @@ pub fn[U : QuantityUnit] unit_allowed(_tag : TypeTag[U], unit : String) -> Bool 
 ///|
 pub fn[U : QuantityUnit] Quantity::new(
   mantissa : Int64,
-  scale : Int,
+  scale : Int32,
   unit : String,
 ) -> Quantity[U] raise FromSchemaError {
   let tag : TypeTag[U] = type_tag()

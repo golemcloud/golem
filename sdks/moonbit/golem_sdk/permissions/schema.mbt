@@ -4,6 +4,64 @@
 // node of a permission card; only the schema's `polymorphic` flag differs.
 
 ///|
+pub extend PermissionCard with @schema.IntoSchema::{
+  type_id,
+  register_in,
+  to_value,
+}
+
+///|
+pub extend PermissionCard with @schema.FromSchema::{from_value}
+
+///|
+pub extend PermissionCard with @schema.IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend PermissionCard with @schema.FromWire::{
+  read_wire,
+  read_result_payload,
+}
+
+///|
+pub extend PermissionCard with @schema.WireSchema::{
+  append_wire_type,
+  append_result_type,
+}
+
+///|
+pub extend PolymorphicPermissionCard with @schema.IntoSchema::{
+  type_id,
+  register_in,
+  to_value,
+}
+
+///|
+pub extend PolymorphicPermissionCard with @schema.FromSchema::{from_value}
+
+///|
+pub extend PolymorphicPermissionCard with @schema.IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend PolymorphicPermissionCard with @schema.FromWire::{
+  read_wire,
+  read_result_payload,
+}
+
+///|
+pub extend PolymorphicPermissionCard with @schema.WireSchema::{
+  append_wire_type,
+  append_result_type,
+}
+
+///|
 /// A card is a first-class capability node in the schema model
 /// (`SchemaType::permission-card`). The schema is never polymorphic: a
 /// `PermissionCard` declares a concrete card. The host refuses an agent call

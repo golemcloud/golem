@@ -152,7 +152,10 @@ pub suberror ToolBuildError {
   ValueIsTypeMismatch(String)
   UnresolvedValueIsLiteral(String)
 } derive(Eq, @debug.Debug)
+pub fn ToolBuildError::equal(Self, Self) -> Bool
+pub fn ToolBuildError::not_equal(Self, Self) -> Bool
 pub fn ToolBuildError::schema_model(String) -> Self
+pub fn ToolBuildError::to_repr(Self) -> @debug.Repr
 
 pub(all) suberror ToolStreamError {
   Cancelled
@@ -160,6 +163,9 @@ pub(all) suberror ToolStreamError {
   ResourceExhausted
   Failed(String)
 } derive(Eq, @debug.Debug)
+pub fn ToolStreamError::equal(Self, Self) -> Bool
+pub fn ToolStreamError::not_equal(Self, Self) -> Bool
+pub fn ToolStreamError::to_repr(Self) -> @debug.Repr
 
 // Types and methods
 pub(all) struct CanonicalInputField {
@@ -168,11 +174,15 @@ pub(all) struct CanonicalInputField {
   short : Char?
   type_ : @schema_model.SchemaGraph
 } derive(Eq)
+pub fn CanonicalInputField::equal(Self, Self) -> Bool
+pub fn CanonicalInputField::not_equal(Self, Self) -> Bool
 
 pub(all) struct CanonicalInputModel {
   fields : Array[CanonicalInputField]
   record_graph : @schema_model.SchemaGraph
 } derive(Eq)
+pub fn CanonicalInputModel::equal(Self, Self) -> Bool
+pub fn CanonicalInputModel::not_equal(Self, Self) -> Bool
 
 pub(all) struct CanonicalInputValue {
   name : String
@@ -181,6 +191,8 @@ pub(all) struct CanonicalInputValue {
   type_ : @schema_model.SchemaGraph
   value : @schema_model.SchemaValue
 } derive(Eq)
+pub fn CanonicalInputValue::equal(Self, Self) -> Bool
+pub fn CanonicalInputValue::not_equal(Self, Self) -> Bool
 
 pub(all) struct CommandBodyDef {
   positionals : PositionalsDef
@@ -340,6 +352,9 @@ pub(all) enum ToolLiteral {
   List(Array[String])
   Map(Array[(String, String)])
 } derive(Eq, @debug.Debug)
+pub fn ToolLiteral::equal(Self, Self) -> Bool
+pub fn ToolLiteral::not_equal(Self, Self) -> Bool
+pub fn ToolLiteral::to_repr(Self) -> @debug.Repr
 
 pub(all) enum ValueIsLiteralDef {
   Resolved(@schema_model.SchemaValue)
