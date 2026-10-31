@@ -693,6 +693,8 @@ mod tests {
         assert_eq!(text_value(&record_fields(&input)[0]), Some("golem"));
     }
 
+    // Never called: it only has to compile, which shows that a generated subtree wrapper carries
+    // the root descriptor, the command path and the inherited prefix.
     fn generated_subtree_wrapper_carries_the_root_descriptor_typechecks() {
         let wrapper = RefinedClientParentClient::default().child("europe".to_string());
         let _: Option<golem_rust::agentic::WireToolDescriptorFn> = wrapper.root_descriptor;
