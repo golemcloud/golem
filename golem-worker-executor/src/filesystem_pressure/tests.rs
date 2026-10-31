@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::*;
+use crate::filesystem::errors::OperationContext;
 #[cfg(target_os = "linux")]
-use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+use crate::filesystem::sandbox::SandboxFilesystemProvisioning;
 #[cfg(target_os = "linux")]
 use crate::services::golem_config::FilesystemStorageMode;
 use std::collections::{HashMap, VecDeque};
@@ -26,6 +27,35 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
 use tokio::sync::Notify;
+
+#[test]
+fn pressure_configuration_errors_report_the_target_and_capacity() {
+    let config = FilesystemPressureConfig::default();
+    let byte_target = config.target_available_bytes();
+    let error = config
+        .validate_capacity(byte_target - 1, u64::MAX)
+        .unwrap_err();
+    assert!(
+        matches!(error, FilesystemPressureConfigError::Bytes { target, capacity }
+        if target == byte_target && capacity == byte_target - 1)
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "filesystem pressure byte target {byte_target} exceeds volume capacity {}",
+            byte_target - 1
+        )
+    );
+    let object_target = config.target_available_filesystem_objects();
+    let error = config
+        .validate_capacity(u64::MAX, object_target - 1)
+        .unwrap_err();
+    assert!(
+        matches!(error, FilesystemPressureConfigError::Objects { target, capacity }
+        if target == object_target && capacity == object_target - 1)
+    );
+    assert!(!error.to_string().ends_with("filesystem"));
+}
 
 struct ScriptedRecovery {
     observations: Mutex<VecDeque<Result<FilesystemSpace, &'static str>>>,
@@ -94,10 +124,7 @@ impl CapacityRecoverySource for ScriptedRecovery {
         match self.observations.lock().unwrap().pop_front().unwrap() {
             Ok(observation) => Ok(observation),
             Err(message) => Err(FilesystemPressureError::Observation(
-                FilesystemStorageError::verification(
-                    message,
-                    std::path::Path::new("<scripted-volume>"),
-                ),
+                StorageVolumeError::from(OperationContext::verification(message, None)),
             )),
         }
     }
@@ -737,7 +764,7 @@ async fn managed_xfs_reobserves_fresh_space_after_verified_deletion() {
     let root = PathBuf::from(std::env::var("GOLEM_MANAGED_XFS_TEST_ROOT").unwrap());
     let provisioning = SandboxFilesystemProvisioning::new(
         &FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
             root: root.clone().into(),
         },
         golem_common::model::RetryConfig::default(),

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::filesystem::errors::OperationContext;
 
 /// Opens the target according to the expected kind, access mode, symlink policy, and disposition.
 ///
@@ -66,7 +67,7 @@ pub(crate) fn read_file<Adapter: SandboxFilesystemAdapter>(
         return Err(AccessError::NotPermitted);
     }
     let lease = generation_handle.lease_call(&generation.registry, CallEffect::Read)?;
-    let SandboxNode::File(file) = file.ownership.sandbox() else {
+    let SandboxHandle::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
     let file = file.clone();
@@ -151,7 +152,7 @@ pub(crate) fn list_directory<Adapter: SandboxFilesystemAdapter>(
         return Err(AccessError::NotPermitted);
     }
     let lease = generation_handle.lease_call(&generation.registry, CallEffect::Read)?;
-    let SandboxNode::Directory(directory) = directory.ownership.sandbox() else {
+    let SandboxHandle::Directory(directory) = directory.ownership.sandbox() else {
         unreachable!("directory wrapper must contain a sandbox directory")
     };
     let directory = directory.clone();
@@ -211,7 +212,7 @@ pub(crate) fn write<Adapter: SandboxFilesystemAdapter>(
         return Err(AccessError::NotPermitted);
     }
     let lease = generation_handle.lease_call(&generation.registry, CallEffect::Changes)?;
-    let SandboxNode::File(file) = file.ownership.sandbox() else {
+    let SandboxHandle::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
     let file = file.clone();
@@ -276,12 +277,12 @@ async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
         {
             // A node of the guest open path closes through `execute_close`, which retries the
             // close and decides the effect of a failed close on the generation.
-            execute_close(Arc::clone(&generation), opened.into_node()).await?;
+            execute_close(Arc::clone(&generation), opened).await?;
             return Err(refusal);
         }
         if open_returns_directory(options) {
             let directory_key = opened
-                .directory_coordination_key()
+                .directory_id()
                 .expect("sandbox directory open must carry a coordination identity");
             if !coordination.extend(vec![directory_key]) {
                 drop(opened);
@@ -296,7 +297,7 @@ pub(super) async fn execute_open<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     target: SandboxPath,
     options: OpenOptions,
-) -> Result<SandboxOpened, Error> {
+) -> Result<SandboxHandle, Error> {
     let mut options = options;
     let mut budget = RetryBudget::new(2);
     loop {
@@ -392,10 +393,10 @@ async fn open_postcondition<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<bool, FilesystemStorageError> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or_else(|| {
-        FilesystemStorageError::verification(
+        FilesystemStorageError::from(OperationContext::verification(
             "inspect deleted filesystem open postcondition",
-            std::path::Path::new("<agent-filesystem>"),
-        )
+            None,
+        ))
     })?;
     let attributes = sandbox
         .get_path_attributes(
@@ -475,7 +476,7 @@ async fn execute_write<Adapter: SandboxFilesystemAdapter>(
             Ok(()) if written != 0 => continue,
             Ok(()) => FilesystemStorageError::io(
                 "write sandbox filesystem file",
-                std::path::Path::new("<agent-filesystem>"),
+                None,
                 std::io::ErrorKind::WriteZero.into(),
             ),
             Err(error) => error,
@@ -537,7 +538,7 @@ pub(super) fn unwritten_write_suffix(
 /// error, invalidates the generation, and the call gives `RuntimeInvalidated`.
 async fn execute_flush<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
-    node: SandboxNode,
+    node: SandboxHandle,
     level: FlushLevel,
 ) -> Result<(), Error> {
     let result = {

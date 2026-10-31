@@ -3,7 +3,8 @@ use super::super::tests::{
 };
 use super::super::{delete, resident_generation_handle, seal};
 use super::*;
-use crate::sandbox_filesystem::{SandboxObjectKind, SandboxOpened};
+use crate::filesystem::sandbox::{SandboxHandle, SandboxObjectKind};
+
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
 };
@@ -170,7 +171,7 @@ async fn inspection_revalidates_before_io_and_sanitizes_permission_failures() {
     assert!(!admit(&handle).unwrap().registry.is_invalidated());
     // Once open succeeds, a metadata failure must never turn into a target miss.
     for kind in [std::io::ErrorKind::NotFound, std::io::ErrorKind::Other] {
-        control.push_open(Ok(SandboxOpened::scripted_file(42)));
+        control.push_open(Ok(SandboxHandle::scripted_file(42)));
         control.push_get_attributes(Err(sandbox_error("secret host path", kind)));
         control.push_close(Ok(()));
         assert!(matches!(
@@ -193,10 +194,10 @@ async fn inspection_walk_uses_single_component_descriptors_and_open_metadata() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let handle = resident_generation_handle(&filesystem);
     for id in [10, 11] {
-        control.push_open(Ok(SandboxOpened::scripted_directory(id)));
+        control.push_open(Ok(SandboxHandle::scripted_directory(id)));
         control.push_close(Ok(()));
     }
-    control.push_open(Ok(SandboxOpened::scripted_file(12)));
+    control.push_open(Ok(SandboxHandle::scripted_file(12)));
     control.push_close(Ok(()));
     let mut attrs = sandbox_attributes(SandboxObjectKind::File);
     attrs.size = u64::MAX;
@@ -237,7 +238,7 @@ async fn inspection_walk_uses_single_component_descriptors_and_open_metadata() {
     assert!(
         calls
             .iter()
-            .any(|call| call.starts_with("get_node_attributes("))
+            .any(|call| call.starts_with("get_handle_attributes("))
     );
     assert!(
         !calls

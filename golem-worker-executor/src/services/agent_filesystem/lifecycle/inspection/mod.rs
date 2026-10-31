@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::sandbox_filesystem::SandboxInspectionFailure;
+use crate::filesystem::sandbox::SandboxInspectionFailure;
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadHead, FileReadMetadata, validate_file_read_path,
 };

@@ -204,10 +204,9 @@ pub(crate) fn close(node: OpenNode) -> FilesystemClose {
 impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
     pub(super) async fn register_opened(
         self: Arc<Self>,
-        opened: SandboxOpened,
+        node: SandboxHandle,
         access: AccessMode,
     ) -> Result<Opened, Error> {
-        let node = opened.into_node();
         let (node_lease, return_to_caller) = self.registry.register_node();
         let open_node = self.wrap_node(node, access, node_lease);
         if return_to_caller {
@@ -220,7 +219,7 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
 
     pub(super) fn wrap_node(
         self: &Arc<Self>,
-        node: SandboxNode,
+        node: SandboxHandle,
         access: AccessMode,
         node_lease: NodeLease,
     ) -> OpenNode {
@@ -237,14 +236,14 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
             })),
         };
         match node {
-            SandboxNode::File(_) => OpenNode::File(File { ownership }),
-            SandboxNode::Directory(_) => OpenNode::Directory(Directory { ownership }),
+            SandboxHandle::File(_) => OpenNode::File(File { ownership }),
+            SandboxHandle::Directory(_) => OpenNode::Directory(Directory { ownership }),
         }
     }
 
     pub(super) fn start_close(
         self: Arc<Self>,
-        node: SandboxNode,
+        node: SandboxHandle,
         node_lease: NodeLease,
     ) -> FilesystemClose {
         let call_lease = self.registry.lease_internal_call();
@@ -263,7 +262,7 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
 
 pub(super) async fn execute_close<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
-    node: SandboxNode,
+    node: SandboxHandle,
 ) -> Result<(), Error> {
     let mut budget = RetryBudget::new(2);
     loop {

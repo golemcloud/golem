@@ -403,7 +403,7 @@ impl StoreCalls {
     ) -> Self {
         let store = match store {
             StoreOf::Blob(storage, config) => {
-                crate::filesystem_snapshot::store(storage, config, StoreKey(()))
+                crate::filesystem_snapshot::create_store(storage, config, StoreKey(()))
             }
             #[cfg(any(test, feature = "test-utils"))]
             StoreOf::Given(store) => store,
@@ -856,6 +856,11 @@ impl StoreCalls {
         self.store.shut_down().await;
         self.store_stopped.cancel();
         self.jobs.close();
+        self.jobs.wait().await;
+    }
+
+    pub(super) async fn wait_for_shutdown(&self) {
+        self.store_stopped.cancelled().await;
         self.jobs.wait().await;
     }
 
