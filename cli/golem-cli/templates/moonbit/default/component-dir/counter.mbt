@@ -41,8 +41,3 @@ pub fn CounterAgent::add(self : Self, by : UInt64) -> UInt64 {
 pub fn CounterAgent::reset(self : Self) -> Unit {
   self.value = 0
 }
-
-///|
-fn main {
-
-}

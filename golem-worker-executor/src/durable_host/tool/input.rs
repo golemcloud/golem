@@ -34,7 +34,7 @@ use std::task::{Context, Poll};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use wasmtime::AsContextMut;
 use wasmtime::component::{
-    Accessor, AccessorTask, Destination, StreamProducer, StreamResult, TerminalConsumption,
+    Accessor, Destination, StreamProducer, StreamResult, TerminalConsumption,
 };
 
 struct PreparedRead {
@@ -205,7 +205,9 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
                     oplog: ctx.state.oplog.clone(),
                     result,
                 };
-                store.as_context_mut().spawn(task);
+                store
+                    .as_context_mut()
+                    .spawn(async move |store| task.run(store).await)?;
                 self.pending = Some(pending);
             }
             let prepared = std::task::ready!(Pin::new(self.pending.as_mut().unwrap()).poll(cx));
@@ -301,8 +303,8 @@ struct PrepareAttachmentObservation<Ctx: WorkerCtx> {
     result: oneshot::Sender<Result<PreparedRead, WorkerExecutorError>>,
 }
 
-impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservation<Ctx> {
-    async fn run(self, _accessor: &Accessor<U>) -> wasmtime::Result<()> {
+impl<Ctx: WorkerCtx> PrepareAttachmentObservation<Ctx> {
+    async fn run<U: 'static>(self, _accessor: &Accessor<U>) -> wasmtime::Result<()> {
         self.prepare().await
     }
 }

@@ -587,8 +587,3 @@ pub async fn MoonbitStreamingRpcCaller::call_scalar(self : Self) -> UInt64 {
     target.increment()
   })
 }
-
-///|
-fn main {
-
-}

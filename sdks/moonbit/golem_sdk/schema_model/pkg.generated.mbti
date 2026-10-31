@@ -77,11 +77,17 @@ pub suberror SchemaError {
   BinaryByteRangeInverted
   NullableNesting(inner~ : String)
 } derive(Eq, @debug.Debug)
+pub fn SchemaError::equal(Self, Self) -> Bool
+pub fn SchemaError::not_equal(Self, Self) -> Bool
+pub fn SchemaError::to_repr(Self) -> @debug.Repr
 
 pub suberror SchemaFingerprintError {
   InvalidSchema(String)
   DuplicateSetValue(field~ : String, value~ : String)
 } derive(Eq, @debug.Debug)
+pub fn SchemaFingerprintError::equal(Self, Self) -> Bool
+pub fn SchemaFingerprintError::not_equal(Self, Self) -> Bool
+pub fn SchemaFingerprintError::to_repr(Self) -> @debug.Repr
 
 pub suberror SchemaModelError {
   EncodeError(String)
@@ -89,16 +95,22 @@ pub suberror SchemaModelError {
   MergeConflict(String)
   BuilderError(String)
 } derive(Eq, @debug.Debug)
+pub fn SchemaModelError::equal(Self, Self) -> Bool
+pub fn SchemaModelError::not_equal(Self, Self) -> Bool
+pub fn SchemaModelError::to_repr(Self) -> @debug.Repr
 
 // Types and methods
 pub(all) struct DecodedSchemaGraph {
   graph : SchemaGraph
   roots : Array[SchemaType]
 } derive(Eq, @debug.Debug)
+pub fn DecodedSchemaGraph::equal(Self, Self) -> Bool
+pub fn DecodedSchemaGraph::not_equal(Self, Self) -> Bool
+pub fn DecodedSchemaGraph::to_repr(Self) -> @debug.Repr
 
 pub(all) struct EncodedAgentGraph {
   graph : @types.SchemaGraph
-  root_indices : Array[Int]
+  root_indices : Array[Int32]
 }
 
 pub struct GraphDecoder {
@@ -108,16 +120,16 @@ pub struct GraphDecoder {
   decoded : Array[SchemaType?]
 }
 pub fn GraphDecoder::decode_defs(Self) -> Array[SchemaTypeDef] raise SchemaModelError
-pub fn GraphDecoder::decode_type_at(Self, Int) -> SchemaType raise SchemaModelError
+pub fn GraphDecoder::decode_type_at(Self, Int32) -> SchemaType raise SchemaModelError
 pub fn GraphDecoder::new(@types.SchemaGraph) -> Self raise SchemaModelError
 
 pub struct GraphEncoder {
   type_nodes : Array[@types.SchemaTypeNode]
-  def_index_by_id : Map[String, Int]
+  def_index_by_id : Map[String, Int32]
   wit_defs : Array[@types.SchemaTypeDef]
 }
 pub fn GraphEncoder::encode_graph_root(Self, SchemaType) -> @types.SchemaGraph raise SchemaModelError
-pub fn GraphEncoder::encode_type(Self, SchemaType) -> Int raise SchemaModelError
+pub fn GraphEncoder::encode_type(Self, SchemaType) -> Int32 raise SchemaModelError
 pub fn GraphEncoder::finish(Self) -> @types.SchemaGraph raise SchemaModelError
 pub fn GraphEncoder::new(Array[SchemaTypeDef]) -> Self raise SchemaModelError
 
@@ -154,12 +166,18 @@ pub(all) struct MergedAgentGraph {
   defs : Array[SchemaTypeDef]
   roots : Array[SchemaType]
 } derive(Eq, @debug.Debug)
+pub fn MergedAgentGraph::equal(Self, Self) -> Bool
+pub fn MergedAgentGraph::not_equal(Self, Self) -> Bool
+pub fn MergedAgentGraph::to_repr(Self) -> @debug.Repr
 
 pub(all) struct NamedFieldType {
   name : String
   body : SchemaType
   metadata : @types.MetadataEnvelope
 } derive(Eq, @debug.Debug)
+pub fn NamedFieldType::equal(Self, Self) -> Bool
+pub fn NamedFieldType::not_equal(Self, Self) -> Bool
+pub fn NamedFieldType::to_repr(Self) -> @debug.Repr
 
 pub struct SchemaBuilder {
   defs : Array[SchemaTypeDef]
@@ -176,22 +194,34 @@ pub fn SchemaBuilder::reserve(Self, String) -> Unit
 
 pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, @debug.Debug)
 pub fn SchemaFingerprintV1::as_bytes(Self) -> FixedArray[Byte]
+pub fn SchemaFingerprintV1::equal(Self, Self) -> Bool
+pub fn SchemaFingerprintV1::not_equal(Self, Self) -> Bool
 pub fn SchemaFingerprintV1::to_hex(Self) -> String
+pub fn SchemaFingerprintV1::to_repr(Self) -> @debug.Repr
 
 pub(all) struct SchemaGraph {
   defs : Array[SchemaTypeDef]
   root : SchemaType
 } derive(Eq, @debug.Debug)
+pub fn SchemaGraph::equal(Self, Self) -> Bool
+pub fn SchemaGraph::not_equal(Self, Self) -> Bool
+pub fn SchemaGraph::to_repr(Self) -> @debug.Repr
 
 pub(all) struct SchemaMapEntry {
   key : SchemaValue
   value : SchemaValue
 } derive(Eq, @debug.Debug)
+pub fn SchemaMapEntry::equal(Self, Self) -> Bool
+pub fn SchemaMapEntry::not_equal(Self, Self) -> Bool
+pub fn SchemaMapEntry::to_repr(Self) -> @debug.Repr
 
 pub(all) struct SchemaType {
   body : SchemaTypeBody
   metadata : @types.MetadataEnvelope
 } derive(Eq, @debug.Debug)
+pub fn SchemaType::equal(Self, Self) -> Bool
+pub fn SchemaType::not_equal(Self, Self) -> Bool
+pub fn SchemaType::to_repr(Self) -> @debug.Repr
 
 pub(all) enum SchemaTypeBody {
   Ref(String)
@@ -214,7 +244,7 @@ pub(all) enum SchemaTypeBody {
   Flags(Array[String])
   Tuple(Array[SchemaType])
   List(SchemaType)
-  FixedList(SchemaType, UInt)
+  FixedList(SchemaType, UInt32)
   Map(SchemaType, SchemaType)
   Option(SchemaType)
   Result(SchemaType?, SchemaType?)
@@ -233,30 +263,36 @@ pub(all) enum SchemaTypeBody {
   Future(SchemaType?)
   Stream(SchemaType?)
 } derive(Eq, @debug.Debug)
+pub fn SchemaTypeBody::equal(Self, Self) -> Bool
+pub fn SchemaTypeBody::not_equal(Self, Self) -> Bool
+pub fn SchemaTypeBody::to_repr(Self) -> @debug.Repr
 
 pub(all) struct SchemaTypeDef {
   id : String
   name : String?
   body : SchemaType
 } derive(Eq, @debug.Debug)
+pub fn SchemaTypeDef::equal(Self, Self) -> Bool
+pub fn SchemaTypeDef::not_equal(Self, Self) -> Bool
+pub fn SchemaTypeDef::to_repr(Self) -> @debug.Repr
 
 pub(all) enum SchemaValue {
   Bool(Bool)
-  S8(Int)
-  S16(Int)
-  S32(Int)
+  S8(Int32)
+  S16(Int32)
+  S32(Int32)
   S64(Int64)
   U8(Byte)
-  U16(UInt)
-  U32(UInt)
+  U16(UInt32)
+  U32(UInt32)
   U64(UInt64)
   F32(Float)
   F64(Double)
   Char(Char)
   String(String)
   Record(Array[SchemaValue])
-  Variant(UInt, SchemaValue?)
-  Enum(UInt)
+  Variant(UInt32, SchemaValue?)
+  Enum(UInt32)
   Flags(Array[Bool])
   Tuple(Array[SchemaValue])
   List(Array[SchemaValue])
@@ -279,8 +315,11 @@ pub(all) enum SchemaValue {
   Stream(GuestSchemaValueStreamHandle)
   PermissionCard(@permission_card.GuestPermissionCardHandle)
 } derive(Eq, @debug.Debug)
+pub fn SchemaValue::equal(Self, Self) -> Bool
+pub fn SchemaValue::not_equal(Self, Self) -> Bool
 pub fn SchemaValue::release_resources(Self, SchemaValueResourceDrops) -> Unit
 pub fn SchemaValue::rollback_input_resources(Self, SchemaValueResourceDrops) -> Unit
+pub fn SchemaValue::to_repr(Self) -> @debug.Repr
 
 pub(all) struct SchemaValueResourceDrops {
   drop_secret : (@types.Secret) -> Unit
@@ -293,11 +332,17 @@ pub(all) struct SecretSpec {
   inner : SchemaType
   category : String?
 } derive(Eq, @debug.Debug)
+pub fn SecretSpec::equal(Self, Self) -> Bool
+pub fn SecretSpec::not_equal(Self, Self) -> Bool
+pub fn SecretSpec::to_repr(Self) -> @debug.Repr
 
 pub(all) struct TypedSchemaValue {
   graph : SchemaGraph
   value : SchemaValue
 } derive(Eq, @debug.Debug)
+pub fn TypedSchemaValue::equal(Self, Self) -> Bool
+pub fn TypedSchemaValue::not_equal(Self, Self) -> Bool
+pub fn TypedSchemaValue::to_repr(Self) -> @debug.Repr
 
 pub(all) struct UnionBranch {
   tag : String
@@ -305,12 +350,22 @@ pub(all) struct UnionBranch {
   discriminator : @types.DiscriminatorRule
   metadata : @types.MetadataEnvelope
 } derive(Eq, @debug.Debug)
+pub fn UnionBranch::equal(Self, Self) -> Bool
+pub fn UnionBranch::not_equal(Self, Self) -> Bool
+pub fn UnionBranch::to_repr(Self) -> @debug.Repr
 
 pub(all) struct VariantCaseType {
   name : String
   payload : SchemaType?
   metadata : @types.MetadataEnvelope
 } derive(Eq, @debug.Debug)
+pub fn VariantCaseType::equal(Self, Self) -> Bool
+pub fn VariantCaseType::not_equal(Self, Self) -> Bool
+pub fn VariantCaseType::to_repr(Self) -> @debug.Repr
+
+pub fn SchemaValueStreamReadError::equal(Self, Self) -> Bool
+pub fn SchemaValueStreamReadError::not_equal(Self, Self) -> Bool
+pub fn SchemaValueStreamReadError::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 pub type TypeId = String

@@ -21,6 +21,28 @@ pub(all) struct QuotaToken {
 }
 
 ///|
+pub extend QuotaToken with @schema.IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend QuotaToken with @schema.FromSchema::{from_value}
+
+///|
+pub extend QuotaToken with @schema.IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend QuotaToken with @schema.FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend QuotaToken with @schema.WireSchema::{
+  append_wire_type,
+  append_result_type,
+}
+
+///|
 /// A short-lived capability that represents a pending or committed
 /// resource consumption. Drop without committing is equivalent to
 /// committing zero usage.

@@ -16,14 +16,14 @@ use super::*;
 use std::future::pending;
 use std::sync::Arc;
 use test_r::test;
-use wasmtime::component::{Accessor, AccessorTask, RuntimeObservation};
+use wasmtime::component::{Accessor, RuntimeObservation};
 use wasmtime::{AsContextMut, Config, Engine, Store};
 
 const ROOT: OplogIndex = OplogIndex::from_u64(5);
 
 struct PendingTask;
 
-impl AccessorTask<()> for PendingTask {
+impl PendingTask {
     async fn run(self, _: &Accessor<()>) -> wasmtime::Result<()> {
         pending().await
     }
@@ -45,7 +45,10 @@ fn activities(count: usize) -> Vec<RuntimeActivityId> {
         }))
         .unwrap();
     for _ in 0..count {
-        store.as_context_mut().spawn(PendingTask);
+        store
+            .as_context_mut()
+            .spawn(async |store| PendingTask.run(store).await)
+            .unwrap();
     }
     let ids = ids.lock().unwrap().clone();
     assert_eq!(ids.len(), count);

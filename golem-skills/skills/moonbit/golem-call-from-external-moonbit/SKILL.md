@@ -45,12 +45,11 @@ Avoid invoking `golem generate-bridge` manually — it exists as a low-level esc
 
 ## Step 3: Add the Generated Module to a Workspace
 
-The generated `my-agent-client/` directory is a self-contained module. The generator deliberately
-emits its metadata as `moon.mod.json`; do not rename or edit that generated file. The application
-itself should use the current `moon.mod` format.
+The generated `my-agent-client/` directory is a self-contained module with a `moon.mod` manifest.
+Do not edit the generated manifest. The external application also uses `moon.mod`.
 
-Create the external application in `external-client/`. Because local path dependencies in
-`moon.mod` are deprecated, add `external-client/moon.work` with both modules:
+Create the external application in `external-client/`. Add `external-client/moon.work` with both
+modules to resolve the generated client locally:
 
 ```moonbit
 members = [
@@ -60,7 +59,7 @@ members = [
 ```
 
 Then import the generated module and `moonbitlang/async` in the application's `moon.mod`, using the
-exact generated name/version and the async version declared by the bridge's `moon.mod.json`:
+exact generated name/version and the async version declared by the bridge's `moon.mod`:
 
 ```moonbit
 name = "my-org/external-client"
@@ -217,7 +216,7 @@ client validates returned values against the allowed set and raises a
 
 Each agent type gets its own `moon` module directory containing:
 
-- `moon.mod.json` — module metadata, depending on `moonbitlang/async`
+- `moon.mod` — module metadata, depending on `moonbitlang/async`
 - `runtime/` — the bundled runtime package (`<agent-client>/runtime`): HTTP transport, the schema-native value model, codecs, and configuration
 - `client/client.mbt` — the generated, fully typed client package (`<agent-client>/client`): the agent handle, its constructors and method wrappers, and the generated MoonBit types and codecs for all custom parameter and return types
 
@@ -227,5 +226,5 @@ Each agent type gets its own `moon` module directory containing:
 - The generated code is fully typed — method parameters and return types map to MoonBit types, and all custom types (records, variants, enums, flags, unions, multimodal, unstructured text/binary) are generated as corresponding MoonBit types
 - The client targets `native` and uses `moonbitlang/async` for HTTP communication; all constructors and methods are `async`
 - The generated module is self-contained: it bundles its runtime and only depends on `moonbitlang/async` and the MoonBit core library
-- Keep application metadata in `moon.mod`; leave the generated bridge's `moon.mod.json` unchanged
+- Keep application metadata in `moon.mod`; leave the generated bridge's `moon.mod` unchanged
 - Resolve the generated module through `moon.work`, then run `moon check --target native`

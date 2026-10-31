@@ -235,7 +235,11 @@ pub fn create_context(
     // Without `inherit_network`, wasmtime's default socket address check refuses every connect,
     // bind and outgoing datagram with `access-denied`.
     if agent_sockets_enabled {
-        builder.allow_ip_name_lookup(true).inherit_network();
+        builder
+            .allow_tcp(true)
+            .allow_udp(true)
+            .allow_ip_name_lookup(true)
+            .inherit_network();
     }
     let (wasi, io_ctx) = builder.build();
 

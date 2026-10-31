@@ -118,13 +118,13 @@ type DurationRepr derive(Eq, @debug.Debug)
 
 pub struct NamedPolicy {
   name : String
-  priority : UInt
+  priority : UInt32
   predicate : Predicate
   policy : Policy
 } derive(Eq, @debug.Debug)
 pub fn NamedPolicy::applies_when(Self, Predicate) -> Self
 pub fn NamedPolicy::named(String, Policy) -> Self
-pub fn NamedPolicy::priority(Self, UInt) -> Self
+pub fn NamedPolicy::priority(Self, UInt32) -> Self
 pub fn NamedPolicy::to_raw(Self) -> @retry.NamedRetryPolicy raise RetryBuilderError
 
 pub struct Policy {
@@ -137,7 +137,7 @@ pub fn Policy::exponential(Duration, Double) -> Self
 pub fn Policy::fibonacci(Duration, Duration) -> Self
 pub fn Policy::immediate() -> Self
 pub fn Policy::intersect(Self, Self) -> Self
-pub fn Policy::max_retries(Self, UInt) -> Self
+pub fn Policy::max_retries(Self, UInt32) -> Self
 pub fn Policy::never() -> Self
 pub fn Policy::only_when(Self, Predicate) -> Self
 pub fn Policy::periodic(Duration) -> Self
@@ -206,11 +206,11 @@ pub struct Value {
   repr : ValueRepr
 } derive(Eq, @debug.Debug)
 pub fn Value::boolean(Bool) -> Self
-pub fn Value::int(Int) -> Self
+pub fn Value::int(Int32) -> Self
 pub fn Value::integer(Int64) -> Self
 pub fn Value::text(String) -> Self
 pub fn Value::to_raw(Self) -> @retry.PredicateValue raise RetryBuilderError
-pub fn Value::uint(UInt) -> Self
+pub fn Value::uint(UInt32) -> Self
 pub fn Value::uint64(UInt64) -> Self
 
 type ValueRepr derive(Eq, @debug.Debug)

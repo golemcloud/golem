@@ -20,11 +20,11 @@ fn valid_file_segment(segment : String) -> Bool {
 }
 
 ///|
-fn http_hex(c : UInt16) -> Int raise AgentParseError {
+fn http_hex(c : UInt16) -> Int32 raise AgentParseError {
   match c {
-    '0'..='9' => c.to_int() - 48
-    'a'..='f' => c.to_int() - 87
-    'A'..='F' => c.to_int() - 55
+    '0'..<='9' => c.to_int() - 48
+    'a'..<='f' => c.to_int() - 87
+    'A'..<='F' => c.to_int() - 55
     _ => {
       http_fail("source-path")
       0
@@ -45,7 +45,7 @@ fn decode_http_segment(raw : String) -> String raise AgentParseError {
       bytes.push((http_hex(raw[i + 1]) * 16 + http_hex(raw[i + 2])).to_byte())
       i += 3
     } else {
-      if !(c is ('a'..='z' | 'A'..='Z' | '0'..='9')) &&
+      if !(c is ('a'..<='z' | 'A'..<='Z' | '0'..<='9')) &&
         !"-._~!$&'()*+,;=:@".iter().any(ch => ch.to_int() == c.to_int()) {
         http_fail("source-path")
       }

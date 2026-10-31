@@ -95,7 +95,7 @@ test "provider stdout writes, finishes, and drops exactly once" {
 test "provider stdout batches bytes in bounded 64 KiB writes" {
   run_provider_async(() => {
     for use_bytes in [false, true] {
-      let lengths : Array[Int] = []
+      let lengths : Array[Int32] = []
       let stdout = provider_output_from_callbacks(
         bytes => {
           lengths.push(bytes.length())
@@ -335,7 +335,7 @@ test "invocation stdout terminals preserve structured results and original error
             "validation-error" =>
               Err(@types.ToolError::InvalidInput("original"))
             "exception" => raise ToolStreamError::Failed("original")
-            "cancelled" => raise @async-core.Cancelled::Cancelled
+            "cancelled" => cancelled_task_result()
             _ => {
               if mode == "explicit-failure" {
                 stdout.fail(ToolStreamError::ResourceExhausted)
@@ -367,8 +367,8 @@ test "invocation stdout terminals preserve structured results and original error
           assert_eq(terminals, ["failed"])
         }
         "cancelled" => {
-          assert_true(result is Err(@async-core.Cancelled::Cancelled))
-          assert_eq(terminals, ["cancelled"])
+          assert_true(result is Err(@async-core.TaskCancelled::TaskCancelled))
+          assert_eq(terminals, ["failed"])
         }
         "finish-error" => {
           assert_true(result is Ok(Ok(_)))
@@ -595,7 +595,7 @@ test "real task cancellation during invocation and completion releases stdout an
           ignore(unblock_failure.complete(()))
         }
         try task.wait() catch {
-          @async-core.Cancelled::Cancelled => ()
+          @async-core.TaskCancelled::TaskCancelled => ()
           _ => fail("expected task cancellation")
         } noraise {
           _ => fail("task cancellation was lost")

@@ -1,8 +1,8 @@
 # Add a MoonBit dependency
 
 Current MoonBit projects declare module dependencies in `moon.mod` and package imports in
-`moon.pkg`. The JSON files `moon.mod.json` and `moon.pkg.json` are legacy formats; do not create
-them for application source.
+`moon.pkg`. Golem generates these formats for applications and bridge modules. Do not create
+`moon.mod.json` or `moon.pkg.json`.
 
 ## Add the module
 
@@ -39,20 +39,37 @@ import {
 
 Code can then call that package through `@json_parser`.
 
-For local modules, use a `moon.work` workspace and list each module directory as a member; local
-path dependencies in the new `moon.mod` format are deprecated.
+## Use a local module or generated bridge
 
-Golem's stock MoonBit build template currently assumes a single-module artifact path. Adding
-workspace members changes Moon's output path, so an unchanged `golem build` will not find the
-component WASM. A Golem component that uses `moon.work` must override its debug and release build,
-embed-source, and `componentWasm` paths. Do not present a workspace dependency as a drop-in change
-to a generated Golem application.
+Golem applications include `moon.work`. Keep the application member and any local SDK member,
+then add the local module directory to `members`:
 
-Golem-generated MoonBit bridge modules are a deliberate exception: the bridge generator currently
-emits self-contained modules with `moon.mod.json`. Do not rename or edit that generated file. Put
-the application and generated module in `moon.work`, then import the generated module by its module
-name from the application's `moon.mod` and import its packages from `moon.pkg`.
+```moonbit
+members = [
+  ".",
+  "golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client",
+]
+```
 
-For an ordinary registry dependency, run `moon check` and `golem build --yes`. Confirm that the
+Add `"weather-agent-guest-client@0.0.1"` to the application's `moon.mod` imports and
+`"weather-agent-guest-client/client" @weather` to the caller's `moon.pkg` imports. The workspace
+resolves the module locally. Do not edit the generated bridge's `moon.mod` or put local paths in
+the application's module imports. Generate the bridge through `golem build --yes` before running
+standalone MoonBit checks that need it.
+
+The stock Golem build template supports this workspace layout. Moon places the core Wasm under
+`_build/wasm/<profile>/build/<module-name>/<package-path>/`. The application name sets both the
+generated module name and this artifact directory; component namespaces may differ. Adding members
+does not require custom build or embed commands.
+
+## Build and code generation
+
+`golem build --yes` prepares dependency sources with `moon tree --package --target wasm` before
+code generation. Published SDK tools run as `moonx golemcloud/golem_sdk_tools/cmd@<version> --`;
+the selected version must have its prebuilt Wasm asset published to the registry. Do not add
+`bin-deps` or invoke launchers under `_build/__moonbin__`. A local SDK override runs the sibling
+tools checkout with `moon -C <tools-path> run cmd --` instead.
+
+For an ordinary registry dependency, run `moon check --target wasm` and `golem build --yes`. Confirm that the
 dependency supports the component's `wasm` target; native-only and JavaScript-only packages cannot
 be linked into a Golem agent.

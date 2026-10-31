@@ -5,7 +5,7 @@ test "one writer serializes concurrent appends without reusing the sequence" {
     let (gate, release) : (@async-core.Future[Unit], @async-core.Promise[Unit]) = @async-core.Future::new()
     let (started, signal) = @async-core.Future::new()
     let (queued, signal_queued) = @async-core.Future::new()
-    let base : Writer[Int] = json_writer(
+    let base : Writer[Int32] = json_writer(
       "https://example.test/stream",
       producer_id="p",
       epoch=4,
@@ -124,7 +124,7 @@ test "independent writers can finish in either order" {
 ///|
 test "native producer failure fails its operation task group" {
   run_async(async fn() {
-    let base : Reader[Int] = json_reader("https://example.test/stream")
+    let base : Reader[Int32] = json_reader("https://example.test/stream")
     let reader = { ..base, read_batch: (_, _) => Err(error(GONE)), }
     let @durable-streams.DurableStreamReader(handle) = reader.resource.unwrap()
     try
@@ -145,11 +145,11 @@ test "native producer failure fails its operation task group" {
 ///|
 test "nested schema transfer preserves the ordinary native stream source" {
   run_async(async fn() {
-    let reader : Reader[Int] = json_reader("https://example.test/stream")
+    let reader : Reader[Int32] = json_reader("https://example.test/stream")
     reader.install(batch(b"[13,4]", "end", closed=true))
     let stream = reader.into_stream()
     let value = @schema.to_value_as((Some(stream), "metadata"))
-    let (restored, metadata) : (@schema.AgentStream[Int]?, String) = @schema.from_value_as(
+    let (restored, metadata) : (@schema.AgentStream[Int32]?, String) = @schema.from_value_as(
       value,
     )
     assert_eq(metadata, "metadata")
@@ -192,11 +192,13 @@ test "closing during a host read discards completion without advancing" {
 test "cancelled idle wait retains resolved now and retry_pending retains exhausted budget" {
   run_async(async fn() {
     let requests : Array[@durable-streams.DurableStreamReadRequest] = []
-    let base : Reader[Int] = json_reader(
+    let base : Reader[Int32] = json_reader(
       "https://example.test/stream",
       offset="now",
       transport=SSE,
     )
+    let (waiting, entered_wait) = @async-core.Future::new()
+    let (blocked, _unblock) = @async-core.Future::new()
     let reader = {
       ..base,
       read_batch: (request, _) => {
@@ -209,14 +211,22 @@ test "cancelled idle wait retains resolved now and retry_pending retains exhaust
           },
         )
       },
-      wait: _ => raise @async-core.Cancelled::Cancelled,
+      wait: async fn(_) {
+        ignore(entered_wait.complete(()))
+        blocked.get()
+      },
     }
-    try reader.read() catch {
-      @async-core.Cancelled::Cancelled => ()
-      e => raise e
-    } noraise {
-      _ => fail("idle wait was not cancelled")
-    }
+    @async-core.with_task_group(group => {
+      let read = group.spawn(() => reader.read())
+      waiting.get()
+      read.cancel()
+      try read.wait() catch {
+        @async-core.TaskCancelled::TaskCancelled => ()
+        e => raise e
+      } noraise {
+        _ => fail("idle wait was not cancelled")
+      }
+    })
     assert_eq(reader.checkpoint().offset, "fixed-tail")
     assert_eq(reader.read(), Some(6))
     assert_eq(requests[1].checkpoint.offset, "fixed-tail")
@@ -224,7 +234,7 @@ test "cancelled idle wait retains resolved now and retry_pending retains exhaust
     let calls : Array[@durable-streams.DurableStreamAppendRequest] = []
     let recovered = Ref(false)
     let waits : Array[UInt64] = []
-    let writer_base : Writer[Int] = json_writer(
+    let writer_base : Writer[Int32] = json_writer(
       "https://example.test/stream",
       producer_id="p",
       max_retries=2,

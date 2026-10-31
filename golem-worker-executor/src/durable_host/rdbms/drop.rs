@@ -30,7 +30,7 @@ use golem_common::model::oplog::{
     HostResponse, HostResponseGolemRdbmsTransactionTerminal, OplogEntry,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use wasmtime::component::{Accessor, AccessorTask, HasData};
+use wasmtime::component::{Accessor, HasData};
 
 #[cfg(test)]
 mod tests;
@@ -102,7 +102,7 @@ where
     let mut pending: Vec<_> = ctx
         .table()
         .iter_mut()
-        .filter_map(|entry| {
+        .filter_map(|(_, entry)| {
             entry
                 .downcast_ref::<PendingTransactionDrop<T>>()
                 .map(|entry| {
@@ -364,7 +364,15 @@ where
     };
     if task.replay.is_some() {
         // GC can release the handle before later guest calls that precede its recorded End.
-        store.spawn(task);
+        let begin = task.tx.begin_index;
+        store
+            .spawn(async move |store| task.run(store).await)
+            .map_err(|error| {
+                mark_durable_call_trap_context(
+                    error.into(),
+                    DurableCallTrapContext { retry_from: begin },
+                )
+            })?;
         Ok(())
     } else {
         let begin = task.tx.begin_index;
@@ -383,15 +391,14 @@ struct TransactionDrop<U, Ctx: WorkerCtx, T: RdbmsType + 'static> {
     activity: TailActivity,
 }
 
-impl<U, D, Ctx, T> AccessorTask<U, D> for TransactionDrop<U, Ctx, T>
+impl<U, Ctx, T> TransactionDrop<U, Ctx, T>
 where
     U: Send + 'static,
-    D: HasData + ?Sized,
     Ctx: WorkerCtx,
     T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    async fn run(self, store: &Accessor<U, D>) -> wasmtime::Result<()> {
+    async fn run<D: HasData + ?Sized>(self, store: &Accessor<U, D>) -> wasmtime::Result<()> {
         let begin = self.tx.begin_index;
         self.finish(store)
             .await

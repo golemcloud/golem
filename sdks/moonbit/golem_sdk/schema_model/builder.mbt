@@ -31,7 +31,7 @@ pub fn SchemaBuilder::new() -> SchemaBuilder {
 }
 
 ///|
-fn SchemaBuilder::index_of(self : SchemaBuilder, id : String) -> Int? {
+fn SchemaBuilder::index_of(self : SchemaBuilder, id : String) -> Int32? {
   for i, d in self.defs {
     if d.id == id {
       return Some(i)
@@ -158,6 +158,12 @@ pub(all) struct MergedAgentGraph {
   defs : Array[SchemaTypeDef]
   roots : Array[SchemaType]
 } derive(Debug, Eq)
+
+///|
+pub extend MergedAgentGraph with Debug::{to_repr}
+
+///|
+pub extend MergedAgentGraph with Eq::{equal, not_equal}
 
 ///|
 /// Combine the per-root graphs of an agent (one per constructor / method input

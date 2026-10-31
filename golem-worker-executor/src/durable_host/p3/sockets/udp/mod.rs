@@ -161,12 +161,12 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
             .map_err(|error| types::ErrorCode::from(error).into())
     }
 
-    fn create(
+    async fn create(
         &mut self,
         address_family: types::IpAddressFamily,
     ) -> SocketResult<Resource<UdpSocket>> {
         observe_function_call(&*self.0, "sockets::types::udp-socket", "create");
-        types::HostUdpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family)
+        types::HostUdpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family).await
     }
 
     fn disconnect(&mut self, socket: Resource<UdpSocket>) -> SocketResult<()> {

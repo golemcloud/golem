@@ -1,6 +1,6 @@
 ///|
 test "tool invoke error mapping preserves every protocol variant" {
-  let errors : Array[ToolInvokeError[Int]] = [
+  let errors : Array[ToolInvokeError[Int32]] = [
     InvalidToolName("missing"),
     InvalidCommandPath(["nested", "command"]),
     InvalidInput("input"),
@@ -50,7 +50,7 @@ test "wire protocol errors retain their exact middleware variants" {
 
 ///|
 test "underlying copies share overlap revocation and exactly-once drop state" {
-  let drops : Ref[Int] = Ref(0)
+  let drops : Ref[Int32] = Ref(0)
   let underlying = new_underlying_tool(
     (_, _, _) => Err(@types.ToolError::InvalidInput("unused")),
     fn() { drops.val = drops.val + 1 },
@@ -73,14 +73,14 @@ test "underlying copies share overlap revocation and exactly-once drop state" {
 }
 
 ///|
-fn counted_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
+fn counted_stream(drops : Ref[Int32]) -> @async-core.Stream[Byte] {
   @async-core.Stream::produce(_ => (), on_unstarted_drop=fn() {
     drops.val = drops.val + 1
   })
 }
 
 ///|
-fn rejection_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
+fn rejection_stream(drops : Ref[Int32]) -> @async-core.Stream[Byte] {
   @async-core.Stream::from_source(_ => None, () => drops.val += 1, () => {
     drops.val += 1
   })
@@ -197,13 +197,13 @@ priv suberror FakeBackendFailure derive(Debug)
 extern "wasm" fn reset_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
 
 ///|
-extern "wasm" fn resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+extern "wasm" fn resource_drop_count(kind : Int32) -> Int32 = "golem:test" "resource-drop-count"
 
 ///|
 fn assert_resource_drop_counts(
-  secret : Int,
-  quota_token : Int,
-  permission_card : Int,
+  secret : Int32,
+  quota_token : Int32,
+  permission_card : Int32,
 ) -> Unit raise {
   assert_eq(resource_drop_count(0), secret)
   assert_eq(resource_drop_count(1), quota_token)
@@ -404,7 +404,7 @@ fn raw_unit_value() -> @types.TypedSchemaValue raise {
 }
 
 ///|
-fn raw_secret_value(index : Int) -> @types.TypedSchemaValue raise {
+fn raw_secret_value(index : Int32) -> @types.TypedSchemaValue raise {
   let unit = @schema.try_into_typed_schema_value(())
   @model.typed_schema_value_to_wit({
     graph: unit.graph,
@@ -958,7 +958,7 @@ test "projection rejection and malformed wire results release stdout" {
     stdout: Some(counted_stream(rejected_drops)),
     stderr: None,
   })
-  let projected : Result[Int, ToolInvokeError[Unit]] = decode_result_value(
+  let projected : Result[Int32, ToolInvokeError[Unit]] = decode_result_value(
     rejected,
   )
   assert_true(projected is Err(InvalidResult(_)))
@@ -1392,14 +1392,7 @@ test "cancelling one waiter preserves shared typed and raw observation" {
           async fn() { invocation.get() }
         }
         @async-core.with_task_group(async fn(group) {
-          let first = group.spawn(async fn() {
-            try get() catch {
-              @async-core.Cancelled::Cancelled => ()
-              error => raise error
-            } noraise {
-              _ => fail("cancelled waiter unexpectedly returned")
-            }
-          })
+          let first = group.spawn(get)
           entered.get()
           let second = group.spawn(get)
           first.cancel()
@@ -1411,7 +1404,12 @@ test "cancelling one waiter preserves shared typed and raw observation" {
           }
           assert_eq(second.wait(), expected)
           assert_eq(get(), expected)
-          first.wait()
+          try first.wait() catch {
+            @async-core.TaskCancelled::TaskCancelled => ()
+            error => raise error
+          } noraise {
+            _ => fail("cancelled waiter unexpectedly returned")
+          }
         })
         assert_eq(gets.val, 1)
         assert_eq(drops.val, 1)
@@ -1549,7 +1547,7 @@ test "cancelling a suspended backend call clears active state" {
       started.get()
       call.cancel()
       try call.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         _ => fail("unexpected cancellation error")
       } noraise {
         _ => fail("cancelled invocation unexpectedly returned")
@@ -1624,19 +1622,13 @@ test "enclosing group cancellation settles active call before scoped raw drop" {
           )
           underlying_holder.val = Some(underlying)
           let input = @schema.try_into_typed_schema_value(())
-          try underlying.invoke([], input, None) catch {
-            @async-core.Cancelled::Cancelled =>
-              raise @async-core.Cancelled::Cancelled
-            error => raise error
-          } noraise {
-            _ => ()
-          }
+          ignore(underlying.invoke([], input, None))
         })
       })
       started.get()
       scoped.cancel()
       try scoped.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         _ => fail("unexpected enclosing-group cancellation error")
       } noraise {
         _ => fail("cancelled scoped invocation unexpectedly returned")

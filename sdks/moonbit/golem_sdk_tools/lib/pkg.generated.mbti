@@ -28,9 +28,9 @@ pub fn ensure_pkg_import(String, String, String) -> String raise ComponentRoleEr
 
 pub fn error_message(Error) -> String
 
-pub fn find_config_param(Array[(String, ParamType)]) -> (String, String, Int)?
+pub fn find_config_param(Array[(String, ParamType)]) -> (String, String, Int32)?
 
-pub fn find_principal_index(Array[(String, ParamType)]) -> Int?
+pub fn find_principal_index(Array[(String, ParamType)]) -> Int32?
 
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
@@ -182,7 +182,7 @@ pub(all) enum AgentSnapshotting {
   Disabled
   Default
   Periodic(UInt64)
-  EveryNInvocation(UInt)
+  EveryNInvocation(UInt32)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct AgentsCommandOptions {
@@ -201,8 +201,8 @@ pub(all) struct DurableStreamRouteInfo {
   allow_external_writes : Bool?
   allow_stream_delete : Bool?
   allow_invocation_delete : Bool?
-  max_concurrent_readers_per_stream : UInt?
-  max_append_requests_per_second_per_stream : UInt?
+  max_concurrent_readers_per_stream : UInt32?
+  max_append_requests_per_second_per_stream : UInt32?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct DurableStreamSlotInfo {
@@ -440,7 +440,7 @@ pub(all) struct ToolInfo {
   description : String
   examples : Array[ToolExample]
   commands : Array[ToolCommandInfo]
-  mut root_command : Int?
+  mut root_command : Int32?
 } derive(Eq, @debug.Debug)
 pub fn ToolInfo::client_pascal_case(Self) -> String
 pub fn ToolInfo::wire_name(Self) -> String

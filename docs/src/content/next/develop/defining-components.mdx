@@ -604,7 +604,7 @@ The SDK supports a large variety of data types in agent constructors and agent m
     </Tabs.Tab>
 
     <Tabs.Tab>
-    Any MoonBit package can be added as a dependency in `moon.mod.json` and imported from `moon.pkg`, as long as it supports compiling to WASI.
+    Add MoonBit module dependencies in `moon.mod` and package imports in `moon.pkg`. Dependencies must support the `wasm` target. Add local modules, including generated bridge clients, to the application's `moon.work`. See [Add a MoonBit dependency](/next/how-to-guides/moonbit/golem-add-moonbit-package) for workspace and code generation details.
     </Tabs.Tab>
 
     <Tabs.Tab>

@@ -33,7 +33,7 @@ struct WaitForDrop {
     started: oneshot::Sender<()>,
 }
 
-impl AccessorTask<ResourceTable> for WaitForDrop {
+impl WaitForDrop {
     async fn run(self, _store: &Accessor<ResourceTable>) -> wasmtime::Result<()> {
         self.started.send(()).unwrap();
         self.wait.await.map_err(wasmtime::Error::new)
@@ -79,7 +79,8 @@ async fn destroy_waiting_store(
     let (started, started_rx) = oneshot::channel();
     store
         .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
-            accessor.spawn(WaitForDrop { wait, started });
+            let task = WaitForDrop { wait, started };
+            accessor.spawn(async move |accessor| task.run(accessor).await)?;
             started_rx.await.unwrap();
             Ok(())
         })

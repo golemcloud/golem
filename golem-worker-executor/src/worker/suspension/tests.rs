@@ -15,7 +15,7 @@ use golem_common::model::oplog::{DurableInvocationId, OplogIndex};
 use golem_common::model::tool::ToolName;
 use golem_common::model::{AgentId, OwnedAgentId};
 use std::future::pending;
-use wasmtime::component::{Accessor, AccessorTask, RuntimeActivityKind};
+use wasmtime::component::{Accessor, RuntimeActivityKind};
 use wasmtime::{AsContextMut, Config, Engine, Store};
 
 use test_r::test;
@@ -77,7 +77,7 @@ async fn consumed_guest_block_cannot_release_a_later_delivery() {
 
 struct PendingTask;
 
-impl AccessorTask<()> for PendingTask {
+impl PendingTask {
     async fn run(self, _: &Accessor<()>) -> wasmtime::Result<()> {
         pending().await
     }
@@ -99,7 +99,10 @@ fn runtime_ids(count: usize) -> Vec<RuntimeActivityId> {
         }))
         .unwrap();
     for _ in 0..count {
-        store.as_context_mut().spawn(PendingTask);
+        store
+            .as_context_mut()
+            .spawn(async |store| PendingTask.run(store).await)
+            .unwrap();
     }
     let result = ids.lock().unwrap().clone();
     assert_eq!(result.len(), count);

@@ -5,12 +5,13 @@ This is a [MoonBit](https://docs.moonbitlang.com) project.
 ## Project Structure
 
 - MoonBit packages are organized per directory, for each directory, there is a
-  `moon.pkg.json` file listing its dependencies. Each package has its files and
+  `moon.pkg` file listing its package imports. Each package has its files and
   blackbox test files (common, ending in `_test.mbt`) and whitebox test files
   (ending in `_wbtest.mbt`).
 
-- In the toplevel directory, this is a `moon.mod.json` file listing about the
-  module and some meta information.
+- The module's `moon.mod` declares its name, metadata, module imports and
+  `preferred_target`. The parent `moon.work` lists local module directories;
+  local dependency paths belong in that workspace, not in `moon.mod`.
 
 ## Coding convention
 

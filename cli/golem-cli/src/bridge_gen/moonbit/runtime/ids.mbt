@@ -21,6 +21,12 @@ pub(all) struct AgentId {
 } derive(Debug, Eq)
 
 ///|
+pub extend AgentId with Debug::{to_repr}
+
+///|
+pub extend AgentId with Eq::{equal, not_equal}
+
+///|
 fn AgentId::from_json(j : Json) -> AgentId raise {
   let m = expect_object(j)
   {
@@ -30,7 +36,9 @@ fn AgentId::from_json(j : Json) -> AgentId raise {
 }
 
 ///|
-let rng : @random.Rand = @random.Rand::chacha8(seed=int64_to_bytes(@async.now()))
+let rng : @random.Rand = @random.Rand::chacha8(
+  seed=int64_to_bytes(@async.now()),
+)
 
 ///|
 fn int64_to_bytes(v : Int64) -> Bytes {
@@ -49,17 +57,20 @@ fn int64_to_bytes(v : Int64) -> Bytes {
 let hex_digits : String = "0123456789abcdef"
 
 ///|
-fn byte_to_hex(b : Int) -> String {
+fn byte_to_hex(b : Int32) -> String {
   let hi = (b >> 4) & 0xF
   let lo = b & 0xF
-  String::from_array([hex_digits.get_char(hi).unwrap(), hex_digits.get_char(lo).unwrap()])
+  String::from_array([
+    hex_digits.get_char(hi).unwrap(),
+    hex_digits.get_char(lo).unwrap(),
+  ])
 }
 
 ///|
 /// Generates a random RFC 4122 version 4 UUID string, used for phantom agent
 /// identifiers.
 pub fn random_uuid() -> String {
-  let bytes : Array[Int] = []
+  let bytes : Array[Int32] = []
   for _ in 0..<16 {
     bytes.push(rng.int(limit=256))
   }

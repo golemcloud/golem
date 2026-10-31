@@ -25,6 +25,12 @@ pub(all) enum GolemServer {
 } derive(Debug, Eq)
 
 ///|
+pub extend GolemServer with Debug::{to_repr}
+
+///|
+pub extend GolemServer with Eq::{equal, not_equal}
+
+///|
 let local_well_known_token : String = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 
 ///|
@@ -58,7 +64,13 @@ pub(all) struct Configuration {
 } derive(Debug, Eq)
 
 ///|
-let config_cell : Ref[Configuration?] = { val: None }
+pub extend Configuration with Debug::{to_repr}
+
+///|
+pub extend Configuration with Eq::{equal, not_equal}
+
+///|
+let config_cell : Ref[Configuration?] = { val: None, }
 
 ///|
 /// Configure all bridge clients in this project. Can be called repeatedly to
@@ -68,7 +80,7 @@ pub fn configure(
   app_name : String,
   env_name : String,
 ) -> Unit {
-  config_cell.val = Some({ server, app_name, env_name })
+  config_cell.val = Some({ server, app_name, env_name, })
 }
 
 ///|

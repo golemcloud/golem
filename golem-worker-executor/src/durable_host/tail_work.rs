@@ -15,7 +15,7 @@
 //! Activity tracking for Golem-spawned store background tasks ("tail work").
 //!
 //! Durable host operations spawn background tasks onto the wasmtime store
-//! (`store.spawn(AccessorTask)`): HTTP body recorders, TCP send/receive
+//! (`store.spawn(async move |accessor| ...)`): HTTP body recorders, TCP send/receive
 //! drivers, filesystem/stdio stream consumers, blobstore/keyvalue value
 //! consumers. `run_concurrent` returns as soon as the invocation's root
 //! future resolves, leaving these tasks suspended wherever their last poll

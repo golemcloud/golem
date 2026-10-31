@@ -18,6 +18,16 @@ fn run_attachment_async(body : async () -> Unit) -> Unit raise {
 }
 
 ///|
+async fn[T] cancelled_task_result() -> T {
+  @async-core.with_task_group(group => {
+    let (blocked, _unblock) = @async-core.Future::new()
+    let task = group.spawn(() => blocked.get())
+    task.cancel()
+    task.wait()
+  })
+}
+
+///|
 fn assert_encoded_source_failure(
   error : ToolStreamError,
   expected : @toolStreams.ByteStreamFailure,
@@ -95,19 +105,19 @@ test "stdin skips empty source chunks before producing host items" {
 }
 
 ///|
-test "stdin preserves task cancellation as stream cancellation" {
+test "stdin treats an observed cancelled task as an ordinary source failure" {
   run_attachment_async(async fn() {
     let closes = Ref(0)
     let source = @async-core.Stream::from_source(
-      _ => raise @async-core.Cancelled::Cancelled,
+      _ => cancelled_task_result(),
       fn() { closes.val += 1 },
       fn() { closes.val += 1 },
     )
     let encoded = stdin_byte_stream(source)
     guard encoded.read(1) is Some(items) && items.length() == 1 else {
-      fail("expected one encoded stdin cancellation")
+      fail("expected one encoded stdin failure")
     }
-    assert_true(items[0] is Err(@toolStreams.ByteStreamFailure::Cancelled))
+    assert_true(items[0] is Err(@toolStreams.ByteStreamFailure::Failed(_)))
     encoded.drop_sync()
     assert_eq(closes.val, 1)
   })
@@ -144,7 +154,12 @@ test "cancelling a stdin producer publishes cancellation and closes its source" 
       let task = group.spawn(async fn() { producer(sink) })
       started.get()
       task.cancel()
-      task.wait()
+      try task.wait() catch {
+        @async-core.TaskCancelled::TaskCancelled => ()
+        error => raise error
+      } noraise {
+        _ => fail("cancelled stdin producer unexpectedly completed")
+      }
     })
     guard encoded.read(1) is Some(items) && items.length() == 1 else {
       fail("cancelled stdin producer did not publish one terminal")

@@ -21,13 +21,13 @@ fn run_tool_core_stream_async(body : async () -> Unit) -> Unit raise {
 extern "wasm" fn reset_tool_core_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
 
 ///|
-extern "wasm" fn tool_core_resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+extern "wasm" fn tool_core_resource_drop_count(kind : Int32) -> Int32 = "golem:test" "resource-drop-count"
 
 ///|
-extern "wasm" fn set_tool_core_stream_host_mode(mode : Int) = "golem:test" "set-schema-value-stream-host-mode"
+extern "wasm" fn set_tool_core_stream_host_mode(mode : Int32) = "golem:test" "set-schema-value-stream-host-mode"
 
 ///|
-struct WireOnlyToolResult(UInt)
+struct WireOnlyToolResult(UInt32)
 
 ///|
 impl @schema.WireSchema for WireOnlyToolResult with fn append_wire_type(encoder) {
@@ -56,10 +56,10 @@ test "generated tool results require no model serialization traits" {
 
 ///|
 fn cancellable_tool_result_stream(
-  raw_secret : Int,
+  raw_secret : Int32,
   producer_started : Array[Bool],
-  cleanup_runs : Array[Int],
-) -> @schema.AgentStream[Int] {
+  cleanup_runs : Array[Int32],
+) -> @schema.AgentStream[Int32] {
   let captured = @types.Secret::Secret(raw_secret)
   @schema.AgentStream::produce(
     async fn(writer) {
@@ -103,7 +103,7 @@ test "result encoding preserves cancellation and drops result and stdout" {
       started.get()
       encode.cancel()
       try encode.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         error =>
           fail("tool result encoding changed cancellation: \{Repr(error)}")
       } noraise {
@@ -138,7 +138,7 @@ test "custom error encoding preserves cancellation and drops its payload" {
       started.get()
       encode.cancel()
       try encode.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         error =>
           fail("tool error encoding changed cancellation: \{Repr(error)}")
       } noraise {

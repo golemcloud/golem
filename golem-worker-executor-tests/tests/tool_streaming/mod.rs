@@ -17407,9 +17407,9 @@ async fn typescript_guest_recursive_rm_removes_tool_created_output(
     Ok(())
 }
 
-/// Node exits once only unreferenced timers remain: the runtime cancels the pending `wait-for` of
-/// the interval after a short wait of its own completed. The next rebuild of the owner replays the
-/// completed body with that cancelled wait.
+/// Node exits once only unreferenced timers remain. An HTTP response keeps the body alive until
+/// the interval's internal clock read completes, then the runtime cancels the pending wait.
+/// The next rebuild of the owner replays the completed body with that cancelled wait.
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -17470,18 +17470,69 @@ async fn builtin_node_unreferenced_timer_is_replayed_after_restart(
         )
         .await?;
 
-    let unreferenced = invoke_cli_tool(
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let script = format!(
+        "setInterval(() => {{}}, 60_000).unref(); await fetch('http://{address}/'); console.log('done')"
+    );
+    let release_after_clock_read = async {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let (connection, _) = listener.accept().await?;
+        let mut connection = BufReader::new(connection);
+        loop {
+            let mut line = String::new();
+            anyhow::ensure!(
+                connection.read_line(&mut line).await? != 0,
+                "HTTP request ended early"
+            );
+            if line == "\r\n" {
+                break;
+            }
+        }
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let completed_clock_read = entries.iter().any(|read| {
+                let PublicOplogEntry::Start(start) = &read.entry else {
+                    return false;
+                };
+                start.function_name.ends_with("monotonic-clock::now")
+                    && entries.iter().any(|wait| {
+                        Some(wait.oplog_index) == start.parent_start_index
+                            && matches!(&wait.entry, PublicOplogEntry::Start(start)
+                                if start.function_name.ends_with("monotonic-clock::wait-for"))
+                    })
+                    && entries.iter().any(|entry| {
+                        matches!(&entry.entry, PublicOplogEntry::End(end)
+                            if end.start_index == read.oplog_index)
+                    })
+            });
+            if completed_clock_read {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        connection
+            .get_mut()
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await?;
+        Ok::<_, anyhow::Error>(())
+    };
+    let invocation = invoke_cli_tool(
         &executor,
         &caller_component,
         agent_name,
         "node",
         "/workspace",
-        vec![
-            "-e",
-            "setInterval(() => {}, 60_000).unref(); console.log('done')",
-        ],
-    )
-    .await?;
+        vec!["-e", &script],
+    );
+    let (unreferenced, ()) = tokio::try_join!(invocation, async {
+        tokio::time::timeout(Duration::from_secs(30), release_after_clock_read)
+            .await
+            .map_err(|_| anyhow::anyhow!("the interval's clock read did not complete"))?
+    })?;
+    drop(listener);
     assert_eq!(unreferenced.exit_code, 0, "{unreferenced:?}");
     assert_eq!(unreferenced.stdout, b"done\n");
     assert!(unreferenced.stderr.is_empty());

@@ -38,6 +38,15 @@ pub(open) trait AllowedMimeTypes {
 pub(all) struct AnyLanguage {} derive(Debug, Eq)
 
 ///|
+pub extend AnyLanguage with Debug::{to_repr}
+
+///|
+pub extend AnyLanguage with Eq::{equal, not_equal}
+
+///|
+pub extend AnyLanguage with AllowedLanguages::{languages}
+
+///|
 pub impl AllowedLanguages for AnyLanguage with fn languages() {
   []
 }
@@ -46,6 +55,15 @@ pub impl AllowedLanguages for AnyLanguage with fn languages() {
 /// MIME type restriction that allows every MIME type.
 #warnings("-struct_never_constructed")
 pub(all) struct AnyMimeType {} derive(Debug, Eq)
+
+///|
+pub extend AnyMimeType with Debug::{to_repr}
+
+///|
+pub extend AnyMimeType with Eq::{equal, not_equal}
+
+///|
+pub extend AnyMimeType with AllowedMimeTypes::{mime_types}
 
 ///|
 pub impl AllowedMimeTypes for AnyMimeType with fn mime_types() {
@@ -59,6 +77,34 @@ pub impl AllowedMimeTypes for AnyMimeType with fn mime_types() {
 pub(all) enum UnstructuredText[L] {
   Inline(text~ : String, language~ : String?)
   Url(String)
+}
+
+///|
+pub extend UnstructuredText with Debug::{to_repr}
+
+///|
+pub extend UnstructuredText with Eq::{equal, not_equal}
+
+///|
+pub extend UnstructuredText with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend UnstructuredText with FromSchema::{from_value}
+
+///|
+pub extend UnstructuredText with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend UnstructuredText with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend UnstructuredText with WireSchema::{
+  append_wire_type,
+  append_result_type,
 }
 
 ///|
@@ -109,6 +155,34 @@ pub(all) enum UnstructuredBinary[M] {
 }
 
 ///|
+pub extend UnstructuredBinary with Debug::{to_repr}
+
+///|
+pub extend UnstructuredBinary with Eq::{equal, not_equal}
+
+///|
+pub extend UnstructuredBinary with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend UnstructuredBinary with FromSchema::{from_value}
+
+///|
+pub extend UnstructuredBinary with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend UnstructuredBinary with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend UnstructuredBinary with WireSchema::{
+  append_wire_type,
+  append_result_type,
+}
+
+///|
 /// Equality ignores the phantom restriction type, which carries no data.
 pub impl[M] Eq for UnstructuredBinary[M] with fn equal(self, other) {
   match (self, other) {
@@ -150,11 +224,11 @@ pub fn[M] UnstructuredBinary::url(url : String) -> UnstructuredBinary[M] {
 
 ///|
 /// Case index of the `inline` alternative of an unstructured wrapper.
-let unstructured_inline_case : UInt = 0
+let unstructured_inline_case : UInt32 = 0
 
 ///|
 /// Case index of the `url` alternative of an unstructured wrapper.
-let unstructured_url_case : UInt = 1
+let unstructured_url_case : UInt32 = 1
 
 ///|
 fn role_metadata(role : @types.Role) -> @types.MetadataEnvelope {
@@ -386,7 +460,7 @@ fn append_unstructured_wire_type(
   encoder : WireTypeEncoder,
   inline : @types.SchemaTypeBody,
   role : @types.Role,
-) -> Int {
+) -> Int32 {
   let inline = encoder.push(inline)
   let url = encoder.push(@types.UrlType(default_url_restrictions()))
   encoder.push_with_metadata(
@@ -405,9 +479,9 @@ fn append_unstructured_wire_type(
 ///|
 fn append_unstructured_wire_value(
   encoder : WireEncoder,
-  case : UInt,
+  case : UInt32,
   payload : @types.SchemaValueNode,
-) -> Int {
+) -> Int32 {
   let payload = encoder.push(payload)
   encoder.push(@types.VariantValue({ case, payload: Some(payload), }))
 }

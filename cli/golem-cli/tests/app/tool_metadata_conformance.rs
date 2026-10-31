@@ -522,9 +522,6 @@ fn Option::drop_sync(self : @asyncCore.Stream[Byte]?) -> Unit {{
     None => ()
   }}
 }}
-
-///|
-fn main {{}}
 "#
     )
 }

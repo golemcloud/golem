@@ -46,10 +46,8 @@ struct ApplyEntityReplay<T: 'static, Ctx: WorkerCtx> {
         tokio::sync::mpsc::UnboundedReceiver<oneshot::Sender<Result<(), WorkerExecutorError>>>,
 }
 
-impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx> wasmtime::component::AccessorTask<T, D>
-    for ApplyEntityReplay<T, Ctx>
-{
-    async fn run(mut self, store: &Accessor<T, D>) -> wasmtime::Result<()> {
+impl<T: 'static, Ctx: WorkerCtx> ApplyEntityReplay<T, Ctx> {
+    async fn run<D: HasData + ?Sized>(mut self, store: &Accessor<T, D>) -> wasmtime::Result<()> {
         let runtime =
             store.with(|mut access| (self.get_ctx)(access.data_mut()).runtime_suspension.clone());
         loop {
@@ -73,7 +71,7 @@ impl<Ctx: WorkerCtx> EntitySettlementContext<Ctx> {
     pub(crate) fn capture<T: 'static, D: HasData + ?Sized>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    ) -> Self {
+    ) -> wasmtime::Result<Self> {
         let mut captured = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             Self {
@@ -106,14 +104,15 @@ impl<Ctx: WorkerCtx> EntitySettlementContext<Ctx> {
         });
         if captured.role == ReplayToLiveRole::PrimaryAgent && !captured.suppressed {
             let (sender, requests) = tokio::sync::mpsc::unbounded_channel();
-            store.spawn(ApplyEntityReplay {
+            let task = ApplyEntityReplay {
                 get_ctx,
                 settlement_activity: captured.settlement_activity.clone(),
                 requests,
-            });
+            };
+            store.spawn(async move |store| task.run(store).await)?;
             captured.replay_application = Some(sender);
         }
-        captured
+        Ok(captured)
     }
 
     pub(super) async fn publish_live(

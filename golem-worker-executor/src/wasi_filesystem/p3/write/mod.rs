@@ -181,12 +181,14 @@ impl<Ctx> FilesystemWriteTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for FilesystemWriteTask<Ctx>
+impl<Ctx> FilesystemWriteTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: 'static,
 {
-    async fn run(self, _accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    pub(super) async fn run<U: 'static>(
+        self,
+        _accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         let FilesystemWriteTask {
             mut chunks_rx,
             result_tx,

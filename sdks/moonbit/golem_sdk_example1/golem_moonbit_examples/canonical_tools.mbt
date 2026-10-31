@@ -10,7 +10,7 @@ pub(all) enum CanonicalGrepColorMode {
 #derive.golem_schema
 pub(all) struct CanonicalGrepHit {
   file : @schema.Path
-  line : UInt
+  line : UInt32
   text : String
 }
 
@@ -43,7 +43,7 @@ pub fn CanonicalGrep::canonical_grep(
   color : CanonicalGrepColorMode,
   pattern : String,
   extra_patterns : Array[String],
-  max_count : UInt?,
+  max_count : UInt32?,
   files : Array[@schema.Path],
   stdin : @asyncCore.Stream[Byte],
   stdout : @tool.ProviderOutput,
@@ -93,9 +93,9 @@ pub(all) enum CanonicalGitOutputMode {
 #derive.golem_schema
 pub(all) struct CanonicalCommitResult {
   hash : String
-  files_changed : UInt
-  insertions : UInt
-  deletions : UInt
+  files_changed : UInt32
+  insertions : UInt32
+  deletions : UInt32
 }
 
 ///|
@@ -166,7 +166,7 @@ struct CanonicalGit {}
 #derive.constraint("requires_all", value_is="output=Json")
 #derive.result("human", formatter="porcelain", formatter="json", default="human")
 pub fn CanonicalGit::commit(
-  verbose : UInt,
+  verbose : UInt32,
   git_dir : @schema.Path,
   paginate : Bool,
   config : Map[String, String],
@@ -198,7 +198,7 @@ pub fn CanonicalGit::commit(
 #derive.arg("paginate", scope="global", kind="flag", negatable=true, default="true")
 #derive.arg("config", scope="global", short="c", repeatable="repeated")
 pub fn CanonicalGit::remote(
-  verbose : UInt,
+  verbose : UInt32,
   git_dir : @schema.Path,
   paginate : Bool,
   config : Map[String, String],
@@ -214,7 +214,7 @@ pub fn CanonicalGit::remote(
 #derive.command(subtree="CanonicalStash")
 #derive.arg("verbose", scope="global", short="v", kind="count-flag", max="3")
 #derive.arg("git_dir", name="git-dir", scope="global", kind="dir", env="GIT_DIR", default=".git")
-pub fn CanonicalGit::stash(verbose : UInt, git_dir : @schema.Path) -> Unit {
+pub fn CanonicalGit::stash(verbose : UInt32, git_dir : @schema.Path) -> Unit {
   ignore(verbose)
   ignore(git_dir)
 }
@@ -276,7 +276,7 @@ struct CanonicalRemote {}
 #derive.arg("tags", kind="flag", negatable=true, default="true")
 #derive.arg("fetch", kind="flag", short="f", default="false")
 pub fn CanonicalRemote::add(
-  verbose : UInt,
+  verbose : UInt32,
   name : String,
   url : @schema.Url,
   track : Array[String],
@@ -344,7 +344,7 @@ struct CanonicalStash {}
 #derive.arg("message", scope="option", short="m", required=true)
 #derive.arg("keep_index", name="keep-index", kind="flag", short="k", default="false")
 pub fn CanonicalStash::stash(
-  verbose : UInt,
+  verbose : UInt32,
   message : String,
   keep_index : Bool,
 ) -> Result[Unit, CanonicalStashError] {
@@ -360,7 +360,7 @@ pub fn CanonicalStash::stash(
 #derive.arg("index", scope="option", short="i")
 pub fn CanonicalStash::pop(
   name : String?,
-  index : UInt?,
+  index : UInt32?,
 ) -> Result[Unit, CanonicalStashError] {
   ignore(name)
   ignore(index)
@@ -373,7 +373,7 @@ pub fn CanonicalStash::pop(
 #derive.arg("index", scope="option", short="i")
 pub fn CanonicalStash::apply(
   name : String?,
-  index : UInt?,
+  index : UInt32?,
 ) -> Result[Unit, CanonicalStashError] {
   ignore(name)
   ignore(index)

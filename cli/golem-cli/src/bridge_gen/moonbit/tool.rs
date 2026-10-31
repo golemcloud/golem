@@ -107,19 +107,8 @@ impl MoonBitToolBridgeGenerator {
     }
 
     fn write_module_file(&self) -> anyhow::Result<()> {
-        self.inner.write_module_file()?;
-        let path = self.target_path.join("moon.mod.json");
-        let mut manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)
-            .context("failed to parse generated MoonBit module manifest")?;
-        manifest["name"] =
-            serde_json::Value::String(tool_bridge_client_directory_name(&self.rpc_tool_name));
-        fs::write_str(
-            path,
-            serde_json::to_string_pretty(&manifest)
-                .context("failed to serialize generated MoonBit tool module manifest")?
-                + "\n",
-        )?;
-        Ok(())
+        self.inner
+            .write_module_file_with_name(&tool_bridge_client_directory_name(&self.rpc_tool_name))
     }
 
     fn write_client(&mut self) -> anyhow::Result<()> {
@@ -540,6 +529,10 @@ impl MoonBitToolBridgeGenerator {
             }
             writer.dedent();
             writer.line("} derive(Eq)");
+            writer.blank();
+            writer.line(format!(
+                "pub extend {error_name} with Eq::{{equal, not_equal}}"
+            ));
             writer.blank();
 
             writer.line("///|");
@@ -1240,10 +1233,8 @@ mod tests {
             "{source}"
         );
         assert!(!source.contains("@tool.ToolClient::new(\"search\")"));
-        let manifest: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(target.join("moon.mod.json")).unwrap())
-                .unwrap();
-        assert_eq!(manifest["name"], "runtime-search-tool-guest-client");
+        let manifest = std::fs::read_to_string(target.join("moon.mod")).unwrap();
+        assert!(manifest.contains("name = \"runtime-search-tool-guest-client\""));
     }
 
     #[test]

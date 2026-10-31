@@ -166,19 +166,23 @@ impl SdkOverrides {
     }
 
     pub fn moonbit_sdk_dep(&self) -> String {
-        match &self.moonbit_sdk_path {
-            Some(path) => format!(
-                r#"{{ "path": {} }}"#,
-                serde_json::to_string(path).expect("serializing a string cannot fail")
-            ),
-            None => {
-                let version = self
-                    .moonbit_sdk_version
-                    .as_deref()
-                    .unwrap_or(versions::sdk::MOONBIT);
-                serde_json::to_string(version).expect("serializing a string cannot fail")
-            }
+        let version = self
+            .moonbit_sdk_version
+            .as_deref()
+            .unwrap_or(versions::sdk::MOONBIT);
+        serde_json::to_string(&format!("golemcloud/golem_sdk@{version}"))
+            .expect("serializing a string cannot fail")
+    }
+
+    pub fn moonbit_workspace(&self) -> String {
+        let mut members = vec![".".to_string()];
+        if let Some(path) = &self.moonbit_sdk_path {
+            members.push(path.clone());
         }
+        format!(
+            "members = {}\n",
+            serde_json::to_string_pretty(&members).expect("serializing strings cannot fail")
+        )
     }
 
     /// The version for the SDK's `require` line in a generated `go.mod`.
@@ -257,24 +261,6 @@ impl SdkOverrides {
         sibling.to_string_lossy().into_owned()
     }
 
-    pub fn moonbit_sdk_tools_bin_deps(&self) -> String {
-        match &self.moonbit_sdk_path {
-            Some(_) => String::new(),
-            None => {
-                let version = self
-                    .moonbit_sdk_version
-                    .as_deref()
-                    .unwrap_or(versions::sdk::MOONBIT);
-                format!(
-                    r#",
-  "bin-deps": {{
-    "golemcloud/golem_sdk_tools": "{version}"
-  }}"#
-                )
-            }
-        }
-    }
-
     pub fn moonbit_sdk_build_path(&self) -> String {
         match &self.moonbit_sdk_path {
             Some(path) => path.clone(),
@@ -288,9 +274,8 @@ impl SdkOverrides {
     /// In override (dev) mode it expands to a `moon -C <local-tools-path> run cmd --`
     /// invocation that runs the tool from a local sibling checkout.
     ///
-    /// In published mode it runs the launcher installed by `moon install` under
-    /// `_build/__moonbin__` for the project's `bin-deps` dependency. The launcher
-    /// selects the runtime and preserves the application working directory.
+    /// In published mode `moonx` runs the pinned registry package and preserves
+    /// the application working directory.
     pub fn moonbit_sdk_tools_cmd(&self) -> String {
         match &self.moonbit_sdk_path {
             Some(path) => {
@@ -302,7 +287,12 @@ impl SdkOverrides {
                     .unwrap_or_else(|| ".mooncakes/golemcloud/golem_sdk_tools".to_string());
                 format!("moon -C \"{tools_path}\" run cmd --")
             }
-            None => "./_build/__moonbin__/golem-sdk-tools".to_string(),
+            None => format!(
+                "moonx golemcloud/golem_sdk_tools/cmd@{} --",
+                self.moonbit_sdk_version
+                    .as_deref()
+                    .unwrap_or(versions::sdk::MOONBIT)
+            ),
         }
     }
 
@@ -722,10 +712,10 @@ mod tests {
             ..Default::default()
         };
 
-        let dependency: serde_json::Value =
-            serde_json::from_str(&overrides.moonbit_sdk_dep()).unwrap();
-
-        assert_eq!(dependency["path"], path);
+        let workspace = overrides.moonbit_workspace();
+        let members: Vec<String> =
+            serde_json::from_str(workspace.strip_prefix("members = ").unwrap()).unwrap();
+        assert_eq!(members, vec![".", path]);
     }
 
     #[test]
@@ -734,20 +724,13 @@ mod tests {
             moonbit_sdk_version: Some("0.6.0-rc4".to_string()),
             ..Default::default()
         };
-        let module: serde_json::Value = serde_json::from_str(&format!(
-            "{{\"deps\":{{\"golemcloud/golem_sdk\":{}}}{}}}",
-            overrides.moonbit_sdk_dep(),
-            overrides.moonbit_sdk_tools_bin_deps(),
-        ))
-        .unwrap();
-        assert_eq!(module["deps"]["golemcloud/golem_sdk"], "0.6.0-rc4");
         assert_eq!(
-            module["bin-deps"]["golemcloud/golem_sdk_tools"],
-            "0.6.0-rc4"
+            overrides.moonbit_sdk_dep(),
+            "\"golemcloud/golem_sdk@0.6.0-rc4\""
         );
         assert_eq!(
             overrides.moonbit_sdk_tools_cmd(),
-            "./_build/__moonbin__/golem-sdk-tools"
+            "moonx golemcloud/golem_sdk_tools/cmd@0.6.0-rc4 --"
         );
     }
 
@@ -757,7 +740,6 @@ mod tests {
             moonbit_sdk_path: Some("/repo with spaces/golem_sdk".to_string()),
             ..Default::default()
         };
-        assert_eq!(overrides.moonbit_sdk_tools_bin_deps(), "");
         assert_eq!(
             overrides.moonbit_sdk_tools_cmd(),
             "moon -C \"/repo with spaces/golem_sdk_tools\" run cmd --"

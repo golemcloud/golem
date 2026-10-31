@@ -1517,8 +1517,8 @@ async fn cancelling_raw_wasmtime_read_operation_preserves_and_resumes_the_attach
     )
   )
   (type $stream (stream u8))
-  (core func $stream.read-async (canon stream.read $stream async (memory $memory "mem")))
-  (core func $stream.read-sync (canon stream.read $stream (memory $memory "mem")))
+  (core func $stream.read-async (canon stream.read $stream async (memory (core memory $memory "mem"))))
+  (core func $stream.read-sync (canon stream.read $stream (memory (core memory $memory "mem"))))
   (core func $stream.cancel-read (canon stream.cancel-read $stream))
   (core func $stream.drop-readable (canon stream.drop-readable $stream))
   (core instance $core (instantiate $core (with "" (instance
@@ -1530,7 +1530,7 @@ async fn cancelling_raw_wasmtime_read_operation_preserves_and_resumes_the_attach
     (export "cancelled" (func $cancelled))
   ))))
   (func (export "run") async (param "stream" (stream u8))
-    (canon lift (core func $core "run") (memory $memory "mem")))
+    (canon lift (core func $core "run") (memory (core memory $memory "mem"))))
 )
             "#,
     )
@@ -1733,7 +1733,7 @@ async fn native_raw_read_observer_feasibility() {
                 (import "" "ready" (func $ready (result i32)))
                 (func (export "run") (param $s i32) {body}))
               (type $s (stream u8))
-              (core func $read (canon stream.read $s async (memory $memory "mem")))
+              (core func $read (canon stream.read $s async (memory (core memory $memory "mem"))))
               (core func $cancel (canon stream.cancel-read $s))
               (core func $drop (canon stream.drop-readable $s))
               (canon thread.yield (core func $yield))
@@ -1744,7 +1744,7 @@ async fn native_raw_read_observer_feasibility() {
                 (export "ready" (func $ready))
                 (export "report" (func $report))))))
               (func (export "run") async (param "s" $s)
-                (canon lift (core func $m "run") (memory $memory "mem"))))"#
+                (canon lift (core func $m "run") (memory (core memory $memory "mem")))))"#
         );
         let component = Component::new(&engine, wat).unwrap();
         let (producer, consumer, _) = pair(8);

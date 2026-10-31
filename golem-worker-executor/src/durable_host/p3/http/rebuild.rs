@@ -170,6 +170,7 @@ pub(super) fn recorded_request_body_replayability<Ctx: WorkerCtx, U: 'static>(
 /// per-request timeout options, and the given body (empty for bodiless sends,
 /// or the recorded body streamed from the oplog).
 pub(super) fn build_rebuilt_request(
+    hooks: &mut dyn wasmtime_wasi_http::WasiHttpHooks,
     rebuild: &P3HttpSendRebuild,
     extra_headers: &[(String, String)],
     body: UnsyncBoxBody<Bytes, ErrorCode>,
@@ -220,7 +221,7 @@ pub(super) fn build_rebuilt_request(
     }
 
     let options = rebuild.request.options.as_ref().map(|options| {
-        std::sync::Arc::new(wasmtime_wasi_http::p3::RequestOptions {
+        std::sync::Arc::new(wasmtime_wasi_http::RequestOptions {
             connect_timeout: options
                 .connect_timeout_nanos
                 .map(std::time::Duration::from_nanos),
@@ -238,7 +239,7 @@ pub(super) fn build_rebuilt_request(
         scheme,
         authority,
         path_with_query,
-        FieldMap::new_immutable(headers),
+        FieldMap::new_immutable(hooks, headers),
         options,
         body,
     );
@@ -391,7 +392,10 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
         }
     };
 
-    let request = match build_rebuilt_request(rebuild, extra_headers, body) {
+    let request = match accessor.with(|mut access| {
+        let view = wasi_http_view::<Ctx, U>(access.data_mut());
+        build_rebuilt_request(view.hooks, rebuild, extra_headers, body)
+    }) {
         Ok(request) => request,
         Err(message) => return ResendOutcome::Failed(ErrorCode::InternalError(Some(message))),
     };
@@ -399,7 +403,7 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
     let converted = accessor.with(|mut access| {
         let pool = {
             let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            ctx.wasi_http.connection_pool.clone()
+            ctx.http_hooks.connection_pool.clone()
         };
         let converted = request.into_http_with_getter(
             access.as_context_mut(),
@@ -424,13 +428,17 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
 
     let sent = match pool {
         Some(pool) => pool
-            .pooled_send_request_p3(http_request, options)
+            .send_request(http_request, options)
             .await
             .map(|(response, io, _pooled_connection)| (response, io)),
-        None => match wasmtime_wasi_http::p3::default_send_request(http_request, options).await {
+        None => match wasmtime_wasi_http::default_send_request(http_request, options).await {
             Ok((response, io)) => Ok((
                 response.map(http_body_util::BodyExt::boxed_unsync),
-                Box::new(io) as Box<dyn std::future::Future<Output = Result<(), ErrorCode>> + Send>,
+                Box::new(io)
+                    as Box<
+                        dyn std::future::Future<Output = Result<(), wasmtime_wasi_http::Error>>
+                            + Send,
+                    >,
             )),
             Err(error) => Err(error),
         },
@@ -440,6 +448,15 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
     }
     match sent {
         Ok((response, io)) => {
+            let mut hooks = accessor.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut())
+                    .http_hooks
+                    .clone()
+            });
+            let response = response.map(|body| {
+                body.map_err(move |error| hooks.transport_error_to_p3(&error))
+                    .boxed_unsync()
+            });
             let io = Box::into_pin(io);
             let io_task = tokio::task::spawn(async move {
                 let result = io.await;
@@ -450,7 +467,10 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
                 io_guard: AbortOnDropIoTask(io_task, recovery),
             }
         }
-        Err(code) => ResendOutcome::Failed(code),
+        Err(error) => ResendOutcome::Failed(
+            accessor
+                .with(|mut access| wasi_http_view::<Ctx, U>(access.data_mut()).error_to_p3(&error)),
+        ),
     }
 }
 
@@ -508,6 +528,7 @@ mod tests {
         };
 
         let request = build_rebuilt_request(
+            wasmtime_wasi_http::default_hooks(),
             &rebuild,
             &[("range".to_string(), "bytes=100-".to_string())],
             Empty::<Bytes>::new()

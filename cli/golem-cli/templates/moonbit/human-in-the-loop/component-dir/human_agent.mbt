@@ -60,8 +60,3 @@ pub fn HumanAgent::decide_approval(
     }
   }
 }
-
-///|
-fn main {
-
-}

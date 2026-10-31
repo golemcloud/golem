@@ -116,7 +116,7 @@ golem.yaml                        # Root application manifest
 moon.mod.json                     # Module definition (deps, preferred-target: wasm)
 moon.pkg                          # Root package config
 <component>/                      # Component package (each becomes a WASM component)
-  moon.pkg                        # Package config (imports, is-main, link exports)
+  moon.pkg                        # Package config (imports, foreign_library, link exports)
   counter.mbt                     # Agent definition
   golem_reexports.mbt             # Generated — re-exports WASM entry points from SDK
   golem_agents.mbt                # Generated — agent registration and RawAgent dispatch
@@ -149,7 +149,8 @@ All MoonBit identifiers are used **as-is** (matching the source code) when used 
 - Do NOT manually edit generated files (`golem_reexports.mbt`, `golem_agents.mbt`, `golem_derive.mbt`, `golem_clients.mbt`)
 - Do NOT manually edit files in `wit/` directories — they are managed by the SDK
 - `golem-temp/` and `_build/` are gitignored build artifacts
-- The `fn main {}` block must exist in the main package (can be empty)
+- Component packages use `pkgtype(kind: "foreign_library")` and must not contain `fn main`
+- Generated `fn init` registration runs at instantiation through the Wasm start section; there is no `_start` export
 - Multiple agents can coexist in the same package
 
 ## Coding Convention

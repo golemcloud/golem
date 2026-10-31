@@ -62,8 +62,8 @@ use golem_common::model::oplog::{
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, Destination, FutureReader, Linker, Resource, Source,
-    StreamConsumer, StreamProducer, StreamReader, StreamResult,
+    Access, Accessor, Destination, FutureReader, Linker, Resource, Source, StreamConsumer,
+    StreamProducer, StreamReader, StreamResult,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::filesystem::{Descriptor, WasiFilesystemView};
@@ -250,7 +250,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
                 .activity();
-            store.spawn(FilesystemWriteTask::<Ctx>::new(
+            let task = FilesystemWriteTask::<Ctx>::new(
                 chunks_rx,
                 result_tx,
                 generation_handle,
@@ -258,7 +258,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 WritePlacement::At(offset),
                 activity,
                 authorization_permit,
-            ));
+            );
+            store.spawn(async move |store| task.run(store).await)?;
 
             FutureReader::new(
                 &mut store,
@@ -329,7 +330,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
                 .activity();
-            store.spawn(FilesystemWriteTask::<Ctx>::new(
+            let task = FilesystemWriteTask::<Ctx>::new(
                 chunks_rx,
                 result_tx,
                 generation_handle,
@@ -337,7 +338,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 WritePlacement::Append,
                 activity,
                 authorization_permit,
-            ));
+            );
+            store.spawn(async move |store| task.run(store).await)?;
 
             FutureReader::new(
                 &mut store,

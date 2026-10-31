@@ -289,6 +289,7 @@ def run_ours(case, wasm, wasmtime, base, cache):
     report = pathlib.Path(tempfile.mkdtemp(dir=base)) / "status"
     command = [
         wasmtime, "run", "-Sp3", "-Shttp", "-Wcomponent-model-async=y",
+        "-Wmax-wasm-stack=1048576", "-Wasync-stack-size=2621440",
         "-Ccache-config=" + str(cache), "--dir", str(root) + "::/",
         "--dir", str(report.parent) + "::/.conformance",
     ]

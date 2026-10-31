@@ -19,13 +19,13 @@ pub fn byte_stream(@async-core.Stream[Result[FixedArray[Byte], @streams.ByteStre
 
 pub fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field(Array[@tool-core.CanonicalInputValue], String, String) -> T raise @types.ToolError
 
-pub fn decode_canonical_input(@tool-core.ToolDef, Int, @types.TypedSchemaValue, String) -> Array[@tool-core.CanonicalInputValue] raise @types.ToolError
+pub fn decode_canonical_input(@tool-core.ToolDef, Int32, @types.TypedSchemaValue, String) -> Array[@tool-core.CanonicalInputValue] raise @types.ToolError
 
-pub fn decode_invocation_input(@types.TypedSchemaValue, Int, String) -> Array[@schema_model.SchemaValue] raise @types.ToolError
+pub fn decode_invocation_input(@types.TypedSchemaValue, Int32, String) -> Array[@schema_model.SchemaValue] raise @types.ToolError
 
 pub fn[E : @tool-core.ToolErrorSchema] decode_named_tool_error(String, @schema_model.TypedSchemaValue) -> Result[E, String]?
 
-pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @types.ToolError
+pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int32, String) -> T raise @types.ToolError
 
 pub fn[E] decode_result_empty(@tool-core.InvocationResult) -> Result[Unit, ToolError[E]]
 
@@ -57,7 +57,7 @@ pub fn[E] expect_stdout(@async-core.Stream[Byte]?) -> Result[@async-core.Stream[
 
 pub fn[E] expect_value(@schema_model.TypedSchemaValue?) -> Result[@schema_model.TypedSchemaValue, ToolError[E]]
 
-pub fn forward_canonical_input(Array[@tool-core.CanonicalInputValue], @tool-core.ToolDef, Int) -> @types.TypedSchemaValue raise @types.ToolError
+pub fn forward_canonical_input(Array[@tool-core.CanonicalInputValue], @tool-core.ToolDef, Int32) -> @types.TypedSchemaValue raise @types.ToolError
 
 pub fn get_registered_tool(String) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.Tool, @types.ToolError]
 
@@ -103,7 +103,7 @@ pub fn refine_numeric(@schema_model.SchemaGraph, String?, String?, String?) -> @
 
 pub fn refine_path(@schema_model.SchemaGraph, @types.PathDirection?, @types.PathKind?, Array[String]?, extensions? : Array[String]?) -> @schema_model.SchemaGraph raise @tool-core.ToolBuildError
 
-pub fn refine_text(@schema_model.SchemaGraph, String?, UInt?, UInt?) -> @schema_model.SchemaGraph raise @tool-core.ToolBuildError
+pub fn refine_text(@schema_model.SchemaGraph, String?, UInt32?, UInt32?) -> @schema_model.SchemaGraph raise @tool-core.ToolBuildError
 
 pub fn refine_url(@schema_model.SchemaGraph, Array[String]?) -> @schema_model.SchemaGraph raise @tool-core.ToolBuildError
 
@@ -129,7 +129,7 @@ pub fn render_argument_help(@golemcloud/golem_sdk/interface/golem/tool/common.To
 
 pub fn render_help(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, Array[String]) -> Result[String, @tool-core.ToolBuildError]
 
-pub fn resolve_command_path(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, Array[String]) -> Result[Int, @tool-core.ToolBuildError]
+pub fn resolve_command_path(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, Array[String]) -> Result[Int32, @tool-core.ToolBuildError]
 
 pub fn tool_name(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Result[String, @tool-core.ToolBuildError]
 
@@ -143,11 +143,11 @@ pub fn wire_refine_numeric(@tool-core.WireToolType, String?, String?, String?) -
 
 pub fn wire_refine_path(@tool-core.WireToolType, @types.PathDirection?, @types.PathKind?, Array[String]?, extensions? : Array[String]?) -> @tool-core.WireToolType raise @tool-core.ToolBuildError
 
-pub fn wire_refine_text(@tool-core.WireToolType, String?, UInt?, UInt?) -> @tool-core.WireToolType raise @tool-core.ToolBuildError
+pub fn wire_refine_text(@tool-core.WireToolType, String?, UInt32?, UInt32?) -> @tool-core.WireToolType raise @tool-core.ToolBuildError
 
 pub fn wire_refine_url(@tool-core.WireToolType, Array[String]?) -> @tool-core.WireToolType raise @tool-core.ToolBuildError
 
-pub fn wire_text_input_field(@types.SchemaValueTree, Int) -> Unit
+pub fn wire_text_input_field(@types.SchemaValueTree, Int32) -> Unit
 
 pub fn wire_tool_literal(@tool-core.WireToolType, @tool-core.ToolLiteral) -> @types.SchemaValueTree raise @tool-core.ToolBuildError
 
@@ -171,10 +171,10 @@ pub fn ProviderOutput::drop(Self) -> Unit
 pub async fn ProviderOutput::fail(Self, @tool-core.ToolStreamError) -> Unit
 pub async fn ProviderOutput::finish(Self) -> Unit
 pub fn ProviderOutput::is_open(Self) -> Bool
-pub async fn ProviderOutput::write(Self, ArrayView[Byte]) -> Int
+pub async fn ProviderOutput::write(Self, ArrayView[Byte]) -> Int32
 pub async fn ProviderOutput::write_all(Self, ArrayView[Byte]) -> Bool
 pub async fn ProviderOutput::write_all_bytes(Self, BytesView) -> Bool
-pub async fn ProviderOutput::write_bytes(Self, BytesView) -> Int
+pub async fn ProviderOutput::write_bytes(Self, BytesView) -> Int32
 
 pub(all) enum RemoteToolError {
   InvalidToolName(String)
@@ -183,6 +183,9 @@ pub(all) enum RemoteToolError {
   ConstraintViolation(String)
   InvalidResult(String)
 } derive(Eq, @debug.Debug)
+pub fn RemoteToolError::equal(Self, Self) -> Bool
+pub fn RemoteToolError::not_equal(Self, Self) -> Bool
+pub fn RemoteToolError::to_repr(Self) -> @debug.Repr
 
 pub(all) enum RpcError {
   Protocol(String)
@@ -192,6 +195,9 @@ pub(all) enum RpcError {
   Cancelled
   ResourceExhausted(String)
 } derive(Eq, @debug.Debug)
+pub fn RpcError::equal(Self, Self) -> Bool
+pub fn RpcError::not_equal(Self, Self) -> Bool
+pub fn RpcError::to_repr(Self) -> @debug.Repr
 
 pub(all) struct ToolClient {
   rpc : @host.ToolRpc

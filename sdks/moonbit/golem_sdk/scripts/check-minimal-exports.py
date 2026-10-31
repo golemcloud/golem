@@ -117,8 +117,7 @@ def main():
         if package.exists():
             shutil.rmtree(package)
         package.mkdir()
-        (package / "moon.pkg").write_text('import {\n}\noptions(\n  "is-main": true,\n)\n')
-        (package / "main.mbt").write_text("fn main {}\n")
+        (package / "moon.pkg").write_text('import {\n}\npkgtype(kind: "foreign_library")\noptions(\n)\n')
         for enabled, source in [(agents, "agent.mbt"), (tools_present, "tool.mbt")]:
             if enabled:
                 shutil.copyfile(fixtures / source, package / source)

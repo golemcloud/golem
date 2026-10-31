@@ -82,7 +82,7 @@ fn emit_wire_tool_node(
   tools : Array[ToolInfo],
   ancestors : Array[ProjectedToolArg],
   mount : ToolCommandInfo?,
-) -> Int raise ToolEmitError {
+) -> Int32 raise ToolEmitError {
   let index = nodes.length()
   nodes.push("")
   let plans = tool.commands.map(command => {

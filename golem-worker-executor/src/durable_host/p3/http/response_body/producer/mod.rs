@@ -542,7 +542,10 @@ where
                     Ok(None) => Ok(None),
                     Ok(Some(headers)) => {
                         let view = wasi_http_view::<Ctx, U>(store.data_mut());
-                        match view.table.push(FieldMap::new_immutable(headers)) {
+                        match view
+                            .table
+                            .push(FieldMap::new_immutable(view.hooks, headers))
+                        {
                             Ok(resource) => Ok(Some(resource)),
                             Err(err) => {
                                 return Poll::Ready(Err(wasmtime::Error::from(err)

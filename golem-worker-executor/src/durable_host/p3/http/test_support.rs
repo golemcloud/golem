@@ -33,8 +33,31 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use wasmtime_wasi::ResourceTable;
-use wasmtime_wasi_http::p3::{WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
 use wasmtime_wasi_http::{FieldMap, WasiHttpCtx};
+use wasmtime_wasi_http::{WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
+
+#[test_r::test]
+fn transport_error_mapping_preserves_durable_error_codes() {
+    let mut hooks = crate::durable_host::DurableHttpHooks {
+        connection_pool: None,
+        is_replay: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+    let mut ctx = TestHttpCtx::default();
+    let mut codes = all_serializable_error_codes();
+    codes.extend([
+        SerializableHttpErrorCode::HttpRequestHeaderSize(None),
+        SerializableHttpErrorCode::HttpRequestHeaderSize(Some(SerializableFieldSizePayload {
+            field_name: None,
+            field_size: None,
+        })),
+    ]);
+    for code in codes {
+        let error = wasmtime_wasi_http::Error::from(deserialize_error_code(code.clone()));
+        let mapped = hooks.transport_error_to_p3(&error);
+        assert_eq!(serialize_error_code(&mapped), code);
+        assert_eq!(serialize_error_code(&ctx.http().error_to_p3(&error)), code);
+    }
+}
 
 /// Minimal in-memory `Oplog` for driving durable request-body machinery:
 /// stores appended entries, serves inline payloads, and gates
@@ -285,7 +308,7 @@ impl WasiHttpView for TestHttpCtx {
 
 pub(super) fn short_content_length_request() -> (
     wasmtime_wasi_http::p3::Request,
-    impl Future<Output = Result<(), ErrorCode>> + Send + 'static,
+    impl Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send + 'static,
 ) {
     let mut headers = HeaderMap::new();
     headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("4"));
@@ -295,11 +318,9 @@ pub(super) fn short_content_length_request() -> (
         Some(http::uri::Scheme::HTTP),
         Some(http::uri::Authority::from_static("example.com")),
         Some(http::uri::PathAndQuery::from_static("/upload")),
-        FieldMap::new_immutable(headers),
+        FieldMap::new_immutable(&mut TestHttpHooks, headers),
         None,
-        Full::new(Bytes::from_static(b"x"))
-            .map_err(|never| match never {})
-            .boxed_unsync(),
+        Full::new(Bytes::from_static(b"x")),
     )
 }
 
@@ -309,7 +330,7 @@ pub(super) fn short_content_length_request() -> (
 /// transmission future, not through `into_http`'s content-length channel.
 pub(super) fn erroring_body_request_without_content_length() -> (
     wasmtime_wasi_http::p3::Request,
-    impl Future<Output = Result<(), ErrorCode>> + Send + 'static,
+    impl Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send + 'static,
 ) {
     let body = http_body_util::StreamBody::new(futures::stream::once(async {
         Err::<http_body::Frame<Bytes>, ErrorCode>(ErrorCode::HttpProtocolError)
@@ -321,7 +342,7 @@ pub(super) fn erroring_body_request_without_content_length() -> (
         Some(http::uri::Scheme::HTTP),
         Some(http::uri::Authority::from_static("example.com")),
         Some(http::uri::PathAndQuery::from_static("/upload")),
-        FieldMap::new_immutable(HeaderMap::new()),
+        FieldMap::new_immutable(&mut TestHttpHooks, HeaderMap::new()),
         None,
         body,
     )

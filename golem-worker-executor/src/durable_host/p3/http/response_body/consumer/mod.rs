@@ -204,12 +204,14 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for HttpConsumeBodyTask<Ctx>
+impl<Ctx> HttpConsumeBodyTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: Send + 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    pub(super) async fn run<U: Send + 'static>(
+        self,
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         let HttpConsumeBodyTask {
             mut body,
             demand_rx,

@@ -1,8 +1,8 @@
 ///|
 fn multipart_agent_source(
   loader : String,
-  saver? : Bool = true,
-  byte_hooks? : Bool = false,
+  saver~ : Bool = true,
+  byte_hooks~ : Bool = false,
 ) -> String {
   let declaration =
     #|#derive.agent(snapshotting="every_n(3)")

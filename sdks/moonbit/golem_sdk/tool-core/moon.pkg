@@ -10,6 +10,8 @@ import {
   "moonbitlang/core/string",
 }
 
-warnings = "-44"
+// Tool validation and invocation failures are explicit result values.
+
+warnings = "-44-result_error_return"
 
 supported_targets = "+wasm"

@@ -29,17 +29,17 @@ fn datetime_valid(dt : @types.Datetime) -> Bool {
 }
 
 ///|
-fn s8_in_range(i : Int) -> Bool {
+fn s8_in_range(i : Int32) -> Bool {
   i >= -128 && i <= 127
 }
 
 ///|
-fn s16_in_range(i : Int) -> Bool {
+fn s16_in_range(i : Int32) -> Bool {
   i >= -32768 && i <= 32767
 }
 
 ///|
-fn u16_in_range(u : UInt) -> Bool {
+fn u16_in_range(u : UInt32) -> Bool {
   u <= 65535
 }
 
@@ -106,7 +106,7 @@ fn normalize_numeric_restrictions(
 /// indices: per-graph node indices are only valid within a single encoding.
 pub struct GraphEncoder {
   type_nodes : Array[@types.SchemaTypeNode]
-  def_index_by_id : Map[String, Int]
+  def_index_by_id : Map[String, Int32]
   wit_defs : Array[@types.SchemaTypeDef]
 }
 
@@ -118,7 +118,7 @@ pub struct GraphEncoder {
 pub fn GraphEncoder::new(
   defs : Array[SchemaTypeDef],
 ) -> GraphEncoder raise SchemaModelError {
-  let def_index_by_id : Map[String, Int] = Map([])
+  let def_index_by_id : Map[String, Int32] = Map([])
   for i, def in defs {
     if def_index_by_id.contains(def.id) {
       raise EncodeError("duplicate def id '\{def.id}' in schema graph")
@@ -128,7 +128,7 @@ pub fn GraphEncoder::new(
   let enc : GraphEncoder = { type_nodes: [], def_index_by_id, wit_defs: [], }
   // Encode each def body into the shared pool. All def indices are already
   // registered, so a `Ref` to any def (forward or back) resolves correctly.
-  let bodies : Array[Int] = []
+  let bodies : Array[Int32] = []
   for def in defs {
     bodies.push(enc.encode_type(def.body))
   }
@@ -144,7 +144,7 @@ pub fn GraphEncoder::new(
 pub fn GraphEncoder::encode_type(
   self : GraphEncoder,
   st : SchemaType,
-) -> Int raise SchemaModelError {
+) -> Int32 raise SchemaModelError {
   let body = self.encode_body(st.body)
   self.type_nodes.push({ body, metadata: st.metadata, })
   self.type_nodes.length() - 1
@@ -154,7 +154,7 @@ pub fn GraphEncoder::encode_type(
 fn GraphEncoder::encode_opt(
   self : GraphEncoder,
   o : SchemaType?,
-) -> Int? raise SchemaModelError {
+) -> Int32? raise SchemaModelError {
   match o {
     Some(t) => Some(self.encode_type(t))
     None => None
@@ -289,7 +289,7 @@ pub fn schema_graph_to_wit(
 /// `OutputSchema::Single`, config decls, etc.
 pub(all) struct EncodedAgentGraph {
   graph : @types.SchemaGraph
-  root_indices : Array[Int]
+  root_indices : Array[Int32]
 }
 
 ///|
@@ -362,7 +362,7 @@ pub fn GraphDecoder::decode_defs(
 /// Decode a single root type by its `type-node-index`.
 pub fn GraphDecoder::decode_type_at(
   self : GraphDecoder,
-  idx : Int,
+  idx : Int32,
 ) -> SchemaType raise SchemaModelError {
   self.type_at(idx)
 }
@@ -370,7 +370,7 @@ pub fn GraphDecoder::decode_type_at(
 ///|
 fn GraphDecoder::def_id(
   self : GraphDecoder,
-  di : Int,
+  di : Int32,
 ) -> String raise SchemaModelError {
   if di < 0 || di >= self.wit_defs.length() {
     raise DecodeError(
@@ -383,7 +383,7 @@ fn GraphDecoder::def_id(
 ///|
 fn GraphDecoder::type_at(
   self : GraphDecoder,
-  idx : Int,
+  idx : Int32,
 ) -> SchemaType raise SchemaModelError {
   if idx < 0 || idx >= self.nodes.length() {
     raise DecodeError(
@@ -410,7 +410,7 @@ fn GraphDecoder::type_at(
 ///|
 fn GraphDecoder::decode_opt(
   self : GraphDecoder,
-  o : Int?,
+  o : Int32?,
 ) -> SchemaType? raise SchemaModelError {
   match o {
     Some(i) => Some(self.type_at(i))
@@ -518,6 +518,12 @@ pub(all) struct DecodedSchemaGraph {
 } derive(Debug, Eq)
 
 ///|
+pub extend DecodedSchemaGraph with Debug::{to_repr}
+
+///|
+pub extend DecodedSchemaGraph with Eq::{equal, not_equal}
+
+///|
 pub fn schema_graph_roots_from_wit(
   wit : @types.SchemaGraph,
 ) -> DecodedSchemaGraph raise SchemaModelError {
@@ -553,7 +559,7 @@ fn ValueEncoder::new() -> ValueEncoder {
 fn ValueEncoder::emit(
   self : ValueEncoder,
   v : SchemaValue,
-) -> Int raise SchemaModelError {
+) -> Int32 raise SchemaModelError {
   self.value_nodes.push(self.emit_node(v))
   self.value_nodes.length() - 1
 }
@@ -562,7 +568,7 @@ fn ValueEncoder::emit(
 fn ValueEncoder::emit_opt(
   self : ValueEncoder,
   o : SchemaValue?,
-) -> Int? raise SchemaModelError {
+) -> Int32? raise SchemaModelError {
   match o {
     Some(v) => Some(self.emit(v))
     None => None
@@ -744,9 +750,9 @@ fn reject_native_streams(value : SchemaValue) -> Unit raise SchemaModelError {
 /// owned handle — compared by its underlying resource identity, not just holder
 /// identity — appears more than once in the tree.
 fn preflight_value(value : SchemaValue) -> Unit raise SchemaModelError {
-  let seen_secrets : Map[Int, Bool] = Map([])
-  let seen_quota_tokens : Map[Int, Bool] = Map([])
-  let seen_permission_cards : Map[Int, Bool] = Map([])
+  let seen_secrets : Map[Int32, Bool] = Map([])
+  let seen_quota_tokens : Map[Int32, Bool] = Map([])
+  let seen_permission_cards : Map[Int32, Bool] = Map([])
   preflight_streams(value, [], Map([]))
   preflight_walk(value, seen_secrets, seen_quota_tokens, seen_permission_cards)
 }
@@ -755,7 +761,7 @@ fn preflight_value(value : SchemaValue) -> Unit raise SchemaModelError {
 fn preflight_streams(
   value : SchemaValue,
   seen : Array[GuestSchemaValueStreamHandle],
-  wrapped : Map[Int, Bool],
+  wrapped : Map[Int32, Bool],
 ) -> Unit raise SchemaModelError {
   match value {
     Stream(handle) => {
@@ -836,9 +842,9 @@ async fn prepare_outgoing_streams(value : SchemaValue) -> Unit {
 ///|
 fn preflight_walk(
   value : SchemaValue,
-  seen_secrets : Map[Int, Bool],
-  seen_quota_tokens : Map[Int, Bool],
-  seen_permission_cards : Map[Int, Bool],
+  seen_secrets : Map[Int32, Bool],
+  seen_quota_tokens : Map[Int32, Bool],
+  seen_permission_cards : Map[Int32, Bool],
 ) -> Unit raise SchemaModelError {
   match value {
     S8(i) =>
@@ -1026,7 +1032,7 @@ fn ValuePreflight::new(nodes : Array[@types.SchemaValueNode]) -> ValuePreflight 
 ///|
 fn ValuePreflight::visit_idx(
   self : ValuePreflight,
-  idx : Int,
+  idx : Int32,
 ) -> Unit raise SchemaModelError {
   if idx < 0 || idx >= self.nodes.length() {
     raise DecodeError(
@@ -1044,7 +1050,7 @@ fn ValuePreflight::visit_idx(
 ///|
 fn[R : Eq] ValuePreflight::claim_handle(
   self : ValuePreflight,
-  idx : Int,
+  idx : Int32,
   raw : R,
   seen : Array[R],
   name : String,
@@ -1066,7 +1072,7 @@ fn[R : Eq] ValuePreflight::claim_handle(
 ///|
 fn ValuePreflight::visit_opt(
   self : ValuePreflight,
-  idx : Int?,
+  idx : Int32?,
 ) -> Unit raise SchemaModelError {
   match idx {
     Some(idx) => self.visit_idx(idx)
@@ -1077,7 +1083,7 @@ fn ValuePreflight::visit_opt(
 ///|
 fn ValuePreflight::visit_node(
   self : ValuePreflight,
-  idx : Int,
+  idx : Int32,
   node : @types.SchemaValueNode,
 ) -> Unit raise SchemaModelError {
   match node {
@@ -1139,7 +1145,7 @@ fn ValuePreflight::visit_node(
 }
 
 ///|
-fn ValuePreflight::first_unreferenced_handle(self : ValuePreflight) -> Int? {
+fn ValuePreflight::first_unreferenced_handle(self : ValuePreflight) -> Int32? {
   for i in 0..<self.nodes.length() {
     match self.nodes[i] {
       @types.SecretValue(_)
@@ -1230,7 +1236,7 @@ fn drop_unique_resources(
 ///|
 fn ValueDecoder::decode_opt(
   self : ValueDecoder,
-  o : Int?,
+  o : Int32?,
 ) -> SchemaValue? raise SchemaModelError {
   match o {
     Some(i) => Some(self.from_idx(i))
@@ -1241,7 +1247,7 @@ fn ValueDecoder::decode_opt(
 ///|
 fn ValueDecoder::from_idx(
   self : ValueDecoder,
-  idx : Int,
+  idx : Int32,
 ) -> SchemaValue raise SchemaModelError {
   if idx < 0 || idx >= self.nodes.length() {
     raise DecodeError(
@@ -1260,7 +1266,7 @@ fn ValueDecoder::from_idx(
 ///|
 fn ValueDecoder::from_node(
   self : ValueDecoder,
-  idx : Int,
+  idx : Int32,
   n : @types.SchemaValueNode,
 ) -> SchemaValue raise SchemaModelError {
   match n {

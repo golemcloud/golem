@@ -22,28 +22,28 @@ fn run_tool_client_stream_async(body : async () -> Unit) -> Unit raise {
 extern "wasm" fn reset_tool_client_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
 
 ///|
-extern "wasm" fn tool_client_resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+extern "wasm" fn tool_client_resource_drop_count(kind : Int32) -> Int32 = "golem:test" "resource-drop-count"
 
 ///|
-extern "wasm" fn set_tool_client_stream_host_mode(mode : Int) = "golem:test" "set-schema-value-stream-host-mode"
+extern "wasm" fn set_tool_client_stream_host_mode(mode : Int32) = "golem:test" "set-schema-value-stream-host-mode"
 
 ///|
-extern "wasm" fn set_tool_client_host_mode(mode : Int) = "golem:test" "set-tool-host-mode"
+extern "wasm" fn set_tool_client_host_mode(mode : Int32) = "golem:test" "set-tool-host-mode"
 
 ///|
-extern "wasm" fn settle_tool_client_result() -> Int = "golem:test" "settle-tool-result"
+extern "wasm" fn settle_tool_client_result() -> Int32 = "golem:test" "settle-tool-result"
 
 ///|
 #owned(bytes)
-extern "wasm" fn tool_client_bytes_pointer(bytes : Bytes) -> Int =
+extern "wasm" fn tool_client_bytes_pointer(bytes : Bytes) -> Int32 =
   #|(func (param i32) (result i32) local.get 0)
 
 ///|
 extern "wasm" fn set_tool_client_result_node(
-  pointer : Int,
-  types : Int,
-  defs : Int,
-  name : Int,
+  pointer : Int32,
+  types : Int32,
+  defs : Int32,
+  name : Int32,
 ) = "golem:test" "tool-result-node"
 
 ///|
@@ -123,29 +123,33 @@ test "collection maps unknown channel errors without hiding sibling outcomes" {
 ///|
 test "collection preserves task cancellation" {
   run_tool_client_stream_async(async fn() {
+    let (started, start) = @async-core.Future::new()
+    let (blocked, _unblock) = @async-core.Future::new()
     let stream = @async-core.Stream::from_source(
-      _ => raise @async-core.Cancelled::Cancelled,
+      async fn(_) {
+        ignore(start.complete(()))
+        blocked.get()
+        None
+      },
       () => (),
       () => (),
     )
     let result : async () -> Result[String, ToolError[NoToolError]] = async fn() {
       Ok("unreachable")
     }
-    try collect_tool_channels(Some(stream), None, result) catch {
-      @async-core.Cancelled::Cancelled => ()
-      error => fail("stream collection changed cancellation: \{repr(error)}")
-    } noraise {
-      _ => fail("stream cancellation became a collected outcome")
-    }
-    let cancelled_result : async () -> Result[String, ToolError[NoToolError]] = async fn() {
-      raise @async-core.Cancelled::Cancelled
-    }
-    try collect_tool_channels(None, None, cancelled_result) catch {
-      @async-core.Cancelled::Cancelled => ()
-      error => fail("result collection changed cancellation: \{repr(error)}")
-    } noraise {
-      _ => fail("result cancellation became a collected outcome")
-    }
+    @async-core.with_task_group(group => {
+      let task = group.spawn(() => {
+        collect_tool_channels(Some(stream), None, result)
+      })
+      started.get()
+      task.cancel()
+      try task.wait() catch {
+        @async-core.TaskCancelled::TaskCancelled => ()
+        error => fail("stream collection changed cancellation: \{repr(error)}")
+      } noraise {
+        _ => fail("stream cancellation became a collected outcome")
+      }
+    })
   })
 }
 
@@ -160,7 +164,7 @@ test "client input encoding preserves cancellation and drops input and stdin" {
     set_tool_client_stream_host_mode(3)
     defer set_tool_client_stream_host_mode(0)
     let captured = @types.Secret::Secret(150)
-    let input_stream : @schema.AgentStream[Int] = @schema.AgentStream::produce(
+    let input_stream : @schema.AgentStream[Int32] = @schema.AgentStream::produce(
       async fn(writer) {
         input_producer_started[0] = true
         captured.drop()
@@ -196,7 +200,7 @@ test "client input encoding preserves cancellation and drops input and stdin" {
       started.get()
       invoke.cancel()
       try invoke.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         error => fail("tool client changed cancellation: \{Repr(error)}")
       } noraise {
         _ => fail("cancelled tool client invocation unexpectedly completed")
@@ -323,7 +327,7 @@ test "cancelling a blocked output read preserves the result observer" {
       assert_true(read.try_wait() is None)
       read.cancel()
       try read.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         _ => fail("blocked output read raised the wrong cancellation")
       } noraise {
         _ => fail("blocked output read unexpectedly completed")
@@ -374,7 +378,7 @@ test "detach during get rejects late delivery and disposes only after the host b
             assert_eq(tool_client_resource_drop_count(5), 1)
           }
           try get.wait() catch {
-            @async-core.Cancelled::Cancelled => assert_true(cancelled)
+            @async-core.TaskCancelled::TaskCancelled => assert_true(cancelled)
             error => fail("unexpected result error: \{repr(error)}")
           } noraise {
             result => {

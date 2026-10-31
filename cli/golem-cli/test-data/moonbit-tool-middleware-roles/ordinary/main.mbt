@@ -19,8 +19,3 @@ pub fn OrdinaryAgent::use_ambient_tool(self : Self) -> Unit {
   let client = @tool.ToolClient::new(self.name)
   client.drop()
 }
-
-///|
-fn main {
-
-}

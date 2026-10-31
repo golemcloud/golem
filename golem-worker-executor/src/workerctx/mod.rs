@@ -70,7 +70,7 @@ use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi_http::p3::WasiHttpView;
+use wasmtime_wasi_http::WasiHttpView;
 
 /// Executable identity used to construct a worker context.
 ///

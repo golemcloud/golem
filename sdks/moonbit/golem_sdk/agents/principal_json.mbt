@@ -5,12 +5,15 @@ pub suberror JsonCodecError {
 } derive(Debug)
 
 ///|
+pub extend JsonCodecError with Debug::{to_repr}
+
+///|
 let hex_chars : FixedArray[Char] = [
   '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
 ]
 
 ///|
-fn uint64_hex(value : UInt64, width : Int) -> String {
+fn uint64_hex(value : UInt64, width : Int32) -> String {
   let buf = StringBuilder()
   for i = width - 1; i >= 0; i = i - 1 {
     let nibble = ((value >> (i * 4)) & 0xFUL).to_int()
@@ -20,7 +23,7 @@ fn uint64_hex(value : UInt64, width : Int) -> String {
 }
 
 ///|
-fn hex_code_to_uint64(c : Int) -> UInt64 raise JsonCodecError {
+fn hex_code_to_uint64(c : Int32) -> UInt64 raise JsonCodecError {
   if c >= 0x30 && c <= 0x39 {
     (c - 0x30).to_uint64()
   } else if c >= 0x61 && c <= 0x66 {

@@ -462,8 +462,8 @@ fn typed_wasmtime_writer_component(engine: &Engine) -> Component {
   (export $item-export "byte-stream-item" (type $item))
   (type $stream (stream $item-export))
   (core func $stream.new (canon stream.new $stream))
-  (core func $stream.write-async (canon stream.write $stream async (memory $memory "mem")))
-  (core func $stream.write-sync (canon stream.write $stream (memory $memory "mem")))
+  (core func $stream.write-async (canon stream.write $stream async (memory (core memory $memory "mem"))))
+  (core func $stream.write-sync (canon stream.write $stream (memory (core memory $memory "mem"))))
   (core func $stream.cancel-write (canon stream.cancel-write $stream))
   (core func $stream.drop-writable (canon stream.drop-writable $stream))
   (core instance $core (instantiate $core (with "" (instance

@@ -2032,11 +2032,12 @@ async fn test_generated_streaming_bridges_end_to_end() {
     // Cut the accepted WebSocket frame during its payload to cover EOF after header parsing.
     let (moonbit_proxy, moonbit_interrupted, moonbit_proxy_task) =
         start_interrupting_websocket_proxy(&worker_service_url, true).await;
-    let moonbit_manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(moonbit_client.join("moon.mod.json")).unwrap(),
-    )
-    .unwrap();
-    let moonbit_module = moonbit_manifest["name"].as_str().unwrap();
+    let moonbit_module = "streaming-rpc-target-client";
+    assert!(
+        std::fs::read_to_string(moonbit_client.join("moon.mod"))
+            .unwrap()
+            .contains(&format!("name = \"{moonbit_module}\""))
+    );
     let moonbit_main_pkg = formatdoc! {r#"
         import {{
           "moonbitlang/async",
@@ -2164,11 +2165,12 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
     let moonbit_config_client =
         ctx.cwd_path_join("moonbit-streaming-bridge/configured-rpc-target-client");
-    let moonbit_config_manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(moonbit_config_client.join("moon.mod.json")).unwrap(),
-    )
-    .unwrap();
-    let moonbit_config_module = moonbit_config_manifest["name"].as_str().unwrap();
+    let moonbit_config_module = "configured-rpc-target-client";
+    assert!(
+        std::fs::read_to_string(moonbit_config_client.join("moon.mod"))
+            .unwrap()
+            .contains(&format!("name = \"{moonbit_config_module}\""))
+    );
     let moonbit_config_main_pkg = formatdoc! {r#"
         import {{
           "moonbitlang/async",
@@ -2941,7 +2943,7 @@ async fn test_moonbit_bridge_e2e() {
 
     let client_dir = bridge_root.join("counter-agent-client");
     assert!(
-        client_dir.join("moon.mod.json").exists(),
+        client_dir.join("moon.mod").exists(),
         "generated MoonBit bridge module is missing at {}",
         client_dir.display()
     );
@@ -2969,14 +2971,12 @@ async fn test_moonbit_bridge_e2e() {
         }}
         "#
     };
-    let module_name = std::fs::read_to_string(client_dir.join("moon.mod.json"))
-        .unwrap()
-        .parse::<serde_json::Value>()
-        .unwrap()
-        .get("name")
-        .and_then(|name| name.as_str())
-        .unwrap()
-        .to_string();
+    let module_name = "counter-agent-client";
+    assert!(
+        std::fs::read_to_string(client_dir.join("moon.mod"))
+            .unwrap()
+            .contains(&format!("name = \"{module_name}\""))
+    );
     let main_moon_pkg = formatdoc! {r#"
         import {{
           "moonbitlang/async" @async,
@@ -5089,17 +5089,11 @@ async fn test_moonbit_agent_guest_bridge_e2e() {
     )
     .unwrap();
 
-    let moon_mod_path = ctx.cwd_path_join("moon.mod.json");
-    let mut moon_mod: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&moon_mod_path).unwrap()).unwrap();
-    moon_mod["deps"]["counter-agent-guest-client"] = serde_json::json!({
-        "path": "golem-temp/bridge-sdk/moonbit/internal/counter-agent-guest-client"
-    });
-    fs::write_str(
-        &moon_mod_path,
-        serde_json::to_string_pretty(&moon_mod).unwrap() + "\n",
-    )
-    .unwrap();
+    super::add_moonbit_local_dependency(
+        &ctx,
+        "counter-agent-guest-client",
+        "golem-temp/bridge-sdk/moonbit/internal/counter-agent-guest-client",
+    );
 
     let consumer_pkg_path = ctx.cwd_path_join("consumer/moon.pkg");
     let consumer_pkg = fs::read_to_string(&consumer_pkg_path).unwrap();
@@ -5134,8 +5128,6 @@ async fn test_moonbit_agent_guest_bridge_e2e() {
                 },
               )
             }
-
-            fn main {}
         "#},
     )
     .unwrap();
@@ -5144,7 +5136,7 @@ async fn test_moonbit_agent_guest_bridge_e2e() {
     assert!(outputs.success_or_dump());
     assert!(
         ctx.cwd_path_join(
-            "golem-temp/bridge-sdk/moonbit/internal/counter-agent-guest-client/moon.mod.json"
+            "golem-temp/bridge-sdk/moonbit/internal/counter-agent-guest-client/moon.mod"
         )
         .exists()
     );
@@ -5261,17 +5253,11 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
     )
     .unwrap();
 
-    let moon_mod_path = ctx.cwd_path_join("moon.mod.json");
-    let mut moon_mod: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&moon_mod_path).unwrap()).unwrap();
-    moon_mod["deps"]["echo-tool-guest-client"] = serde_json::json!({
-        "path": "golem-temp/bridge-sdk/moonbit/internal/echo-tool-guest-client"
-    });
-    fs::write_str(
-        &moon_mod_path,
-        serde_json::to_string_pretty(&moon_mod).unwrap() + "\n",
-    )
-    .unwrap();
+    super::add_moonbit_local_dependency(
+        &ctx,
+        "echo-tool-guest-client",
+        "golem-temp/bridge-sdk/moonbit/internal/echo-tool-guest-client",
+    );
 
     let consumer_pkg_path = ctx.cwd_path_join("consumer/moon.pkg");
     let consumer_pkg = fs::read_to_string(&consumer_pkg_path).unwrap();
@@ -5305,8 +5291,6 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
                 Err(_) => "unexpected tool error"
               }
             }
-
-            fn main {}
         "#},
     )
     .unwrap();
@@ -5314,10 +5298,8 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join(
-            "golem-temp/bridge-sdk/moonbit/internal/echo-tool-guest-client/moon.mod.json"
-        )
-        .exists()
+        ctx.cwd_path_join("golem-temp/bridge-sdk/moonbit/internal/echo-tool-guest-client/moon.mod")
+            .exists()
     );
     let consumer_component =
         ctx.cwd_path_join("_build/wasm/debug/moonbit_tool_bridge_consumer.agent.wasm");

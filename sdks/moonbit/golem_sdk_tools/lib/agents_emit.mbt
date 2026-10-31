@@ -224,7 +224,7 @@ fn emit_constructed_agent(
   buf : StringBuilder,
   indent : String,
   snapshot_format : String?,
-  multipart? : Bool = false,
+  multipart~ : Bool = false,
 ) -> Unit {
   let (snapshottable, format) = match snapshot_format {
     None => ("None", "None")

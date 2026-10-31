@@ -1035,9 +1035,8 @@ async fn moonbit_component_build_waits_for_independently_buildable_agent_provide
     let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer/producer-final.wasm");
     let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
-    let guest_bridge_manifest = ctx.cwd_path_join(
-        "golem-temp/bridge-sdk/moonbit/internal/bar-agent-guest-client/moon.mod.json",
-    );
+    let guest_bridge_manifest =
+        ctx.cwd_path_join("golem-temp/bridge-sdk/moonbit/internal/bar-agent-guest-client/moon.mod");
     let guest_bridge_dir = guest_bridge_manifest.parent().unwrap();
 
     let producer_final_wasm_hash =
@@ -1073,28 +1072,33 @@ async fn moonbit_component_build_waits_for_independently_buildable_agent_provide
     fs::create_dir_all(ctx.cwd_path_join("producer")).unwrap();
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
     fs::write_str(
-        ctx.cwd_path_join("moon.mod.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "name": "moonbit-guest-bridge-order",
-            "version": "0.0.1",
-            "deps": {
-                "bar-agent-guest-client": {
-                    "path": guest_bridge_dir,
-                },
-            },
-            "preferred-target": "wasm",
-        }))
-        .unwrap(),
+        ctx.cwd_path_join("moon.mod"),
+        "name = \"moonbit-guest-bridge-order\"\nversion = \"0.0.1\"\npreferred_target = \"wasm\"\nimport {\n}\n",
     )
     .unwrap();
     fs::write_str(
-        ctx.cwd_path_join("producer/moon.mod.json"),
+        ctx.cwd_path_join("moon.work"),
+        golem_cli::sdk_overrides::sdk_overrides()
+            .unwrap()
+            .moonbit_workspace(),
+    )
+    .unwrap();
+    super::add_moonbit_local_dependency(
+        &ctx,
+        "bar-agent-guest-client",
+        guest_bridge_dir.to_str().unwrap(),
+    );
+    fs::write_str(
+        ctx.cwd_path_join("producer/moon.work"),
+        "members = [\".\"]\n",
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("producer/moon.mod"),
         indoc! {r#"
-            {
-              "name": "moonbit-guest-bridge-provider",
-              "version": "0.0.1",
-              "preferred-target": "wasm"
-            }
+            name = "moonbit-guest-bridge-provider"
+            version = "0.0.1"
+            preferred_target = "wasm"
         "#},
     )
     .unwrap();
@@ -1176,9 +1180,8 @@ async fn moon_dependency_preparation_is_cached_per_module_root(_tracing: &Tracin
             #!/bin/sh
             set -eu
             case "${1:-}" in
-              update)
-                ;;
-              install)
+              tree)
+                test "$*" = "tree --package --target wasm"
                 mkdir -p .mooncakes
                 : > .mooncakes/prepared
                 ;;
@@ -1202,20 +1205,14 @@ async fn moon_dependency_preparation_is_cached_per_module_root(_tracing: &Tracin
         ),
     );
 
-    let moon_mod_json = indoc! {r#"
-        {
-          "name": "identical-module",
-          "version": "0.0.1",
-          "preferred-target": "wasm"
-        }
+    let moon_mod = indoc! {r#"
+        name = "identical-module"
+        version = "0.0.1"
+        preferred_target = "wasm"
     "#};
     for module in ["a", "b"] {
         fs::create_dir_all(ctx.cwd_path_join(module)).unwrap();
-        fs::write_str(
-            ctx.cwd_path_join(format!("{module}/moon.mod.json")),
-            moon_mod_json,
-        )
-        .unwrap();
+        fs::write_str(ctx.cwd_path_join(format!("{module}/moon.mod")), moon_mod).unwrap();
     }
     fs::create_dir_all(ctx.cwd_path_join("b/.mooncakes")).unwrap();
 
@@ -1269,9 +1266,8 @@ async fn moon_dependency_preparation_uses_physical_ancestor_for_parent_dir(_trac
             #!/bin/sh
             set -eu
             case "${1:-}" in
-              update)
-                ;;
-              install)
+              tree)
+                test "$*" = "tree --package --target wasm"
                 mkdir -p .mooncakes
                 : > .mooncakes/prepared
                 ;;
@@ -1295,20 +1291,14 @@ async fn moon_dependency_preparation_uses_physical_ancestor_for_parent_dir(_trac
         ),
     );
 
-    let moon_mod_json = indoc! {r#"
-        {
-          "name": "module",
-          "version": "0.0.1",
-          "preferred-target": "wasm"
-        }
+    let moon_mod = indoc! {r#"
+        name = "module"
+        version = "0.0.1"
+        preferred_target = "wasm"
     "#};
-    fs::write_str(ctx.cwd_path_join("moon.mod.json"), moon_mod_json).unwrap();
+    fs::write_str(ctx.cwd_path_join("moon.mod"), moon_mod).unwrap();
     fs::create_dir_all(ctx.cwd_path_join("component/nested")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("component/nested/moon.mod.json"),
-        moon_mod_json,
-    )
-    .unwrap();
+    fs::write_str(ctx.cwd_path_join("component/nested/moon.mod"), moon_mod).unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"

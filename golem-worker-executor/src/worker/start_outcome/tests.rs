@@ -226,8 +226,7 @@ fn shared_memory_target_is_refused_without_a_snapshot_fault() {
     )
     .unwrap();
     let compilation_error = wasmtime::component::Component::from_binary(&engine, &bytes)
-        .err()
-        .expect("the production engine must reject shared memory");
+        .expect_err("the production engine must reject shared memory");
     assert!(!compilation_error.to_string().is_empty());
     let automatic = automatic_head();
     let manual = manual_head();

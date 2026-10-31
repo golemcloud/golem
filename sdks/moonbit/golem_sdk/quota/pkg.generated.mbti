@@ -19,11 +19,22 @@ pub(all) struct FailedReservation {
 pub(all) struct QuotaToken {
   // private fields
 }
+pub fn QuotaToken::append_result_payload(Self, @schema.WireEncoder) -> Int32? raise @schema.WireError
+pub fn QuotaToken::append_result_type(@schema.WireTypeEncoder) -> Int32?
+pub fn QuotaToken::append_wire(Self, @schema.WireEncoder) -> Int32 raise @schema.WireError
+pub fn QuotaToken::append_wire_type(@schema.WireTypeEncoder) -> Int32
 pub fn QuotaToken::drop(Self) -> Unit
+pub fn QuotaToken::from_value(@schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
 pub fn QuotaToken::merge(Self, Self) -> Unit
 pub fn QuotaToken::new(String, UInt64) -> Self
+pub fn QuotaToken::read_result_payload(@schema.WireReader, Int32?) -> Self raise @schema.WireError
+pub fn QuotaToken::read_wire(@schema.WireReader, Int32) -> Self raise @schema.WireError
+pub fn QuotaToken::register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
+pub fn QuotaToken::release_wire(Self, @schema.WireReleaser) -> Unit
 pub fn QuotaToken::reserve(Self, UInt64) -> Result[Reservation, FailedReservation]
 pub fn QuotaToken::split(Self, UInt64) -> Self
+pub fn QuotaToken::to_value(Self) -> @schema_model.SchemaValue
+pub fn QuotaToken::type_id() -> String
 pub impl @schema.FromSchema for QuotaToken
 pub impl @schema.FromWire for QuotaToken
 pub impl @schema.IntoSchema for QuotaToken

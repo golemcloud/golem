@@ -66,6 +66,29 @@ mod typescript_guest_streams;
 mod typescript_http_router;
 mod typescript_native_source;
 
+fn add_moonbit_local_dependency(ctx: &TestContext, module: &str, path: &str) {
+    let manifest_path = ctx.cwd_path_join("moon.mod");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(
+        manifest_path,
+        manifest.replacen("import {", &format!("import {{\n  \"{module}@0.0.1\","), 1),
+    )
+    .unwrap();
+    let workspace_path = ctx.cwd_path_join("moon.work");
+    let workspace = std::fs::read_to_string(&workspace_path).unwrap();
+    let mut members: Vec<String> =
+        serde_json::from_str(workspace.trim().strip_prefix("members = ").unwrap()).unwrap();
+    members.push(path.to_string());
+    std::fs::write(
+        workspace_path,
+        format!(
+            "members = {}\n",
+            serde_json::to_string_pretty(&members).unwrap()
+        ),
+    )
+    .unwrap();
+}
+
 inherit_test_dep!(Tracing);
 
 // Tags for the it-cli CI shards. They must live in the `app` module so the tag's module-path

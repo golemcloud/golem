@@ -16,7 +16,7 @@ use super::*;
 use crate::durable_host::p3::{DurableP3View, observe_function_call};
 use crate::workerctx::WorkerCtx;
 use wasmtime::component::Resource;
-use wasmtime_wasi_http::p3::WasiHttpView;
+use wasmtime_wasi_http::WasiHttpView;
 use wasmtime_wasi_http::p3::bindings::clocks::monotonic_clock::Duration;
 use wasmtime_wasi_http::p3::bindings::http::types;
 use wasmtime_wasi_http::p3::bindings::http::types::{

@@ -90,7 +90,7 @@ unicode-segmentation = ">=1.0, <1.13"
 uuid = { version = "1.19.0", features = ["v4"] }
 wasip3 = { version = "0.7.0", features = ["http-compat"] }
 wasi-logger = { version = "0.1.2", features = ["kv"] }
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "67b83d42c135db8c5c42bf26c53ec162bbdca5ea", version = "=0.63.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
 
 [features]
 default = ["durability", "json", "macro"]

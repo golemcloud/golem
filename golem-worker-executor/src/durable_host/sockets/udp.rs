@@ -160,9 +160,9 @@ impl<Ctx: WorkerCtx> HostIncomingDatagramStream for DurableWorkerCtx<Ctx> {
         HostIncomingDatagramStream::subscribe(&mut self.as_wasi_view().sockets(), self_)
     }
 
-    fn drop(&mut self, rep: Resource<IncomingDatagramStream>) -> wasmtime::Result<()> {
+    async fn drop(&mut self, rep: Resource<IncomingDatagramStream>) -> wasmtime::Result<()> {
         self.observe_function_call("sockets::udp", "drop");
-        HostIncomingDatagramStream::drop(&mut self.as_wasi_view().sockets(), rep)
+        HostIncomingDatagramStream::drop(&mut self.as_wasi_view().sockets(), rep).await
     }
 }
 
@@ -197,9 +197,9 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
         HostOutgoingDatagramStream::subscribe(&mut self.as_wasi_view().sockets(), self_)
     }
 
-    fn drop(&mut self, rep: Resource<OutgoingDatagramStream>) -> wasmtime::Result<()> {
+    async fn drop(&mut self, rep: Resource<OutgoingDatagramStream>) -> wasmtime::Result<()> {
         self.observe_function_call("sockets::udp", "drop");
-        HostOutgoingDatagramStream::drop(&mut self.as_wasi_view().sockets(), rep)
+        HostOutgoingDatagramStream::drop(&mut self.as_wasi_view().sockets(), rep).await
     }
 }
 

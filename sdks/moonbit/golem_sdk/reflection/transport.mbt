@@ -86,15 +86,9 @@ async fn Transport::invoke_value(
 async fn encode_awaited_input(
   input : @model.SchemaValue,
 ) -> @types.SchemaValueTree {
+  errdefer input.rollback_input_resources(@model_host.resource_drops())
   let wire = @model.schema_value_to_wit_async(input) catch {
-    @async-core.Cancelled::Cancelled as error => {
-      input.rollback_input_resources(@model_host.resource_drops())
-      raise error
-    }
-    error => {
-      input.rollback_input_resources(@model_host.resource_drops())
-      raise Schema("failed to encode invocation input: \{repr(error)}")
-    }
+    error => raise Schema("failed to encode invocation input: \{repr(error)}")
   }
   wire
 }

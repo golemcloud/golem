@@ -108,7 +108,7 @@ fn durable_streams_str(options : DurableStreamRouteInfo?) -> String {
           None => "None"
         }
       }
-      let opt_uint = fn(value : UInt?) {
+      let opt_uint = fn(value : UInt32?) {
         match value {
           Some(v) => "Some(\{v})"
           None => "None"
