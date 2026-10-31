@@ -19,10 +19,16 @@ test "default generation supports agents tools and middleware together" {
   remove_default_world_fixture(root)
   @fs.create_dir(root)
   @fs.create_dir(root + "/component")
+  @fs.write_string_to_file(root + "/moon.mod", "name = \"test/generation\"\n")
+  let packages = @lib.discover_packages(root + "/component")
+  assert_eq(packages.length(), 0)
   @fs.write_string_to_file(
     root + "/component/moon.pkg",
     "pkgtype(kind: \"foreign_library\")\noptions(\n)\n",
   )
+  let packages = @lib.discover_packages(root + "/component")
+  assert_eq(packages.length(), 1)
+  assert_eq(packages[0].rel_path, "component")
   @fs.write_string_to_file(
     root + "/component/source.mbt",
     (

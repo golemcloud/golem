@@ -567,8 +567,10 @@ fn project_command(
           scope != Some("option") &&
           scope != Some("tail")
         let count_flag = kind == Some("count-flag")
-        if count_flag && base != Simple("UInt") {
-          emit_fail("count-flag argument '" + source + "' must have type UInt")
+        if count_flag && !(base is Simple("UInt" | "UInt32")) {
+          emit_fail(
+            "count-flag argument '" + source + "' must have type UInt32",
+          )
         }
         let explicit_flag = kind == Some("flag") || scope == Some("flag")
         if explicit_flag && base != Simple("Bool") {
