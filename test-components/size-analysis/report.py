@@ -60,6 +60,7 @@ def main():
         "tool": "retention-non-reflective",
         "reflection": "retention-reflection",
         "tool-client": "retention-tool-client",
+        "tool-client-refined": "retention-tool-client-refined",
     }
     for label, package in fixture_packages.items():
         run(
