@@ -626,7 +626,7 @@ render_verb!(AgentVerb { Invoke => "invoke", View => "view", Delete => "delete",
 render_verb!(ToolVerb { Invoke => "invoke" });
 render_verb!(KvVerb { Read => "read", Write => "write", Delete => "delete", List => "list" });
 render_verb!(BlobVerb { Read => "read", Write => "write", Delete => "delete", List => "list" });
-render_verb!(RdbmsVerb { Query => "query", Mutate => "mutate" });
+render_verb!(RdbmsVerb { Query => "query", Mutate => "mutate", Unanalyzed => "unanalyzed" });
 render_verb!(CardVerb { Derive => "derive", Revoke => "revoke", Inspect => "inspect", Install => "install" });
 render_verb!(SystemVerb { CreateAccount => "create-account", ImpersonateUser => "impersonate-user", ViewDefaultPlan => "view-default-plan", ViewAccountSummariesReport => "view-account-summaries-report", ViewAccountCountsReport => "view-account-counts-report" });
 render_verb!(PlanVerb { View => "view", Create => "create", Update => "update" });
@@ -852,12 +852,14 @@ impl RenderFragment for BlobResourcePattern {
 }
 impl RenderFragment for RdbmsResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {
-        let Self::Table {
-            database,
-            schema,
-            table,
-        } = self;
-        Ok(format!("{database}.{schema}.{table}"))
+        Ok(match self {
+            Self::Table {
+                database,
+                schema,
+                table,
+            } => format!("{database}.{schema}.{table}"),
+            Self::Database { database } => format!("database({database})"),
+        })
     }
 }
 impl RenderFragment for CardResourcePattern {

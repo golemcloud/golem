@@ -233,9 +233,11 @@ fn unexpected(operation: &str) -> RdbmsError {
 
 fn statement_name(statement: &str) -> Result<&'static str, RdbmsError> {
     match statement {
-        "INSERT INTO completion_effects (label) VALUES ('first')" => Ok("first"),
-        "INSERT INTO completion_effects (label) VALUES ('second')" => Ok("second"),
-        "INSERT INTO completion_effects (label) VALUES ('tx-statement')" => Ok("tx-statement"),
+        "INSERT INTO public.completion_effects (label) VALUES ('first')" => Ok("first"),
+        "INSERT INTO public.completion_effects (label) VALUES ('second')" => Ok("second"),
+        "INSERT INTO public.completion_effects (label) VALUES ('tx-statement')" => {
+            Ok("tx-statement")
+        }
         _ => Err(unexpected("statement")),
     }
 }
