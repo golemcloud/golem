@@ -276,7 +276,7 @@ pub impl WireSchema for Bytes with fn append_wire_type(encoder) {
 }
 
 ///|
-pub impl WireSchema for @types.Uuid with fn append_wire_type(encoder) {
+pub impl WireSchema for Uuid with fn append_wire_type(encoder) {
   encoder.push(@types.SchemaTypeBody::UuidType)
 }
 

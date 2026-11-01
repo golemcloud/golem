@@ -105,6 +105,8 @@ func fixtureType(t *testing.T, raw any) schema.SchemaType {
 		return ty(schema.PathType{})
 	case "url":
 		return ty(schema.UrlType{})
+	case "uuid":
+		return ty(schema.UUIDType{})
 	case "datetime":
 		return ty(schema.DatetimeType{})
 	case "duration":

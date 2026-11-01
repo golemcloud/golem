@@ -15,7 +15,7 @@ test "direct writer preserves all optional payloads and numeric tokens" {
     F64Value(-1.0 / 0.0),
     F64Value(0.0 / 0.0),
     StringValue("\"\\\n\t\u0001é😀"),
-    UuidValue("id"),
+    UuidValue(Uuid::from_bits(0x0123456789abcdefUL, 0xfedcba9876543210UL)),
     FixedListValue([U8Value(7)]),
     VariantValue(1, None),
     VariantValue(0, Some(StringValue("x"))),
@@ -61,7 +61,7 @@ test "direct requests preserve configuration and optional members" {
       value: @json.parse("{\"$float\":\"ordinary\",\"x\":null,\"z\":-0}"),
     },
   ]
-  for optional in [None, Some("\"\\\n😀")] {
+  for optional in [None, Some(Uuid::from_bits(1UL, 2UL))] {
     @debug.assert_eq(
       @json.parse(
         render_create_agent_request(
@@ -392,7 +392,7 @@ fn encode_create_agent_request(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
 ) -> Json {
   let fields : Array[(String, Json)] = [
@@ -402,7 +402,7 @@ fn encode_create_agent_request(
     ("parameters", schema_value_to_json(parameters)),
   ]
   match phantom_id {
-    Some(id) => fields.push(("phantomId", Json::string(id)))
+    Some(id) => fields.push(("phantomId", Json::string(id.to_string())))
     None => ()
   }
   fields.push(("config", Json::array(config.map(encode_config_entry))))
@@ -415,7 +415,7 @@ fn encode_agent_invocation_request(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
   method_name : String,
   method_parameters : SchemaValue,
@@ -434,7 +434,7 @@ fn encode_agent_invocation_request(
     ("mode", Json::string(mode)),
   ]
   match phantom_id {
-    Some(id) => fields.push(("phantomId", Json::string(id)))
+    Some(id) => fields.push(("phantomId", Json::string(id.to_string())))
     None => ()
   }
   match schedule_at {

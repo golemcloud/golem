@@ -18,7 +18,7 @@ pub(all) struct MethodOnlyAgentClient {
 fn[C : @schema.IntoSchema] full_client_create(
   type_name : String,
   constructor_input : C,
-  phantom_id : @types.Uuid?,
+  phantom_id : @schema.Uuid?,
   agent_config : Array[@common.TypedAgentConfigValue],
   reusable : Bool,
 ) -> FullAgentClient raise ReflectError {
@@ -65,7 +65,7 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClie
 pub fn[C : @schema.IntoSchema] FullAgentClient::get_phantom(
   type_name : String,
   constructor_input : C,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
 ) -> FullAgentClient raise ReflectError {
   full_client_create(type_name, constructor_input, Some(phantom_id), [], true)
 }
@@ -74,7 +74,7 @@ pub fn[C : @schema.IntoSchema] FullAgentClient::get_phantom(
 pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_phantom_with_config(
   type_name : String,
   constructor_input : C,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
   config : Config,
 ) -> FullAgentClient raise ReflectError {
   let values = config.typed_values() catch {
@@ -98,7 +98,7 @@ pub fn[C : @schema.IntoSchema] FullAgentClient::new_phantom(
   type_name : String,
   constructor_input : C,
 ) -> FullAgentClient raise ReflectError {
-  let phantom_id = @apiHost.generate_idempotency_key()
+  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
   FullAgentClient::get_phantom(type_name, constructor_input, phantom_id)
 }
 
@@ -108,7 +108,7 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClie
   constructor_input : C,
   config : Config,
 ) -> FullAgentClient raise ReflectError {
-  let phantom_id = @apiHost.generate_idempotency_key()
+  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
   FullAgentClient::get_phantom_with_config(
     type_name, constructor_input, phantom_id, config,
   )
@@ -119,7 +119,7 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClie
 pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(
   type_name : String,
   constructor_input : C,
-  phantom_id? : @types.Uuid? = None,
+  phantom_id? : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   ParsedAgentId::create(
     type_name,
@@ -215,7 +215,7 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClie
 pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral_phantom(
   type_name : String,
   constructor_input : C,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
 ) -> FullAgentClient raise ReflectError {
   full_client_create(type_name, constructor_input, Some(phantom_id), [], true)
 }
@@ -224,7 +224,7 @@ pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral_phantom(
 pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_phantom_with_config(
   type_name : String,
   constructor_input : C,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
   config : Config,
 ) -> FullAgentClient raise ReflectError {
   let values = config.typed_values() catch {

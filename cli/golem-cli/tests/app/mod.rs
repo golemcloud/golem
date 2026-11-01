@@ -65,6 +65,7 @@ mod tool_middleware_conformance;
 mod typescript_guest_streams;
 mod typescript_http_router;
 mod typescript_native_source;
+mod uuid_interop;
 
 inherit_test_dep!(Tracing);
 
@@ -90,6 +91,7 @@ tag_suite!(
 );
 tag_suite!(scala_http_router, agents_guest_bridge_sources);
 tag_suite!(scala_tool_sources, agents_guest_bridge_sources);
+tag_suite!(uuid_interop, agents_guest_bridge_sources);
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(builtin_bash, deploy);
@@ -139,6 +141,7 @@ tag_suite!(tool_metadata_conformance, deploy);
 tag_suite!(tool_middleware, deploy);
 tag_suite!(tool_middleware_conformance, deploy);
 tag_suite!(typescript_guest_streams, agents_guest_bridge);
+tag_suite!(uuid_interop, agents_guest_bridge);
 tag_suite!(typescript_http_router, deploy);
 tag_suite!(typescript_native_source, agents_guest_bridge);
 

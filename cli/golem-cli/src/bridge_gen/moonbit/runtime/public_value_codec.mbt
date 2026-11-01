@@ -1010,6 +1010,14 @@ fn PublicValueCodec::encode_at(
         Json::null()
       }
     }
+    ("uuid", UuidValue(v)) => {
+      pvc_charge(charge, 36)
+      if materialize {
+        Json::string(v.to_string())
+      } else {
+        Json::null()
+      }
+    }
     ("record", RecordValue(v)) =>
       self.encode_record(schema, v, depth, charge, application, materialize)
     ("variant", VariantValue(i, v)) =>

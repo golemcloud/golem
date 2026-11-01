@@ -66,7 +66,7 @@ pub(all) struct ResolvedAgent {
   configuration : Configuration
   agent_type_name : String
   parameters : SchemaValue
-  phantom_id : String?
+  phantom_id : Uuid?
   config : Array[AgentConfigEntry]
   agent_id : AgentId?
 }
@@ -84,7 +84,7 @@ fn write_request_fields(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
 ) -> Unit {
   output.write_string("{\"appName\":")
@@ -98,7 +98,7 @@ fn write_request_fields(
   match phantom_id {
     Some(id) => {
       output.write_string(",\"phantomId\":")
-      output.write_string(Json::string(id).stringify())
+      output.write_string(Json::string(id.to_string()).stringify())
     }
     None => ()
   }
@@ -118,7 +118,7 @@ fn render_create_agent_request(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
 ) -> String {
   let output = StringBuilder()
@@ -135,7 +135,7 @@ fn render_agent_invocation_request(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
   method_name : String,
   method_parameters : SchemaValue,

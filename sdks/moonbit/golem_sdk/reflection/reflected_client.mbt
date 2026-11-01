@@ -134,7 +134,7 @@ pub(all) struct ReflectedAgentClient {
   priv agent_type : AgentType
   priv transport : Transport
   reusable_identity : ParsedAgentId?
-  phantom_id : @types.Uuid?
+  phantom_id : @schema.Uuid?
 }
 
 ///|
@@ -267,7 +267,7 @@ pub fn AgentType::find_method(self : AgentType, name : String) -> AgentMethod? {
 pub fn AgentType::agent_id_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id? : @types.Uuid? = None,
+  phantom_id? : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   self.constructor_input.validate_value(constructor_value)
   ParsedAgentId::create(self.name, constructor_value, phantom_id~)
@@ -277,7 +277,7 @@ pub fn AgentType::agent_id_value(
 pub fn AgentType::agent_id_json(
   self : AgentType,
   constructor_json : Json,
-  phantom_id? : @types.Uuid? = None,
+  phantom_id? : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   self.agent_id_value(
     self.constructor_input.pack_json(constructor_json),
@@ -289,7 +289,7 @@ pub fn AgentType::agent_id_json(
 fn AgentType::client_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id : @types.Uuid?,
+  phantom_id : @schema.Uuid?,
   reusable_identity : ParsedAgentId?,
 ) -> ReflectedAgentClient raise ReflectError {
   self.client_value_with_config(
@@ -304,7 +304,7 @@ fn AgentType::client_value(
 fn AgentType::client_value_with_config(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id : @types.Uuid?,
+  phantom_id : @schema.Uuid?,
   reusable_identity : ParsedAgentId?,
   config : Array[@common.TypedAgentConfigValue],
 ) -> ReflectedAgentClient raise ReflectError {
@@ -369,7 +369,7 @@ pub fn AgentType::get_json_with_config(
 pub fn AgentType::get_phantom_value_with_config(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
   config : Array[ReflectedConfigValue],
 ) -> ReflectedAgentClient raise ReflectError {
   let overrides = self.validate_config_values(config)
@@ -390,7 +390,7 @@ pub fn AgentType::get_phantom_value_with_config(
 pub fn AgentType::get_phantom_json_with_config(
   self : AgentType,
   constructor_json : Json,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
   config : Array[ReflectedConfigJsonValue],
 ) -> ReflectedAgentClient raise ReflectError {
   let overrides = self.pack_config_json(config)
@@ -418,7 +418,7 @@ pub fn AgentType::new_phantom_value_with_config(
   if self.mode == Ephemeral {
     self.client_value_with_config(constructor_value, None, None, overrides)
   } else {
-    let phantom_id = @apiHost.generate_idempotency_key()
+    let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
     let identity = self.agent_id_value(
       constructor_value,
       phantom_id=Some(phantom_id),
@@ -443,7 +443,7 @@ pub fn AgentType::new_phantom_json_with_config(
   if self.mode == Ephemeral {
     self.client_value_with_config(packed_constructor, None, None, overrides)
   } else {
-    let phantom_id = @apiHost.generate_idempotency_key()
+    let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
     let identity = self.agent_id_value(
       packed_constructor,
       phantom_id=Some(phantom_id),
@@ -517,7 +517,7 @@ pub fn AgentType::get_json(
 pub fn AgentType::resume_phantom_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
 ) -> ReflectedAgentClient raise ReflectError {
   guard self.mode == Durable else {
     raise Identity("phantom identities are unavailable for ephemeral agents")
@@ -533,7 +533,7 @@ pub fn AgentType::resume_phantom_value(
 pub fn AgentType::resume_phantom_json(
   self : AgentType,
   constructor_json : Json,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
 ) -> ReflectedAgentClient raise ReflectError {
   self.resume_phantom_value(
     self.constructor_input.pack_json(constructor_json),
@@ -549,7 +549,7 @@ pub fn AgentType::new_phantom_value(
   guard self.mode == Durable else {
     raise Identity("phantom identities are unavailable for ephemeral agents")
   }
-  let phantom_id = @apiHost.generate_idempotency_key()
+  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
   self.resume_phantom_value(constructor_value, phantom_id)
 }
 
@@ -586,7 +586,7 @@ pub fn AgentType::ephemeral_json(
 pub fn AgentType::ephemeral_phantom_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
 ) -> ReflectedAgentClient raise ReflectError {
   guard self.mode == Ephemeral else {
     raise Identity(
@@ -600,7 +600,7 @@ pub fn AgentType::ephemeral_phantom_value(
 pub fn AgentType::ephemeral_phantom_json(
   self : AgentType,
   constructor_json : Json,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
 ) -> ReflectedAgentClient raise ReflectError {
   self.ephemeral_phantom_value(
     self.constructor_input.pack_json(constructor_json),
@@ -612,7 +612,7 @@ pub fn AgentType::ephemeral_phantom_json(
 pub fn AgentType::ephemeral_phantom_value_with_config(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
   config : Array[ReflectedConfigValue],
 ) -> ReflectedAgentClient raise ReflectError {
   guard self.mode == Ephemeral else {
@@ -632,7 +632,7 @@ pub fn AgentType::ephemeral_phantom_value_with_config(
 pub fn AgentType::ephemeral_phantom_json_with_config(
   self : AgentType,
   constructor_json : Json,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
   config : Array[ReflectedConfigJsonValue],
 ) -> ReflectedAgentClient raise ReflectError {
   guard self.mode == Ephemeral else {
