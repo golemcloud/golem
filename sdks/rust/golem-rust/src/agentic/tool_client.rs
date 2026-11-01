@@ -100,10 +100,20 @@ pub struct ToolSubtreeCommand;
 #[doc(hidden)]
 pub struct OmittedSurface<const ID: u64>;
 
+/// The generated standalone wire descriptor function of a tool definition.
+#[doc(hidden)]
+pub type WireToolDescriptorFn = fn(
+    &crate::agentic::WireToolSchema,
+) -> Result<
+    crate::agentic::ExtendedToolType<crate::agentic::WireTypeRef>,
+    crate::agentic::ToolBuildError,
+>;
+
 #[doc(hidden)]
 pub trait ToolClientWithParts: Sized {
     fn __golem_tool_client_with_parts(
         root_tool_name: String,
+        root_descriptor: Option<WireToolDescriptorFn>,
         command_path: Vec<String>,
         schema_path: Vec<String>,
         inherited_prefix: Vec<DirectInputValue>,
@@ -275,6 +285,258 @@ pub async fn encode_direct_tool_input(
         graph,
         value: writer.finish(root),
     })
+}
+
+/// Encodes the input of a client whose published input schema can differ from
+/// the Rust parameter types. With a descriptor, the record follows the
+/// canonical input record schema of the selected command, built by the same
+/// functions that the host uses on the published tool.
+#[doc(hidden)]
+pub async fn encode_direct_tool_input_with_descriptor(
+    values: &[DirectInputValue],
+    field_order: &[&str],
+    descriptor: Option<WireToolDescriptorFn>,
+    command_path: &[String],
+) -> Result<crate::schema::wit::wire::TypedSchemaValue, String> {
+    match descriptor {
+        Some(descriptor) => {
+            encode_direct_tool_input_from_descriptor(values, descriptor, command_path).await
+        }
+        None => encode_direct_tool_input(values, field_order).await,
+    }
+}
+
+struct DescriptorInputField {
+    name: String,
+    aliases: Vec<String>,
+    body: crate::schema::wit::wire::TypeNodeIndex,
+    is_option: bool,
+}
+
+struct DescriptorInputModel {
+    graph: crate::schema::wit::wire::SchemaGraph,
+    fields: Vec<DescriptorInputField>,
+}
+
+impl DescriptorInputField {
+    fn matches(&self, value: &DirectInputValue) -> bool {
+        self.name == value.name
+            || self.aliases.contains(&value.name)
+            || value.aliases.contains(&self.name)
+    }
+}
+
+type DescriptorInputModels =
+    std::collections::HashMap<(usize, Vec<String>), Rc<DescriptorInputModel>>;
+
+thread_local! {
+    static DESCRIPTOR_INPUT_MODELS: RefCell<DescriptorInputModels> = RefCell::new(DescriptorInputModels::new());
+}
+
+fn descriptor_input_model(
+    descriptor: WireToolDescriptorFn,
+    command_path: &[String],
+) -> Result<Rc<DescriptorInputModel>, String> {
+    let key = (descriptor as usize, command_path.to_vec());
+    if let Some(model) = DESCRIPTOR_INPUT_MODELS.with(|models| models.borrow().get(&key).cloned()) {
+        return Ok(model);
+    }
+    let model = Rc::new(build_descriptor_input_model(descriptor, command_path)?);
+    DESCRIPTOR_INPUT_MODELS.with(|models| models.borrow_mut().insert(key, Rc::clone(&model)));
+    Ok(model)
+}
+
+fn build_descriptor_input_model(
+    descriptor: WireToolDescriptorFn,
+    command_path: &[String],
+) -> Result<DescriptorInputModel, String> {
+    use crate::schema::wit::wire::SchemaTypeBody;
+    let schema = crate::agentic::WireToolSchema::default();
+    let tool = descriptor(&schema)
+        .and_then(|tool| tool.into_wire(schema))
+        .map_err(|error| format!("tool descriptor build failed: {error}"))?;
+    let tool = crate::schema::tool::wit::decode_tool(tool)
+        .map_err(|error| format!("tool descriptor decoding failed: {error}"))?;
+    let command_index = tool.command_index_by_path(command_path).ok_or_else(|| {
+        format!(
+            "tool descriptor has no command body at path `{}`",
+            command_path.join(" ")
+        )
+    })?;
+    let record_schema = tool
+        .canonical_input_record_schema_unvalidated(command_index)
+        .map_err(|error| error.to_string())?;
+    let graph =
+        crate::schema::wit::encode_graph(&record_schema).map_err(|error| error.to_string())?;
+    let Some(SchemaTypeBody::RecordType(record)) =
+        resolve_wire_type(&graph, graph.root).map(|node| &node.body)
+    else {
+        return Err("canonical tool input schema is not a record".to_string());
+    };
+    let fields = tool.canonical_input_fields(command_index);
+    if record.len() != fields.len() {
+        return Err("canonical tool input schema does not match its fields".to_string());
+    }
+    let fields = fields
+        .into_iter()
+        .zip(record)
+        .map(|(field, record_field)| DescriptorInputField {
+            is_option: matches!(
+                resolve_wire_type(&graph, record_field.body).map(|node| &node.body),
+                Some(SchemaTypeBody::OptionType(_))
+            ),
+            name: field.name,
+            aliases: field.aliases,
+            body: record_field.body,
+        })
+        .collect();
+    Ok(DescriptorInputModel { graph, fields })
+}
+
+fn resolve_wire_type(
+    graph: &crate::schema::wit::wire::SchemaGraph,
+    mut index: crate::schema::wit::wire::TypeNodeIndex,
+) -> Option<&crate::schema::wit::wire::SchemaTypeNode> {
+    for _ in 0..=graph.defs.len() {
+        let node = graph.type_nodes.get(usize::try_from(index).ok()?)?;
+        match node.body {
+            crate::schema::wit::wire::SchemaTypeBody::RefType(definition) => {
+                index = graph.defs.get(usize::try_from(definition).ok()?)?.body;
+            }
+            _ => return Some(node),
+        }
+    }
+    None
+}
+
+async fn encode_direct_tool_input_from_descriptor(
+    values: &[DirectInputValue],
+    descriptor: WireToolDescriptorFn,
+    command_path: &[String],
+) -> Result<crate::schema::wit::wire::TypedSchemaValue, String> {
+    use crate::schema::wit::direct::{WirePreflight, WireSchemaBuilder, WireWriter};
+    use crate::schema::wit::wire::{SchemaTypeBody, SchemaValueNode};
+    let mut selected: Vec<&DirectInputValue> = Vec::new();
+    for value in values {
+        if let Some(previous) = selected
+            .iter_mut()
+            .find(|previous| previous.name == value.name)
+        {
+            *previous = value;
+        } else {
+            selected.push(value);
+        }
+    }
+    let mut preflight = WirePreflight::asynchronous();
+    for value in &selected {
+        value
+            .encoder
+            .preflight(&mut preflight)
+            .map_err(|e| e.to_string())?;
+    }
+    for value in &selected {
+        value.encoder.prepare().await.map_err(|e| e.to_string())?;
+    }
+
+    let model = descriptor_input_model(descriptor, command_path)?;
+    let mut ordered: Vec<Option<&DirectInputValue>> = vec![None; model.fields.len()];
+    for value in selected {
+        let index = model
+            .fields
+            .iter()
+            .position(|field| field.matches(value))
+            .ok_or_else(|| {
+                format!(
+                    "tool input value `{}` matches no field of the selected command",
+                    value.name
+                )
+            })?;
+        if ordered[index].replace(value).is_some() {
+            return Err(format!(
+                "more than one tool input value matches field `{}`",
+                model.fields[index].name
+            ));
+        }
+    }
+
+    let mut writer = WireWriter::default();
+    let mut indices = Vec::with_capacity(model.fields.len());
+    for (field, value) in model.fields.iter().zip(ordered) {
+        let value = value.ok_or_else(|| format!("missing tool input field `{}`", field.name))?;
+        let mut schemas = WireSchemaBuilder::default();
+        let own_schema = value.encoder.schema(&mut schemas);
+        let own_is_option = matches!(
+            schemas.resolve(own_schema).map(|node| &node.body),
+            Some(SchemaTypeBody::OptionType(_))
+        );
+        let index = value
+            .encoder
+            .write(&mut writer)
+            .map_err(|e| e.to_string())?;
+        indices.push(if field.is_option && !own_is_option {
+            writer.push(SchemaValueNode::OptionValue(Some(index)))
+        } else {
+            index
+        });
+    }
+    let root = writer.push(SchemaValueNode::RecordValue(indices.clone()));
+    let mut value = writer.finish(root);
+    for (field, index) in model.fields.iter().zip(indices) {
+        conform_wire_value(&mut value.value_nodes, &model.graph, field.body, index)?;
+    }
+    Ok(crate::schema::wit::wire::TypedSchemaValue {
+        graph: model.graph.clone(),
+        value,
+    })
+}
+
+/// Rewrites value nodes whose Rust encoding differs from the node the schema
+/// requires. A `string` value becomes a `text` value where the schema says
+/// `text`. Refinements of every other kind restrict the type only, so their
+/// value nodes stay unchanged.
+fn conform_wire_value(
+    nodes: &mut [crate::schema::wit::wire::SchemaValueNode],
+    graph: &crate::schema::wit::wire::SchemaGraph,
+    ty: crate::schema::wit::wire::TypeNodeIndex,
+    value: crate::schema::wit::wire::ValueNodeIndex,
+) -> Result<(), String> {
+    use crate::schema::wit::wire::{SchemaTypeBody, SchemaValueNode, TextValuePayload};
+    let ty = &resolve_wire_type(graph, ty)
+        .ok_or("tool input schema node is out of bounds")?
+        .body;
+    let node = usize::try_from(value)
+        .ok()
+        .and_then(|index| nodes.get_mut(index))
+        .ok_or("tool input value node is out of bounds")?;
+    let children = match (ty, &*node) {
+        (SchemaTypeBody::TextType(_), SchemaValueNode::StringValue(_)) => {
+            let SchemaValueNode::StringValue(text) =
+                std::mem::replace(node, SchemaValueNode::BoolValue(false))
+            else {
+                unreachable!("the node was matched as a string value");
+            };
+            *node = SchemaValueNode::TextValue(TextValuePayload {
+                text,
+                language: None,
+            });
+            return Ok(());
+        }
+        (SchemaTypeBody::OptionType(inner), SchemaValueNode::OptionValue(Some(child))) => {
+            (*inner, vec![*child])
+        }
+        (SchemaTypeBody::ListType(item), SchemaValueNode::ListValue(items)) => {
+            (*item, items.clone())
+        }
+        (SchemaTypeBody::FixedListType(spec), SchemaValueNode::FixedListValue(items)) => {
+            (spec.element, items.clone())
+        }
+        _ => return Ok(()),
+    };
+    let (item, items) = children;
+    for child in items {
+        conform_wire_value(nodes, graph, item, child)?;
+    }
+    Ok(())
 }
 
 impl<E: Display> Display for ToolError<E> {
@@ -1514,6 +1776,86 @@ mod tests {
         );
         assert!(handle.is_present());
         assert_eq!(handle.take().unwrap().take_handle(), 71);
+    }
+
+    #[test]
+    fn conform_wire_value_turns_string_values_into_text_where_the_schema_says_text() {
+        use crate::schema::wit::direct::{WireSchemaBuilder, WireWriter};
+        use crate::schema::wit::wire::{
+            FixedListSpec, SchemaTypeBody, SchemaValueNode, TextRestrictions,
+        };
+        let text = || {
+            SchemaTypeBody::TextType(TextRestrictions {
+                languages: None,
+                min_length: None,
+                max_length: Some(8),
+                regex: None,
+            })
+        };
+        let mut schemas = WireSchemaBuilder::default();
+        let top = schemas.push(text());
+        let option_item = schemas.push(text());
+        let option = schemas.push(SchemaTypeBody::OptionType(option_item));
+        let list_item = schemas.push(text());
+        let list = schemas.push(SchemaTypeBody::ListType(list_item));
+        let fixed_item = schemas.push(text());
+        let fixed = schemas.push(SchemaTypeBody::FixedListType(FixedListSpec {
+            element: fixed_item,
+            length: 1,
+        }));
+        let plain = schemas.push(SchemaTypeBody::StringType);
+        let graph = schemas.finish(top);
+
+        let mut writer = WireWriter::default();
+        let string = |writer: &mut WireWriter, text: &str| {
+            writer.push(SchemaValueNode::StringValue(text.to_string()))
+        };
+        let top_value = string(&mut writer, "top");
+        let option_child = string(&mut writer, "inner");
+        let option_value = writer.push(SchemaValueNode::OptionValue(Some(option_child)));
+        let absent_value = writer.push(SchemaValueNode::OptionValue(None));
+        let first = string(&mut writer, "first");
+        let second = string(&mut writer, "second");
+        let list_value = writer.push(SchemaValueNode::ListValue(vec![first, second]));
+        let fixed_child = string(&mut writer, "fixed");
+        let fixed_value = writer.push(SchemaValueNode::FixedListValue(vec![fixed_child]));
+        let plain_value = string(&mut writer, "plain");
+        let mut nodes = writer.finish(top_value).value_nodes;
+
+        for (ty, value) in [
+            (top, top_value),
+            (option, option_value),
+            (option, absent_value),
+            (list, list_value),
+            (fixed, fixed_value),
+            (plain, plain_value),
+        ] {
+            conform_wire_value(&mut nodes, &graph, ty, value).unwrap();
+        }
+
+        let text_of = |index: i32| match &nodes[index as usize] {
+            SchemaValueNode::TextValue(payload) if payload.language.is_none() => {
+                Some(payload.text.as_str())
+            }
+            _ => None,
+        };
+        assert_eq!(text_of(top_value), Some("top"));
+        assert_eq!(text_of(option_child), Some("inner"));
+        assert_eq!(text_of(first), Some("first"));
+        assert_eq!(text_of(second), Some("second"));
+        assert_eq!(text_of(fixed_child), Some("fixed"));
+        assert!(matches!(
+            nodes[option_value as usize],
+            SchemaValueNode::OptionValue(Some(child)) if child == option_child
+        ));
+        assert!(matches!(
+            nodes[absent_value as usize],
+            SchemaValueNode::OptionValue(None)
+        ));
+        assert!(matches!(
+            &nodes[plain_value as usize],
+            SchemaValueNode::StringValue(text) if text == "plain"
+        ));
     }
 
     #[test]

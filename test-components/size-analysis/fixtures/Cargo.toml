@@ -9,6 +9,7 @@ members = [
     "reflection",
     "tool",
     "tool-client",
+    "tool-client-refined",
     "typed-floor",
 ]
 resolver = "2"

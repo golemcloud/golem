@@ -32,44 +32,67 @@ fn plain_values_and_constraints_work_without_rich_features() {
     }
 }
 
-#[test]
-fn regex_validation_is_opt_in_not_a_smaller_dialect() {
-    let graph = SchemaGraph::anonymous(SchemaType::Text {
+fn text_regex_graph(pattern: &str) -> SchemaGraph {
+    SchemaGraph::anonymous(SchemaType::Text {
         restrictions: TextRestrictions {
-            regex: Some(r"\p{Greek}+".into()),
+            min_length: Some(2),
+            regex: Some(pattern.into()),
             ..Default::default()
         },
         metadata: Default::default(),
-    });
-    assert_eq!(validate_graph(&graph).is_ok(), cfg!(feature = "regex"));
-    for (text, matches) in [("prefix αβ suffix", true), ("abc", false)] {
-        let value = SchemaValue::Text(TextValuePayload {
-            text: text.into(),
-            language: None,
-        });
-        let result = validate_value(&graph, &graph.root, &value);
-        assert_eq!(result.is_ok(), cfg!(feature = "regex") && matches);
-        #[cfg(not(feature = "regex"))]
-        assert!(matches!(
-            &result.unwrap_err()[0],
-            validation::ValueError::UnsupportedFeature {
-                feature: "regex",
-                ..
-            }
-        ));
-    }
+    })
 }
 
+fn text_value(text: &str) -> SchemaValue {
+    SchemaValue::Text(TextValuePayload {
+        text: text.into(),
+        language: None,
+    })
+}
+
+#[cfg(feature = "regex")]
 #[test]
-fn invalid_regex_is_rejected_by_schema_validation() {
-    let graph = SchemaGraph::anonymous(SchemaType::Text {
-        restrictions: TextRestrictions {
-            regex: Some("[".into()),
-            ..Default::default()
-        },
-        metadata: Default::default(),
-    });
-    assert!(validate_graph(&graph).is_err());
+fn text_regex_is_checked_with_the_regex_feature() {
+    let graph = text_regex_graph(r"\p{Greek}+");
+    validate_graph(&graph).unwrap();
+    validate_value(&graph, &graph.root, &text_value("prefix αβ suffix")).unwrap();
+    let errors = validate_value(&graph, &graph.root, &text_value("abc")).unwrap_err();
+    assert!(matches!(
+        errors.as_slice(),
+        [validation::ValueError::TextRegexMismatch { .. }]
+    ));
+}
+
+#[cfg(feature = "regex")]
+#[test]
+fn invalid_text_regex_is_ill_formed_with_the_regex_feature() {
+    let errors = validate_graph(&text_regex_graph("[")).unwrap_err();
+    assert!(matches!(
+        errors.as_slice(),
+        [validation::SchemaError::InvalidTextRegex { .. }]
+    ));
+}
+
+#[cfg(not(feature = "regex"))]
+#[test]
+fn text_regex_is_an_unsupported_feature_without_the_regex_feature() {
+    for pattern in [r"\p{Greek}+", "["] {
+        let graph = text_regex_graph(pattern);
+        assert!(matches!(
+            validate_graph(&graph).unwrap_err().as_slice(),
+            [validation::SchemaError::UnsupportedFeature("regex")]
+        ));
+        for text in ["prefix αβ suffix", "abc"] {
+            let errors = validate_value(&graph, &graph.root, &text_value(text)).unwrap_err();
+            assert!(matches!(
+                errors.as_slice(),
+                [validation::ValueError::UnsupportedFeature {
+                    feature: "regex",
+                    ..
+                }]
+            ));
+        }
+    }
 }
 
 #[test]
