@@ -19,6 +19,7 @@ componentTemplates:
           - "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
           - "{{ componentDir }}/tsconfig.json"
           - "{{ appRootDir }}/package.json"
+          - "{{ appRootDir }}/package-lock.json"
           targets:
           - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
         - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
@@ -42,6 +43,7 @@ componentTemplates:
           - "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
           - "{{ componentDir }}/tsconfig.json"
           - "{{ appRootDir }}/package.json"
+          - "{{ appRootDir }}/package-lock.json"
           targets:
           - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
         - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
@@ -63,6 +65,7 @@ componentTemplates:
           - "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
           - "{{ componentDir }}/tsconfig.json"
           - "{{ appRootDir }}/package.json"
+          - "{{ appRootDir }}/package-lock.json"
           targets:
           - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
         - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"

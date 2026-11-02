@@ -303,6 +303,9 @@ impl ToolsWithEnsuredCommonDeps {
         }
 
         let mut lock = self.tools_with_ensured_common_deps.write().await;
+        if lock.contains(tool) {
+            return Ok(());
+        }
 
         let result = ensure().await;
 
@@ -311,6 +314,13 @@ impl ToolsWithEnsuredCommonDeps {
         }
 
         result
+    }
+
+    pub async fn invalidate_common_deps_for_tool(&self, tool: &str) {
+        self.tools_with_ensured_common_deps
+            .write()
+            .await
+            .remove(tool);
     }
 }
 
@@ -1169,9 +1179,77 @@ pub fn validated_to_anyhow<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::ApplicationContext;
+    use super::{ApplicationContext, ToolsWithEnsuredCommonDeps};
     use crate::model::app::{Application, ApplicationSourceMode, ResolvedLocalServer};
     use test_r::test;
+
+    #[test]
+    async fn common_deps_ensure_once_rechecks_after_concurrent_read_misses() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let owner = ToolsWithEnsuredCommonDeps::new();
+        let calls = AtomicUsize::new(0);
+        let initial = owner.tools_with_ensured_common_deps.write().await;
+        let mut first = Box::pin(owner.ensure_common_deps_for_tool_once("node", || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let mut second = Box::pin(owner.ensure_common_deps_for_tool_once("node", || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        assert!(futures_util::poll!(first.as_mut()).is_pending());
+        assert!(futures_util::poll!(second.as_mut()).is_pending());
+        drop(initial);
+        // Both read permits are granted before either writer can proceed.
+        assert!(futures_util::poll!(first.as_mut()).is_pending());
+        assert!(futures_util::poll!(second.as_mut()).is_pending());
+        let (first, second) = tokio::join!(first, second);
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn common_deps_failure_retries_and_invalidation_is_tool_scoped() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let owner = ToolsWithEnsuredCommonDeps::new();
+        let calls = AtomicUsize::new(0);
+        assert!(
+            owner
+                .ensure_common_deps_for_tool_once("node", || async {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    anyhow::bail!("install failed")
+                })
+                .await
+                .is_err()
+        );
+        owner
+            .ensure_common_deps_for_tool_once("node", || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        owner
+            .ensure_common_deps_for_tool_once("moon:module", || async { Ok(()) })
+            .await
+            .unwrap();
+        owner.invalidate_common_deps_for_tool("node").await;
+        owner
+            .ensure_common_deps_for_tool_once("node", || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        owner
+            .ensure_common_deps_for_tool_once("moon:module", || async {
+                anyhow::bail!("unrelated tool was invalidated")
+            })
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
 
     #[test]
     fn automatic_manifest_upgrade_applies_before_load_without_changing_cwd() {

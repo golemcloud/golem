@@ -1476,6 +1476,22 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     - if all matching files defined by <FieldLink path="components.<component-name>.build[*].targets"/>
     - are newer then the matched files defined by `sources`.
 
+    For managed `node` and `npx` commands, Golem prepares npm dependencies before
+    checking source and target timestamps. It runs `npm install` when
+    `package.json` or `package-lock.json` changes, or when the `node_modules`
+    root is missing. The generated TypeScript and Effect build steps include
+    `package-lock.json` in their sources. After npm finishes, Golem records the
+    package files that npm produced so the next unchanged build can skip work.
+    Changes to the set of matched source paths also trigger a rebuild, including
+    a deleted lockfile that npm is configured not to recreate. For unchanged
+    path sets, output freshness still follows the source and target timestamps.
+
+    Golem does not scan the contents of `node_modules` for changes. If a build
+    patches installed packages or shares generated code across components,
+    declare the producer's inputs and outputs and order consumers after that
+    producer. Removing part of `node_modules` requires an explicit install step;
+    automatic dependency preparation repairs a missing root directory.
+
     <Example>
       { /* @formatter:off */ }
       ```yaml

@@ -82,6 +82,8 @@ pub struct TaskResult {
 pub struct ResolvedExternalCommandMarkerHash<'a> {
     pub build_dir: &'a Path,
     pub command: &'a app_raw::ExternalCommand,
+    // Collected in sorted order; membership changes matter even if npm leaves a lock absent.
+    pub source_paths: &'a [PathBuf],
 }
 
 #[derive(Serialize)]
@@ -645,6 +647,7 @@ mod tests {
                 ResolvedExternalCommandMarkerHash {
                     build_dir: Path::new("component"),
                     command,
+                    source_paths: &[],
                 },
             )
             .unwrap()
@@ -657,6 +660,38 @@ mod tests {
         assert!(!marker(&a).is_up_to_date());
         marker(&a).success().unwrap();
         assert!(marker(&a).is_up_to_date());
+    }
+
+    #[test]
+    fn external_build_marker_tracks_declared_source_membership() {
+        let directory = tempfile::tempdir().unwrap();
+        let command = serde_json::from_value::<app_raw::ExternalCommand>(serde_json::json!({
+            "command": "npx rollup -c",
+            "sources": ["package-lock.json", "src/main.ts"],
+            "targets": ["main.js"]
+        }))
+        .unwrap();
+        let with_lock = [
+            PathBuf::from("package-lock.json"),
+            PathBuf::from("src/main.ts"),
+        ];
+        let without_lock = [PathBuf::from("src/main.ts")];
+        let marker = |source_paths| {
+            TaskResultMarker::new(
+                directory.path(),
+                ResolvedExternalCommandMarkerHash {
+                    build_dir: Path::new("component"),
+                    command: &command,
+                    source_paths,
+                },
+            )
+            .unwrap()
+        };
+        for paths in [&with_lock[..], &without_lock[..], &with_lock[..]] {
+            assert!(!marker(paths).is_up_to_date());
+            marker(paths).success().unwrap();
+            assert!(marker(paths).is_up_to_date());
+        }
     }
 
     #[test]
