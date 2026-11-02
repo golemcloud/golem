@@ -66,7 +66,7 @@ where
     T: 'static,
     D: HasData + ?Sized + 'static,
     Ctx: WorkerCtx,
-    E: From<WorkerExecutorError> + Send + 'static + Into<anyhow::Error>,
+    E: DurableCallTrapError + Send + 'static,
 {
     async fn run(self, accessor: &Accessor<T, D>) -> wasmtime::Result<()> {
         let Self {
@@ -375,7 +375,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> wasmtime::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
@@ -409,7 +409,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         build_request: F,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> wasmtime::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
@@ -426,7 +426,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             AccessClaimOptions::default(),
-            AccessRequest::Built(Box::new(build_request)),
+            AccessRequest::<_, T, D, wasmtime::Error>::Built(Box::new(move |context, accessor| {
+                Box::pin(async move { Ok(build_request(context, accessor).await?) })
+            })),
             None,
             None,
         )
@@ -456,7 +458,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
         request: Pair::Req,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> wasmtime::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
@@ -467,7 +469,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             claim_options,
-            AccessRequest::<_, T, D, WorkerExecutorError>::Ready(request),
+            AccessRequest::<_, T, D, wasmtime::Error>::Ready(request),
             None,
             None,
         )
@@ -487,7 +489,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         mut options: AccessClaimOptions,
         request: Pair::Req,
         targets: Result<Vec<PermissionTarget>, String>,
-    ) -> Result<(Self, Option<Result<LiveAuthorizationPermit, String>>), WorkerExecutorError>
+    ) -> wasmtime::Result<(Self, Option<Result<LiveAuthorizationPermit, String>>)>
     where
         Pair: DeniablePair,
         T: 'static,
@@ -512,7 +514,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         claim_options: AccessClaimOptions,
         request: Pair::Req,
         span_started: golem_common::model::oplog::SpanStarted,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> wasmtime::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
@@ -523,7 +525,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             claim_options,
-            AccessRequest::<_, T, D, WorkerExecutorError>::Ready(request),
+            AccessRequest::<_, T, D, wasmtime::Error>::Ready(request),
             Some(Box::new(move |_| Ok(span_started))),
             None,
         )
@@ -595,7 +597,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         T: 'static,
         D: HasData + ?Sized + 'static,
         Ctx: WorkerCtx,
-        E: From<WorkerExecutorError> + Send + 'static + Into<anyhow::Error>,
+        E: DurableCallTrapError + Send + 'static,
     {
         let identity = AccessCallIdentity::capture(
             store,
@@ -668,7 +670,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
         build_request: F,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -695,7 +697,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -723,7 +725,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
         requires_agent_authority: bool,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -752,7 +754,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         capture: C,
         build_request: F,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -784,7 +786,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         span_observer: Option<Arc<dyn CallSpanObserver>>,
         requires_agent_authority: bool,
         capture: Option<C>,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -809,7 +811,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             function_type,
             claim_options,
             requires_agent_authority,
-            build_request,
+            async move |context, captured| Ok(build_request(context, captured).await?),
             build_span,
             span_observer,
             capture,
@@ -836,7 +838,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
         F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
-        E: From<WorkerExecutorError>,
+        E: DurableCallTrapError,
     {
         let is_live =
             store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live());

@@ -58,7 +58,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 HostRequestNoInput {},
                 DurableFunctionType::ReadLocal,
             )
-            .await?;
+            .await
+            .map_err(StreamError::Trap)?;
             let call = if call.is_live() {
                 call
             } else {
@@ -126,7 +127,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 HostRequestNoInput {},
                 DurableFunctionType::ReadLocal,
             )
-            .await?;
+            .await
+            .map_err(StreamError::Trap)?;
             let call = if call.is_live() {
                 call
             } else {
@@ -225,7 +227,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     HostRequestNoInput {},
                     DurableFunctionType::ReadLocal,
                 )
-                .await?;
+                .await
+                .map_err(StreamError::Trap)?;
             let call = if call.is_live() {
                 call
             } else {

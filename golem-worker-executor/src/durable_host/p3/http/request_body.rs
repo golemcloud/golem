@@ -1474,7 +1474,7 @@ where
             // loudly on the closed channel.
             Err(error) => {
                 drop(resolution_tx);
-                return Err(wasmtime::Error::from(error));
+                return Err(error);
             }
         };
 

@@ -774,3 +774,184 @@ function arrayChunks<T>(array: T[], chunkSize: number): T[][] {
 
   return chunks;
 }
+
+interface GcSnapshotState {
+  name: string;
+  completed: number;
+  checksum: number;
+  restored: boolean;
+}
+
+const gcSnapshotValue = (state: GcSnapshotState) => ({
+  name: state.name,
+  completed: state.completed,
+  checksum: state.checksum,
+});
+
+const collectGarbage = async () => {
+  // `gc` defers the collection to the next event-loop turn.
+  (globalThis as unknown as { gc: () => void }).gc();
+  await sleep(0);
+  await sleep(0);
+};
+
+// Each RPC client is owned by a reference cycle, so only a garbage collection releases it, at a
+// point that depends on the heap. The snapshot does not contain the heap: a restored agent has
+// none of the clients created before the snapshot, so its collections release different clients
+// than the original run's did.
+export const TsGcSnapshotDriver = defineAgent({
+  name: "TsGcSnapshotDriver",
+  id: { name: z.string() },
+  snapshotting: { everyNInvocations: 2 },
+  methods: {
+    run: method({
+      input: { count: z.number(), collectAt: z.number() },
+      returns: z.number(),
+    }),
+    inspect: method({
+      input: {},
+      returns: z.object({
+        completed: z.number(),
+        checksum: z.number(),
+        restored: z.boolean(),
+      }),
+    }),
+  },
+});
+
+export const TsGcSnapshotDriverImpl = TsGcSnapshotDriver.implement({
+  init: ({ id }): GcSnapshotState => ({
+    name: id.name,
+    completed: 0,
+    checksum: 0,
+    restored: false,
+  }),
+  methods: {
+    async run({ count, collectAt }) {
+      const targetId = { name: this.name + "-target" };
+      for (let i = 0; i < count; i++) {
+        if (i === collectAt) {
+          await collectGarbage();
+        }
+        const client = TsCounter.client.get(targetId);
+        const cycle: { client: typeof client; self?: unknown } = { client };
+        cycle.self = cycle;
+        await client.incBy({ value: 1 });
+        const observed = await client.getValue();
+        this.completed++;
+        if (observed !== this.completed) {
+          throw new Error(`provider count ${observed} != ${this.completed}`);
+        }
+        this.checksum += observed;
+      }
+      return this.completed;
+    },
+    inspect() {
+      return {
+        completed: this.completed,
+        checksum: this.checksum,
+        restored: this.restored,
+      };
+    },
+  },
+  snapshot: {
+    save() {
+      return new TextEncoder().encode(JSON.stringify(gcSnapshotValue(this)));
+    },
+    load(bytes: Uint8Array): GcSnapshotState {
+      return { ...JSON.parse(new TextDecoder().decode(bytes)), restored: true };
+    },
+  },
+});
+
+interface InputGcState {
+  name: string;
+  restored: boolean;
+  reads: number;
+  retained: unknown[];
+}
+
+async function retainInputCycle(state: InputGcState, reads: number) {
+  const stream = await TsStreamingRpcTarget.client
+    .get({ name: state.name })
+    .produce({ values: [20, 21, 22] });
+  for (let index = 0; index < reads; index++) {
+    const item = await stream.next();
+    if (item.done || item.value !== 20 + index)
+      throw new Error("incorrect stream item");
+    state.reads++;
+  }
+  const cycle: { stream: typeof stream; self?: unknown } = { stream };
+  cycle.self = cycle;
+  if (!state.restored) state.retained.push(cycle);
+}
+
+export const TsInputGc = defineAgent({
+  name: "TsInputGc",
+  id: { name: z.string() },
+  snapshotting: { everyNInvocations: 1 },
+  methods: {
+    promise: method({ input: {}, returns: PromiseIdSchema }),
+    run: method({
+      input: { reads: z.number(), gate: PromiseIdSchema },
+      returns: z.void(),
+    }),
+    inspect: method({
+      input: {},
+      returns: z.object({
+        restored: z.boolean(),
+        reads: z.number(),
+        retained: z.number(),
+      }),
+    }),
+    continuation: method({ input: {}, returns: U32List }),
+  },
+});
+
+export const TsInputGcImpl = TsInputGc.implement({
+  init: ({ id }): InputGcState => ({
+    name: id.name,
+    restored: false,
+    reads: 0,
+    retained: [],
+  }),
+  methods: {
+    promise() {
+      return createPromise();
+    },
+    async run({ reads, gate }) {
+      await retainInputCycle(this, reads);
+      // Both executions make the same timer calls. Only reachability differs.
+      await collectGarbage();
+      await awaitPromise(gate as PromiseId);
+    },
+    inspect() {
+      return {
+        restored: this.restored,
+        reads: this.reads,
+        retained: this.retained.length,
+      };
+    },
+    async continuation() {
+      return collect(
+        await TsStreamingRpcTarget.client
+          .get({ name: this.name })
+          .produce({ values: [30, 31, 32] }),
+      );
+    },
+  },
+  snapshot: {
+    save() {
+      return new TextEncoder().encode(
+        JSON.stringify({ name: this.name, reads: this.reads }),
+      );
+    },
+    load(bytes: Uint8Array): InputGcState {
+      return {
+        ...JSON.parse(new TextDecoder().decode(bytes)),
+        restored: true,
+        retained: [],
+      };
+    },
+  },
+});

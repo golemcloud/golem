@@ -260,10 +260,10 @@ Validation performed:
   optimized outputs preserve their decoded WIT contract.
 - Counters debug build retains `.debug_info`, `.debug_line`, `.debug_str` and
   `name`; the release symbol-stripped cores do not contain them.
-- `cargo test -p golem-worker-executor --test integration --
+- `cargo test -p golem-worker-executor-tests --test integration --
   worker_initialization::partial_creation_reloads_identity_and_original_initialization
   --report-time`: 1 passed with the stripped counters fixture.
-- `cargo test -p golem-worker-executor --test integration --
+- `cargo test -p golem-worker-executor-tests --test integration --
   durability::automatic_snapshot_every_2nd_invocation durability::snapshot_based_recovery
   --exact --report-time`: 2 passed separately with baseline, stripped, and
   restricted-Oz counters components (six successful test executions).

@@ -15,9 +15,10 @@
 use super::fork::Copied;
 use super::store_calls::StoreOf;
 use super::*;
+use crate::filesystem_snapshot::test_support::SpacedTimes;
 use crate::filesystem_snapshot::{
     CallError, Failed, FilesystemSnapshotStore, InMemorySnapshotStore, ReadError, RestoreFailure,
-    RunSlots, SpacedTimes, Unlimited, Withdrawal,
+    RunSlots, Unlimited, Withdrawal,
 };
 use crate::services::agent_filesystem::{RestoreClass, RestoreTree};
 use crate::services::golem_config::FilesystemSnapshotUploadValues;
@@ -3410,7 +3411,7 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     a_volume_below_the_pressure_target_admits_no_periodic_upload(
         FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
             root: root.into(),
         },
         "managed-xfs-pressure",
@@ -3455,7 +3456,7 @@ async fn a_volume_below_the_pressure_target_admits_no_periodic_upload(
     storage: FilesystemStorageMode,
     name: &str,
 ) {
-    let provisioning = crate::sandbox_filesystem::SandboxFilesystemProvisioning::new(
+    let provisioning = crate::filesystem::sandbox::SandboxFilesystemProvisioning::new(
         &storage,
         crate::services::golem_config::FilesystemStorageConfig::default().cleanup_retry,
     )

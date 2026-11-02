@@ -39,10 +39,13 @@
 //!   only guest progress can admit this delivery, and no durable effect remains;
 //! * passive replay-progress notification for a markerless completion whose
 //!   durable finalization is finished. No recorded entry depends on that
-//!   unobserved delivery, and invocation settlement may own the remaining tail.
+//!   unobserved delivery, and invocation settlement may own the remaining tail;
+//! * a destructor's passive wait for sibling history or the natural replay tail.
+//!   Its cursor transactions stay active, and it cannot perform a missing live
+//!   effect until the normal replay-to-live transition authorizes continuation.
 //!
 //! Waits whose completion is *not* guest-driven — durable oplog appends,
-//! live network / file I/O, replay-resolver waits, queued or running cursor
+//! live network / file I/O, ordinary replay-resolver waits, queued or running cursor
 //! transactions, and recorded delivery-marker waits — keep the task active:
 //! the completion path waits for them (bounded by the invocation tail-drain
 //! timeout).

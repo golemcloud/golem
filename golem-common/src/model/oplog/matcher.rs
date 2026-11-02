@@ -505,6 +505,10 @@ impl PublicOplogEntry {
                 Self::string_match("snapshotconfirmed", &[], query_path, query)
                     || Self::string_match("snapshot-confirmed", &[], query_path, query)
             }
+            PublicOplogEntry::SpanClosed(_params) => {
+                Self::string_match("spanclosed", &[], query_path, query)
+                    || Self::string_match("span-closed", &[], query_path, query)
+            }
             PublicOplogEntry::OplogProcessorCheckpoint(_params) => {
                 Self::string_match("oplogprocessorcheckpoint", &[], query_path, query)
                     || Self::string_match("oplog-processor-checkpoint", &[], query_path, query)

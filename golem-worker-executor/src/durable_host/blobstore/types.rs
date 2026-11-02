@@ -183,8 +183,7 @@ where
                 },
                 HostRequestNoInput {},
             )
-            .await
-            .map_err(wasmtime::Error::from)?;
+            .await?;
 
             if !handle.is_live() {
                 match handle

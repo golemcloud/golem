@@ -730,6 +730,20 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.filesystem_snapshot)
                 ));
             }
+            PublicOplogEntry::SpanClosed(params) => {
+                logln(format_message_highlight("SPAN CLOSED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                if let Some(start_index) = &params.resource_start_index {
+                    logln(format!("{pad}resource start:    {start_index}"));
+                }
+                logln(format!(
+                    "{pad}span finished:     {:?}",
+                    params.span_finished
+                ));
+            }
             PublicOplogEntry::OplogProcessorCheckpoint(params) => {
                 logln(format_message_highlight("OPLOG PROCESSOR CHECKPOINT"));
                 logln(format!(

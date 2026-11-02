@@ -18,9 +18,7 @@ use crate::durable_host::p3::http::test_support::FrameTestOplog;
 use crate::services::oplog::Oplog;
 use golem_common::model::Timestamp;
 use golem_common::model::invocation_context::TraceId;
-use golem_common::model::oplog::{
-    HostPayloadPair, HostRequest, HostRequestNoInput, OplogEntry, OplogPayload,
-};
+use golem_common::model::oplog::{HostPayloadPair, HostRequestNoInput, OplogEntry, OplogPayload};
 use test_r::test;
 
 fn opening() -> OplogEntry {
@@ -73,23 +71,18 @@ async fn send_span_abandonment_waits_for_opening_and_preserves_drop_time() {
             lifecycle.abandon();
         }
         lifecycle.abandon();
+        let DropEvent::FinishP3HttpSpan { cleanup } = events.try_recv().unwrap() else {
+            panic!("expected cleanup");
+        };
+        cleanup.progress.await.unwrap();
         let entries = oplog.entries();
-        assert_eq!(entries.len(), 4);
-        assert!(matches!(&entries[2], OplogEntry::Start {
-            function_name, observational_owner: Some(owner), request: Some(OplogPayload::Inline(request)), ..
-        } if *function_name == golem_common::model::oplog::host_functions::P3HttpSpanCleanup::HOST_FUNCTION_NAME
-            && *owner == OplogIndex::from_u64(7)
-            && matches!(request.as_ref(), HostRequest::P3HttpSpanCleanup(request) if request.send_start_index == index)));
+        assert_eq!(entries.len(), 3);
         assert!(
-            matches!(&entries[3], OplogEntry::End { span_finished: Some(finished), .. }
-            if finished.finished_at == finished_at
+            matches!(&entries[2], OplogEntry::SpanClosed { resource_start_index: Some(send_index), span_finished: finished, .. }
+            if *send_index == index && finished.finished_at == finished_at
                 && finished.span_id == lifecycle.started_span().unwrap().span_id
                 && finished.outcome == golem_common::model::oplog::SpanOutcome::Abandoned)
         );
-        assert!(matches!(
-            events.try_recv(),
-            Ok(DropEvent::FinishP3HttpSpan { .. })
-        ));
         assert!(events.try_recv().is_err());
     }
 }
@@ -150,6 +143,193 @@ async fn send_span_teardown_and_snapshot_do_not_append_cleanup() {
         assert!(events.try_recv().is_err());
         assert_eq!(oplog.entry_count(), 1);
     }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn repaired_send_not_delivered_closes_the_original_span_live() {
+    assert_send_abandonment_after_live_tail(false, false).await;
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn markerless_completed_send_not_delivered_closes_the_original_span_live() {
+    assert_send_abandonment_after_live_tail(true, false).await;
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn completed_entity_send_abandonment_does_not_borrow_owner_liveness() {
+    assert_send_abandonment_after_live_tail(true, true).await;
+}
+
+async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_entity: bool) {
+    use crate::durable_host::concurrent::{
+        Resolution, ResolutionOutcome, cleanup_recorder_for_store,
+    };
+    use crate::durable_host::replay_state::{
+        ReplayStartClaimOutcome, ReplayState, ReplayToLiveRole, StartClaim,
+    };
+    use golem_common::model::entity::InvocationExecutionMode;
+    use golem_common::model::{AgentId, OwnedAgentId};
+
+    let oplog = FrameTestOplog::new();
+    oplog
+        .add(OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        })
+        .await
+        .unwrap();
+    let mut entry = opening();
+    if let OplogEntry::Start {
+        observational_owner,
+        ..
+    } = &mut entry
+    {
+        *observational_owner = None;
+    }
+    let index = oplog.add(entry.clone()).await.unwrap();
+    // Successful sends leave the span open for body consumption or response abandonment.
+    let end = OplogEntry::End {
+        timestamp: Timestamp::now_utc(),
+        start_index: index,
+        response: None,
+        forced_commit: false,
+        span_finished: None,
+        span_attributes: None,
+    };
+    if recorded_end {
+        oplog.add(end.clone()).await.unwrap();
+        oplog
+            .add(OplogEntry::RemoveRetryPolicy {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                name: "http-tail-sentinel".to_string(),
+            })
+            .await
+            .unwrap();
+    }
+    let replay = ReplayState::new_for_owner(
+        OwnedAgentId {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            agent_id: AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "http-repair".to_string(),
+            },
+        },
+        oplog.clone(),
+        golem_common::model::regions::DeletedRegions::default(),
+        None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        oplog.current_oplog_index().await,
+        None,
+    )
+    .await
+    .unwrap();
+    let (recorder, mut events) = cleanup_recorder_for_store(
+        oplog.clone(),
+        replay.clone(),
+        completed_entity.then_some(InvocationExecutionMode::ReplayingCompleted),
+        Arc::new(AtomicBool::new(false)),
+        true,
+    );
+    let lifecycle = Arc::new(P3SendSpanLifecycle::new(recorder));
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = replay
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &P3HttpClientSend::HOST_FUNCTION_NAME,
+            &DurableFunctionType::WriteRemote,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("send Start must replay")
+    };
+    lifecycle.clone().started(index, &entry, true);
+    let resolution = replay.await_resolution_outcome(handle).await.unwrap();
+    if recorded_end {
+        assert!(matches!(
+            resolution,
+            ResolutionOutcome::Resolved(Resolution::Completed {
+                delivery_marker: None,
+                ..
+            })
+        ));
+    } else {
+        assert!(matches!(resolution, ResolutionOutcome::Incomplete));
+    }
+    let mut delivery = recorded_end.then(|| {
+        if completed_entity {
+            CompletionDelivery::test_replay_discarded()
+        } else {
+            CompletionDelivery::test_replay_at_tail(oplog.clone(), replay.clone(), index, None)
+        }
+    });
+    if recorded_end && !completed_entity {
+        let preparation = delivery.as_mut().unwrap().prepare_delivery(None);
+        tokio::pin!(preparation);
+        assert!(futures::poll!(preparation.as_mut()).is_pending());
+    }
+    if recorded_end {
+        let (_, sentinel) = replay.get_oplog_entry(None).await.unwrap();
+        assert!(
+            matches!(sentinel, OplogEntry::RemoveRetryPolicy { name, .. }
+            if name == "http-tail-sentinel")
+        );
+    }
+    let memory = crate::services::linear_memory::LinearMemoryTracker::new(
+        2,
+        2,
+        golem_common::model::agent::AgentMode::Durable,
+        true,
+        Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
+            0, 10, 0, 0, 0,
+        )),
+        Arc::new(Mutex::new(
+            crate::services::active_agents::MemoryGrant::inert(2),
+        )),
+        std::time::Instant::now(),
+    );
+    replay
+        .switch_to_live(&memory, ReplayToLiveRole::PrimaryAgent)
+        .await
+        .unwrap();
+    assert!(replay.is_live_published());
+    let mut delivery = if let Some(delivery) = delivery.take() {
+        delivery
+    } else {
+        oplog.add(end).await.unwrap();
+        CompletionDelivery::test_live_armed(oplog.clone(), index)
+            .await
+            .unwrap()
+    };
+    delivery.prepare_delivery(None).await.unwrap();
+    lifecycle.abandon();
+    settle_send_terminal(TerminalConsumption::NotDelivered, delivery);
+    let DropEvent::FinishP3HttpSpan { cleanup } = events.try_recv().unwrap() else {
+        panic!("abandonment must enqueue resident cleanup");
+    };
+    cleanup.progress.await.unwrap();
+    let entries = oplog.entries();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(entry, OplogEntry::Start { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries.iter().any(|entry| matches!(entry,
+        OplogEntry::SpanClosed { resource_start_index: Some(source), span_finished, .. }
+        if *source == index && span_finished.span_id == lifecycle.started_span().unwrap().span_id
+            && span_finished.outcome == golem_common::model::oplog::SpanOutcome::Abandoned)),
+        !completed_entity
+    );
+    assert_eq!(
+        entries.iter().any(|entry| matches!(entry,
+        OplogEntry::CompletionDiscarded { start_index, .. } if *start_index == index)),
+        !completed_entity
+    );
+    assert!(events.try_recv().is_err());
 }
 
 #[test]

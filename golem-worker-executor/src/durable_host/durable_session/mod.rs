@@ -793,6 +793,8 @@ struct DurableReadWait {
 /// Adapts a durable input endpoint to Wasmtime polling, values, and guest-drop cleanup.
 pub struct DurableInputProducer {
     input: DurableInputEndpoint,
+    /// Guest acknowledgements lag the endpoint's host-take ordinal while delivery is pending.
+    guest_read_ordinal: Arc<AtomicU64>,
     pending: Option<DurableReceiveFuture>,
     pending_activity: Option<Arc<OnceLock<RuntimeActivityId>>>,
     live_admission: Option<oneshot::Receiver<Result<(), WorkerExecutorError>>>,
@@ -847,9 +849,11 @@ pub(crate) struct DurableInputReceiveAdmission {
 }
 
 /// Deferred cleanup returned when a guest drops an unread durable input.
+#[derive(Clone)]
 pub struct DroppedDurableInput {
     streams: StreamSession,
     transport_stream_id: u64,
+    consumer_read_ordinal: u64,
     role: StreamCancelRole,
 }
 

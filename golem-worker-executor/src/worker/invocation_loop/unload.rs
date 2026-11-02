@@ -186,37 +186,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         .await;
     }
 
-    pub(super) fn unload_running_agent<Runtime, Adapter>(
-        agent: RunningAgent<Runtime, Adapter>,
-        reason: UnloadReason,
-        deadline: Instant,
-        permit_state: &mut ConcurrentAgentPermitState<
-            crate::services::active_agents::ConcurrentAgentPermit,
-        >,
-        filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
-        before_delete: Option<BoxFuture<'static, ()>>,
-    ) -> UnloadObserver
-    where
-        Runtime: Send + 'static,
-        Adapter: SandboxFilesystemAdapter,
-    {
-        let RunningAgent {
-            runtime,
-            filesystem,
-        } = agent;
-        unload_resident_agent_ownership(
-            ResidentAgentOwnership {
-                runtime,
-                filesystem,
-            },
-            reason,
-            deadline,
-            permit_state,
-            filesystem_activity,
-            before_delete,
-        )
-    }
-
     pub(super) fn archive_ephemeral_oplog(&self) {
         let worker = self.parent.clone();
         let shutdown_worker = worker.clone();
@@ -339,6 +308,50 @@ pub(super) async fn finish_filesystem_limit_unload(
     cleanup_failure
 }
 
+pub(super) fn unload_prepared_agent<Runtime, Adapter>(
+    agent: PreparedAgent<Runtime, Adapter>,
+    operations: Arc<OwnerToolOperations>,
+    reason: UnloadReason,
+    deadline: Instant,
+    permit_state: &mut ConcurrentAgentPermitState<
+        crate::services::active_agents::ConcurrentAgentPermit,
+    >,
+    filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+    hook: Option<(OwnedAgentId, Arc<dyn WorkerDeletionHook>)>,
+) -> UnloadObserver
+where
+    Runtime: Send + 'static,
+    Adapter: SandboxFilesystemAdapter,
+{
+    let ownership = match agent {
+        PreparedAgent::Resident(RunningAgent {
+            runtime,
+            filesystem,
+        }) => SealedAgentOwnership {
+            runtime,
+            filesystem: seal(filesystem),
+            operations: Some(operations),
+        },
+        PreparedAgent::Aborted {
+            runtime,
+            filesystem,
+        } => SealedAgentOwnership {
+            runtime,
+            filesystem,
+            operations: Some(operations),
+        },
+    };
+    unload_sealed_agent_ownership(
+        ownership,
+        reason,
+        deadline,
+        permit_state,
+        filesystem_activity,
+        hook,
+    )
+}
+
+#[cfg(test)]
 pub(super) fn unload_resident_agent_ownership<Runtime, Adapter>(
     ownership: ResidentAgentOwnership<Runtime, Adapter>,
     reason: UnloadReason,
@@ -347,7 +360,7 @@ pub(super) fn unload_resident_agent_ownership<Runtime, Adapter>(
         crate::services::active_agents::ConcurrentAgentPermit,
     >,
     filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
-    before_delete: Option<BoxFuture<'static, ()>>,
+    hook: Option<(OwnedAgentId, Arc<dyn WorkerDeletionHook>)>,
 ) -> UnloadObserver
 where
     Runtime: Send + 'static,
@@ -356,17 +369,19 @@ where
     let ResidentAgentOwnership {
         runtime,
         filesystem,
+        operations,
     } = ownership;
     unload_sealed_agent_ownership(
         SealedAgentOwnership {
             runtime,
             filesystem: seal(filesystem),
+            operations: Some(operations),
         },
         reason,
         deadline,
         permit_state,
         filesystem_activity,
-        before_delete,
+        hook,
     )
 }
 
@@ -378,7 +393,7 @@ pub(super) fn unload_sealed_agent_ownership<Runtime, Adapter>(
         crate::services::active_agents::ConcurrentAgentPermit,
     >,
     filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
-    before_delete: Option<BoxFuture<'static, ()>>,
+    hook: Option<(OwnedAgentId, Arc<dyn WorkerDeletionHook>)>,
 ) -> UnloadObserver
 where
     Runtime: Send + 'static,
@@ -403,6 +418,7 @@ where
         let SealedAgentOwnership {
             runtime,
             filesystem,
+            operations,
         } = ownership;
         debug!(?reason, "Unloading resident agent");
         drop(runtime);
@@ -437,8 +453,16 @@ where
                 completion.complete(Some(error.clone()));
             }
 
-            if let Some(before_delete) = before_delete {
-                before_delete.await;
+            // Entity drainage destroys Stores and releases lanes, but accepted supervisors
+            // can still hold registered operations after the primary runtime is gone.
+            if let Some((owner, hook)) = &hook {
+                hook.before_owner_operation_settlement(owner).await;
+            }
+            if let Some(operations) = operations {
+                operations.wait_owner_settled().await;
+            }
+            if let Some((owner, hook)) = &hook {
+                hook.before_filesystem_cleanup(owner).await;
             }
             match delete_unloaded_filesystem(filesystem).await {
                 Ok(()) => {
@@ -478,6 +502,7 @@ pub async fn cleanup_startup_filesystem<Adapter: SandboxFilesystemAdapter>(
         SealedAgentOwnership {
             runtime: (),
             filesystem,
+            operations: None,
         },
         UnloadReason::Failure,
         resource_usage_close_deadline(),

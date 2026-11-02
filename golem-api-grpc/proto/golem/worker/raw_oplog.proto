@@ -79,6 +79,7 @@ message RawOplogEntry {
     RawSnapshotConfirmedParameters snapshot_confirmed = 66;
     RawToolAttachmentReadParameters tool_attachment_read = 67;
     RawToolAttachmentControlParameters tool_attachment_control = 68;
+    RawSpanClosedParameters span_closed = 69;
   }
 }
 
@@ -405,6 +406,11 @@ message RawSnapshotParameters {
 
 message RawSnapshotConfirmedParameters {
   string filesystem_snapshot = 1;
+}
+
+message RawSpanClosedParameters {
+  optional uint64 resource_start_index = 1;
+  RawSpanFinished span_finished = 2;
 }
 
 message RawOplogProcessorCheckpointParameters {

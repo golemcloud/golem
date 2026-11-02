@@ -218,6 +218,9 @@ impl OwnerToolOperation {
                     .get_mut(&self.id)
                     .unwrap()
                     .withdraw_uncommitted_cancellation(&self.owner.changed);
+                if state.operations[&self.id].winner.is_terminal() {
+                    return false;
+                }
                 if state
                     .operations
                     .values()
@@ -349,9 +352,47 @@ impl OwnerToolOperation {
         expected: ToolOperationWinner,
         committed: Option<ToolOperationWinner>,
     ) {
+        self.resolve_selection_with_cleanup(expected, committed, async { Ok(()) })
+            .await
+            .expect("terminal resolution without cleanup cannot fail");
+    }
+
+    pub(crate) async fn resolve_ordinary_with_cleanup(
+        &self,
+        terminal: Arc<SerializableToolOperationTerminal>,
+        cleanup: impl std::future::Future<Output = Result<(), WorkerExecutorError>>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.resolve_selection_with_cleanup(
+            ToolOperationWinner::SelectingOrdinary,
+            Some(ToolOperationWinner::Ordinary {
+                _terminal: terminal,
+            }),
+            cleanup,
+        )
+        .await
+    }
+
+    pub(crate) async fn resolve_cancel_with_cleanup(
+        &self,
+        cleanup: impl std::future::Future<Output = Result<(), WorkerExecutorError>>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.resolve_selection_with_cleanup(
+            ToolOperationWinner::SelectingCancelled,
+            Some(ToolOperationWinner::Cancelled),
+            cleanup,
+        )
+        .await
+    }
+
+    async fn resolve_selection_with_cleanup(
+        &self,
+        expected: ToolOperationWinner,
+        committed: Option<ToolOperationWinner>,
+        cleanup: impl std::future::Future<Output = Result<(), WorkerExecutorError>>,
+    ) -> Result<(), WorkerExecutorError> {
         let terminal_committed = committed.is_some();
         let next = committed.unwrap_or(ToolOperationWinner::Open);
-        let lane = {
+        {
             let mut state = self.owner.state.lock().unwrap();
             let operation = state.operations.get_mut(&self.id).unwrap();
             assert_eq!(
@@ -367,6 +408,15 @@ impl OwnerToolOperation {
                 winner = operation.winner.kind_label(),
                 "Resolved tool operation terminal selection"
             );
+        }
+        self.owner.changed.notify_waiters();
+        // The durable terminal already chose the result. Cleanup must not elect against
+        // its own selecting state, but it still owns the lane until parent preparation
+        // completes. On failure the owner-failure cleanup drains that lane instead.
+        cleanup.await?;
+        let lane = {
+            let mut state = self.owner.state.lock().unwrap();
+            let operation = state.operations.get_mut(&self.id).unwrap();
             if terminal_committed {
                 std::mem::replace(&mut operation.lane, LaneOwnership::None)
             } else {
@@ -379,6 +429,7 @@ impl OwnerToolOperation {
             "Drained tool terminal lane ownership"
         );
         self.owner.changed.notify_waiters();
+        Ok(())
     }
 
     pub(crate) fn winner_if_active(&self) -> Option<ToolOperationWinner> {

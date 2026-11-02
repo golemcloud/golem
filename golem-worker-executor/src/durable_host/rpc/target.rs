@@ -469,13 +469,10 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     request: HostRequestGolemRpcCreate,
     with_agent_authority: bool,
-) -> Result<
-    (
-        DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
-        Arc<InvocationContextSpan>,
-    ),
-    WorkerExecutorError,
-> {
+) -> anyhow::Result<(
+    DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
+    Arc<InvocationContextSpan>,
+)> {
     let function_type = rpc_connection_function_type(with_agent_authority);
     let begun = if with_agent_authority {
         DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::begin_with_agent_authority(
@@ -515,11 +512,21 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
                 Ok(handle) => Ok((handle, span)),
                 Err(error) => {
                     finish_span_in_memory(ctx, span.span_id())?;
-                    Err(error)
+                    Err(error.into())
                 }
             }
         }
-        ResolvedCall::Replay(handle) => {
+        ResolvedCall::Replay(mut handle) => {
+            let recorded = match handle.recorded_request(ctx).await {
+                Ok(recorded) => recorded,
+                Err(error) => return Err(handle.trap(error)),
+            };
+            if recorded.remote_agent_id != request.remote_agent_id {
+                return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
+                    format!("RPC connection to {}", request.remote_agent_id),
+                    format!("RPC connection to {}", recorded.remote_agent_id),
+                )));
+            }
             let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
                     "RPC connection Start carrying span_started",

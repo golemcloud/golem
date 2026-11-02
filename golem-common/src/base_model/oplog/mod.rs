@@ -1011,5 +1011,24 @@ oplog_entry! {
         public {
             filesystem_snapshot: String,
         }
+    },
+    /// Records that the guest released a host resource whose only durable content is its
+    /// span, and that the span closed. The release itself is not a durable call: replay neither
+    /// claims nor requires this entry, so a guest may release the resource at another point
+    /// when it replays.
+    SpanClosed {
+        hint: true
+        wit_raw_type: "raw-span-closed-parameters"
+        wit_public_type: "span-closed-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            /// The `Start` of the durable call that opened the span.
+            resource_start_index: Option<OplogIndex>,
+            span_finished: SpanFinished,
+        }
+        public {
+            resource_start_index: Option<OplogIndex>,
+            span_finished: PublicSpanFinished,
+        }
     }
 }

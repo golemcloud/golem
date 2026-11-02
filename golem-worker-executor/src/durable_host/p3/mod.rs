@@ -221,8 +221,7 @@ where
         request.clone(),
         targets,
     )
-    .await
-    .map_err(wasmtime::Error::from)?;
+    .await?;
     let denied = decision
         .as_ref()
         .and_then(|decision| decision.as_ref().err())

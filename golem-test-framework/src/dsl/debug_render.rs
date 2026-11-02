@@ -442,6 +442,14 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 params.filesystem_snapshot
             );
         }
+        PublicOplogEntry::SpanClosed(params) => {
+            let _ = writeln!(result, "SPAN CLOSED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            if let Some(start_index) = &params.resource_start_index {
+                let _ = writeln!(result, "{pad}resource start:    {start_index}");
+            }
+            let _ = writeln!(result, "{pad}span finished:     {:?}", params.span_finished);
+        }
         PublicOplogEntry::OplogProcessorCheckpoint(params) => {
             let _ = writeln!(result, "OPLOG PROCESSOR CHECKPOINT");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
