@@ -213,6 +213,10 @@ pub trait PermissionClass {
 
     const NAME: &'static str;
 
+    fn verb_subsumes(grant: Option<Self::Verb>, target: Option<Self::Verb>) -> bool {
+        grant.is_none() || grant == target
+    }
+
     fn parse_resource(
         _verb: Option<Self::Verb>,
         resource: &str,
@@ -241,7 +245,7 @@ pub struct ClassPermissionTarget<C: PermissionClass> {
 impl<C: PermissionClass> ClassPermissionTarget<C> {
     pub fn subsumes(&self, other: &Self) -> bool {
         self.owner.subsumes(&other.owner)
-            && (self.verb.is_none() || self.verb == other.verb)
+            && C::verb_subsumes(self.verb, other.verb)
             && self.resource.subsumes(&other.resource)
     }
 }
@@ -259,13 +263,13 @@ impl<C: PermissionClass> ClassPermissionPattern<C> {
     pub fn subsumes(&self, other: &Self) -> bool {
         self.owner.subsumes(&other.owner)
             && self.recipient.subsumes(&other.recipient)
-            && (self.verb.is_none() || self.verb == other.verb)
+            && C::verb_subsumes(self.verb, other.verb)
             && self.resource.subsumes(&other.resource)
     }
 
     pub fn subsumes_target(&self, other: &ClassPermissionTarget<C>) -> bool {
         self.owner.subsumes(&other.owner)
-            && (self.verb.is_none() || self.verb == other.verb)
+            && C::verb_subsumes(self.verb, other.verb)
             && self.resource.subsumes(&other.resource)
     }
 }

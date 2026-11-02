@@ -1018,6 +1018,19 @@ mod tests {
         let surface =
             agent_effective_surface_from_wallet(&context, [&StoredCard::Polymorphic(card)]);
 
+        for (verb, resource, allowed) in [
+            ("query", "orders.public.jobs", true),
+            ("mutate", "orders.public.jobs", true),
+            ("unanalyzed", "database(orders)", false),
+        ] {
+            let target = parse_permission(&format!(
+                "rdbms(owner@example.com/shop/prod) @ * : {verb} : {resource}"
+            ))
+            .unwrap()
+            .to_target();
+            assert_eq!(surface.authorize(&target).unwrap(), allowed);
+        }
+
         assert!(
             surface
                 .authorize(&environment_view_target("owner@example.com/shop/prod"))

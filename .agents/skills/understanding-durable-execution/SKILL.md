@@ -2726,6 +2726,50 @@ checks the policy before appending its `Start`. P3 imports that await before the
 RDBMS connection query-stream and transaction query, execute and query-stream authorize through
 `start_with_options_and_authorize`, after replay and protocol readiness resolve but before `Start`.
 Their denial builders record the same query-execution failure for all database engines.
+SQL authorization analyzes the statement first and checks every extracted table target. A denied
+table check never falls back. Only unsupported analysis checks the explicit `rdbms` verb
+`unanalyzed` on `database(name)`. Default agent cards, table wildcards and wildcard verbs do not
+grant this capability; the operator-authorized oplog-processor path does not bypass this check.
+Connections resolve and cache their database identity on first live authorization; their
+transactions share that resident cache. The cache holds no authority decisions or mutable SQL
+namespace state. Completed replay does not resolve it.
+Explicit executable expressions must belong to the supported analysis subset, including inside
+the separately parsed partial-index conflict predicate. Trusted PostgreSQL dispatch receives
+catalog qualifications in executable SQL. Analyzed unqualified physical relations execute in
+`public`, not native `search_path`: reads, writes, created tables, index target tables and
+foreign-key references use the same namespace for authorization and execution. Explicit schemas
+remain explicit; PostgreSQL `RENAME` destinations stay in the source schema. CTE references,
+aliases, columns and comments remain unchanged. Temporary `CREATE TABLE` is unsupported analysis
+and requires explicit `unanalyzed` authority. No session `SET` changes implement this contract.
+Unquoted PostgreSQL relation-modifier `ONLY` in SELECT/UPDATE/DELETE fails closed and requires
+explicit `unanalyzed`; supported `LOCK TABLE ONLY` retains ordinary grants. Bare built-in
+`DEFAULT CURRENT_TIMESTAMP` works with ordinary grants alongside supported `now()`, not every
+timestamp routine or form.
+Approved regclass/UUID cast placeholders require actual built-in text values. Approved regclass
+string literals normalize one-part relation names offline into safely escaped `E'public.name'`
+literals; explicitly schema-qualified literals remain unchanged. Keep these casts constant to
+preserve PostgreSQL early OID binding, stored constraints after table renames and index predicate
+immutability. Only built-in Text placeholders use trusted runtime `pg_catalog.regexp_match` to
+detect dots outside double quotes, then `pg_catalog.format('public.%s', input)` to prefix one-part
+names. Offline literals use the same quote/dot boundary rule. Both follow PostgreSQL's leading-quote
+rule: a double quote starts quoting only at the beginning of a name part. Explicit multi-part input remains
+unchanged. Preserve native regclass spelling, including unquoted `migration-log`, rather than
+enforce SQL identifier grammar. Both forms preserve
+quoted case and explicit schemas. Original bound parameters and durable request SQL remain unchanged.
+Both offline literals and bound Text normalization use exactly PostgreSQL scanner whitespace:
+ASCII space, tab, LF, CR, vertical tab and form feed, not Unicode trim or locale `[:space:]`.
+Unicode whitespace stays part of an unquoted name.
+Unsupported analysis executes the unchanged original without deterministic namespace rewriting,
+only under an admitted `unanalyzed` grant. Ordinary supported migrations keep ordinary grants.
+PostgreSQL guest dispatch does not populate SQLx's statement cache, whose SQL-only key would
+otherwise permit reuse of an earlier custom source type. This sacrifices guest statement reuse.
+SQLx metadata queries do not pass through the analyzer; catalog qualifications of guest SQL do
+not secure driver queries. The session namespace remains administrator-trusted, including
+`search_path` and protection against shadow built-in types or routines. Golem does not enforce a
+safe `search_path`.
+Approved expressions do not establish transitive table isolation: implicit
+behavior of authorized objects and trusted types, including ordinary operators on custom
+parameter or column types, remains the database administrator's responsibility.
 `replay_or_persist_failure` restores a recorded denial before considering resource loss: an
 incomplete denied call remains denied; an admitted incomplete call still reports transaction or
 stream loss without repeating its database effect.
