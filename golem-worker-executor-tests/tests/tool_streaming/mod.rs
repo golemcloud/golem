@@ -879,7 +879,7 @@ pub(crate) fn deployment_state(
     let account_email = AccountEmail::new("test@golem");
     let mut registered_tools = BTreeMap::new();
 
-    for definition in definitions {
+    for (index, definition) in definitions.into_iter().enumerate() {
         let root_name = definition
             .commands
             .nodes
@@ -891,20 +891,26 @@ pub(crate) fn deployment_state(
         registered_tools.insert(
             name,
             RegisteredTool {
-                deployment_revision,
-                release_id: None,
-                metadata_digest: Default::default(),
-                definition,
-                provision: ToolProvisionConfig::default(),
-                component_bindings: Default::default(),
-                source: ToolSource::Component {
-                    component_id: provider_component_id,
-                    component_revision: provider_revision,
-                    component_name: ComponentName(provider_component_name.to_string()),
+                type_id: golem_common::model::type_id::TypeId::try_from(
+                    u32::try_from(index + 1).unwrap(),
+                )
+                .unwrap(),
+                registration: golem_common::model::tool::ToolRegistration {
+                    deployment_revision,
+                    release_id: None,
+                    metadata_digest: Default::default(),
+                    definition,
+                    provision: ToolProvisionConfig::default(),
+                    component_bindings: Default::default(),
+                    source: ToolSource::Component {
+                        component_id: provider_component_id,
+                        component_revision: provider_revision,
+                        component_name: ComponentName(provider_component_name.to_string()),
+                    },
+                    owner_account_id,
+                    owner_account_email: account_email.clone(),
+                    metadata_version: "0.1.0".to_string(),
                 },
-                owner_account_id,
-                owner_account_email: account_email.clone(),
-                metadata_version: "0.1.0".to_string(),
             },
         );
     }
@@ -922,14 +928,14 @@ pub(crate) fn deployment_state(
                 name.clone(),
                 CompiledToolBinding {
                     deployment_revision,
-                    release_id: tool.release_id,
-                    metadata_digest: tool.metadata_digest,
+                    release_id: tool.registration.release_id,
+                    metadata_digest: tool.registration.metadata_digest,
                     owner: ToolBindingOwner::AgentType {
                         agent_type_name: agent_type.clone(),
                     },
                     tool_name: name.clone(),
-                    version: tool.definition.version.clone(),
-                    metadata_version: tool.metadata_version.clone(),
+                    version: tool.registration.definition.version.clone(),
+                    metadata_version: tool.registration.metadata_version.clone(),
                     account_id: owner_account_id,
                     account_email: account_email.clone(),
                     parameters: NormalizedJsonValue::new(serde_json::json!({})),
@@ -937,7 +943,7 @@ pub(crate) fn deployment_state(
                     secret_keys_readable: SecretKeyScope::All,
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access,
-                    source: tool.source.clone(),
+                    source: tool.registration.source.clone(),
                 },
             )
         })
@@ -1682,8 +1688,13 @@ fn install_middleware_chain(
     middleware_definitions: &[ToolMiddleware],
     occurrences: Vec<(&str, TypedSchemaValue)>,
 ) {
-    let mut effective_definition = deployment.registered_tools[tool_name].definition.clone();
-    let owner_account_id = deployment.registered_tools[tool_name].owner_account_id;
+    let mut effective_definition = deployment.registered_tools[tool_name]
+        .registration
+        .definition
+        .clone();
+    let owner_account_id = deployment.registered_tools[tool_name]
+        .registration
+        .owner_account_id;
     let account_email = AccountEmail::new("middleware@golem");
     let registrations = middleware_definitions
         .iter()
@@ -1909,16 +1920,19 @@ fn native_deployment_state(
         implementation_version: "1.0.0".to_string(),
     };
     let registered = RegisteredTool {
-        deployment_revision,
-        release_id: None,
-        definition,
-        provision: ToolProvisionConfig::default(),
-        source: source.clone(),
-        owner_account_id,
-        owner_account_email: account_email.clone(),
-        metadata_version: "0.1.0".to_string(),
-        metadata_digest: definition_digest,
-        component_bindings: BTreeMap::new(),
+        type_id: golem_common::model::type_id::TypeId::try_from(1_u32).unwrap(),
+        registration: golem_common::model::tool::ToolRegistration {
+            deployment_revision,
+            release_id: None,
+            definition,
+            provision: ToolProvisionConfig::default(),
+            source: source.clone(),
+            owner_account_id,
+            owner_account_email: account_email.clone(),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: definition_digest,
+            component_bindings: BTreeMap::new(),
+        },
     };
     let agent_type = AgentTypeName(caller_agent_type.to_string());
     let owner = ToolBindingOwner::AgentType {
@@ -1929,9 +1943,9 @@ fn native_deployment_state(
         release_id: None,
         owner: owner.clone(),
         tool_name: tool_name.clone(),
-        version: registered.definition.version.clone(),
-        metadata_version: registered.metadata_version.clone(),
-        metadata_digest: registered.metadata_digest,
+        version: registered.registration.definition.version.clone(),
+        metadata_version: registered.registration.metadata_version.clone(),
+        metadata_digest: registered.registration.metadata_digest,
         account_id: owner_account_id,
         account_email,
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
@@ -1958,16 +1972,19 @@ fn native_deployment_state(
     state.registered_tools.insert(
         helper_name.clone(),
         RegisteredTool {
-            deployment_revision,
-            release_id: None,
-            definition: helper_definition,
-            provision: ToolProvisionConfig::default(),
-            source: helper_source.clone(),
-            owner_account_id,
-            owner_account_email: AccountEmail::new("test@golem"),
-            metadata_version: "0.1.0".to_string(),
-            metadata_digest: helper_digest,
-            component_bindings: BTreeMap::new(),
+            type_id: golem_common::model::type_id::TypeId::try_from(2_u32).unwrap(),
+            registration: golem_common::model::tool::ToolRegistration {
+                deployment_revision,
+                release_id: None,
+                definition: helper_definition,
+                provision: ToolProvisionConfig::default(),
+                source: helper_source.clone(),
+                owner_account_id,
+                owner_account_email: AccountEmail::new("test@golem"),
+                metadata_version: "0.1.0".to_string(),
+                metadata_digest: helper_digest,
+                component_bindings: BTreeMap::new(),
+            },
         },
     );
     state.tool_bindings.get_mut(&owner).unwrap().insert(

@@ -1026,6 +1026,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     assert_eq!(
         agent_types.values,
         vec![DeployedRegisteredAgentType {
+            type_id: agent_types.values[0].type_id,
             agent_type: agent_type_schema.clone(),
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: component.id,

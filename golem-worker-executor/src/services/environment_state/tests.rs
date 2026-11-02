@@ -120,36 +120,43 @@ fn mcp_binding_scopes_intersect_environment_and_agent_authority() {
     );
 }
 
-fn registered_tool(name: &str, deployment_revision: DeploymentRevision) -> RegisteredTool {
+fn registered_tool(
+    name: &str,
+    deployment_revision: DeploymentRevision,
+    type_id: u32,
+) -> RegisteredTool {
     RegisteredTool {
-        deployment_revision,
-        release_id: None,
-        definition: Tool {
-            version: "1.0.0".to_string(),
-            requires_filesystem: false,
-            commands: CommandTree {
-                nodes: vec![CommandNode {
-                    name: name.to_string(),
-                    aliases: Vec::new(),
-                    doc: Doc::default(),
-                    globals: Globals::default(),
-                    subcommands: Vec::new(),
-                    body: None,
-                }],
+        type_id: golem_common::model::type_id::TypeId::try_from(type_id).unwrap(),
+        registration: golem_common::model::tool::ToolRegistration {
+            deployment_revision,
+            release_id: None,
+            definition: Tool {
+                version: "1.0.0".to_string(),
+                requires_filesystem: false,
+                commands: CommandTree {
+                    nodes: vec![CommandNode {
+                        name: name.to_string(),
+                        aliases: Vec::new(),
+                        doc: Doc::default(),
+                        globals: Globals::default(),
+                        subcommands: Vec::new(),
+                        body: None,
+                    }],
+                },
+                schema: SchemaGraph::empty(),
             },
-            schema: SchemaGraph::empty(),
+            provision: ToolProvisionConfig::default(),
+            source: ToolSource::Component {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::try_from(1_u64).unwrap(),
+                component_name: ComponentName(format!("tools:{name}")),
+            },
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("owner@example.com"),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: Default::default(),
+            component_bindings: BTreeMap::new(),
         },
-        provision: ToolProvisionConfig::default(),
-        source: ToolSource::Component {
-            component_id: ComponentId::new(),
-            component_revision: ComponentRevision::try_from(1_u64).unwrap(),
-            component_name: ComponentName(format!("tools:{name}")),
-        },
-        owner_account_id: AccountId::new(),
-        owner_account_email: AccountEmail::new("owner@example.com"),
-        metadata_version: "0.1.0".to_string(),
-        metadata_digest: Default::default(),
-        component_bindings: BTreeMap::new(),
     }
 }
 
@@ -158,6 +165,7 @@ fn binding(
     tool_name: &ToolName,
     registered_tool: &RegisteredTool,
 ) -> CompiledToolBinding {
+    let registered_tool = &registered_tool.registration;
     CompiledToolBinding {
         deployment_revision: registered_tool.deployment_revision,
         release_id: registered_tool.release_id,
@@ -184,9 +192,9 @@ fn deployment_state() -> (ToolDeploymentState, AgentTypeName, AgentTypeName) {
     let alpha_name = ToolName::try_from("alpha").unwrap();
     let beta_name = ToolName::try_from("beta").unwrap();
     let unbound_name = ToolName::try_from("unbound").unwrap();
-    let alpha = registered_tool(alpha_name.as_str(), deployment_revision);
-    let beta = registered_tool(beta_name.as_str(), deployment_revision);
-    let unbound = registered_tool(unbound_name.as_str(), deployment_revision);
+    let alpha = registered_tool(alpha_name.as_str(), deployment_revision, 1);
+    let beta = registered_tool(beta_name.as_str(), deployment_revision, 2);
+    let unbound = registered_tool(unbound_name.as_str(), deployment_revision, 3);
 
     (
         ToolDeploymentState {
@@ -480,7 +488,10 @@ fn accepted_tool_activation_snapshot_round_trip_preserves_binding_identity() {
         metadata_digest: Default::default(),
     };
     let middleware_parameter_schema = middleware.definition.parameter_schema.clone();
-    let effective_definition = deployment.registered_tools[&tool_name].definition.clone();
+    let effective_definition = deployment.registered_tools[&tool_name]
+        .registration
+        .definition
+        .clone();
     let owner = agent_owner(&agent);
     deployment
         .registered_tool_middlewares
@@ -571,7 +582,7 @@ fn accessible_tools_join_bindings_and_registrations_in_name_order() {
     let (deployment, agent_a, agent_b) = deployment_state();
     let alpha = ToolName::try_from("alpha").unwrap();
     let beta = ToolName::try_from("beta").unwrap();
-    let expected_alpha_component = match &deployment.registered_tools[&alpha].source {
+    let expected_alpha_component = match &deployment.registered_tools[&alpha].registration.source {
         ToolSource::Component { component_id, .. } => *component_id,
         ToolSource::Host { .. } => panic!("test fixture must be component-backed"),
     };
@@ -653,7 +664,10 @@ fn component_baseline_binding_is_independent_from_agent_bindings() {
 fn discovery_projects_effective_definition_per_agent_binding() {
     let (mut deployment, agent_a, agent_b) = deployment_state();
     let beta = ToolName::try_from("beta").unwrap();
-    let mut presented_a = deployment.registered_tools[&beta].definition.clone();
+    let mut presented_a = deployment.registered_tools[&beta]
+        .registration
+        .definition
+        .clone();
     presented_a.commands.nodes[0].name = "adapter-a".to_string();
     let mut presented_b = presented_a.clone();
     presented_b.commands.nodes[0].name = "adapter-b".to_string();
@@ -839,11 +853,11 @@ fn host_dispatch_preserves_exact_handler_and_consumer_policy() {
     let host_tool_id = HostToolId::try_from("native-search".to_string()).unwrap();
     let implementation_version = "2026.08.28".to_string();
     let registered = deployment.registered_tools.get_mut(&alpha).unwrap();
-    registered.source = ToolSource::Host {
+    registered.registration.source = ToolSource::Host {
         host_tool_id: host_tool_id.clone(),
         implementation_version: implementation_version.clone(),
     };
-    registered.provision.env.insert(
+    registered.registration.provision.env.insert(
         "CONSUMER_CONFIGURATION".to_string(),
         "preserved".to_string(),
     );
@@ -853,12 +867,12 @@ fn host_dispatch_preserves_exact_handler_and_consumer_policy() {
         .unwrap()
         .get_mut(&alpha)
         .unwrap();
-    binding.source = registered.source.clone();
+    binding.source = registered.registration.source.clone();
     binding.parameters = NormalizedJsonValue::new(serde_json::json!({
         "consumer": "parameters"
     }));
     binding.filesystem_access = ToolFilesystemAccess::Allowed;
-    let expected_provision = registered.provision.clone();
+    let expected_provision = registered.registration.provision.clone();
     let expected_binding = binding.clone();
     let expected_revision = deployment.deployment_revision;
 
@@ -995,8 +1009,8 @@ fn activation_enforces_requirement_and_propagates_capability_for_every_owner() {
                 BTreeMap::from([(alpha.clone(), compiled_binding)]),
             );
             let registered = deployment.registered_tools.get_mut(&alpha).unwrap();
-            registered.definition.requires_filesystem = requires_filesystem;
-            registered.provision.files = with_files.then(file).into_iter().collect();
+            registered.registration.definition.requires_filesystem = requires_filesystem;
+            registered.registration.provision.files = with_files.then(file).into_iter().collect();
 
             let result = get_tool_activation_from_deployment(Some(&deployment), &owner, &alpha);
             match expected {
@@ -1058,6 +1072,7 @@ fn activation_lookup_rejects_files_with_explicit_filesystem_denial() {
         .registered_tools
         .get_mut(&alpha)
         .unwrap()
+        .registration
         .provision
         .files
         .push(InitialAgentFile {
@@ -1141,7 +1156,7 @@ fn activation_lookup_rejects_mismatched_metadata_digest() {
     let registered = &deployment.registered_tools[&alpha];
     let mismatched_digest = golem_common::model::tool_release::tool_metadata_digest(
         "other-metadata-version",
-        &registered.definition,
+        &registered.registration.definition,
     )
     .unwrap();
     deployment
@@ -1166,6 +1181,7 @@ fn activation_lookup_rejects_registration_under_the_wrong_name() {
         .registered_tools
         .get_mut(&alpha)
         .unwrap()
+        .registration
         .definition
         .commands
         .nodes[0]

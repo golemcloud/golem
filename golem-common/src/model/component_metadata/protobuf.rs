@@ -145,6 +145,16 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata>
                 .collect(),
             root_package_name: value.root_package_name,
             root_package_version: value.root_package_version,
+            agent_type_ids: value
+                .agent_type_ids
+                .into_iter()
+                .map(|(name, id)| Ok((AgentTypeName(name), id.try_into()?)))
+                .collect::<Result<_, String>>()?,
+            tool_type_ids: value
+                .tool_type_ids
+                .into_iter()
+                .map(|(name, id)| Ok((ToolName::try_from(name)?, id.try_into()?)))
+                .collect::<Result<_, String>>()?,
             config_schema: value
                 .config_schema
                 .map(TryInto::try_into)
@@ -257,6 +267,16 @@ impl TryFrom<ComponentMetadataInnerData>
                 .collect(),
             root_package_name: value.root_package_name,
             root_package_version: value.root_package_version,
+            agent_type_ids: value
+                .agent_type_ids
+                .into_iter()
+                .map(|(name, id)| (name.0, id.get()))
+                .collect(),
+            tool_type_ids: value
+                .tool_type_ids
+                .into_iter()
+                .map(|(name, id)| (name.into_inner(), id.get()))
+                .collect(),
             config_schema: Some(value.config_schema.into()),
             component_provision_config: Some(value.component_provision_config.try_into()?),
             agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),
@@ -888,9 +908,12 @@ fn tool_source_from_proto(
 
 impl From<RegisteredTool> for golem_api_grpc::proto::golem::registry::RegisteredTool {
     fn from(value: RegisteredTool) -> Self {
+        let type_id = value.type_id.get();
+        let value = value.registration;
         let source = legacy_component_tool_source(&value.source);
         let tagged_source = Some(value.source.into());
         Self {
+            type_id,
             deployment_revision: value.deployment_revision.into(),
             definition: Some(value.definition.into()),
             provision: Some(value.provision.into()),
@@ -929,32 +952,35 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredTool> for Registe
             }
         };
         Ok(Self {
-            deployment_revision: DeploymentRevision::try_from(value.deployment_revision)?,
-            definition,
-            provision: value
-                .provision
-                .ok_or("missing RegisteredTool.provision")?
-                .try_into()?,
-            component_bindings: value
-                .component_bindings
-                .into_iter()
-                .map(|(name, binding)| {
-                    Ok((ComponentName(name), ToolBindingInput::try_from(binding)?))
-                })
-                .collect::<Result<_, String>>()?,
-            source: tool_source_from_proto(value.tagged_source, value.source)?,
-            owner_account_id: AccountId::try_from(
-                value
-                    .owner_account_id
-                    .ok_or("missing RegisteredTool.owner_account_id")?,
-            )?,
-            owner_account_email: AccountEmail::new(value.owner_account_email),
-            metadata_version,
-            release_id: value
-                .tool_release_id
-                .map(uuid::Uuid::from)
-                .map(crate::model::tool_release::ToolReleaseId),
-            metadata_digest,
+            type_id: crate::model::type_id::TypeId::try_from(value.type_id)?,
+            registration: crate::model::tool::ToolRegistration {
+                deployment_revision: DeploymentRevision::try_from(value.deployment_revision)?,
+                definition,
+                provision: value
+                    .provision
+                    .ok_or("missing RegisteredTool.provision")?
+                    .try_into()?,
+                component_bindings: value
+                    .component_bindings
+                    .into_iter()
+                    .map(|(name, binding)| {
+                        Ok((ComponentName(name), ToolBindingInput::try_from(binding)?))
+                    })
+                    .collect::<Result<_, String>>()?,
+                source: tool_source_from_proto(value.tagged_source, value.source)?,
+                owner_account_id: AccountId::try_from(
+                    value
+                        .owner_account_id
+                        .ok_or("missing RegisteredTool.owner_account_id")?,
+                )?,
+                owner_account_email: AccountEmail::new(value.owner_account_email),
+                metadata_version,
+                release_id: value
+                    .tool_release_id
+                    .map(uuid::Uuid::from)
+                    .map(crate::model::tool_release::ToolReleaseId),
+                metadata_digest,
+            },
         })
     }
 }
@@ -1151,14 +1177,15 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::ToolDeploymentState> for To
         let mut registered_tools = BTreeMap::new();
         for proto in value.registered_tools {
             let registered: RegisteredTool = proto.try_into()?;
-            if registered.deployment_revision != deployment_revision {
+            if registered.registration.deployment_revision != deployment_revision {
                 return Err(format!(
                     "registered tool deployment revision {} does not match snapshot revision {}",
-                    registered.deployment_revision, deployment_revision
+                    registered.registration.deployment_revision, deployment_revision
                 ));
             }
             let name = ToolName::try_from(
                 registered
+                    .registration
                     .definition
                     .name()
                     .ok_or("registered tool definition has no name")?,
@@ -1176,7 +1203,7 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::ToolDeploymentState> for To
             })?;
             let mut binding: CompiledToolBinding = proto.try_into()?;
             if metadata_digest_missing {
-                binding.metadata_digest = registered.metadata_digest;
+                binding.metadata_digest = registered.registration.metadata_digest;
             }
             if binding.deployment_revision != deployment_revision {
                 return Err(format!(
@@ -1184,13 +1211,13 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::ToolDeploymentState> for To
                     binding.deployment_revision, deployment_revision
                 ));
             }
-            if binding.source != registered.source
-                || binding.version != registered.definition.version
-                || binding.metadata_version != registered.metadata_version
-                || binding.release_id != registered.release_id
-                || binding.metadata_digest != registered.metadata_digest
-                || binding.account_id != registered.owner_account_id
-                || binding.account_email != registered.owner_account_email
+            if binding.source != registered.registration.source
+                || binding.version != registered.registration.definition.version
+                || binding.metadata_version != registered.registration.metadata_version
+                || binding.release_id != registered.registration.release_id
+                || binding.metadata_digest != registered.registration.metadata_digest
+                || binding.account_id != registered.registration.owner_account_id
+                || binding.account_email != registered.registration.owner_account_email
             {
                 return Err(format!(
                     "compiled binding for tool {} does not match the registered implementation",

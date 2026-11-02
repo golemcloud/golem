@@ -206,6 +206,10 @@ pub struct ComponentMetadataInnerData {
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_types: Vec<AgentTypeSchema>,
 
+    /// Registry-assigned identities, separate from guest declarations.
+    pub agent_type_ids: BTreeMap<AgentTypeName, crate::base_model::type_id::TypeId>,
+    pub tool_type_ids: BTreeMap<ToolName, crate::base_model::type_id::TypeId>,
+
     /// Server-derived streaming classification for each declared agent method.
     pub agent_method_streams: BTreeMap<AgentTypeName, BTreeMap<String, AgentMethodStreamMetadata>>,
 
