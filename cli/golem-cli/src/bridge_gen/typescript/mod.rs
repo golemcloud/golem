@@ -3260,7 +3260,7 @@ impl TypeScriptBridgeGenerator {
                 format!("((n: any) => n.value as string)({value})")
             }
             SchemaType::Uuid { .. } => {
-                format!("((n: any) => base.Uuid.parse(n.value as string))({value})")
+                format!("((n: any) => base.Uuid.from(n.value))({value})")
             }
             SchemaType::Datetime { .. } => {
                 format!("((n: any) => base.datetimeToISOString(n.value))({value})")
@@ -3531,7 +3531,7 @@ impl TypeScriptBridgeGenerator {
                 format!("((n: any) => n.value.url as string)({value})")
             }
             SchemaType::Uuid { .. } => {
-                format!("((n: any) => base.Uuid.from(n.value))({value})")
+                format!("((n: any) => base.Uuid.parse(n.value as string))({value})")
             }
             SchemaType::Datetime { .. } => {
                 format!("((n: any) => n.value.value as string)({value})")

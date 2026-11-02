@@ -1587,6 +1587,7 @@ mod tests {
                 allowed_extensions: None,
             }),
             "url" => SchemaType::url(UrlRestrictions::default()),
+            "uuid" => SchemaType::uuid(),
             "datetime" => SchemaType::datetime(),
             "duration" => SchemaType::duration(),
             "quantity" => SchemaType::quantity(QuantitySpec {

@@ -294,7 +294,7 @@ let stream_sessions : Map[String, LiveStreamSession] = Map([])
 
 ///|
 fn fresh_id() -> String {
-  random_uuid()
+  Uuid::random().to_string()
 }
 
 ///|
@@ -1696,7 +1696,7 @@ pub async fn invoke_streaming_agent(
     ("method", Json::string(method_name)),
   ]
   match resolved.phantom_id {
-    Some(id) => selector.push(("phantomId", Json::string(id)))
+    Some(id) => selector.push(("phantomId", Json::string(id.to_string())))
     None => ()
   }
   let frozen_start = protocol_message("invocationStart", [
