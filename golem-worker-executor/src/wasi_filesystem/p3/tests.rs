@@ -587,7 +587,7 @@ fn p2_p3_sandbox_escape_errors_are_access_denied() {
     let refusal = || {
         AgentFilesystemError::Sandbox(FilesystemStorageError::io(
             "open sandbox path",
-            root.path(),
+            Some(root.path()),
             directory.open("../outside").unwrap_err(),
         ))
     };
@@ -634,7 +634,7 @@ fn p2_p3_cross_project_link_mapping_is_identical() {
         let storage_error = || {
             FilesystemStorageError::io(
                 "hard link",
-                std::path::Path::new("<namespace-parity-test>"),
+                None,
                 std::io::Error::from_raw_os_error(libc::EXDEV),
             )
         };
@@ -651,7 +651,7 @@ fn p2_p3_cross_project_link_mapping_is_identical() {
 
 #[test]
 async fn staged_p2_p3_attribute_namespace_and_replay_routes_execute_through_agent_filesystem() {
-    use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+    use crate::filesystem::sandbox::SandboxFilesystemProvisioning;
     use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
     use crate::services::agent_filesystem::{
         ResolvedStorageLimits, bind_resource_usage_metering, close, create_fresh, delete,
@@ -1360,11 +1360,7 @@ fn p2_p3_write_progress_and_placement_translation_is_identical() {
 #[test]
 fn p2_p3_write_quota_capacity_and_permission_errors_are_identical() {
     fn storage_error() -> FilesystemStorageError {
-        FilesystemStorageError::io(
-            "write",
-            std::path::Path::new("<wasi-write-test>"),
-            std::io::ErrorKind::StorageFull.into(),
-        )
+        FilesystemStorageError::io("write", None, std::io::ErrorKind::StorageFull.into())
     }
 
     use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode as P2ErrorCode;

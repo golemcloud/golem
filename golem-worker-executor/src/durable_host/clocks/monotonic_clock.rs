@@ -79,7 +79,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 DurableFunctionType::ReadLocal,
             )
             .await?;
-        #[cfg(feature = "test-utils")]
+        #[cfg(any(test, feature = "test-utils"))]
         if handle.is_live()
             && let Err(interrupt) = self
                 .owner_execution
