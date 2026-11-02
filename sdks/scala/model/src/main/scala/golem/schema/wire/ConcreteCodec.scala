@@ -286,14 +286,10 @@ object ConcreteCodec {
     scalar[golem.ULong](WitSchemaTypeBody.U64Type())(value => WitSchemaValueNode.U64Value(U64.toRawBits(value.value))) {
       case WitSchemaValueNode.U64Value(value) => new golem.ULong(U64.fromRawBits(value))
     }
-  val uuid: ConcreteCodec[golem.Uuid] = {
-    val bits = scalar[BigInt](WitSchemaTypeBody.U64Type())(value => WitSchemaValueNode.U64Value(U64.toRawBits(value))) {
-      case WitSchemaValueNode.U64Value(value) => U64.fromRawBits(value)
-    }.asInstanceOf[ConcreteCodec[Any]]
-    product[golem.Uuid]("uuid.Uuid", "uuid", Vector("high-bits", "low-bits"), Vector(bits, bits), false) { values =>
-      new golem.Uuid(values(0).asInstanceOf[BigInt], values(1).asInstanceOf[BigInt])
+  val uuid: ConcreteCodec[java.util.UUID] =
+    scalar[java.util.UUID](WitSchemaTypeBody.UuidType)(WitSchemaValueNode.UuidValue.apply) {
+      case WitSchemaValueNode.UuidValue(value) => value
     }
-  }
   val instant: ConcreteCodec[java.time.Instant] = scalar[java.time.Instant](WitSchemaTypeBody.DatetimeType)(value =>
     WitSchemaValueNode.DatetimeValue(Datetime(value.getEpochSecond, value.getNano))
   ) {

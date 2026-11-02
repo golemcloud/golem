@@ -175,6 +175,19 @@ object SchemaRefSpec extends ZIOSpecDefault {
       )
       assertTrue(rich.unpackJson(value).flatMap(rich.packJson) == Right(value))
     },
+    test("packs and unpacks UUIDs as lowercase hyphenated JSON strings") {
+      val ref = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(UuidType)))
+      val max = java.util.UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
+      val nil = new java.util.UUID(0L, 0L)
+      assertTrue(
+        ref.unpackJson(UuidValue(max)) == Right(Json.String("ffffffff-ffff-ffff-ffff-ffffffffffff")),
+        ref.unpackJson(UuidValue(nil)) == Right(Json.String("00000000-0000-0000-0000-000000000000")),
+        ref.packJson(Json.String("ffffffff-ffff-ffff-ffff-ffffffffffff")) == Right(UuidValue(max)),
+        ref.packJson(Json.String("00000000-0000-0000-0000-000000000000")) == Right(UuidValue(nil)),
+        ref.packJson(Json.String("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")).isLeft,
+        ref.packJson(Json.String("1-2-3-4-5")).isLeft
+      )
+    },
     test("does not expose capabilities as JSON") {
       val ref = SchemaRef(
         SchemaGraph(ListMap.empty, SchemaType(PermissionCardType(PermissionCardSpec(polymorphic = false))))
@@ -516,7 +529,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
         "",
         "scala",
         AgentMode.Durable,
-        ComponentId(golem.Uuid(BigInt(0), BigInt(1))),
+        ComponentId(new java.util.UUID(0L, 1L)),
         SchemaRef(graph),
         Nil,
         List(
@@ -603,7 +616,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
       )
       val client   = definition.client
       val expected = Left(GolemReflectError.SchemaEncode("bad config"))
-      val phantom  = golem.Uuid(BigInt(0), BigInt(1))
+      val phantom  = new java.util.UUID(0L, 1L)
       assertTrue(
         client.get("worker", "bad") == expected,
         client.getPhantom("worker", phantom, "bad") == expected,

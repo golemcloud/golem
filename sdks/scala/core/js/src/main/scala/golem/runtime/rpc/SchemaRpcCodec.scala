@@ -21,8 +21,9 @@ import golem.host.js.schema.{JsSchemaValueTree, JsTypedAgentConfigValue, JsTyped
 import golem.runtime.autowire.SchemaPayload
 import golem.schema._
 import golem.schema.wire.SchemaWire
-import golem.{UByte, UInt, ULong, UShort, Uuid}
+import golem.{UByte, UInt, ULong, UShort}
 
+import java.util.UUID
 import scala.collection.immutable.ListMap
 import scala.concurrent.Future
 import scala.scalajs.js
@@ -223,15 +224,9 @@ private[golem] object SchemaRpcCodec {
   def requiredPayload(payload: Option[SchemaValue], context: String): SchemaValue =
     payload.getOrElse(throw new RuntimeException(s"Missing payload for $context"))
 
-  def encodeUuid(uuid: Uuid): SchemaValue = {
-    if (uuid.highBits < 0 || uuid.highBits > MaxU64)
-      throw new RuntimeException(s"UUID high half ${uuid.highBits} out of range [0, $MaxU64]")
-    if (uuid.lowBits < 0 || uuid.lowBits > MaxU64)
-      throw new RuntimeException(s"UUID low half ${uuid.lowBits} out of range [0, $MaxU64]")
-    SchemaValue.UuidValue(uuid)
-  }
+  def encodeUuid(uuid: UUID): SchemaValue = SchemaValue.UuidValue(uuid)
 
-  def decodeUuidOrThrow(value: SchemaValue): Uuid = value match {
+  def decodeUuidOrThrow(value: SchemaValue): UUID = value match {
     case SchemaValue.UuidValue(uuid) => uuid
     case other                       => throw new RuntimeException(s"Expected a uuid value, got $other")
   }

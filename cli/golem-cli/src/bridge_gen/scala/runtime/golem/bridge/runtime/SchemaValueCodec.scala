@@ -131,7 +131,7 @@ object SchemaValueCodec {
         }
       case PathValue(v)     => node("path") { output.append("{\"path\":"); string(v); output.append('}'); () }
       case UrlValue(v)      => node("url") { output.append("{\"url\":"); string(v); output.append('}'); () }
-      case UuidValue(v)     => node("uuid")(string(Uuid.toStandardString(v)))
+      case UuidValue(v)     => node("uuid")(string(v.toString))
       case DatetimeValue(v) => node("datetime") { output.append("{\"value\":"); string(v); output.append('}'); () }
       case DurationValue(v) =>
         node("duration") { output.append("{\"nanoseconds\":"); string(v.toString); output.append('}'); () }
@@ -225,7 +225,7 @@ object SchemaValueCodec {
       node("binary", Json.obj(withMime))
     case PathValue(v)                         => node("path", Json.obj("path" -> Json.string(v)))
     case UrlValue(v)                          => node("url", Json.obj("url" -> Json.string(v)))
-    case UuidValue(v)                         => node("uuid", Json.string(Uuid.toStandardString(v)))
+    case UuidValue(v)                         => node("uuid", Json.string(v.toString))
     case DatetimeValue(v)                     => node("datetime", Json.obj("value" -> Json.string(v)))
     case DurationValue(v)                     => node("duration", Json.obj("nanoseconds" -> Json.string(v.toString)))
     case QuantityValue(mantissa, scale, unit) =>
@@ -461,38 +461,19 @@ object SchemaValueCodec {
   def requiredPayload(payload: Option[SchemaValue], context: String): SchemaValue =
     payload.getOrElse(throw BridgeException(s"Missing payload for $context"))
 
-  // --- UUID <-> record-of-two-u64 -----------------------------------------
+  // --- UUID text ------------------------------------------------------------
 
   /**
-   * Encodes a [[Uuid]] as the cross-SDK `uuid.Uuid` builtin record (two `u64`
-   * halves). The runtime [[SchemaValue.U64Value]] holds the raw 64 bits, so the
-   * unsigned half values are reinterpreted as raw bits via `toLong`.
+   * Parses the canonical UUID text form: lowercase hexadecimal digits in the
+   * hyphenated 8-4-4-4-12 layout, as `java.util.UUID.toString` produces it.
+   * `UUID.fromString` also accepts other forms, so the layout is checked first.
    */
-  def encodeUuid(uuid: Uuid): SchemaValue = {
-    if (uuid.highBits < 0 || uuid.highBits > MaxU64)
-      throw BridgeException(s"UUID high half ${uuid.highBits} out of range [0, $MaxU64]")
-    if (uuid.lowBits < 0 || uuid.lowBits > MaxU64)
-      throw BridgeException(s"UUID low half ${uuid.lowBits} out of range [0, $MaxU64]")
-    RecordValue(
-      List(U64Value((uuid.highBits & MaxU64).toLong), U64Value((uuid.lowBits & MaxU64).toLong))
-    )
-  }
+  def parseUuid(text: String): Either[String, java.util.UUID] =
+    if (CanonicalUuid.matcher(text).matches()) Right(java.util.UUID.fromString(text))
+    else Left(s"Expected a lowercase hyphenated UUID, got '$text'")
 
-  /** Decodes the `uuid.Uuid` builtin record into a [[Uuid]]. */
-  def decodeUuid(value: SchemaValue): Either[String, Uuid] = value match {
-    case RecordValue(List(U64Value(hi), U64Value(lo))) =>
-      Right(Uuid(BigInt(hi) & MaxU64, BigInt(lo) & MaxU64))
-    case other => Left(s"Expected a uuid record (two u64 fields), got $other")
-  }
-
-  /**
-   * [[decodeUuid]] variant that throws [[BridgeException]] on a shape mismatch.
-   */
-  def decodeUuidOrThrow(value: SchemaValue): Uuid =
-    decodeUuid(value) match {
-      case Right(uuid)   => uuid
-      case Left(message) => throw BridgeException(message)
-    }
+  private val CanonicalUuid =
+    java.util.regex.Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
   // --- Decoding ------------------------------------------------------------
 
@@ -585,7 +566,7 @@ object SchemaValueCodec {
     case "url" =>
       exactObject(value, Set("url"), "url").flatMap(member(_, "url")).flatMap(Json.asString).map(UrlValue(_))
     case "uuid" =>
-      Json.asString(value).flatMap(Uuid.fromStandardString).map(UuidValue(_))
+      Json.asString(value).flatMap(parseUuid).map(UuidValue(_))
     case "datetime" =>
       exactObject(value, Set("value"), "datetime")
         .flatMap(member(_, "value"))

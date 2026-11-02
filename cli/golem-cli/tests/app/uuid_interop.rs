@@ -60,6 +60,12 @@ fn manifest() -> String {
             dependencies:
               agents:
                 - {APP}:rust-target/RustUuidTarget
+          {APP}:scala-caller:
+            dir: scala-caller
+            templates: scala
+            dependencies:
+              agents:
+                - {APP}:scala/ScalaUuidTarget
           {APP}:rust-caller:
             dir: rust-caller
             templates: rust
@@ -429,33 +435,34 @@ fn write_scala(ctx: &TestContext) {
         indoc! {r#"
             package uuids
 
-            import golem.{BaseAgent, Uuid}
+            import golem.BaseAgent
             import golem.runtime.annotations.{agentDefinition, agentImplementation}
             import golem.bridge.client.rust_uuid_target.{RustUuidTargetClient, UuidHolder => RustHolder}
             import zio.blocks.schema.Schema
+            import java.util.UUID
             import scala.concurrent.Future
             import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
-            final case class UuidHolder(primary: Uuid, maybe: Option[Uuid], all: List[Uuid])
+            final case class UuidHolder(primary: UUID, maybe: Option[UUID], all: List[UUID])
             object UuidHolder {
               implicit val schema: Schema[UuidHolder] = Schema.derived
             }
 
             @agentDefinition()
             trait ScalaUuidTarget extends BaseAgent {
-              class Id(val key: golem.Uuid)
-              def echo(value: golem.Uuid): golem.Uuid
+              class Id(val key: java.util.UUID)
+              def echo(value: java.util.UUID): java.util.UUID
               def nested(value: UuidHolder): UuidHolder
-              def identity(): golem.Uuid
+              def identity(): java.util.UUID
               def touch(): Int
             }
 
             @agentImplementation()
-            final class ScalaUuidTargetImpl(private val key: Uuid) extends ScalaUuidTarget {
+            final class ScalaUuidTargetImpl(private val key: UUID) extends ScalaUuidTarget {
               private var touches = 0
-              def echo(value: Uuid): Uuid = value
+              def echo(value: UUID): UUID = value
               def nested(value: UuidHolder): UuidHolder = value
-              def identity(): Uuid = key
+              def identity(): UUID = key
               def touch(): Int = { touches += 1; touches }
             }
 
@@ -467,12 +474,10 @@ fn write_scala(ctx: &TestContext) {
 
             @agentImplementation()
             final class ScalaUuidCallerImpl(private val name: String) extends ScalaUuidCaller {
-              private def parse(text: String): Uuid = Uuid.fromStandardString(text).toOption.get
-
               def run(key: String): Future[String] = {
-                val id = parse(key)
-                val nil = parse("00000000-0000-0000-0000-000000000000")
-                val max = parse("ffffffff-ffff-ffff-ffff-ffffffffffff")
+                val id = UUID.fromString(key)
+                val nil = new UUID(0L, 0L)
+                val max = new UUID(-1L, -1L)
                 val target = RustUuidTargetClient.get(id)
                 for {
                   echoed <- Future.sequence(List(id, nil, max).map(v => target.echo(v)))
@@ -495,6 +500,59 @@ fn write_scala(ctx: &TestContext) {
     let build_path = ctx.cwd_path_join("uuid_interop_scala.sbt");
     let mut build = fs::read_to_string(&build_path).unwrap();
     build.push_str("\n  .settings(Compile / unmanagedSourceDirectories += (LocalRootProject / baseDirectory).value / \"golem-temp/bridge-sdk/scala/internal/rust-uuid-target-guest-client/src/main/scala\")\n");
+    fs::write_str(build_path, build).unwrap();
+}
+
+fn write_scala_caller(ctx: &TestContext) {
+    let scala_dir = ctx.cwd_path_join("scala-caller/src/main/scala");
+    std::fs::remove_dir_all(&scala_dir).unwrap();
+    fs::create_dir_all(scala_dir.join("peers")).unwrap();
+    fs::write_str(
+        scala_dir.join("peers/PeerAgents.scala"),
+        indoc! {r#"
+            package peers
+
+            import golem.BaseAgent
+            import golem.runtime.annotations.{agentDefinition, agentImplementation}
+            import golem.bridge.client.scala_uuid_target.{ScalaUuidTargetClient, UuidHolder}
+            import java.util.UUID
+            import scala.concurrent.Future
+            import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+
+            @agentDefinition()
+            trait ScalaPeerCaller extends BaseAgent {
+              class Id(val name: String)
+              def run(key: String): Future[String]
+            }
+
+            @agentImplementation()
+            final class ScalaPeerCallerImpl(private val name: String) extends ScalaPeerCaller {
+              def run(key: String): Future[String] = {
+                val id = UUID.fromString(key)
+                val nil = new UUID(0L, 0L)
+                val max = new UUID(-1L, -1L)
+                val target = ScalaUuidTargetClient.get(id)
+                for {
+                  echoed <- Future.sequence(List(id, nil, max).map(v => target.echo(v)))
+                  withSome <- target.nested(UuidHolder(id, Some(max), List(id, nil, max)))
+                  withNone <- target.nested(UuidHolder(id, None, List(id, nil, max)))
+                  identity <- target.identity()
+                  touches <- target.touch()
+                } yield {
+                  require(echoed == List(id, nil, max), s"echo $echoed")
+                  require(withSome == UuidHolder(id, Some(max), List(id, nil, max)), s"nested $withSome")
+                  require(withNone == UuidHolder(id, None, List(id, nil, max)), s"nested $withNone")
+                  require(identity == id, s"identity $identity")
+                  s"ok:$touches"
+                }
+              }
+            }
+        "#},
+    )
+    .unwrap();
+    let build_path = ctx.cwd_path_join("uuid_interop_scala_caller.sbt");
+    let mut build = fs::read_to_string(&build_path).unwrap();
+    build.push_str("\n  .settings(Compile / unmanagedSourceDirectories += (LocalRootProject / baseDirectory).value / \"golem-temp/bridge-sdk/scala/internal/scala-uuid-target-guest-client/src/main/scala\")\n");
     fs::write_str(build_path, build).unwrap();
 }
 
@@ -608,6 +666,7 @@ async fn deployed_context() -> TestContext {
         ("go", "go"),
         ("scala", "scala"),
         ("moonbit", "moonbit"),
+        ("scala", "scala-caller"),
         ("rust", "rust-caller"),
     ] {
         let output = ctx
@@ -628,6 +687,7 @@ async fn deployed_context() -> TestContext {
     write_ts(&ctx);
     write_go(&ctx);
     write_scala(&ctx);
+    write_scala_caller(&ctx);
     write_moonbit(&ctx);
     write_rust_caller(&ctx);
     assert!(ctx.cli([flag::YES, cmd::BUILD]).await.success_or_dump());
@@ -777,7 +837,8 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
         scala_client.join("src/main/scala/Main.scala"),
         formatdoc! {r#"
             import golem.bridge.client.rust_uuid_target.{{RustUuidTargetClient, UuidHolder}}
-            import golem.bridge.runtime.{{GolemServer, Uuid}}
+            import golem.bridge.runtime.GolemServer
+            import java.util.UUID
             import scala.concurrent.{{Await, ExecutionContext}}
             import scala.concurrent.duration.*
 
@@ -787,10 +848,9 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
 
               def main(args: Array[String]): Unit = {{
                 RustUuidTargetClient.configure(GolemServer.Custom("{url}", "{token}"), "{APP}", "local")
-                def parse(text: String): Uuid = Uuid.fromStandardString(text).toOption.get
-                val key = parse("{KEY}")
-                val nil = parse("00000000-0000-0000-0000-000000000000")
-                val max = parse("ffffffff-ffff-ffff-ffff-ffffffffffff")
+                val key = UUID.fromString("{KEY}")
+                val nil = new UUID(0L, 0L)
+                val max = new UUID(-1L, -1L)
                 val target = Await.result(RustUuidTargetClient.get(key), timeout)
                 for (value <- List(key, nil, max)) assert(Await.result(target.echo(value), timeout) == value)
                 for (maybe <- List(Some(max), None)) {{
@@ -1014,6 +1074,17 @@ async fn uuid_values_cross_every_bridge() {
             "Rust guest caller of the {target} target: {stdout}"
         );
     }
+
+    let stdout = invoke(
+        &ctx,
+        "ScalaPeerCaller(\"hub\")",
+        &["run", &format!("\"{KEY}\"")],
+    )
+    .await;
+    assert!(
+        stdout.contains("ok:2"),
+        "Scala guest caller of the Scala target: {stdout}"
+    );
 
     run_external_drivers(&ctx, touch).await;
 }

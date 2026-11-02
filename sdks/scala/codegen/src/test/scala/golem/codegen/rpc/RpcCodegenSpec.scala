@@ -750,7 +750,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     val content = result.files.head.content
     assert(content.contains("def get(name: String): CounterRemote"), s"missing get with params in:\n$content")
     assert(
-      content.contains("def getPhantom(name: String, phantom: _root_.golem.Uuid): CounterRemote"),
+      content.contains("def getPhantom(name: String, phantom: _root_.java.util.UUID): CounterRemote"),
       s"missing getPhantom with params in:\n$content"
     )
     assert(
@@ -816,7 +816,7 @@ class RpcCodegenSpec extends munit.FunSuite {
       s"missing getWithConfig with params in:\n$content"
     )
     assert(
-      content.contains("def getPhantomWithConfig(name: String, phantom: _root_.golem.Uuid, host:"),
+      content.contains("def getPhantomWithConfig(name: String, phantom: _root_.java.util.UUID, host:"),
       s"missing getPhantomWithConfig with params in:\n$content"
     )
     assert(
@@ -842,7 +842,7 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      content.contains("def getPhantom(name: String, id: Int, phantom: _root_.golem.Uuid)"),
+      content.contains("def getPhantom(name: String, id: Int, phantom: _root_.java.util.UUID)"),
       s"ephemeral agent should accept an explicit phantom ID:\n$content"
     )
     assert(
@@ -868,7 +868,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     val content = result.files.head.content
     assert(content.contains("def get(): SimpleRemote"), s"missing no-param get in:\n$content")
     assert(
-      content.contains("def getPhantom(phantom: _root_.golem.Uuid): SimpleRemote"),
+      content.contains("def getPhantom(phantom: _root_.java.util.UUID): SimpleRemote"),
       s"missing no-param getPhantom in:\n$content"
     )
     assert(content.contains("def newPhantom(): SimpleRemote"), s"missing no-param newPhantom in:\n$content")

@@ -65,7 +65,7 @@ mod type_name;
 mod wire;
 
 pub use config::RustBridgeGeneratorConfig;
-pub use type_name::{RustRemappedType, RustTypeName};
+pub use type_name::RustTypeName;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RustBridgeMode {
@@ -325,27 +325,26 @@ impl RustBridgeGenerator {
                     "mimetypes",
                 ]
                 .into_iter()
-                .map(|name| RustTypeName::Derived(name.to_string())),
+                .map(|name| RustTypeName(name.to_string())),
             )?,
             RustBridgeMode::GuestWasmRpc => {
                 let reserved_names = [
-                    RustTypeName::Derived("__golem_bridge_runtime".to_string()),
-                    RustTypeName::Derived(Self::guest_client_struct_name_string(
+                    RustTypeName("__golem_bridge_runtime".to_string()),
+                    RustTypeName(Self::guest_client_struct_name_string(
                         &agent_type.type_name.0,
                     )),
-                    RustTypeName::Derived(format!(
+                    RustTypeName(format!(
                         "{}WithScopeCard",
                         Self::guest_client_struct_name_string(&agent_type.type_name.0)
                     )),
-                    RustTypeName::Derived("languages".to_string()),
-                    RustTypeName::Derived("mimetypes".to_string()),
+                    RustTypeName("languages".to_string()),
+                    RustTypeName("mimetypes".to_string()),
                 ]
                 .into_iter()
-                .chain(extra.into_iter().map(RustTypeName::Derived));
+                .chain(extra.into_iter().map(RustTypeName));
                 TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved_names)?
             }
         };
-        validate_remapped_types(&type_naming)?;
 
         Ok(Self {
             target_path: target_path.to_path_buf(),
@@ -1144,17 +1143,14 @@ impl RustBridgeGenerator {
         let mut factories = Vec::new();
         let mut names = ParameterNaming::new();
         for (_, name) in self.type_naming.types() {
-            if let RustTypeName::Derived(name) = name {
-                names.reserve(name.clone());
-            }
+            names.reserve(name.0.clone());
         }
         let mut index = 0;
         while index < self.stream_items.len() {
             let item = self.stream_items[index].clone();
             let json = serde_json::to_value(&item)?;
             let label = match self.type_naming.type_name_for_type(&item) {
-                Some(RustTypeName::Derived(name)) => name.to_snake_case(),
-                Some(RustTypeName::Remapped(RustRemappedType::Uuid)) => "uuid".to_string(),
+                Some(RustTypeName(name)) => name.to_snake_case(),
                 _ => json["kind"]
                     .as_str()
                     .ok_or_else(|| anyhow!("Missing schema kind"))?
@@ -2759,10 +2755,7 @@ impl RustBridgeGenerator {
         let mut client_definitions = Vec::new();
         let mut codecs = Vec::new();
 
-        for (typ, name) in &types {
-            let RustTypeName::Derived(name_str) = name else {
-                continue;
-            };
+        for (typ, RustTypeName(name_str)) in &types {
             let name_ident = Ident::new(name_str, Span::call_site());
             let resolved = self.resolve_ref_owned(typ);
             let streaming = contains_stream_in_graph(&self.agent_type.schema, &resolved);
@@ -2836,10 +2829,7 @@ impl RustBridgeGenerator {
             .collect();
 
         let mut defs = Vec::new();
-        for (typ, name) in &types {
-            let RustTypeName::Derived(name_str) = name else {
-                continue;
-            };
+        for (typ, RustTypeName(name_str)) in &types {
             let name_ident = Ident::new(name_str, Span::call_site());
             let resolved = self.resolve_ref_owned(typ);
 
@@ -3367,47 +3357,6 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn remapped_type_tokens(&self, remapped: &RustRemappedType) -> TokenStream {
-        match remapped {
-            RustRemappedType::Uuid => self.uuid_type_tokens(),
-        }
-    }
-
-    /// The `uuid.Uuid` builtin travels as its schema record of two `u64` halves.
-    fn remapped_encode_expr(remapped: &RustRemappedType, val: &TokenStream) -> TokenStream {
-        match remapped {
-            RustRemappedType::Uuid => quote! {{
-                let (__high, __low) = (#val).as_u64_pair();
-                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Record {
-                    fields: vec![
-                        crate::__golem_bridge_runtime::schema::SchemaValue::U64(__high),
-                        crate::__golem_bridge_runtime::schema::SchemaValue::U64(__low),
-                    ],
-                })
-            }},
-        }
-    }
-
-    fn remapped_decode_expr(&self, remapped: &RustRemappedType, val: &TokenStream) -> TokenStream {
-        match remapped {
-            RustRemappedType::Uuid => {
-                let uuid = self.uuid_type_tokens();
-                quote! {
-                    match #val {
-                        crate::__golem_bridge_runtime::schema::SchemaValue::Record { fields } => match fields.as_slice() {
-                            [
-                                crate::__golem_bridge_runtime::schema::SchemaValue::U64(__high),
-                                crate::__golem_bridge_runtime::schema::SchemaValue::U64(__low),
-                            ] => Ok(#uuid::from_u64_pair(*__high, *__low)),
-                            __other => Err(format!("Expected uuid record of two u64 halves, got {:?}", __other)),
-                        },
-                        __other => Err(format!("Expected uuid record value, got {:?}", __other)),
-                    }
-                }
-            }
-        }
-    }
-
     fn emit_encode_expr_mode(
         &mut self,
         val: TokenStream,
@@ -3416,12 +3365,7 @@ impl RustBridgeGenerator {
         depth: usize,
         streaming: bool,
     ) -> anyhow::Result<TokenStream> {
-        let inner = if let Some(RustTypeName::Remapped(remapped)) =
-            self.type_naming.type_name_for_type(typ).cloned()
-        {
-            Self::remapped_encode_expr(&remapped, &val)
-        } else if let Some(RustTypeName::Derived(n)) =
-            self.type_naming.type_name_for_type(typ).cloned()
+        let inner = if let Some(RustTypeName(n)) = self.type_naming.type_name_for_type(typ).cloned()
         {
             let encode_fn = Ident::new(
                 &if streaming {
@@ -3483,12 +3427,7 @@ impl RustBridgeGenerator {
         depth: usize,
         streaming: bool,
     ) -> anyhow::Result<TokenStream> {
-        let inner = if let Some(RustTypeName::Remapped(remapped)) =
-            self.type_naming.type_name_for_type(typ).cloned()
-        {
-            self.remapped_decode_expr(&remapped, &val)
-        } else if let Some(RustTypeName::Derived(n)) =
-            self.type_naming.type_name_for_type(typ).cloned()
+        let inner = if let Some(RustTypeName(n)) = self.type_naming.type_name_for_type(typ).cloned()
         {
             let decode_fn = Ident::new(
                 &if streaming {
@@ -4166,11 +4105,7 @@ impl RustBridgeGenerator {
         typ: &SchemaType,
         box_recursive: bool,
     ) -> anyhow::Result<TokenStream> {
-        if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
-            let n = match name {
-                RustTypeName::Remapped(remapped) => return Ok(self.remapped_type_tokens(&remapped)),
-                RustTypeName::Derived(n) => n,
-            };
+        if let Some(RustTypeName(n)) = self.type_naming.type_name_for_type(typ).cloned() {
             let ident = Ident::new(&n, Span::call_site());
             if box_recursive && self.type_naming.is_recursive_ref(typ) {
                 return Ok(quote! { Box<#ident> });
@@ -4575,44 +4510,11 @@ impl RustBridgeGenerator {
 
     fn root_type_name_conflicts(&self, name: &str) -> bool {
         self.agent_type.type_name.0 == name
-            || self.type_naming.types().any(|(_, type_name)| {
-                matches!(type_name, RustTypeName::Derived(type_name) if type_name == name)
-            })
+            || self
+                .type_naming
+                .types()
+                .any(|(_, type_name)| type_name.0 == name)
     }
-}
-
-/// A remapped name replaces the generated definition, so its codecs assume the
-/// exact schema body of the builtin it stands for.
-fn validate_remapped_types(type_naming: &TypeNaming<RustTypeName>) -> anyhow::Result<()> {
-    for (typ, name) in type_naming.types() {
-        let RustTypeName::Remapped(RustRemappedType::Uuid) = name else {
-            continue;
-        };
-        let SchemaType::Ref { id, .. } = typ else {
-            bail!("Remapped uuid type is not a reference: {typ:?}");
-        };
-        let body = type_naming
-            .graph()
-            .lookup(id)
-            .map(|def| &def.body)
-            .ok_or_else(|| anyhow!("Missing definition for {}", id.0))?;
-        let is_uuid_record = matches!(
-            body,
-            SchemaType::Record { fields, .. }
-                if fields.len() == 2
-                    && fields[0].name == "high-bits"
-                    && matches!(fields[0].body, SchemaType::U64 { .. })
-                    && fields[1].name == "low-bits"
-                    && matches!(fields[1].body, SchemaType::U64 { .. })
-        );
-        if !is_uuid_record {
-            bail!(
-                "Type {} must be a record of the u64 fields high-bits and low-bits, got {body:?}",
-                id.0
-            );
-        }
-    }
-    Ok(())
 }
 
 // TODO: use published version when available

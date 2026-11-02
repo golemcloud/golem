@@ -248,9 +248,9 @@ object PermissionsApiSpec extends ZIOSpecDefault {
       val revoking  = template(host.rawCard("revoking"))
       val revoked   = revoking.revoke()
       val installed = template(host.rawCard("installed"))
-      val result    = installed.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
+      val result    = installed.install(Holder.App(new java.util.UUID(1L, 2L)))
       val denied    = template(host.rawCard("install-denied"))
-      val refused   = denied.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
+      val refused   = denied.install(Holder.App(new java.util.UUID(1L, 2L)))
       val released  = template(host.rawCard("released"))
       released.release()
       released.release()
@@ -417,7 +417,7 @@ object PermissionsApiSpec extends ZIOSpecDefault {
       val agentResult = agentCard.install(Holder.agent(componentId, "Target(\"b\")"))
       val agentArgs   = host.args("installCard")
       val appCard     = card(host.rawCard("b"))
-      val appResult   = appCard.install(Holder.App(golem.Uuid(BigInt(5), BigInt(6))))
+      val appResult   = appCard.install(Holder.App(new java.util.UUID(5L, 6L)))
       val appArgs     = host.args("installCard")
       val holder      = agentArgs(1).asInstanceOf[js.Dynamic]
       assertTrue(

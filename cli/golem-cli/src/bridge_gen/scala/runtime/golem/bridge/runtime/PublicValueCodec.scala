@@ -145,7 +145,7 @@ object PublicValueCodec {
         case ("path", PathValue(v)) => validatePath(schema, v); budget.string(v); budget.json(json.Json.string(v))
         case ("url", UrlValue(v)) => validateUrl(schema, v); budget.string(v); budget.json(json.Json.string(v))
         case ("uuid", UuidValue(v)) =>
-          budget.add(16); budget.json(json.Json.string(Uuid.toStandardString(v)))
+          budget.add(16); budget.json(json.Json.string(v.toString))
         case ("datetime", DatetimeValue(v)) =>
           validateDatetime(v); budget.string(v); budget.json(json.Json.string(if (application) canonicalDatetime(v) else v))
         case ("duration", DurationValue(v)) =>
