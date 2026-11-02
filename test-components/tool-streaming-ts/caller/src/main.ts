@@ -17,8 +17,24 @@ import { TsStreamingClient } from 'ts-streaming-tool-guest-client';
 import { getConfigValue } from 'golem:agent/host@2.0.0';
 import type { SchemaGraph, Secret } from 'golem:core/types@2.0.0';
 import { z } from 'zod/v4';
+import { Buffer } from 'node:buffer';
+import { execFile, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+
+// Runs the bound `streaming` tool through node:child_process: `produce 3 2` streams chunks 0, 1
+// and 2 of two bytes each, and an unknown command is a usage error from the shared parser.
+async function childProcessToolObservation(): Promise<string> {
+  const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
+  const sync = spawnSync('streaming', ['produce', '3', '2']);
+  const asynchronous = await new Promise<string>((resolve, reject) => {
+    execFile('streaming', ['produce', '3', '2'], { encoding: 'buffer' }, (error, stdout) =>
+      error ? reject(error) : resolve(hex(stdout)),
+    );
+  });
+  const usage = spawnSync('streaming', ['no-such-command']);
+  return `sync=${sync.status}:${hex(sync.stdout)};async=${asynchronous};usage=${usage.status}`;
+}
 
 const TscClient = client(
   toolDefinition('tsc', { requiresFilesystem: true })
@@ -198,6 +214,10 @@ const Caller = defineAgent({
     matrix_core_observation: method({
       input: {},
       returns: MatrixCoreObservation,
+    }),
+    child_process_tool_observation: method({
+      input: {},
+      returns: z.string(),
     }),
   },
 });
@@ -421,6 +441,9 @@ Caller.implement({
       }
       await compile();
       return Result.ok('removed-output-source-preserved-recompiled');
+    },
+    child_process_tool_observation() {
+      return childProcessToolObservation();
     },
     async matrix_core_observation() {
       const client = MatrixCoreClient.newClient();

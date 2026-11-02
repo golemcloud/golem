@@ -115,6 +115,7 @@ mod path_policy_acceptance;
 mod python_sidecar;
 mod rdbms_drop;
 mod rust_sdk_gol40_conformance;
+mod sdk_child_process_tools;
 mod snapshot_attachments;
 mod tool_result_delivery;
 mod trapped_leaf_observers;
