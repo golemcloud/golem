@@ -125,6 +125,7 @@ async fn entity_submitted_after_executor_shutdown_is_never_polled() {
 struct ShutdownDrainProbe {
     attempts: Arc<std::sync::atomic::AtomicUsize>,
     fail_first: bool,
+    close_gate: Option<Arc<tokio::sync::Semaphore>>,
     tasks: Option<crate::worker::tasks::WorkerTasks>,
 }
 
@@ -143,12 +144,17 @@ impl crate::services::oplog::Oplog for ShutdownDrainProbe {
     fn executor_shutdown_handle(&self) -> crate::services::oplog::OplogShutdownHandle {
         let attempts = self.attempts.clone();
         let fail_first = self.fail_first;
+        let close_gate = self.close_gate.clone();
         crate::services::oplog::OplogShutdownHandle::new(
             || {},
             move || {
                 let attempts = attempts.clone();
+                let close_gate = close_gate.clone();
                 Box::pin(async move {
                     let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    if let Some(gate) = close_gate {
+                        gate.acquire().await.unwrap().forget();
+                    }
                     if fail_first && attempt == 0 {
                         Err("injected shutdown drain failure".to_string())
                     } else {
@@ -271,6 +277,7 @@ async fn failed_shutdown_drain_remains_registered_for_retry() {
     let oplog = Arc::new(ShutdownDrainProbe {
         attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         fail_first: true,
+        close_gate: None,
         tasks: None,
     });
     tasks.register_owner_oplog(oplog.clone());
@@ -286,12 +293,54 @@ async fn failed_shutdown_drain_remains_registered_for_retry() {
 
 #[test]
 #[timeout("10s")]
+async fn concurrent_shutdown_waits_serialize_oplog_close_and_keep_failed_drains_retryable() {
+    use std::sync::atomic::Ordering;
+    use tokio_util::sync::CancellationToken;
+
+    for fail_first in [false, true] {
+        let shutdown = CancellationToken::new();
+        let loops = super::InvocationLoops::new(shutdown.clone());
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let oplog = Arc::new(ShutdownDrainProbe {
+            attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            fail_first,
+            close_gate: Some(gate.clone()),
+            tasks: Some(crate::worker::tasks::WorkerTasks::default()),
+        });
+        loops.register_owner_oplog(oplog.clone());
+        shutdown.cancel();
+        let first = loops.wait_for_exit();
+        let second = loops.wait_for_exit();
+        tokio::pin!(first, second);
+        assert!(futures::poll!(&mut first).is_pending());
+        assert_eq!(oplog.attempts.load(Ordering::Acquire), 1);
+        assert!(futures::poll!(&mut second).is_pending());
+        assert_eq!(oplog.attempts.load(Ordering::Acquire), 1);
+        gate.add_permits(1);
+        assert_eq!(first.await.is_err(), fail_first);
+        if fail_first {
+            assert!(futures::poll!(&mut second).is_pending());
+            assert_eq!(oplog.attempts.load(Ordering::Acquire), 2);
+            gate.add_permits(1);
+        }
+        second.await.unwrap();
+        loops.wait_for_exit().await.unwrap();
+        assert_eq!(
+            oplog.attempts.load(Ordering::Acquire),
+            if fail_first { 2 } else { 1 }
+        );
+    }
+}
+
+#[test]
+#[timeout("10s")]
 async fn shutdown_waits_for_construction_before_draining_registered_oplog() {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let tasks = super::InvocationLoops::new(shutdown.clone());
     let oplog = Arc::new(ShutdownDrainProbe {
         attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         fail_first: false,
+        close_gate: None,
         tasks: None,
     });
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
@@ -341,6 +390,7 @@ async fn shutdown_stops_worker_roots_before_joining_invocation_cleanup() {
     let oplog = Arc::new(ShutdownDrainProbe {
         attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         fail_first: false,
+        close_gate: None,
         tasks: Some(worker_tasks.clone()),
     });
     loops.register_owner_oplog(oplog.clone());

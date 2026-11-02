@@ -48,6 +48,7 @@ pub mod shard;
 pub mod shard_manager;
 pub mod shutdown;
 pub mod stream_session_index;
+pub(crate) mod work_admission;
 pub mod worker;
 pub mod worker_activator;
 pub mod worker_enumeration;

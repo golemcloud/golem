@@ -32,6 +32,6 @@ cargo test -p golem-human-approval --lib -- --report-time
 ```
 
 Service acceptance tests live in `src/acceptance_tests.rs`. Deployed middleware coverage lives in
-`golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs`. The support crate remains a
+`golem-worker-executor-tests/tests/tool_streaming/middleware_acceptance.rs`. The support crate remains a
 root-workspace member so its tests run in the ordinary unit-test suite, and only the worker
 executor's test dependencies consume it.

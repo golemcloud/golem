@@ -18,7 +18,7 @@
 // method variants compile, register, and are emitted into the component
 // metadata, and that the resulting component builds via the QuickJS WASM
 // injection / pre-initialization pipeline. Runtime cache semantics are covered
-// by the Rust executor tests in golem-worker-executor/tests/readonly.rs and by
+// by the Rust executor tests in golem-worker-executor-tests/tests/readonly.rs and by
 // the HTTP integration tests in integration-tests/tests/custom_api/readonly_http.rs.
 //
 // The `method({ readOnly })` surface expresses every
