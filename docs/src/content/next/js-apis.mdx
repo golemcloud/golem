@@ -152,9 +152,11 @@ Context propagates through `Promise.prototype.then`, `catch`, and `finally`, and
 
 #### `node:child_process`
 
-The runtime cannot create operating-system subprocesses. A limited compatibility adapter runs JavaScript targets invoked through `process.execPath` inline, with separate argument, environment, and working-directory views. It also recognizes npm's literal `sh -c` form for plain Node commands and executable Node shebang files.
+The runtime cannot create operating-system subprocesses. A limited compatibility adapter runs JavaScript targets invoked through `process.execPath`, with separate argument, environment, and working-directory views. It also recognizes npm's literal `sh -c` form for plain Node commands and executable Node shebang files. On Preview 3, these local Node children run in separate JavaScript runtimes; Preview 2 runs them inline.
 
-Other executables, unsupported shells and shell syntax, and unsupported shebangs fail with `ENOSYS`. Inline execution does not create a fresh JavaScript runtime or a subprocess.
+Commands that name a tool bound to the calling component run that tool, with arguments parsed by the same command schema as the Bash tool. Local Node scripts and package launchers take precedence over a tool with the same name. `GOLEM_NODE_TOOL_PROCESSES=0` or `false` disables tool dispatch; tool permissions still apply.
+
+Other executables, unsupported shells and shell syntax, and unsupported shebangs fail with `ENOSYS`.
 
 - `ChildProcess`, `exec`, `execFile`, `fork`, `spawn`, `execSync`, `execFileSync`, `spawnSync`
 

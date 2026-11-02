@@ -10,7 +10,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, isAbsolute } from "node:path";
+import { dirname, join, isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import {
   installToolProcessBridge,
@@ -87,4 +88,18 @@ test("changed native module registration points fail closed", (t) => {
     () => installToolProcessBridge(directory),
     /Expected one registration point/,
   );
+});
+
+test("every JavaScript SDK template generator embeds the modules and installs the bridge", () => {
+  const sdks = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  for (const generator of [
+    "ts/packages/golem-ts-sdk/scripts/generate-agent-template.mjs",
+    "effect/scripts/generate-agent-template.mjs",
+    "scala/scripts/generate-agent-guest-wasm.sh",
+  ]) {
+    const source = readFileSync(join(sdks, generator), "utf8");
+    assert.match(source, /javascript\/tool-process-template\.mjs/, generator);
+    assert.match(source, /\btoolProcessModules\b/, generator);
+    assert.match(source, /\binstallToolProcessBridge\(/, generator);
+  }
 });

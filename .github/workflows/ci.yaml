@@ -243,7 +243,7 @@ jobs:
       - name: Compute built-in artifact cache key
         id: cache-key
         env:
-          SOURCE_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'Makefile.toml', 'builtin-artifacts.json', 'builtin-tools/**', 'plugins/**', 'wit/**', 'sdks/rust/**', 'sdks/ts/**', 'cli/golem-cli/**', 'golem-common/**', 'golem-api-grpc/**', 'golem-client/**', 'golem-schema/**', 'golem-schema-derive/**', 'golem-tool-metadata/**', 'golem-rust-macro/**', 'golem-mcp-import/**', 'golem-openapi-client-generator/**', 'golem-skills/skills/**', '.github/actions/setup-*/**', '.github/workflows/ci.yaml') }}
+          SOURCE_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'Makefile.toml', 'builtin-artifacts.json', 'builtin-tools/**', 'plugins/**', 'wit/**', 'sdks/rust/**', 'sdks/ts/**', 'sdks/javascript/**', 'cli/golem-cli/**', 'golem-common/**', 'golem-api-grpc/**', 'golem-client/**', 'golem-schema/**', 'golem-schema-derive/**', 'golem-tool-metadata/**', 'golem-rust-macro/**', 'golem-mcp-import/**', 'golem-openapi-client-generator/**', 'golem-skills/skills/**', '.github/actions/setup-*/**', '.github/workflows/ci.yaml') }}
         run: |
           tools=$({ rustc -vV; node --version; wasm-rquickjs --version; wasm-tools --version; } | sha256sum | cut -d' ' -f1)
           echo "value=golem-builtin-artifacts-v3-${SOURCE_HASH}-${tools}" >> "$GITHUB_OUTPUT"

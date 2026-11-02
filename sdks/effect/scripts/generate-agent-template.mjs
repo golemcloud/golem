@@ -3,6 +3,10 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { templateMatrix } from "./template-matrix.mjs"
+import {
+  installToolProcessBridge,
+  toolProcessModules,
+} from "../../javascript/tool-process-template.mjs"
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sourceWit = join(packageDir, "wit")
@@ -15,12 +19,13 @@ const sharedModules = [
   ["effect", "dist/effect.mjs"],
   ["effect/http", "dist/effect-http.mjs"],
   ["effect/http-api", "dist/effect-httpapi.mjs"],
+  ...toolProcessModules,
 ]
 
 for (const template of templateMatrix) {
   const modules = [[template.sdkModuleName, template.sdkEntry], ...sharedModules]
   for (const [, entry] of modules) {
-    if (!existsSync(join(packageDir, entry))) {
+    if (!existsSync(resolve(packageDir, entry))) {
       throw new Error(`${entry} does not exist; run npm run build:bundle first`)
     }
   }
@@ -52,4 +57,5 @@ for (const template of templateMatrix) {
     throw new Error(`Expected one pinned wit-bindgen line in ${cargoToml}, found ${count}`)
   writeFileSync(cargoToml, original.replace(witBindgenLine, forkedLine))
   rmSync(join(output, "Cargo.lock"), { force: true })
+  installToolProcessBridge(output)
 }

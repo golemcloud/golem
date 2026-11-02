@@ -12,6 +12,8 @@ set -euo pipefail
 # 2) runs `wasm-rquickjs generate-wrapper-crate` with a `@slot` for user JS injection.
 #    Unlike the TS SDK, we do NOT embed a separate SDK JS module here.
 #    Scala.js bundles the SDK into the user's `scala.js`, which golem-cli injects later.
+#    The shared tool-process modules and native bridge from sdks/javascript are embedded,
+#    so `node:child_process` dispatches to the component's bound tools as in the TS SDK.
 # 3) builds the component with `cargo build --target wasm32-wasip2`
 # 4) updates embedded plugin resources (used by sbt/mill plugins).
 #
@@ -20,6 +22,7 @@ set -euo pipefail
 #
 # Requirements:
 # - `wasm-rquickjs` (from crate `wasm-rquickjs-cli`)
+# - Node.js, to run the shared tool-process template helper
 # - Rust toolchain with `wasm32-wasip2` target (`rustup target add wasm32-wasip2`)
 #
 # Usage:
@@ -31,6 +34,26 @@ sdk_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 if ! command -v wasm-rquickjs &>/dev/null; then
   echo "[agent-guest] ERROR: wasm-rquickjs not found. Install it with: cargo install wasm-rquickjs-cli" >&2
+  exit 1
+fi
+
+if ! command -v node &>/dev/null; then
+  echo "[agent-guest] ERROR: node not found; it runs sdks/javascript/tool-process-template.mjs" >&2
+  exit 1
+fi
+
+tool_process_template="$sdk_root/../javascript/tool-process-template.mjs"
+tool_process_modules=()
+while IFS= read -r module; do
+  tool_process_modules+=(--js-modules "$module")
+done < <(
+  node --input-type=module -e '
+    const { toolProcessModules } = await import(process.argv[1]);
+    for (const [name, source] of toolProcessModules) console.log(`${name}=${source}`);
+  ' "$tool_process_template"
+)
+if (( ${#tool_process_modules[@]} == 0 )); then
+  echo "[agent-guest] ERROR: no tool-process modules from $tool_process_template" >&2
   exit 1
 fi
 
@@ -111,6 +134,7 @@ for role_spec in "${roles[@]}"; do
     --wit "$wit_root" \
     --world "$world" \
     --target wasi-p3 \
+    "${tool_process_modules[@]}" \
     --js-modules "user=@slot" \
     --output "$wrapper_dir"
 
@@ -135,6 +159,11 @@ for role_spec in "${roles[@]}"; do
 
   # The generated lock still pins the replaced upstream dependency graph.
   rm -f "$wrapper_dir/Cargo.lock"
+
+  node --input-type=module -e '
+    const { installToolProcessBridge } = await import(process.argv[1]);
+    installToolProcessBridge(process.argv[2]);
+  ' "$tool_process_template" "$wrapper_dir"
 
   out_wasm="$target_dir/wasm32-wasip2/release/$artifact"
   rm -f "$out_wasm"

@@ -1,8 +1,10 @@
 # JavaScript tool process adapter
 
-The TypeScript SDK template registers this adapter for agents and tools, including
-the built-in JavaScript and TypeScript tools. The template build requires a
-wasm-rquickjs toolchain with runtime-local process backends and runtime-init hooks.
+The TypeScript, Effect and Scala SDK templates register this adapter for agents and
+tools, including the built-in JavaScript and TypeScript tools. Each template build
+uses `tool-process-template.mjs` for the embedded modules and the native bridge, and
+requires a wasm-rquickjs toolchain with runtime-local process backends and
+runtime-init hooks.
 
 `tool-process-backend.js` describes the Node-facing behavior. The private
 `tool-process-host.js` facade connects it to `tool-process-bridge`, a Rust crate
@@ -24,7 +26,7 @@ waits for the output and its write callbacks.
 
 The [guest bridge fixture](../../test-components/node-tool-processes/README.md)
 tests this adapter over the existing tool API, without WIT or executor changes.
-The SDK template embeds `tool-process-runtime-init.js` as the optional
+Each SDK template embeds `tool-process-runtime-init.js` as the optional
 `wasm-rquickjs-runtime-init` module. It registers the adapter separately in the
 main runtime and each fresh execution job, then calls the public
 `node:child_process` entry points. The native module remains Golem-owned;
