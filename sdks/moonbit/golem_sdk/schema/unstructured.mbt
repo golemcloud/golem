@@ -430,13 +430,16 @@ pub impl[L] IntoWire for UnstructuredText[L] with fn append_wire(self, encoder) 
       append_unstructured_wire_value(
         encoder,
         unstructured_inline_case,
-        @types.TextValue({ text, language, }),
+        @types.TextValue({
+          text: wire_text(text, "unstructured text"),
+          language: wire_optional_text(language, "unstructured text language"),
+        }),
       )
     Url(url) =>
       append_unstructured_wire_value(
         encoder,
         unstructured_url_case,
-        @types.UrlValue(url),
+        @types.UrlValue(wire_text(url, "unstructured url")),
       )
   }
 }
@@ -499,13 +502,18 @@ pub impl[M] IntoWire for UnstructuredBinary[M] with fn append_wire(
       append_unstructured_wire_value(
         encoder,
         unstructured_inline_case,
-        @types.BinaryValue({ bytes: bytes.to_fixedarray(), mime_type, }),
+        @types.BinaryValue({
+          bytes: bytes.to_fixedarray(),
+          mime_type: wire_optional_text(
+            mime_type, "unstructured binary mime type",
+          ),
+        }),
       )
     Url(url) =>
       append_unstructured_wire_value(
         encoder,
         unstructured_url_case,
-        @types.UrlValue(url),
+        @types.UrlValue(wire_text(url, "unstructured url")),
       )
   }
 }

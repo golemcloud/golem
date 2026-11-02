@@ -30,9 +30,16 @@ import (
 // positional on the wire: declaration order is the order the schema reports and
 // the order values are written in.
 func (d *Engine) compileRecord(c *Codec) {
+	c.record = true
 	fields := d.StructFields(c.Typ)
 	if slices.ContainsFunc(fields, func(f Field) bool { return f.AutoInjected }) {
 		MarkInvalid(c, "%s", MisplacedPrincipal)
+		return
+	}
+	// The record would carry none of the struct's state: it would travel as
+	// record {} and arrive as a zero value.
+	if len(fields) == 0 && c.Typ.NumField() > 0 {
+		MarkInvalid(c, "%s has no exported fields, so it cannot travel as a record; it would arrive as a zero value", c.Typ)
 		return
 	}
 
@@ -155,6 +162,14 @@ func (d *Engine) compileMap(c *Codec) {
 		return
 	}
 	key, val := d.Compile(kt), d.Compile(vt)
+	// A Go type of a primitive kind can still lower to another schema type —
+	// time.Duration to duration, Text to text, an enum to enum — and the host
+	// refuses a map keyed by one. Such a key compiles to a scalar codec, whose
+	// body does not read the graph builder.
+	if key.Invalid == "" && !isMapKeyBody(key.Body(nil)) {
+		MarkInvalid(c, "map key type %s lowers to a schema type the host does not accept as a map key; use bool, an integer, a float, Char or string", kt)
+		return
+	}
 
 	c.Body = func(g *GraphBuilder) types.SchemaTypeBody {
 		return types.MakeSchemaTypeBodyMapType(types.MapSpec{Key: g.Node(key), Value: g.Node(val)})
@@ -197,23 +212,48 @@ func (d *Engine) compileMap(c *Codec) {
 	}
 }
 
+// compileResult handles Result[O, E]. An arm of type [values.Unit] is an arm
+// without a value: its schema declares no type and its value travels with no
+// payload, which is how every other language spells result<_, E>.
 func compileResult(c *Codec, okC, errC *Codec) {
+	okUnit, errUnit := isUnitArm(okC), isUnitArm(errC)
+	armType := func(g *GraphBuilder, arm *Codec, unit bool) witTypes.Option[int32] {
+		if unit {
+			return witTypes.None[int32]()
+		}
+		return witTypes.Some(g.Node(arm))
+	}
 	c.Body = func(g *GraphBuilder) types.SchemaTypeBody {
 		return types.MakeSchemaTypeBodyResultType(types.ResultSpec{
-			Ok:  witTypes.Some(g.Node(okC)),
-			Err: witTypes.Some(g.Node(errC)),
+			Ok:  armType(g, okC, okUnit),
+			Err: armType(g, errC, errUnit),
 		})
+	}
+	encodeArm := func(b *ValBuilder, arm *Codec, unit bool, v reflect.Value) witTypes.Option[int32] {
+		if unit {
+			return witTypes.None[int32]()
+		}
+		return witTypes.Some(arm.Encode(b, v))
 	}
 	c.Encode = func(b *ValBuilder, v reflect.Value) int32 {
 		inner, isErr, _ := values.ResultGet(v.Interface())
 		if isErr {
-			i := errC.Encode(b, inner)
 			return b.Push(types.MakeSchemaValueNodeResultValue(
-				types.MakeResultValuePayloadErrValue(witTypes.Some(i))))
+				types.MakeResultValuePayloadErrValue(encodeArm(b, errC, errUnit, inner))))
 		}
-		i := okC.Encode(b, inner)
 		return b.Push(types.MakeSchemaValueNodeResultValue(
-			types.MakeResultValuePayloadOkValue(witTypes.Some(i))))
+			types.MakeResultValuePayloadOkValue(encodeArm(b, okC, okUnit, inner))))
+	}
+	decodeArm := func(d *Decoder, arm *Codec, unit bool, elem reflect.Value, child witTypes.Option[int32], name string) error {
+		switch {
+		case unit && child.IsSome():
+			return fmt.Errorf("%s: %s arm declares no value but one arrived", c.Typ, name)
+		case unit:
+			return nil
+		case child.IsNone():
+			return fmt.Errorf("%s: %s arm carries no value", c.Typ, name)
+		}
+		return arm.Decode(d, elem, child.Some())
 	}
 	c.Decode = func(d *Decoder, dst reflect.Value, idx int32) error {
 		n, err := d.Node(idx)
@@ -226,21 +266,15 @@ func compileResult(c *Codec, okC, errC *Codec) {
 		setter := dst.Addr().Interface()
 		payload := n.ResultValue()
 		if payload.Tag() == types.ResultValuePayloadErrValue {
-			child := payload.ErrValue()
-			if child.IsNone() {
-				return fmt.Errorf("%s: err arm carries no value", c.Typ)
-			}
 			elem, _ := values.ResultSetErr(setter)
-			return errC.Decode(d, elem, child.Some())
-		}
-		child := payload.OkValue()
-		if child.IsNone() {
-			return fmt.Errorf("%s: ok arm carries no value", c.Typ)
+			return decodeArm(d, errC, errUnit, elem, payload.ErrValue(), "err")
 		}
 		elem, _ := values.ResultSetOk(setter)
-		return okC.Decode(d, elem, child.Some())
+		return decodeArm(d, okC, okUnit, elem, payload.OkValue(), "ok")
 	}
 }
+
+func isUnitArm(c *Codec) bool { return c.Typ == reflect.TypeFor[values.Unit]() }
 
 // ---------------------------------------------------------------------------
 // variants and enums
@@ -516,8 +550,17 @@ func compileQuantity(c *Codec, unit values.QuantityUnit) {
 			Max:             witTypes.None[types.QuantityValue](),
 		})
 	}
+	allowed := func(u string) bool {
+		if len(suffixes) == 0 {
+			return u == unit.BaseUnit()
+		}
+		return slices.Contains(suffixes, u)
+	}
 	c.Encode = func(b *ValBuilder, v reflect.Value) int32 {
 		mantissa, scale, u, _ := values.QuantityParts(v.Interface())
+		if !allowed(u) {
+			panic(&EncodeError{fmt.Sprintf("%s: unit %q is not one this quantity accepts", c.Typ, u)})
+		}
 		return b.Push(types.MakeSchemaValueNodeQuantityValueNode(types.QuantityValue{
 			Mantissa: mantissa,
 			Scale:    scale,
@@ -533,6 +576,9 @@ func compileQuantity(c *Codec, unit values.QuantityUnit) {
 			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
 		}
 		q := n.QuantityValueNode()
+		if !allowed(q.Unit) {
+			return fmt.Errorf("%s: unit %q is not one this quantity accepts", c.Typ, q.Unit)
+		}
 		values.QuantitySetParts(dst.Addr().Interface(), q.Mantissa, q.Scale, q.Unit)
 		return nil
 	}

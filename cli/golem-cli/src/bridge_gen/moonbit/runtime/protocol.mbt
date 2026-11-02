@@ -86,7 +86,8 @@ fn write_request_fields(
   parameters : SchemaValue,
   phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
-) -> Unit {
+) -> Unit raise {
+  schema_value_check_text(parameters)
   output.write_string("{\"appName\":")
   output.write_string(Json::string(app_name).stringify())
   output.write_string(",\"envName\":")
@@ -120,7 +121,7 @@ fn render_create_agent_request(
   parameters : SchemaValue,
   phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
-) -> String {
+) -> String raise {
   let output = StringBuilder()
   write_request_fields(
     output, app_name, env_name, agent_type_name, parameters, phantom_id, config,
@@ -142,7 +143,8 @@ fn render_agent_invocation_request(
   mode : String,
   schedule_at : String?,
   idempotency_key : String?,
-) -> String {
+) -> String raise {
+  schema_value_check_text(method_parameters)
   let output = StringBuilder()
   write_request_fields(
     output, app_name, env_name, agent_type_name, parameters, phantom_id, config,

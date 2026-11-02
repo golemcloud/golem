@@ -114,13 +114,13 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 		return string(n.Value), err
 	case StringType:
 		n, err := expect[StringValue](v, path, "string")
-		return n.Value, err
+		return utf8Rendered(n.Value, path, err)
 	case PathType:
 		n, err := expect[PathValue](v, path, "path")
-		return n.Value, err
+		return utf8Rendered(n.Value, path, err)
 	case UrlType:
 		n, err := expect[UrlValue](v, path, "url")
-		return n.Value, err
+		return utf8Rendered(n.Value, path, err)
 
 	case DatetimeType:
 		n, err := expect[DatetimeValue](v, path, "datetime")
@@ -153,6 +153,9 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 	case TextType:
 		n, err := expect[TextValue](v, path, "text")
 		if err != nil {
+			return nil, err
+		}
+		if err := checkUTF8(n.Text, path); err != nil {
 			return nil, err
 		}
 		out := map[string]any{"text": n.Text}
@@ -355,6 +358,19 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 		return nil, fmt.Errorf("%s: streams and futures have no JSON representation", pathOrRoot(path))
 	}
 	return nil, fmt.Errorf("%s: unsupported schema type %T", pathOrRoot(path), body)
+}
+
+// utf8Rendered is a string rendered for canonical JSON, refused when it is not
+// valid UTF-8: encoding/json would send it with U+FFFD in place of each invalid
+// byte.
+func utf8Rendered(s, path string, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
+	if err := checkUTF8(s, path); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func (u *unpacker) renderItems(elem SchemaType, items []SchemaValue, path string) (any, error) {

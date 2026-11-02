@@ -34,7 +34,8 @@ object GolemPath {
     new IntoSchema[GolemPath] {
       override lazy val graph: SchemaGraph =
         SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.PathType(defaultSpec)))
-      override def toValue(value: GolemPath): SchemaValue = SchemaValue.PathValue(value.value)
+      override def toValue(value: GolemPath): SchemaValue =
+        SchemaValue.PathValue(UnicodeText.encodeText("path", value.value))
     }
 
   implicit val fromSchema: FromSchema[GolemPath] =
@@ -58,7 +59,7 @@ object Url {
     new IntoSchema[Url] {
       override lazy val graph: SchemaGraph =
         SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.UrlType(defaultRestrictions)))
-      override def toValue(value: Url): SchemaValue = SchemaValue.UrlValue(value.value)
+      override def toValue(value: Url): SchemaValue = SchemaValue.UrlValue(UnicodeText.encodeText("url", value.value))
     }
 
   implicit val fromSchema: FromSchema[Url] =
@@ -94,6 +95,7 @@ object Quantity {
         SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.QuantityType(unit.spec)))
 
       override def toValue(value: Quantity[U]): SchemaValue = {
+        UnicodeText.encodeText("quantity unit", value.unit)
         if (!unit.allows(value.unit)) throw SchemaEncodeError(s"unit '${value.unit}' is not allowed for quantity")
         SchemaValue.QuantityValueNode(QuantityValue(value.mantissa, value.scale, value.unit))
       }

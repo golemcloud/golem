@@ -41,6 +41,11 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         case _ => report.errorAndAbort(s"Invalid $what: expected one type argument in ${ty.show}")
       }
 
+    // A pattern such as `'[Map[k, v]]` also matches subtypes, which the concrete codec rejects.
+    def exact[C](ty: TypeRepr, what: String)(using Type[C]): Unit =
+      if (ty.typeSymbol != TypeRepr.of[C].typeSymbol)
+        report.errorAndAbort(s"Unsupported wire type ${ty.show}: use $what instead")
+
     def body(tpe: TypeRepr): SchemaType = {
       val ty = tpe.dealias
       if (ty.typeSymbol.fullName == "golem.schema.GuestSecretHandle")
@@ -112,16 +117,19 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         case '[java.time.Duration]                 => SchemaType(SchemaTypeBody.DurationType)
         case '[java.util.UUID]                     => t.uuid
         case '[Array[Byte]]                        => t.list(t.u8)
-        case '[Option[a]]                          => t.option(body(TypeRepr.of[a]))
-        case '[Either[e, a]]                       => t.result(Some(body(TypeRepr.of[a])), Some(body(TypeRepr.of[e])))
-        case '[Map[k, v]]                          => t.map(body(TypeRepr.of[k]), body(TypeRepr.of[v]))
-        case '[List[a]]                            => t.list(body(TypeRepr.of[a]))
-        case '[Vector[a]]                          => t.list(body(TypeRepr.of[a]))
-        case '[Seq[a]]                             => t.list(body(TypeRepr.of[a]))
-        case '[Array[a]]                           => t.list(body(TypeRepr.of[a]))
-        case '[AgentStream[a]]                     => SchemaType(SchemaTypeBody.StreamType(Some(body(TypeRepr.of[a]))))
-        case _                                     =>
-          if (ty <:< TypeRepr.of[Tuple]) t.tuple(ty.typeArgs.map(body))
+        case '[Option[a]]                          => exact[Option[Any]](ty, "Option[A]"); t.option(body(TypeRepr.of[a]))
+        case '[Either[e, a]]                       =>
+          exact[Either[Any, Any]](ty, "Either[E, A]")
+          t.result(Some(body(TypeRepr.of[a])), Some(body(TypeRepr.of[e])))
+        case '[Map[k, v]]      => exact[Map[Any, Any]](ty, "Map[K, V]"); t.map(body(TypeRepr.of[k]), body(TypeRepr.of[v]))
+        case '[List[a]]        => exact[List[Any]](ty, "List[A]"); t.list(body(TypeRepr.of[a]))
+        case '[Vector[a]]      => t.list(body(TypeRepr.of[a]))
+        case '[Set[a]]         => exact[Set[Any]](ty, "Set[A]"); t.list(body(TypeRepr.of[a]))
+        case '[Seq[a]]         => exact[Seq[Any]](ty, "Seq[A], List[A] or Vector[A]"); t.list(body(TypeRepr.of[a]))
+        case '[Array[a]]       => t.list(body(TypeRepr.of[a]))
+        case '[AgentStream[a]] => SchemaType(SchemaTypeBody.StreamType(Some(body(TypeRepr.of[a]))))
+        case _                 =>
+          if (ty <:< TypeRepr.of[Tuple]) t.tuple(TupleElements.of(using q)(ty).map(body))
           else {
             val sym = ty.typeSymbol
             builder.register(
@@ -134,7 +142,9 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
                     val child   = if (c.isTerm) c.termRef else c.typeRef
                     val fields  = c.caseFields
                     val payload =
-                      if (c.isTerm || c.flags.is(Flags.Module) || fields.isEmpty) None
+                      if (c.isTerm || c.flags.is(Flags.Module)) None
+                      else if (c.flags.is(Flags.Sealed) && !c.flags.is(Flags.Case)) Some(body(child))
+                      else if (fields.isEmpty) None
                       else if (fields.size == 1 && fields.head.name == "value")
                         Some(body(child.memberType(fields.head)))
                       else Some(body(child))

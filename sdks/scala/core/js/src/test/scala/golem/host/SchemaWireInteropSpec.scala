@@ -264,6 +264,50 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
         }
         assertTrue(rejected.forall(identity))
       },
+      test("lowering rejects a string with a lone surrogate with the encode error") {
+        def tree(value: String)  = WitSchemaValueTree(Vector(StringValue(value)), 0)
+        def lower(value: String) = scala.util.Try(SchemaWireInterop.valueTreeToJs(tree(value)))
+        val paired               = "a\ud83d\ude00b"
+        assertTrue(
+          List("a\ud800", "\udfff", "\ude00\ud83d").forall(value =>
+            lower(value).failed.toOption.exists(_.isInstanceOf[SchemaEncodeError])
+          ),
+          lower(paired).map(SchemaWireInterop.valueTreeFromJs).toOption.contains(tree(paired))
+        )
+      },
+      test("lowering rejects every textual leaf with a lone surrogate with the encode error") {
+        val bad    = "a\ud800"
+        val leaves = Vector(
+          TextValue(WitTextValuePayload(bad, None)),
+          TextValue(WitTextValuePayload("ok", Some(bad))),
+          BinaryValue(WitBinaryValuePayload(Vector.empty, Some(bad))),
+          PathValue(bad),
+          UrlValue(bad),
+          QuantityValueNode(QuantityValue(1L, 0, bad)),
+          UnionValue(WitUnionValuePayload(bad, 1))
+        )
+        val paired = "a\ud83d\ude00"
+        val good   = WitSchemaValueTree(
+          Vector(
+            TupleValue(Vector(1, 2, 3, 4)),
+            TextValue(WitTextValuePayload(paired, Some(paired))),
+            PathValue(paired),
+            UrlValue(paired),
+            UnionValue(WitUnionValuePayload(paired, 1))
+          ),
+          0
+        )
+        assertTrue(
+          leaves.forall(node =>
+            scala.util
+              .Try(SchemaWireInterop.valueTreeToJs(WitSchemaValueTree(Vector(node, BoolValue(true)), 0)))
+              .failed
+              .toOption
+              .exists(_.isInstanceOf[SchemaEncodeError])
+          ),
+          SchemaWireInterop.valueTreeFromJs(SchemaWireInterop.valueTreeToJs(good)) == good
+        )
+      },
       test("typed schema value round-trips Wit -> Js -> Wit (all cases)") {
         assertTrue(SchemaWireInterop.typedFromJs(SchemaWireInterop.typedToJs(typed)) == typed)
       },

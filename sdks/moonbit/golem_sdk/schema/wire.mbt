@@ -101,6 +101,27 @@ pub fn wire_payload(index : Int?) -> Int raise WireError {
 }
 
 ///|
+/// Rejects a string that holds an unpaired surrogate, because it is not valid
+/// Unicode text.
+fn wire_text(value : String, what : String) -> String raise WireError {
+  guard @model.is_unicode_text(value) else {
+    raise WireError::Invalid("\{what} value contains an unpaired surrogate")
+  }
+  value
+}
+
+///|
+fn wire_optional_text(
+  value : String?,
+  what : String,
+) -> String? raise WireError {
+  match value {
+    Some(value) => Some(wire_text(value, what))
+    None => None
+  }
+}
+
+///|
 pub fn wire_no_payload(index : Int?) -> Unit raise WireError {
   guard index is None else { raise WireError::Invalid("unexpected payload") }
 }
@@ -108,11 +129,13 @@ pub fn wire_no_payload(index : Int?) -> Unit raise WireError {
 ///|
 /// A decode transaction owns the entire carrier until every field has been
 /// decoded and finish succeeds. Abort invalidates lifted holders before
-/// dropping each distinct raw capability, including unreachable ones.
+/// dropping each distinct raw capability, including unreachable ones. Finish
+/// drops the capabilities of discarded subtrees.
 pub struct WireReader {
   tree : @types.SchemaValueTree
   visited : Array[Bool]
   resources : Array[@types.SchemaValueNode]
+  discarded : Array[@types.SchemaValueNode]
   rollback : Array[() -> Unit]
   drop_resource : (@types.SchemaValueNode) -> Unit
   mut settled : Bool
@@ -149,6 +172,7 @@ pub fn WireReader::new(
     tree,
     visited: Array::make(tree.value_nodes.length(), false),
     resources: [],
+    discarded: [],
     rollback: [],
     drop_resource,
     settled: false,
@@ -187,6 +211,10 @@ pub fn WireReader::finish(self : WireReader) -> Unit raise WireError {
   }
   self.settled = true
   self.rollback.clear()
+  for node in self.discarded {
+    (self.drop_resource)(node)
+  }
+  self.discarded.clear()
 }
 
 ///|
@@ -411,6 +439,41 @@ pub fn wire_node(
 }
 
 ///|
+/// Claims the subtree at `index` without decoding it. Its owned resources are
+/// dropped by finish, or by abort like every other resource of the carrier.
+fn WireReader::discard(self : WireReader, index : Int) -> Unit raise WireError {
+  let node = wire_node(self, index)
+  if wire_is_resource(node) {
+    self.discarded.push(node)
+  }
+  match node {
+    @types.SchemaValueNode::RecordValue(children)
+    | @types.SchemaValueNode::TupleValue(children)
+    | @types.SchemaValueNode::ListValue(children)
+    | @types.SchemaValueNode::FixedListValue(children) =>
+      for child in children {
+        self.discard(child)
+      }
+    @types.SchemaValueNode::MapValue(entries) =>
+      for entry in entries {
+        self.discard(entry.key)
+        self.discard(entry.value)
+      }
+    @types.SchemaValueNode::VariantValue({ payload: Some(child), .. })
+    | @types.SchemaValueNode::OptionValue(Some(child))
+    | @types.SchemaValueNode::ResultValue(
+      @types.ResultValuePayload::OkValue(Some(child))
+    )
+    | @types.SchemaValueNode::ResultValue(
+      @types.ResultValuePayload::ErrValue(Some(child))
+    )
+    | @types.SchemaValueNode::UnionValue({ body: child, .. }) =>
+      self.discard(child)
+    _ => ()
+  }
+}
+
+///|
 pub fn wire_record(
   tree : WireReader,
   index : Int,
@@ -448,7 +511,7 @@ pub fn wire_variant(
 
 ///|
 pub impl IntoWire for String with fn append_wire(self, encoder) {
-  encoder.push(@types.SchemaValueNode::StringValue(self))
+  encoder.push(@types.SchemaValueNode::StringValue(wire_text(self, "string")))
 }
 
 ///|
@@ -579,6 +642,11 @@ pub impl FromWire for Byte with fn read_wire(tree, index) {
 
 ///|
 pub impl IntoWire for Char with fn append_wire(self, encoder) {
+  guard @model.is_unicode_scalar(self) else {
+    raise WireError::Invalid(
+      "char value is not a Unicode scalar value: \{self.to_int()}",
+    )
+  }
   encoder.push(@types.SchemaValueNode::CharValue(self))
 }
 
@@ -601,11 +669,8 @@ pub impl IntoWire for Unit with fn append_result_payload(_self, _encoder) {
 }
 
 ///|
-pub impl FromWire for Unit with fn read_result_payload(reader, index) {
-  match index {
-    None => ()
-    Some(index) => FromWire::read_wire(reader, index)
-  }
+pub impl FromWire for Unit with fn read_result_payload(_reader, index) {
+  wire_no_payload(index)
 }
 
 ///|
@@ -700,19 +765,30 @@ pub impl[K : IntoWire, V : IntoWire] IntoWire for Map[K, V] with fn append_wire(
 }
 
 ///|
+/// A repeated key keeps the value of its last entry at the position of its
+/// first entry; the values of earlier entries are not decoded.
 pub impl[K : FromWire + Hash + Eq, V : FromWire] FromWire for Map[K, V] with fn read_wire(
   reader,
   index,
 ) {
   match wire_node(reader, index) {
     @types.SchemaValueNode::MapValue(entries) => {
-      let result : Map[K, V] = Map([])
-      for entry in entries {
+      let keys : Array[K] = []
+      let last : Map[K, Int] = Map([])
+      for i, entry in entries {
         let key : K = FromWire::read_wire(reader, entry.key)
-        guard !result.contains(key) else {
-          raise WireError::Invalid("duplicate map key")
+        keys.push(key)
+        last[key] = i
+      }
+      let result : Map[K, V] = Map([])
+      for i, key in keys {
+        guard last.get(key) is Some(winner) else { continue }
+        if !result.contains(key) {
+          result[key] = V::read_wire(reader, entries[winner].value)
         }
-        result[key] = V::read_wire(reader, entry.value)
+        if winner != i {
+          reader.discard(entries[i].value)
+        }
       }
       result
     }
@@ -767,7 +843,7 @@ pub impl FromWire for @types.Datetime with fn read_wire(tree, index) {
 
 ///|
 pub impl IntoWire for Path with fn append_wire(self, encoder) {
-  encoder.push(@types.SchemaValueNode::PathValue(self.value))
+  encoder.push(@types.SchemaValueNode::PathValue(wire_text(self.value, "path")))
 }
 
 ///|

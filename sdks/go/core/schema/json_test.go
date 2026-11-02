@@ -481,3 +481,30 @@ func TestNumbersOutOfRangeAndTrailingDataAreRejected(t *testing.T) {
 		}
 	}
 }
+
+// A string that is not valid UTF-8 is refused, rather than rendered with
+// U+FFFD in place of each invalid byte, on both the canonical and the wire
+// path.
+func TestInvalidUTF8IsRefused(t *testing.T) {
+	bad := "ok\xffno"
+	for _, c := range []struct {
+		typ   SchemaType
+		value SchemaValue
+	}{
+		{typ(StringType{}), StringValue{Value: bad}},
+		{typ(TextType{}), TextValue{Text: bad}},
+		{typ(PathType{}), PathValue{Value: bad}},
+		{typ(UrlType{}), UrlValue{Value: bad}},
+	} {
+		if _, err := NewRef(SchemaGraph{Root: c.typ}).UnpackJSON(c.value); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+			t.Errorf("UnpackJSON(%#v): %v", c.value, err)
+		}
+		if _, err := MarshalWireValue(c.value); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+			t.Errorf("MarshalWireValue(%#v): %v", c.value, err)
+		}
+	}
+	lang := bad
+	if _, err := MarshalWireValue(TextValue{Text: "ok", Language: &lang}); err == nil {
+		t.Error("a text language that is not UTF-8 was marshalled")
+	}
+}

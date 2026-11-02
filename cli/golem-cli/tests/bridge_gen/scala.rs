@@ -486,6 +486,44 @@ class StreamRuntimeTest extends munit.FunSuite {
       assertEquals(intercept[BridgeException](SchemaValueCodec.render(invalid)).getMessage, oldError)
     }
   }
+  test("strings with a lone surrogate are rejected on encode and decode") {
+    for (invalid <- List(StringValue("a\ud800"), StringValue("\udfff"), StringValue("\ude00\ud83d"))) {
+      intercept[BridgeException](SchemaValueCodec.toJson(invalid))
+      intercept[BridgeException](SchemaValueCodec.render(invalid))
+    }
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"string","value":{}}}""")
+    intercept[BridgeException](codec.encodeApplication(StringValue("a\ud800")))
+    val wire = golem.bridge.runtime.json.Json.obj("kind" -> golem.bridge.runtime.json.Json.string("string"), "value" -> golem.bridge.runtime.json.Json.string("a\ud800"))
+    intercept[BridgeException](codec.decode(wire))
+    assertEquals(codec.decode(codec.encode(StringValue("a\ud83d\ude00"))), StringValue("a😀"))
+    assertEquals(codec.encodeApplication(StringValue("a😀")).render, "\"a😀\"")
+  }
+  test("every textual leaf with a lone surrogate is rejected on encode and decode") {
+    import golem.bridge.runtime.json.Json
+    val bad = "a\ud800"
+    val leaves = List[SchemaValue](TextValue(bad, None), TextValue("ok", Some(bad)), BinaryValue(Vector.empty, Some(bad)), PathValue(bad), UrlValue(bad), QuantityValue(1, 0, bad), UnionValue(bad, StringValue("ok")))
+    for (invalid <- leaves) {
+      intercept[BridgeException](SchemaValueCodec.toJson(invalid))
+      intercept[BridgeException](SchemaValueCodec.render(invalid))
+    }
+    val wires = List(
+      "text" -> Json.obj("text" -> Json.string(bad)),
+      "text" -> Json.obj("text" -> Json.string("ok"), "language" -> Json.string(bad)),
+      "binary" -> Json.obj("bytes" -> Json.arr(Vector.empty), "mimeType" -> Json.string(bad)),
+      "path" -> Json.obj("path" -> Json.string(bad)),
+      "url" -> Json.obj("url" -> Json.string(bad)),
+      "quantity" -> Json.obj("mantissa" -> Json.string("1"), "scale" -> Json.fromInt(0), "unit" -> Json.string(bad)),
+      "union" -> Json.obj("tag" -> Json.string(bad), "body" -> SchemaValueCodec.toJson(StringValue("ok")))
+    )
+    for ((kind, value) <- wires) assert(SchemaValueCodec.fromJson(Json.obj("kind" -> Json.string(kind), "value" -> value)).isLeft, kind)
+    val text = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"text","value":{"restrictions":{}}}}""")
+    intercept[BridgeException](text.encodeApplication(TextValue(bad, None)))
+    val url = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"url","value":{"restrictions":{}}}}""")
+    intercept[BridgeException](url.encodeApplication(UrlValue("https://example.com/\udfff")))
+    val paired = TextValue("a\ud83d\ude00", Some("en"))
+    assertEquals(text.decode(text.encode(paired)), paired)
+    assertEquals(SchemaValueCodec.fromJson(SchemaValueCodec.toJson(UnionValue("a😀", PathValue("😀")))), Right(UnionValue("a😀", PathValue("😀"))))
+  }
   test("direct protocol writer preserves optional fields and application config JSON") {
     val config = List(AgentConfigEntry(List("nested", "\"😀"), golem.bridge.runtime.json.Json.parse("""{"zero":-0,"value":null}""").toOption.get))
     for (phantom <- List(None, Some("phantom\"😀")); schedule <- List(None, Some("2026-01-01T00:00:00Z")); key <- List(None, Some("key\n"))) {

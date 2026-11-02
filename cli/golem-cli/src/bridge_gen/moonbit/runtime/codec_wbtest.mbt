@@ -394,7 +394,7 @@ fn encode_create_agent_request(
   parameters : SchemaValue,
   phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
-) -> Json {
+) -> Json raise {
   let fields : Array[(String, Json)] = [
     ("appName", Json::string(app_name)),
     ("envName", Json::string(env_name)),
@@ -422,7 +422,7 @@ fn encode_agent_invocation_request(
   mode : String,
   schedule_at : String?,
   idempotency_key : String?,
-) -> Json {
+) -> Json raise {
   let fields : Array[(String, Json)] = [
     ("appName", Json::string(app_name)),
     ("envName", Json::string(env_name)),
@@ -446,4 +446,65 @@ fn encode_agent_invocation_request(
     None => ()
   }
   obj(fields)
+}
+
+///|
+test "encoders reject unpaired surrogates and non-scalar chars" {
+  fn utf16(units : Array[Int]) -> String {
+    String::from_array(units.map(unit => unit.unsafe_to_char()))
+  }
+
+  let rejected : Array[SchemaValue] = [
+    StringValue(utf16([0xD800])),
+    StringValue(utf16([0x61, 0xDC00])),
+    StringValue(utf16([0xD83D, 0x61])),
+    ListValue([StringValue("ok"), StringValue(utf16([0xDBFF]))]),
+    TextValue(utf16([0xDC00]), None),
+    PathValue(utf16([0xD800])),
+    UrlValue(utf16([0xD800])),
+    UnionValue(utf16([0xD800]), BoolValue(true)),
+    CharValue(0xD800),
+    CharValue(0x110000),
+  ]
+  for value in rejected {
+    let encoders : Array[(SchemaValue) -> Unit raise] = [
+      v => ignore(schema_value_render(v)),
+      v => ignore(schema_value_to_json(v)),
+      v => {
+        ignore(render_create_agent_request("app", "env", "Agent", v, None, []))
+      },
+      v => {
+        ignore(
+          render_agent_invocation_request(
+            "app",
+            "env",
+            "Agent",
+            RecordValue([]),
+            None,
+            [],
+            "method",
+            v,
+            "await",
+            None,
+            None,
+          ),
+        )
+      },
+    ]
+    for encode in encoders {
+      try encode(value) catch {
+        BridgeError(message) =>
+          assert_true(
+            message.contains("unpaired surrogate") ||
+            message.contains("Unicode scalar value"),
+          )
+        other => fail("unexpected error: \{@debug.to_string(other)}")
+      } noraise {
+        _ => fail("encoded invalid text: \{@debug.to_string(value)}")
+      }
+    }
+  }
+  let emoji = utf16([0x61, 0xD83D, 0xDE00])
+  assert_eq(round_trip(StringValue(emoji)), StringValue(emoji))
+  assert_eq(round_trip(CharValue(0x1F600)), CharValue(0x1F600))
 }

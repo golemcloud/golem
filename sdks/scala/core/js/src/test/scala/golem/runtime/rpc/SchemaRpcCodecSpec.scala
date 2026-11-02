@@ -41,6 +41,11 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
     implicit val schema: Schema[Args2] = Schema.derived
   }
 
+  final case class Link(url: Url, path: GolemPath)
+  object Link {
+    implicit val schema: Schema[Link] = Schema.derived
+  }
+
   final case class NoArgs()
   object NoArgs {
     implicit val schema: Schema[NoArgs] = Schema.derived
@@ -253,6 +258,22 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
           val in   = Args2(7, "hello")
           val tree = SchemaRpcCodec.encodeArgs(in)
           assertTrue(SchemaRpcCodec.decodeArgs[Args2](tree) == Right(in))
+        },
+        test("surrogate chars and lone-surrogate strings fail with the schema errors") {
+          def encodeFailure(result: scala.util.Try[Any]) =
+            result.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError])
+          def decodeFailure(result: scala.util.Try[Any]) =
+            result.failed.toOption.exists(_.isInstanceOf[SchemaDecodeError])
+          val paired = Args2(1, "a\ud83d\ude00")
+          assertTrue(
+            encodeFailure(scala.util.Try(SchemaRpcCodec.encodeArgs(Args2(1, "a\ud800")))),
+            encodeFailure(scala.util.Try(SchemaRpcCodec.encodeChar('\udc00'))),
+            encodeFailure(scala.util.Try(SchemaRpcCodec.encodeArgs(Link(Url("a\ud800"), GolemPath("ok"))))),
+            encodeFailure(scala.util.Try(SchemaRpcCodec.encodeArgs(Link(Url("ok"), GolemPath("\udfff"))))),
+            decodeFailure(scala.util.Try(SchemaRpcCodec.asChar(SchemaValue.CharValue(0xd800)))),
+            SchemaRpcCodec.asChar(SchemaRpcCodec.encodeChar('\uffff')) == '\uffff',
+            SchemaRpcCodec.decodeArgs[Args2](SchemaRpcCodec.encodeArgs(paired)) == Right(paired)
+          )
         },
         test("encodeArgs/decodeArgs round-trip for an empty param list") {
           val in   = NoArgs()

@@ -44,10 +44,11 @@ import scala.util.control.NonFatal
  */
 private[golem] object Derivation {
 
-  private final val SecretFqn   = "golem.config.Secret"
-  private final val PathFqn     = "golem.schema.GolemPath"
-  private final val UrlFqn      = "golem.schema.Url"
-  private final val QuantityFqn = "golem.schema.Quantity"
+  private final val SecretFqn    = "golem.config.Secret"
+  private final val PathFqn      = "golem.schema.GolemPath"
+  private final val UrlFqn       = "golem.schema.Url"
+  private final val QuantityFqn  = "golem.schema.Quantity"
+  private final val TupleConsFqn = "scala.*:"
 
   private val ubyteTypeId: TypeId[UByte]           = TypeId.of[UByte]
   private val byteArrayTypeId: TypeId[Array[Byte]] = TypeId.of[Array[Byte]]
@@ -249,8 +250,9 @@ private[golem] object Derivation {
   private def isSetTypeId(typeId: TypeId[?]): Boolean =
     TypeId.normalize(typeId).fullName == TypeId.set.fullName
 
+  // A tuple of more than 22 elements has no `TupleN` class: its type id is the `*:` cons cell.
   private def isTupleRecord(reflect: Reflect.Bound[?]): Boolean =
-    reflect.typeId.isTuple
+    reflect.typeId.isTuple || normalizedName(reflect) == TupleConsFqn
 
   /** Tuple fields, ordered numerically by their `_N` name. */
   private def tupleFieldsInOrder(rec: Reflect.Record.Bound[?]): List[Reflect.Bound[Any]] =
@@ -478,19 +480,29 @@ private[golem] object Derivation {
     extractSingleRecordPrimitive[String](d, typeName) { case PrimitiveValue.String(v) => v }
 
   private def richToSchemaValue[A](reflect: Reflect.Bound[A], d: DV): SchemaValue =
-    if (isPath(reflect)) SchemaValue.PathValue(stringFromSingleValueRecord(d, "GolemPath"))
-    else if (isUrl(reflect)) SchemaValue.UrlValue(stringFromSingleValueRecord(d, "Url"))
+    if (isPath(reflect))
+      SchemaValue.PathValue(UnicodeText.encodeText("path", stringFromSingleValueRecord(d, "GolemPath")))
+    else if (isUrl(reflect)) SchemaValue.UrlValue(UnicodeText.encodeText("url", stringFromSingleValueRecord(d, "Url")))
     else if (isInstant(reflect))
       d match {
+        case DV.Primitive(PrimitiveValue.Instant(instant)) =>
+          SchemaValue.DatetimeValue(Datetime(instant.getEpochSecond, instant.getNano))
         case DV.Primitive(PrimitiveValue.String(v)) =>
           val instant = Instant.parse(v)
           SchemaValue.DatetimeValue(Datetime(instant.getEpochSecond, instant.getNano))
-        case other => throw SchemaEncodeError(s"Instant expected string dynamic value, got $other")
+        case other => throw SchemaEncodeError(s"Instant expected instant or string dynamic value, got $other")
       }
     else if (isDuration(reflect))
       d match {
+        case DV.Primitive(PrimitiveValue.Duration(duration)) =>
+          try SchemaValue.DurationValue(duration.toNanos)
+          catch {
+            case _: ArithmeticException =>
+              throw SchemaEncodeError(s"Duration is out of i64 nanoseconds range: $duration")
+          }
         case DV.Primitive(PrimitiveValue.Long(v)) => SchemaValue.DurationValue(v)
-        case other                                => throw SchemaEncodeError(s"Duration expected long dynamic value, got $other")
+        case other                                =>
+          throw SchemaEncodeError(s"Duration expected duration or long dynamic value, got $other")
       }
     else {
       val spec = quantitySpec(reflect).getOrElse(throw SchemaEncodeError("missing QuantityUnit for Quantity"))
@@ -509,6 +521,7 @@ private[golem] object Derivation {
             .get("unit")
             .collect { case DV.Primitive(PrimitiveValue.String(v)) => v }
             .getOrElse(throw SchemaEncodeError("Quantity.unit expected string"))
+          UnicodeText.encodeText("quantity unit", unit)
           if (unit != spec.baseUnit && !spec.allowedSuffixes.contains(unit))
             throw SchemaEncodeError(s"unit '$unit' is not allowed for quantity")
           SchemaValue.QuantityValueNode(QuantityValue(mantissa, scale, unit))
@@ -716,7 +729,7 @@ private[golem] object Derivation {
   private def primitiveToSchemaValue(pv: PrimitiveValue): SchemaValue =
     pv match {
       case PrimitiveValue.Unit          => SchemaValue.TupleValue(Nil)
-      case PrimitiveValue.String(v)     => SchemaValue.StringValue(v)
+      case PrimitiveValue.String(v)     => SchemaValue.StringValue(UnicodeText.encodeString(v))
       case PrimitiveValue.Boolean(v)    => SchemaValue.BoolValue(v)
       case PrimitiveValue.Byte(v)       => SchemaValue.S8Value(v)
       case PrimitiveValue.Short(v)      => SchemaValue.S16Value(v)
@@ -724,7 +737,7 @@ private[golem] object Derivation {
       case PrimitiveValue.Long(v)       => SchemaValue.S64Value(v)
       case PrimitiveValue.Float(v)      => SchemaValue.F32Value(v)
       case PrimitiveValue.Double(v)     => SchemaValue.F64Value(v)
-      case PrimitiveValue.Char(v)       => SchemaValue.CharValue(v.toInt)
+      case PrimitiveValue.Char(v)       => SchemaValue.CharValue(UnicodeText.encodeChar(v))
       case PrimitiveValue.BigDecimal(v) => SchemaValue.StringValue(v.toString)
       case PrimitiveValue.BigInt(v)     => SchemaValue.StringValue(v.toString)
       case PrimitiveValue.UUID(v)       => SchemaValue.UuidValue(v)
@@ -786,13 +799,17 @@ private[golem] object Derivation {
       value match {
         case SchemaValue.DatetimeValue(v) =>
           validateNanoseconds(v.nanoseconds)
-          DV.Primitive(PrimitiveValue.String(Instant.ofEpochSecond(v.seconds, v.nanoseconds.toLong).toString))
+          val instant = Instant.ofEpochSecond(v.seconds, v.nanoseconds.toLong)
+          if (reflect.asPrimitive.isDefined) DV.Primitive(PrimitiveValue.Instant(instant))
+          else DV.Primitive(PrimitiveValue.String(instant.toString))
         case other => throw FromSchemaError(s"expected datetime value for Instant, got $other")
       }
     else if (isDuration(reflect))
       value match {
-        case SchemaValue.DurationValue(v) => DV.Primitive(PrimitiveValue.Long(v))
-        case other                        => throw FromSchemaError(s"expected duration value for Duration, got $other")
+        case SchemaValue.DurationValue(v) =>
+          if (reflect.asPrimitive.isDefined) DV.Primitive(PrimitiveValue.Duration(JDuration.ofNanos(v)))
+          else DV.Primitive(PrimitiveValue.Long(v))
+        case other => throw FromSchemaError(s"expected duration value for Duration, got $other")
       }
     else {
       val spec =
@@ -991,7 +1008,7 @@ private[golem] object Derivation {
         }
       case SchemaValue.BoolValue(v) => DV.Primitive(PrimitiveValue.Boolean(v))
       case SchemaValue.CharValue(v) =>
-        if (v < Char.MinValue.toInt || v > Char.MaxValue.toInt)
+        if (!UnicodeText.isScalarValue(v) || v > Char.MaxValue.toInt)
           throw FromSchemaError(s"char value out of Scala Char range: $v")
         DV.Primitive(PrimitiveValue.Char(v.toChar))
       case SchemaValue.S8Value(v)   => DV.Primitive(PrimitiveValue.Byte(v))

@@ -78,7 +78,7 @@ object PublicValueCodec {
         case ("char", CharValue(v)) =>
           if (!Character.isValidCodePoint(v) || v >= 0xd800 && v <= 0xdfff) fail("invalid char value")
           val s = new String(Character.toChars(v)); budget.string(s); budget.json(json.Json.string(s))
-        case ("string", StringValue(v)) => budget.string(v); budget.json(json.Json.string(v))
+        case ("string", StringValue(v)) => validText("string", v); budget.string(v); budget.json(json.Json.string(v))
         case ("record", RecordValue(values)) =>
           val fields = schema.recordFields
           if (fields.length != values.length) fail("record field count does not match schema")
@@ -137,13 +137,15 @@ object PublicValueCodec {
           }
         case ("result", ResultValue(result)) => encodeResult(schema, result, depth, budget, application)
         case ("text", TextValue(text, language)) =>
+          validText("text", text); language.foreach(validText("text language", _))
           validateText(schema, text, language); budget.string(text); language.foreach(budget.string)
           budget.json(json.Json.obj(Vector("text" -> json.Json.string(text)) ++ language.map(v => "language" -> json.Json.string(v))))
         case ("binary", BinaryValue(bytes, mimeType)) =>
+          mimeType.foreach(validText("binary MIME type", _))
           validateBinary(schema, bytes, mimeType); budget.add(bytes.length); mimeType.foreach(budget.string)
           budget.json(json.Json.obj(Vector("bytes" -> json.Json.string(Base64.getUrlEncoder.withoutPadding.encodeToString(bytes.toArray))) ++ mimeType.map(v => "mimeType" -> json.Json.string(v))))
-        case ("path", PathValue(v)) => validatePath(schema, v); budget.string(v); budget.json(json.Json.string(v))
-        case ("url", UrlValue(v)) => validateUrl(schema, v); budget.string(v); budget.json(json.Json.string(v))
+        case ("path", PathValue(v)) => validText("path", v); validatePath(schema, v); budget.string(v); budget.json(json.Json.string(v))
+        case ("url", UrlValue(v)) => validText("url", v); validateUrl(schema, v); budget.string(v); budget.json(json.Json.string(v))
         case ("uuid", UuidValue(v)) =>
           budget.add(16); budget.json(json.Json.string(v.toString))
         case ("datetime", DatetimeValue(v)) =>
@@ -151,13 +153,14 @@ object PublicValueCodec {
         case ("duration", DurationValue(v)) =>
           budget.add(8); budget.json(json.Json.obj("nanoseconds" -> json.Json.string(v.toString)))
         case ("quantity", QuantityValue(mantissa, scale, unit)) =>
-          validateQuantity(schema, mantissa, scale, unit); budget.add(12); budget.string(unit)
+          validText("quantity unit", unit); validateQuantity(schema, mantissa, scale, unit); budget.add(12); budget.string(unit)
           budget.json(json.Json.obj(
             "mantissa" -> json.Json.string(mantissa.toString),
             "scale" -> json.Json.fromLong(scale.toLong),
             "unit" -> json.Json.string(unit)
           ))
         case ("union", UnionValue(tag, body)) =>
+          validText("union tag", tag)
           val branch = unionBranch(schema, tag)
           val encoded = budget.withJson { encodeAt(schemaField(branch, "body"), body, depth + 1, budget, application) }
           if (!matchesDiscriminator(branch, encoded)) fail("union body does not satisfy discriminator")
@@ -461,6 +464,8 @@ object PublicValueCodec {
   private def validateUuidV4(value: String): Unit = if (!UuidV4.matcher(value).matches()) fail("provisional stream reference must be a lower-case UUIDv4")
   private def unsupportedType(kind: String): Nothing = fail(s"unsupported-value: schema type '$kind' cannot cross the public boundary")
   private def fail(message: String): Nothing = throw BridgeException(s"Public value codec: $message")
+  private def validText(what: String, value: String): Unit =
+    if (SchemaValueCodec.loneSurrogateIndex(value) >= 0) fail(s"$what contains a lone surrogate")
 
   private val Unsupported = Set("secret", "quota-token", "permission-card", "future")
   private val MaxDepth = 64

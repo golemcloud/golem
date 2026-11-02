@@ -17,9 +17,48 @@ package engine
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode"
 )
+
+// ParamsTypeProblem explains why t cannot carry parameters, or returns "".
+// The parameters are t's exported fields, so t must be a struct, and one with
+// fields that are all unexported — a stream, an option, or any other value
+// type — would publish none. role names t in the explanation.
+func ParamsTypeProblem(role string, t reflect.Type) string {
+	want := role + " must be a struct whose exported fields are the parameters (golem.Unit for none)"
+	if t.Kind() != reflect.Struct {
+		return fmt.Sprintf("%s, got %s", want, t)
+	}
+	if t.NumField() > 0 && !slices.ContainsFunc(reflect.VisibleFields(t), func(f reflect.StructField) bool { return f.IsExported() }) {
+		return fmt.Sprintf("%s; %s has none, so wrap it in a struct field", want, t)
+	}
+	return ""
+}
+
+// CompileParams compiles the parameter struct t as the record of its exported
+// fields, whatever t means as a value: golem.Unit, the empty tuple as a value,
+// is the empty record here.
+func (d *Engine) CompileParams(t reflect.Type) *Codec {
+	if c := d.Compile(t); c.record {
+		return c
+	}
+	if c, ok := d.paramCodecs[t]; ok {
+		return c
+	}
+	c := &Codec{Typ: t}
+	if problem := ParamsTypeProblem("parameters", t); problem != "" {
+		MarkInvalid(c, "%s", problem)
+	} else {
+		d.compileRecord(c)
+	}
+	if d.paramCodecs == nil {
+		d.paramCodecs = map[reflect.Type]*Codec{}
+	}
+	d.paramCodecs[t] = c
+	return c
+}
 
 // Field is one exported struct field, in declaration order. Declaration
 // order is the wire order: value trees encode records positionally.

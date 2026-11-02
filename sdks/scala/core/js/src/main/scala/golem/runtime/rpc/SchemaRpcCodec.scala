@@ -95,11 +95,7 @@ private[golem] object SchemaRpcCodec {
     SchemaValue.U64Value((x & MaxU64).toLong)
   }
 
-  def encodeChar(v: Char): SchemaValue = {
-    if (java.lang.Character.isSurrogate(v))
-      throw new RuntimeException(f"scala.Char U+${v.toInt}%04X is a surrogate, not a valid Unicode scalar value")
-    SchemaValue.CharValue(v.toInt)
-  }
+  def encodeChar(v: Char): SchemaValue = SchemaValue.CharValue(UnicodeText.encodeChar(v))
 
   private def mismatch(expected: String, got: SchemaValue): Nothing =
     throw new RuntimeException(s"Expected a $expected value, got $got")
@@ -152,7 +148,7 @@ private[golem] object SchemaRpcCodec {
     case SchemaValue.CharValue(x) if x >= 0 && x <= 0xffff && !java.lang.Character.isSurrogate(x.toChar) =>
       x.toChar
     case SchemaValue.CharValue(x) =>
-      throw new RuntimeException(f"Schema char U+$x%04X cannot be represented as a scala.Char")
+      throw SchemaDecodeError(f"Schema char U+$x%04X cannot be represented as a scala.Char")
     case o => mismatch("char", o)
   }
   def asString(v: SchemaValue): String = v match {

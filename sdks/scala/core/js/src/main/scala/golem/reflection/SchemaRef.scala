@@ -467,6 +467,12 @@ private[reflection] object CanonicalJson {
     case _                  => fail("expected a JSON string")
   }
 
+  private def text(json: Json): String = {
+    val value = string(json)
+    if (UnicodeText.loneSurrogateIndex(value) >= 0) fail("string contains a lone surrogate")
+    value
+  }
+
   private def bool(json: Json): Boolean = json match {
     case value: Json.Boolean => value.value
     case _                   => fail("expected a JSON boolean")
@@ -522,9 +528,10 @@ private[reflection] object CanonicalJson {
         F64Value(value)
       case CharType =>
         val text = string(json)
-        if (text.codePointCount(0, text.length) != 1) fail("expected one Unicode scalar")
+        if (text.codePointCount(0, text.length) != 1 || !UnicodeText.isScalarValue(text.codePointAt(0)))
+          fail("expected one Unicode scalar")
         CharValue(text.codePointAt(0))
-      case StringType           => StringValue(string(json))
+      case StringType           => StringValue(text(json))
       case RecordType(expected) =>
         val jsonFields = fields(json)
         jsonFields.keys
@@ -626,25 +633,25 @@ private[reflection] object CanonicalJson {
         val jsonFields = fields(json)
         if (!jsonFields.keySet.subsetOf(Set("text", "language"))) fail("text JSON contains unknown fields")
         TextValue(
-          at("text")(string(jsonFields.getOrElse("text", fail("missing field 'text'")))),
-          jsonFields.get("language").map(value => at("language")(string(value)))
+          at("text")(text(jsonFields.getOrElse("text", fail("missing field 'text'")))),
+          jsonFields.get("language").map(value => at("language")(text(value)))
         )
       case BinaryType(_) =>
         val jsonFields = fields(json)
         if (!jsonFields.keySet.subsetOf(Set("bytes", "mimeType"))) fail("binary JSON contains unknown fields")
         val mimeType = jsonFields.get("mimeType").map { value =>
           at("mimeType") {
-            val text = string(value)
-            if (!MimeTypePattern.pattern.matcher(text).matches()) fail("invalid MIME type")
-            text
+            val mimeType = text(value)
+            if (!MimeTypePattern.pattern.matcher(mimeType).matches()) fail("invalid MIME type")
+            mimeType
           }
         }
         BinaryValue(
           at("bytes")(decodeBase64Url(string(jsonFields.getOrElse("bytes", fail("missing field 'bytes'"))))),
           mimeType
         )
-      case PathType(_) => PathValue(string(json))
-      case UrlType(_)  => UrlValue(string(json))
+      case PathType(_) => PathValue(text(json))
+      case UrlType(_)  => UrlValue(text(json))
       case UuidType    =>
         UuidValue(golem.CanonicalUuid.parse(string(json)).fold(fail, identity))
       case DatetimeType =>
@@ -662,7 +669,7 @@ private[reflection] object CanonicalJson {
           QuantityValue(
             at("mantissa")(canonicalLong(jsonFields("mantissa"), unsigned = false)),
             at("scale")(integral(jsonFields("scale"), Int.MinValue, Int.MaxValue).toInt),
-            at("unit")(string(jsonFields("unit")))
+            at("unit")(text(jsonFields("unit")))
           )
         )
       case UnionType(branches) =>

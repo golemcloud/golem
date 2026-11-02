@@ -257,6 +257,7 @@ pub struct WireReader {
   tree : @types.SchemaValueTree
   visited : Array[Bool]
   resources : Array[@types.SchemaValueNode]
+  discarded : Array[@types.SchemaValueNode]
   rollback : Array[() -> Unit]
   drop_resource : (@types.SchemaValueNode) -> Unit
   mut settled : Bool
@@ -295,6 +296,7 @@ pub(open) trait AllowedMimeTypes {
 
 pub(open) trait FromSchema {
   fn from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
+  fn from_result_payload(@schema_model.SchemaValue?) -> Self raise FromSchemaError = _
 }
 pub impl FromSchema for Unit
 pub impl FromSchema for Bool

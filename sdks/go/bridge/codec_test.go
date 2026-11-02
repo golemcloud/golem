@@ -134,17 +134,17 @@ func TestCompositesRoundTrip(t *testing.T) {
 // A result arm that carries no value is spelled struct{} in Go and has no
 // encoder; it travels without a value, and a value arriving for it is an error.
 func TestAUnitResultArm(t *testing.T) {
-	sv := EncodeResult(values.Ok[struct{}, string](struct{}{}), nil, EncodeString)
+	sv := EncodeResult(values.Ok[values.Unit, string](values.Unit{}), nil, EncodeString)
 	if sv.(schema.ResultValue).Value != nil {
 		t.Fatalf("a unit ok arm must travel without a value: %#v", sv)
 	}
-	got, err := DecodeResult[struct{}, string](sv, nil, DecodeString)
+	got, err := DecodeResult[values.Unit, string](sv, nil, DecodeString)
 	if err != nil || !got.IsOk() {
 		t.Fatalf("decode: %#v %v", got, err)
 	}
 
 	withValue := schema.ResultValue{Value: ptr[schema.SchemaValue](schema.BoolValue{Value: true})}
-	if _, err := DecodeResult[struct{}, string](withValue, nil, DecodeString); err == nil ||
+	if _, err := DecodeResult[values.Unit, string](withValue, nil, DecodeString); err == nil ||
 		!strings.Contains(err.Error(), "declares no value") {
 		t.Fatalf("a value for a unit arm must be rejected, got %v", err)
 	}
@@ -167,12 +167,52 @@ func TestDecodingTheWrongKindSaysWhatWasExpected(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
-func TestAMapWithARepeatedKeyIsRejected(t *testing.T) {
+// A key named twice keeps its later entry, as the host's validation and the
+// Rust conversion do.
+func TestAMapWithARepeatedKeyKeepsTheLaterEntry(t *testing.T) {
 	m := schema.MapValue{Entries: []schema.MapEntry{
 		{Key: schema.StringValue{Value: "k"}, Value: schema.BoolValue{Value: true}},
 		{Key: schema.StringValue{Value: "k"}, Value: schema.BoolValue{Value: false}},
 	}}
-	if _, err := DecodeMap(m, DecodeString, DecodeBool); err == nil || !strings.Contains(err.Error(), "appears twice") {
-		t.Fatalf("got %v", err)
+	got, err := DecodeMap(m, DecodeString, DecodeBool)
+	if err != nil || len(got) != 1 || got["k"] {
+		t.Fatalf("got %v, %v", got, err)
+	}
+}
+
+func TestUnitIsTheEmptyTuple(t *testing.T) {
+	sv := EncodeUnit(values.Unit{})
+	if tv, ok := sv.(schema.TupleValue); !ok || len(tv.Elements) != 0 {
+		t.Fatalf("unit encoded as %#v", sv)
+	}
+	data, err := schema.MarshalWireValue(sv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := schema.UnmarshalWireValue(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeUnit(back); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeUnit(schema.TupleValue{Elements: []schema.SchemaValue{schema.BoolValue{}}}); err == nil {
+		t.Fatal("a 1-tuple decoded as unit")
+	}
+}
+
+// A string that is not valid UTF-8 is refused when the value is marshalled,
+// rather than travelling with U+FFFD in its place.
+func TestInvalidUTF8IsRefusedOnTheWire(t *testing.T) {
+	for _, sv := range []schema.SchemaValue{
+		EncodeString("ok\xffno"),
+		EncodeText("ok\xffno"),
+		EncodePath("ok\xffno"),
+		EncodeURL("ok\xffno"),
+		EncodeList([]string{"ok", "\xff"}, EncodeString),
+	} {
+		if _, err := schema.MarshalWireValue(sv); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+			t.Errorf("%#v: got %v", sv, err)
+		}
 	}
 }
