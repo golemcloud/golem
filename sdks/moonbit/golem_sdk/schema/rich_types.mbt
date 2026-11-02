@@ -60,6 +60,127 @@ pub fn Duration::new(nanoseconds : Int64) -> Duration {
 }
 
 ///|
+/// A universally unique identifier (RFC 9562), stored as its 128 bits. `Show`
+/// and `Uuid::to_string` print the lowercase hyphenated form.
+pub struct Uuid {
+  priv high_bits : UInt64
+  priv low_bits : UInt64
+} derive(Eq, Compare, Hash)
+
+///|
+pub suberror UuidParseError {
+  UuidParseError(String)
+} derive(Debug, Eq)
+
+///|
+pub fn Uuid::from_bits(high_bits : UInt64, low_bits : UInt64) -> Uuid {
+  { high_bits, low_bits, }
+}
+
+///|
+pub fn Uuid::high_bits(self : Uuid) -> UInt64 {
+  self.high_bits
+}
+
+///|
+pub fn Uuid::low_bits(self : Uuid) -> UInt64 {
+  self.low_bits
+}
+
+///|
+pub fn Uuid::from_wit(uuid : @types.Uuid) -> Uuid {
+  { high_bits: uuid.high_bits, low_bits: uuid.low_bits, }
+}
+
+///|
+pub fn Uuid::to_wit(self : Uuid) -> @types.Uuid {
+  { high_bits: self.high_bits, low_bits: self.low_bits, }
+}
+
+///|
+/// Generates a random (version 4) UUID from `wasi:random/random`. Golem
+/// records the random bits in the oplog, so the value is stable on replay.
+pub fn Uuid::random() -> Uuid {
+  let high = @random.get_random_u64()
+  let low = @random.get_random_u64()
+  {
+    high_bits: (high & 0xFFFFFFFFFFFF0FFFUL) | 0x0000000000004000UL,
+    low_bits: (low & 0x3FFFFFFFFFFFFFFFUL) | 0x8000000000000000UL,
+  }
+}
+
+///|
+fn uuid_hex_digit(c : UInt16) -> UInt64? {
+  let c = c.to_int()
+  if c >= '0' && c <= '9' {
+    Some((c - '0').to_uint64())
+  } else if c >= 'a' && c <= 'f' {
+    Some((c - 'a' + 10).to_uint64())
+  } else if c >= 'A' && c <= 'F' {
+    Some((c - 'A' + 10).to_uint64())
+  } else {
+    None
+  }
+}
+
+///|
+/// Parses the hyphenated form `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`. Hex
+/// digits may be upper or lower case.
+pub fn Uuid::parse(value : String) -> Uuid raise UuidParseError {
+  if value.length() != 36 {
+    raise UuidParseError("invalid UUID '\{value}': expected 36 characters")
+  }
+  let mut high = 0UL
+  let mut low = 0UL
+  let mut digits = 0
+  for i in 0..<36 {
+    let c = value.code_unit_at(i)
+    if i == 8 || i == 13 || i == 18 || i == 23 {
+      if c.to_int() != '-' {
+        raise UuidParseError("invalid UUID '\{value}': expected '-' at \{i}")
+      }
+      continue
+    }
+    guard uuid_hex_digit(c) is Some(digit) else {
+      raise UuidParseError("invalid UUID '\{value}': invalid hex digit at \{i}")
+    }
+    if digits < 16 {
+      high = (high << 4) | digit
+    } else {
+      low = (low << 4) | digit
+    }
+    digits += 1
+  }
+  { high_bits: high, low_bits: low, }
+}
+
+///|
+fn uuid_write_hex(logger : &Logger, value : UInt64, digits : Int) -> Unit {
+  for i = digits - 1; i >= 0; i = i - 1 {
+    let nibble = ((value >> (i * 4)) & 0xFUL).to_int()
+    logger.write_char("0123456789abcdef".unsafe_get(nibble).unsafe_to_char())
+  }
+}
+
+///|
+pub impl Show for Uuid with fn output(self, logger) {
+  uuid_write_hex(logger, self.high_bits >> 32, 8)
+  logger.write_char('-')
+  uuid_write_hex(logger, self.high_bits >> 16, 4)
+  logger.write_char('-')
+  uuid_write_hex(logger, self.high_bits, 4)
+  logger.write_char('-')
+  uuid_write_hex(logger, self.low_bits >> 48, 4)
+  logger.write_char('-')
+  uuid_write_hex(logger, self.low_bits, 12)
+}
+
+///|
+pub impl Debug for Uuid with fn to_repr(self) {
+  Repr::ctor("Uuid", [(None, Repr::string(self.to_string()))])
+}
+
+///|
 pub(open) trait QuantityUnit {
   fn type_id() -> String
   fn base_unit() -> String
@@ -209,24 +330,24 @@ pub impl[S] FromSchema for Text[S] with fn from_value(v) {
 }
 
 ///|
-pub impl IntoSchema for @types.Uuid with fn type_id() {
+pub impl IntoSchema for Uuid with fn type_id() {
   "golem.core.Uuid"
 }
 
 ///|
-pub impl IntoSchema for @types.Uuid with fn register_in(_b) {
+pub impl IntoSchema for Uuid with fn register_in(_b) {
   @model.schema_type(Uuid)
 }
 
 ///|
-pub impl IntoSchema for @types.Uuid with fn to_value(self) {
-  Uuid(self)
+pub impl IntoSchema for Uuid with fn to_value(self) {
+  Uuid(self.to_wit())
 }
 
 ///|
-pub impl FromSchema for @types.Uuid with fn from_value(v) {
+pub impl FromSchema for Uuid with fn from_value(v) {
   match v {
-    Uuid(value) => value
+    Uuid(value) => Uuid::from_wit(value)
     other =>
       raise FromSchemaError::shape_mismatch("uuid", value_kind(other), "Uuid")
   }

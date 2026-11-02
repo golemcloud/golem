@@ -1746,6 +1746,64 @@ fn guest_mode_moon_checks_result_nested_in_list() {
     );
 }
 
+fn uuid_agent() -> AgentTypeSchema {
+    let ids = def(
+        "ids",
+        SchemaType::record(vec![
+            named_field("primary", SchemaType::uuid()),
+            named_field("secondary", SchemaType::option(SchemaType::uuid())),
+            named_field("all", SchemaType::list(SchemaType::uuid())),
+        ]),
+    );
+    agent(
+        "UuidAgent",
+        "moonbit",
+        vec![field("owner", SchemaType::uuid())],
+        vec![
+            method(
+                "lookup",
+                vec![field("id", SchemaType::uuid()), field("ids", ref_to("ids"))],
+                Some(SchemaType::option(SchemaType::uuid())),
+            ),
+            method("current", vec![], Some(SchemaType::uuid())),
+            method("everything", vec![], Some(ref_to("ids"))),
+        ],
+        vec![ids],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn external_uuid_agent_compiles_and_uses_the_runtime_uuid_type() {
+    let pkg = GeneratedPackage::new(uuid_agent());
+    let client = pkg.client_source();
+    assert!(client.contains("owner : @runtime.Uuid"));
+    assert!(client.contains("id : @runtime.Uuid"));
+    assert!(client.contains("-> @runtime.Uuid? raise {"));
+    assert!(client.contains("-> @runtime.Uuid raise {"));
+    assert!(client.contains("primary : @runtime.Uuid"));
+    assert!(client.contains("secondary : @runtime.Uuid?"));
+    assert!(client.contains("all : Array[@runtime.Uuid]"));
+    assert!(client.contains("phantom : @runtime.Uuid"));
+    assert!(client.contains("@runtime.Uuid::random()"));
+    pkg.test_native();
+}
+
+#[test]
+fn guest_uuid_agent_compiles_and_uses_the_sdk_uuid_type() {
+    let guest = generate_without_check(uuid_agent(), MoonBitBridgeMode::GuestWasmRpc);
+    let client = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    assert!(client.contains("owner : @schema.Uuid"));
+    assert!(client.contains("id : @schema.Uuid"));
+    assert!(client.contains("primary : @schema.Uuid"));
+    assert!(client.contains("phantom_id : @schema.Uuid"));
+    assert!(client.contains("-> @schema.Uuid? {"));
+    assert!(client.contains(".to_wit())"));
+    assert!(client.contains("@schema.Uuid::from_wit(match "));
+    assert!(!client.contains("@types.Uuid"));
+    moon_check_wasm(guest.path());
+}
+
 #[test]
 fn guest_mode_moon_checks_unstructured_text_codec() {
     let media = def(
@@ -2350,7 +2408,7 @@ fn generates_client_surface(#[tagged_as("multi_agent_1")] pkg: &GeneratedPackage
     assert!(client.contains("pub async fn Agent1::get_phantom("));
     assert!(client.contains("pub async fn Agent1::new_phantom("));
     assert!(client.contains("@runtime.create_agent(configuration, \"agent1\", parameters,"));
-    assert!(client.contains("@runtime.random_uuid()"));
+    assert!(client.contains("@runtime.Uuid::random()"));
 
     // Per-method await / trigger / schedule wrappers, with the await result
     // decoded through the named-type codec.
@@ -2595,7 +2653,7 @@ fn config_constructors_are_generated() {
     assert!(!client.contains("config_secret"));
     // phantom precedes the config overrides in get_phantom_with_config.
     assert!(client.contains(
-        "pub async fn ConfigAgent::get_phantom_with_config(name : String, phantom : String, config_api_key : String?, config_max_retries : UInt?)"
+        "pub async fn ConfigAgent::get_phantom_with_config(name : String, phantom : @runtime.Uuid, config_api_key : String?, config_max_retries : UInt?)"
     ));
     // Config entries are built from Some values, preserving the original path.
     assert!(client.contains("let agent_config : Array[@runtime.AgentConfigEntry] = []"));
@@ -2608,7 +2666,7 @@ fn config_constructors_are_generated() {
     assert!(client.contains("parameters, Some(phantom), agent_config)"));
     // new_phantom_with_config delegates to get_phantom_with_config with a fresh id.
     assert!(client.contains(
-        "ConfigAgent::get_phantom_with_config(name, @runtime.random_uuid(), config_api_key, config_max_retries)"
+        "ConfigAgent::get_phantom_with_config(name, @runtime.Uuid::random(), config_api_key, config_max_retries)"
     ));
 }
 

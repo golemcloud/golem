@@ -137,7 +137,7 @@ fn schema_value_write_json(value : SchemaValue, output : StringBuilder) -> Unit 
     CharValue(v) =>
       node("char", () => string(String::from_array([v.unsafe_to_char()])))
     StringValue(v) => node("string", () => string(v))
-    UuidValue(v) => node("uuid", () => string(v))
+    UuidValue(v) => node("uuid", () => string(v.to_string()))
     RecordValue(v) => children("record", "fields", v)
     TupleValue(v) => children("tuple", "elements", v)
     ListValue(v) => children("list", "elements", v)
@@ -314,7 +314,7 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
     CharValue(v) =>
       node("char", Json::string(String::from_array([v.unsafe_to_char()])))
     StringValue(v) => node("string", Json::string(v))
-    UuidValue(v) => node("uuid", Json::string(v))
+    UuidValue(v) => node("uuid", Json::string(v.to_string()))
     RecordValue(fields) =>
       node(
         "record",
@@ -572,7 +572,7 @@ pub fn schema_value_from_json(j : Json) -> SchemaValue raise {
       CharValue(s.get_char(0).unwrap().to_int())
     }
     "string" => StringValue(expect_string(value))
-    "uuid" => UuidValue(expect_string(value))
+    "uuid" => UuidValue(Uuid::parse_canonical(expect_string(value)))
     "record" => {
       let m = expect_object(value)
       exact_fields(m, ["fields"])

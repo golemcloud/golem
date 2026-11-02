@@ -97,10 +97,7 @@ test "direct rich wire codecs preserve units and reject invalid quantity units" 
 
 ///|
 test "rich type round-trips" {
-  let uuid : @types.Uuid = {
-    high_bits: 0x0123456789ABCDEFUL,
-    low_bits: 0xFEDCBA9876543210UL,
-  }
+  let uuid = Uuid::from_bits(0x0123456789ABCDEFUL, 0xFEDCBA9876543210UL)
   assert_eq(rich_roundtrip(uuid), uuid)
   assert_eq(
     rich_roundtrip(Path::new("/tmp/data.txt")),
@@ -130,11 +127,75 @@ test "rich type round-trips" {
 
 ///|
 test "uuid has a first-class schema and value" {
-  let tag : TypeTag[@types.Uuid] = type_tag()
+  let tag : TypeTag[Uuid] = type_tag()
   assert_eq(into_schema_graph(tag).root, @model.schema_type(@model.Uuid))
-  let uuid : @types.Uuid = { high_bits: 1UL, low_bits: 2UL, }
-  assert_eq(to_value_as(uuid), @model.SchemaValue::Uuid(uuid))
-  assert_eq(from_value_as(@model.SchemaValue::Uuid(uuid)), uuid)
+  let uuid = Uuid::from_bits(1UL, 2UL)
+  let wit : @types.Uuid = { high_bits: 1UL, low_bits: 2UL, }
+  assert_eq(uuid.to_wit(), wit)
+  assert_eq(Uuid::from_wit(wit), uuid)
+  assert_eq(to_value_as(uuid), @model.SchemaValue::Uuid(wit))
+  assert_eq(from_value_as(@model.SchemaValue::Uuid(wit)), uuid)
+}
+
+///|
+test "uuid parses and prints the hyphenated form" {
+  let uuid = Uuid::parse("01234567-89AB-cdef-FEDC-ba9876543210")
+  assert_eq(uuid.high_bits(), 0x0123456789ABCDEFUL)
+  assert_eq(uuid.low_bits(), 0xFEDCBA9876543210UL)
+  inspect(uuid, content="01234567-89ab-cdef-fedc-ba9876543210")
+  assert_eq(uuid.to_string(), "01234567-89ab-cdef-fedc-ba9876543210")
+  assert_eq(Uuid::parse(uuid.to_string()), uuid)
+  inspect(
+    Uuid::from_bits(0UL, 0UL),
+    content="00000000-0000-0000-0000-000000000000",
+  )
+  inspect(
+    Uuid::from_bits(0xFFFFFFFFFFFFFFFFUL, 0xFFFFFFFFFFFFFFFFUL),
+    content="ffffffff-ffff-ffff-ffff-ffffffffffff",
+  )
+  debug_inspect(uuid, content="Uuid(\"01234567-89ab-cdef-fedc-ba9876543210\")")
+}
+
+///|
+test "uuid parse rejects malformed input" {
+  for
+    input in [
+      "", "0123456789abcdeffedcba9876543210", "01234567-89ab-cdef-fedc-ba987654321",
+      "01234567-89ab-cdef-fedc-ba98765432100", "01234567_89ab-cdef-fedc-ba9876543210",
+      "0123456g-89ab-cdef-fedc-ba9876543210", "{01234567-89ab-cdef-fedc-ba98765432}",
+    ] {
+    try Uuid::parse(input) catch {
+      UuidParseError(_) => ()
+    } noraise {
+      _ => fail("accepted malformed UUID '\{input}'")
+    }
+  }
+}
+
+///|
+test "uuid ordering and hashing follow the bits" {
+  let a = Uuid::from_bits(1UL, 0xFFFFFFFFFFFFFFFFUL)
+  let b = Uuid::from_bits(2UL, 0UL)
+  assert_true(a < b)
+  assert_eq(a.compare(a), 0)
+  let set : @hashset.HashSet[Uuid] = @hashset.HashSet([
+    a,
+    Uuid::from_bits(1UL, 0xFFFFFFFFFFFFFFFFUL),
+    b,
+  ])
+  assert_eq(set.length(), 2)
+}
+
+///|
+test "uuid random sets the version and variant bits" {
+  let a = Uuid::random()
+  let b = Uuid::random()
+  assert_true(a != b)
+  for uuid in [a, b] {
+    assert_eq((uuid.high_bits() >> 12) & 0xFUL, 4UL)
+    assert_eq(uuid.low_bits() >> 62, 2UL)
+    assert_eq(Uuid::parse(uuid.to_string()), uuid)
+  }
 }
 
 ///|

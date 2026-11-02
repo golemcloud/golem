@@ -1203,7 +1203,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             writer.blank();
 
             writer.line(format!(
-                "pub fn {client}::phantom_id(self : {client}) -> @types.Uuid? {{"
+                "pub fn {client}::phantom_id(self : {client}) -> @schema.Uuid? {{"
             ));
             writer.indent();
             writer.line("self.client.phantom_id()");
@@ -1320,7 +1320,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 client,
                 agent_type_name,
                 "get_phantom",
-                &append_param("phantom_id : @types.Uuid", &param_decls),
+                &append_param("phantom_id : @schema.Uuid", &param_decls),
                 &input,
                 Some("phantom_id"),
                 None,
@@ -1379,7 +1379,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 "get_phantom_with_config",
                 &append_param(
                     &config_decls,
-                    &append_param("phantom_id : @types.Uuid", &param_decls),
+                    &append_param("phantom_id : @schema.Uuid", &param_decls),
                 ),
                 &input,
                 Some("phantom_id"),
@@ -1754,7 +1754,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         }
 
         // Explicit phantom identities are supported only by durable agents.
-        let phantom_decls = append_param("phantom : String", &param_decls);
+        let phantom_decls = append_param("phantom : @runtime.Uuid", &param_decls);
         if self.agent_type.mode == AgentMode::Durable {
             writer
                 .doc("Gets (creating if necessary) the agent with the given explicit phantom id.");
@@ -1789,7 +1789,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         ));
         writer.indent();
         if self.agent_type.mode == AgentMode::Durable {
-            let phantom_call_args = append_arg("@runtime.random_uuid()", &param_names);
+            let phantom_call_args = append_arg("@runtime.Uuid::random()", &param_names);
             writer.line(format!("{agent}::get_phantom({phantom_call_args})"));
         } else {
             writer.line("let configuration = @runtime.get_configuration()");
@@ -1878,7 +1878,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         // get_phantom_with_config (durable only)
         let phantom_config_decls = append_param(
             &config_decls,
-            &append_param("phantom : String", param_decls),
+            &append_param("phantom : @runtime.Uuid", param_decls),
         );
         if self.agent_type.mode == AgentMode::Durable {
             writer.doc("Gets (creating if necessary) the agent with an explicit phantom id, overriding the given configuration values.");
@@ -1915,7 +1915,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         if self.agent_type.mode == AgentMode::Durable {
             let call_args = append_arg_list(
                 param_names,
-                &std::iter::once("@runtime.random_uuid()".to_string())
+                &std::iter::once("@runtime.Uuid::random()".to_string())
                     .chain(config_names.iter().cloned())
                     .collect::<Vec<_>>(),
             );
@@ -2759,7 +2759,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Url { .. } => format!("@runtime.UrlValue({val})"),
             SchemaType::Uuid { .. } => match self.mode {
                 MoonBitBridgeMode::ExternalRest => format!("@runtime.UuidValue({val})"),
-                MoonBitBridgeMode::GuestWasmRpc => format!("@model.SchemaValue::Uuid({val})"),
+                MoonBitBridgeMode::GuestWasmRpc => {
+                    format!("@model.SchemaValue::Uuid(({val}).to_wit())")
+                }
             },
             SchemaType::Datetime { .. } => format!("@runtime.DatetimeValue({val})"),
             SchemaType::Duration { .. } => format!("@runtime.DurationValue({val})"),
@@ -2950,7 +2952,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     "match {val} {{ @runtime.UuidValue(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }}"
                 ),
                 MoonBitBridgeMode::GuestWasmRpc => format!(
-                    "match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }}"
+                    "@schema.Uuid::from_wit(match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }})"
                 ),
             },
             SchemaType::Datetime { .. } => format!("@runtime.as_datetime({val})"),
@@ -3163,8 +3165,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             }
             SchemaType::Path { .. } | SchemaType::Url { .. } => Ok("String".to_string()),
             SchemaType::Uuid { .. } => Ok(match self.mode {
-                MoonBitBridgeMode::ExternalRest => "String",
-                MoonBitBridgeMode::GuestWasmRpc => "@types.Uuid",
+                MoonBitBridgeMode::ExternalRest => "@runtime.Uuid",
+                MoonBitBridgeMode::GuestWasmRpc => "@schema.Uuid",
             }
             .to_string()),
             SchemaType::Datetime { .. } => Ok(match self.mode {

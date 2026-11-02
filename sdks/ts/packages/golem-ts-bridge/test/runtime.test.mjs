@@ -16,6 +16,7 @@ import {
   publicValueCodec,
   schemaGraphFromWire,
   schemaType,
+  Uuid,
 } from '../dist/index.mjs';
 
 const outputMapping = {
@@ -155,6 +156,56 @@ test('config application JSON canonicalizes f32 and datetime and rejects excepti
   assert.deepEqual(exceptional.validate(value, 'none'), value);
   assert.throws(() => exceptional.application(value), /no application JSON representation/);
 });
+
+test('Uuid parses, formats and round-trips its 64-bit halves', () => {
+  const uuid = Uuid.parse('DD00721B-3329-4621-A01D-C71F02CD78C6');
+  assert.equal(uuid.toString(), 'dd00721b-3329-4621-a01d-c71f02cd78c6');
+  assert.equal(uuid.highBits, 0xdd00721b33294621n);
+  assert.equal(uuid.lowBits, 0xa01dc71f02cd78c6n);
+  assert.equal(
+    Uuid.from({ highBits: uuid.highBits, lowBits: uuid.lowBits }).toString(),
+    uuid.toString(),
+  );
+  assert.equal(Uuid.from(uuid), uuid);
+  assert.equal(new Uuid(0n, 0n).toString(), '00000000-0000-0000-0000-000000000000');
+  assert.equal(
+    new Uuid((1n << 64n) - 1n, (1n << 64n) - 1n).toString(),
+    'ffffffff-ffff-ffff-ffff-ffffffffffff',
+  );
+  assert.match(
+    Uuid.generate().toString(),
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+  );
+  assert.throws(() => Uuid.parse('not-a-uuid'), /Invalid UUID/);
+  assert.throws(() => Uuid.parse('dd00721b33294621a01dc71f02cd78c6'), /Invalid UUID/);
+  assert.throws(() => new Uuid(-1n, 0n), RangeError);
+  assert.throws(() => new Uuid(0n, 1n << 64n), RangeError);
+});
+
+test('uuid values validate as canonical strings and map to application JSON strings', () => {
+  const codec = publicValueCodec(
+    schemaGraphFromWire({
+      root: { kind: 'list', value: { element: { kind: 'uuid', value: {} } } },
+    }),
+  );
+  const value = {
+    kind: 'list',
+    value: { elements: [{ kind: 'uuid', value: 'dd00721b-3329-4621-a01d-c71f02cd78c6' }] },
+  };
+  assert.deepEqual(codec.validate(value, 'none'), value);
+  assert.deepEqual(codec.application(value), ['dd00721b-3329-4621-a01d-c71f02cd78c6']);
+  assert.throws(
+    () =>
+      codec.validate(
+        {
+          kind: 'list',
+          value: { elements: [{ kind: 'uuid', value: 'DD00721B-3329-4621-A01D-C71F02CD78C6' }] },
+        },
+        'none',
+      ),
+    /lowercase hyphenated UUID/,
+  );
+});
 const numericFormsGraph = {
   root: {
     kind: 'record',
@@ -175,6 +226,7 @@ const fixtureType = (input) => {
     case 'bool':
     case 'char':
     case 'string':
+    case 'uuid':
     case 'datetime':
     case 'duration':
       return type({ tag: input.kind });
