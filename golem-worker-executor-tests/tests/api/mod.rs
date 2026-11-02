@@ -1,0 +1,9629 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::Tracing;
+use crate::execution_observations::WorkerObservations;
+use anyhow::{anyhow, bail};
+use async_trait::async_trait;
+use axum::Router;
+use axum::routing::get;
+use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
+use golem_api_grpc::proto::golem::worker::{UpdateMode, log_event};
+use golem_common::model::account::AccountId;
+use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
+};
+use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
+use golem_common::model::card::{CardId, ScopeCard, StoredCard};
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
+use golem_common::model::{
+    AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatus, FilterComparator,
+    IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig, ScanCursor, StringFilterComparator,
+};
+use golem_common::schema::SchemaValue;
+use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload};
+use golem_common::{agent_id, data_value};
+use golem_service_base::clients::registry::{
+    RegistryService, RegistryServiceError, ResourceUsageUpdate,
+};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::{AccountResourceLimits, MonthlyResourcePolicy};
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, join_blob_key};
+use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{
+    AgentResult, count_agent_invocation_pair_since, drain_connection, stdout_event_matching,
+    stdout_events,
+};
+use golem_worker_executor::services::events::Event;
+use golem_worker_executor::services::golem_config::FilesystemStorageMode;
+use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
+use golem_worker_executor::services::resource_limits::ResourceLimits;
+use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
+use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
+use golem_worker_executor::worker::{
+    INVOCATION_OWNERSHIP_RECHECK_INTERVAL, Worker, WorkerDeletionHook, WorkerDeletionStage,
+};
+use golem_worker_executor_test_utils::{
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, agent_oplog_length, fake_ownership, registry_test_card, start,
+    start_customized, start_with_overrides, start_with_redis_storage,
+    start_with_resource_limits_and_configure, take_agent_oplog_over_at_epoch,
+};
+use pretty_assertions::assert_eq;
+use redis::Commands;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+
+use std::io::Write;
+use std::pin::Pin;
+
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use system_interface::fs::FileIoExt;
+use test_r::{inherit_test_dep, test, timeout};
+use tokio::sync::Semaphore;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, Span, debug, info};
+
+/// The shard manager process every shard push in these tests names.
+const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
+
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("large_dynamic_memory")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_rust_provider")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_rust_caller")]
+    PrecompiledComponent
+);
+#[derive(Clone, Copy, Debug)]
+enum IntegrationExhaustion {
+    Compute,
+    Memory,
+    DurableStorage,
+    EphemeralStorage,
+}
+
+pub(super) struct MutableResourceLimitsRegistry {
+    limits: Mutex<golem_service_base::model::ResourceLimits>,
+    delayed_policy: Mutex<Option<DelayedPolicy>>,
+    applied_updates: Mutex<Vec<ResourceUsageUpdate>>,
+    batch_control: Mutex<Option<Arc<interruption::periodic_limits::BatchControl>>>,
+}
+
+struct DelayedPolicy {
+    limits: golem_service_base::model::ResourceLimits,
+    started: Arc<Semaphore>,
+    release: Arc<Semaphore>,
+}
+
+impl MutableResourceLimitsRegistry {
+    pub(super) fn new(policy: MonthlyResourcePolicy) -> Self {
+        Self {
+            limits: Mutex::new(resource_limits_response(policy, 0)),
+            delayed_policy: Mutex::new(None),
+            applied_updates: Mutex::new(Vec::new()),
+            batch_control: Mutex::new(None),
+        }
+    }
+
+    fn set_policy(&self, policy: MonthlyResourcePolicy) {
+        let mut limits = self.limits.lock().unwrap();
+        assert_eq!(
+            policy.mode, limits.monthly_policy.mode,
+            "ordinary policy updates cannot change the owner consent mode"
+        );
+        limits.monthly_policy = policy;
+        limits.monthly_policy_revision += 1;
+    }
+
+    pub(super) fn set_max_memory_per_worker(&self, max_memory_per_worker: u64) {
+        self.limits.lock().unwrap().max_memory_per_worker = max_memory_per_worker;
+    }
+
+    fn restore_monthly_policy(&self, policy: MonthlyResourcePolicy) {
+        let mut limits = self.limits.lock().unwrap();
+        assert_eq!(policy.mode, limits.monthly_policy.mode);
+        limits.monthly_policy = policy;
+        limits.monthly_policy_revision += 1;
+        limits.monthly_policy_status =
+            golem_service_base::model::MonthlyResourcePolicyStatus::Available;
+    }
+
+    fn mark_monthly_policy_unavailable(&self) {
+        self.limits.lock().unwrap().monthly_policy_status =
+            golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable;
+    }
+
+    fn applied_updates(&self) -> Vec<ResourceUsageUpdate> {
+        self.applied_updates.lock().unwrap().clone()
+    }
+
+    fn applied_memory_byte_nanoseconds(&self) -> u128 {
+        self.applied_updates()
+            .into_iter()
+            .map(|update| {
+                (update.memory_gb_seconds_delta.max(0) as u128)
+                    .saturating_mul(
+                        golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND,
+                    )
+                    .saturating_add(update.memory_byte_nanoseconds_remainder as u128)
+            })
+            .sum()
+    }
+
+    fn applied_memory_byte_nanoseconds_at_revision(&self, revision: u64) -> u128 {
+        self.applied_updates()
+            .into_iter()
+            .filter(|update| update.monthly_policy_revision == revision)
+            .map(|update| {
+                (update.memory_gb_seconds_delta.max(0) as u128)
+                    .saturating_mul(
+                        golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND,
+                    )
+                    .saturating_add(update.memory_byte_nanoseconds_remainder as u128)
+            })
+            .sum()
+    }
+
+    fn delay_next_policy(&self, policy: MonthlyResourcePolicy) -> (Arc<Semaphore>, Arc<Semaphore>) {
+        let limits = self.limits.lock().unwrap();
+        assert_eq!(
+            policy.mode, limits.monthly_policy.mode,
+            "ordinary policy updates cannot change the owner consent mode"
+        );
+        let started = Arc::new(Semaphore::new(0));
+        let release = Arc::new(Semaphore::new(0));
+        let mut delayed_limits = limits.clone();
+        delayed_limits.monthly_policy = policy;
+        delayed_limits.monthly_policy_revision += 1;
+        let delayed = DelayedPolicy {
+            limits: delayed_limits,
+            started: started.clone(),
+            release: release.clone(),
+        };
+        assert!(
+            self.delayed_policy
+                .lock()
+                .unwrap()
+                .replace(delayed)
+                .is_none(),
+            "only one delayed policy may be pending"
+        );
+        (started, release)
+    }
+
+    fn current_limits(&self) -> golem_service_base::model::ResourceLimits {
+        self.limits.lock().unwrap().clone()
+    }
+
+    fn monthly_usage_mode_revision(&self) -> u64 {
+        self.limits.lock().unwrap().monthly_usage_mode_revision
+    }
+}
+
+fn resource_limits_response(
+    monthly_policy: MonthlyResourcePolicy,
+    monthly_usage_mode_revision: u64,
+) -> golem_service_base::model::ResourceLimits {
+    golem_service_base::model::ResourceLimits {
+        available_blob_storage_bytes: u64::MAX,
+        monthly_policy,
+        max_memory_per_worker: u64::MAX,
+        max_table_elements_per_worker: u64::MAX,
+        max_disk_space_per_worker: u64::MAX,
+        per_invocation_http_call_limit: u64::MAX,
+        per_invocation_rpc_call_limit: u64::MAX,
+        available_http_calls: u64::MAX,
+        available_rpc_calls: u64::MAX,
+        max_concurrent_agents_per_executor: u64::MAX,
+        oplog_writes_per_second: u64::MAX,
+        monthly_policy_status: golem_service_base::model::MonthlyResourcePolicyStatus::Available,
+        usage_update_applied: true,
+        monthly_usage_mode_revision,
+        monthly_policy_revision: monthly_usage_mode_revision,
+    }
+}
+
+#[async_trait]
+impl RegistryService for MutableResourceLimitsRegistry {
+    async fn authenticate_token(
+        &self,
+        _token: &golem_common::model::auth::TokenSecret,
+    ) -> Result<AuthCtx, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_resource_limits(
+        &self,
+        _account_id: AccountId,
+        _metering: golem_service_base::clients::registry::ResourceUsageMetering,
+    ) -> Result<golem_service_base::model::ResourceLimits, RegistryServiceError> {
+        Ok(self.current_limits())
+    }
+
+    async fn update_worker_connection_limit(
+        &self,
+        _account_id: AccountId,
+        _agent_id: &AgentId,
+        _added: bool,
+    ) -> Result<(), RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn batch_update_resource_usage(
+        &self,
+        updates: HashMap<AccountId, ResourceUsageUpdate>,
+    ) -> Result<AccountResourceLimits, RegistryServiceError> {
+        let control = self.batch_control.lock().unwrap().clone();
+        if let Some(control) = control {
+            control.receive_batch().await;
+        }
+        self.applied_updates
+            .lock()
+            .unwrap()
+            .extend(updates.values().copied());
+        let delayed = self.delayed_policy.lock().unwrap().take();
+        let limits = if let Some(delayed) = delayed {
+            delayed.started.add_permits(1);
+            delayed.release.acquire().await.unwrap().forget();
+            *self.limits.lock().unwrap() = delayed.limits.clone();
+            delayed.limits
+        } else {
+            self.current_limits()
+        };
+        Ok(AccountResourceLimits(
+            updates
+                .into_keys()
+                .map(|account_id| (account_id, limits.clone()))
+                .collect(),
+        ))
+    }
+
+    async fn download_component(
+        &self,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<Vec<u8>, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_component_metadata(
+        &self,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<golem_service_base::model::component::Component, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_deployed_component_metadata(
+        &self,
+        _component_id: ComponentId,
+    ) -> Result<golem_service_base::model::component::Component, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_all_deployed_component_revisions(
+        &self,
+        _component_id: ComponentId,
+    ) -> Result<Vec<golem_service_base::model::component::Component>, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn resolve_component(
+        &self,
+        _resolving_account_id: AccountId,
+        _resolving_application_id: golem_common::model::application::ApplicationId,
+        _resolving_environment_id: EnvironmentId,
+        _component_slug: &str,
+    ) -> Result<golem_service_base::model::component::Component, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_all_agent_types(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<Vec<golem_common::model::agent::RegisteredAgentType>, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_agent_type(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+        _name: &golem_common::model::agent::AgentTypeName,
+    ) -> Result<golem_common::model::agent::RegisteredAgentType, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        _source: &golem_common::model::mcp_import::McpImportSource,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+    {
+        unimplemented!()
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        _source: &golem_common::model::mcp_import::McpImportSource,
+        _auth_ctx: &AuthCtx,
+        _oauth_grant_generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        _source: &golem_common::model::mcp_import::McpImportSource,
+        _auth_ctx: &AuthCtx,
+        _refresh: bool,
+    ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+    {
+        unimplemented!()
+    }
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        _app_name: &golem_common::model::application::ApplicationName,
+        _environment_name: &golem_common::model::environment::EnvironmentName,
+        _agent_type_name: &golem_common::model::agent::AgentTypeName,
+        _deployment_revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        _owner_account_email: Option<&str>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::agent::ResolvedAgentType, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_active_routes_for_domain(
+        &self,
+        _domain: &golem_common::model::domain_registration::Domain,
+    ) -> Result<golem_service_base::custom_api::CompiledRoutes, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_active_compiled_mcps_for_domain(
+        &self,
+        _domain: &golem_common::model::domain_registration::Domain,
+    ) -> Result<golem_service_base::mcp::CompiledMcp, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_current_environment_state(
+        &self,
+        _environment_id: EnvironmentId,
+    ) -> Result<golem_service_base::model::environment::EnvironmentState, RegistryServiceError>
+    {
+        unimplemented!()
+    }
+
+    async fn get_resource_definition_by_id(
+        &self,
+        _resource_definition_id: golem_common::model::quota::ResourceDefinitionId,
+    ) -> Result<golem_common::model::quota::ResourceDefinition, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_resource_definition_by_name(
+        &self,
+        _environment_id: EnvironmentId,
+        _resource_name: golem_common::model::quota::ResourceName,
+    ) -> Result<golem_common::model::quota::ResourceDefinition, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn subscribe_registry_invalidations(
+        &self,
+        _last_seen_event_id: Option<u64>,
+    ) -> Result<
+        Pin<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            golem_common::model::agent::RegistryInvalidationEvent,
+                            RegistryServiceError,
+                        >,
+                    > + Send,
+            >,
+        >,
+        RegistryServiceError,
+    > {
+        unimplemented!()
+    }
+
+    async fn run_registry_invalidation_event_subscriber(
+        &self,
+        _service_name: &'static str,
+        _shutdown_token: Option<CancellationToken>,
+        _handler: Arc<dyn golem_service_base::clients::registry::RegistryInvalidationHandler>,
+    ) {
+        unimplemented!()
+    }
+}
+
+fn exhaustion_error(exhaustion: IntegrationExhaustion) -> &'static str {
+    match exhaustion {
+        IntegrationExhaustion::Compute => "fuel exhausted",
+        IntegrationExhaustion::Memory
+        | IntegrationExhaustion::DurableStorage
+        | IntegrationExhaustion::EphemeralStorage => "cannot suspend",
+    }
+}
+
+fn probe_agent(exhaustion: IntegrationExhaustion) -> golem_common::model::agent::ParsedAgentId {
+    let name = format!("policy-probe-{exhaustion:?}-{}", uuid::Uuid::new_v4());
+    match exhaustion {
+        IntegrationExhaustion::DurableStorage => agent_id!("Counter", name),
+        IntegrationExhaustion::Compute
+        | IntegrationExhaustion::Memory
+        | IntegrationExhaustion::EphemeralStorage => agent_id!("EphemeralCounter", name),
+    }
+}
+
+fn policy_probe_uses_start(exhaustion: IntegrationExhaustion) -> bool {
+    matches!(
+        exhaustion,
+        IntegrationExhaustion::DurableStorage | IntegrationExhaustion::EphemeralStorage
+    )
+}
+
+async fn wait_for_policy_rejection(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    exhaustion: IntegrationExhaustion,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let probe = probe_agent(exhaustion);
+            let result = if policy_probe_uses_start(exhaustion) {
+                executor.start_agent(&component.id, probe).await.map(Some)
+            } else {
+                executor
+                    .invoke_and_await_agent(component, &probe, "increment", data_value!())
+                    .await
+                    .map(|_| None)
+            };
+            match result {
+                Err(error) if error.to_string().contains(exhaustion_error(exhaustion)) => {
+                    return Ok(());
+                }
+                Err(error) => return Err(anyhow!("unexpected probe rejection: {error}")),
+                Ok(Some(worker_id)) => {
+                    if executor
+                        .wait_for_status(
+                            &worker_id,
+                            AgentStatus::Suspended,
+                            Duration::from_millis(250),
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                }
+                Ok(None) => {}
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("refreshed {exhaustion:?} policy was not enforced locally"))?
+}
+
+async fn wait_for_policy_admission(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    exhaustion: IntegrationExhaustion,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let probe = probe_agent(exhaustion);
+            let result = if policy_probe_uses_start(exhaustion) {
+                executor.start_agent(&component.id, probe).await.map(Some)
+            } else {
+                executor
+                    .invoke_and_await_agent(component, &probe, "increment", data_value!())
+                    .await
+                    .map(|_| None)
+            };
+            match result {
+                Ok(Some(worker_id)) => {
+                    if executor
+                        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_millis(250))
+                        .await
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                }
+                Ok(None) => return Ok(()),
+                Err(error) if error.to_string().contains(exhaustion_error(exhaustion)) => {}
+                Err(error) => return Err(anyhow!("unexpected probe failure: {error}")),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("refreshed {exhaustion:?} policy was not admitted locally"))?
+}
+
+async fn wait_for_invocation_pair(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+    since: OplogIndex,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+            match count_agent_invocation_pair_since(&oplog, since) {
+                (1, 1) => return Ok(()),
+                (started, finished) if started > 1 || finished > 1 => {
+                    return Err(anyhow!(
+                        "pending invocation executed more than once: {started} started, {finished} finished"
+                    ));
+                }
+                _ => tokio::task::yield_now().await,
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("timed out waiting for the pending invocation to finish"))?
+}
+
+inherit_test_dep!(
+    #[tagged_as("agent_rpc")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust_as_resolve_target")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("http_tests")]
+    PrecompiledComponent
+);
+
+struct DeletionStageHook {
+    target: OwnedAgentId,
+    calls: Mutex<HashMap<WorkerDeletionStage, usize>>,
+    gated_stage: Option<WorkerDeletionStage>,
+    gated_once: AtomicBool,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+    fail_once: Mutex<Option<WorkerDeletionStage>>,
+    claims: AtomicUsize,
+    started_claims: AtomicUsize,
+    claim_events: tokio::sync::Semaphore,
+    cleanup_timeout: Option<Duration>,
+    cleanup_gate: bool,
+    cleanup_calls: AtomicUsize,
+    cleanup_entered: tokio::sync::Semaphore,
+    cleanup_release: tokio::sync::Semaphore,
+    first_result: Mutex<Option<BoxFuture<'static, Result<(), WorkerExecutorError>>>>,
+}
+
+struct BeforeDeletionClaimHook {
+    target: OwnedAgentId,
+    gated_once: AtomicBool,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+impl BeforeDeletionClaimHook {
+    fn new(target: OwnedAgentId) -> Self {
+        Self {
+            target,
+            gated_once: AtomicBool::new(false),
+            entered: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
+
+    async fn wait_until_gated(&self) {
+        self.entered.acquire().await.unwrap().forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+}
+
+#[async_trait]
+impl WorkerDeletionHook for BeforeDeletionClaimHook {
+    async fn before_claim(&self, owned_agent_id: &OwnedAgentId) {
+        if owned_agent_id != &self.target || self.gated_once.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.entered.add_permits(1);
+        self.release.acquire().await.unwrap().forget();
+    }
+
+    async fn before_stage(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _stage: WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+}
+
+impl DeletionStageHook {
+    fn new(
+        target: OwnedAgentId,
+        gated_stage: Option<WorkerDeletionStage>,
+        fail_once: Option<WorkerDeletionStage>,
+    ) -> Self {
+        Self {
+            target,
+            calls: Mutex::new(HashMap::new()),
+            gated_stage,
+            gated_once: AtomicBool::new(false),
+            entered: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+            fail_once: Mutex::new(fail_once),
+            claims: AtomicUsize::new(0),
+            started_claims: AtomicUsize::new(0),
+            claim_events: tokio::sync::Semaphore::new(0),
+            cleanup_timeout: None,
+            cleanup_gate: false,
+            cleanup_calls: AtomicUsize::new(0),
+            cleanup_entered: tokio::sync::Semaphore::new(0),
+            cleanup_release: tokio::sync::Semaphore::new(0),
+            first_result: Mutex::new(None),
+        }
+    }
+
+    async fn wait_until_gated(&self) {
+        self.entered.acquire().await.unwrap().forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+
+    fn calls(&self, stage: WorkerDeletionStage) -> usize {
+        self.calls.lock().unwrap().get(&stage).copied().unwrap_or(0)
+    }
+
+    async fn wait_for_claims(&self, count: u32) {
+        self.claim_events
+            .acquire_many(count)
+            .await
+            .unwrap()
+            .forget();
+    }
+
+    fn claims(&self) -> (usize, usize) {
+        (
+            self.claims.load(Ordering::Acquire),
+            self.started_claims.load(Ordering::Acquire),
+        )
+    }
+}
+
+#[async_trait]
+impl WorkerDeletionHook for DeletionStageHook {
+    fn observe_result(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        result: BoxFuture<'static, Result<(), WorkerExecutorError>>,
+    ) {
+        if owned_agent_id == &self.target && self.claims.load(Ordering::Acquire) == 0 {
+            self.first_result.lock().unwrap().replace(result);
+        }
+    }
+
+    fn unload_deadline(&self, owned_agent_id: &OwnedAgentId, deadline: Instant) -> Instant {
+        if owned_agent_id == &self.target {
+            self.cleanup_timeout
+                .map_or(deadline, |timeout| Instant::now() + timeout)
+        } else {
+            deadline
+        }
+    }
+
+    async fn before_filesystem_cleanup(&self, owned_agent_id: &OwnedAgentId) {
+        if owned_agent_id == &self.target && self.cleanup_gate {
+            self.cleanup_calls.fetch_add(1, Ordering::AcqRel);
+            self.cleanup_entered.add_permits(1);
+            self.cleanup_release.acquire().await.unwrap().forget();
+        }
+    }
+
+    fn claimed(&self, owned_agent_id: &OwnedAgentId, started: bool) {
+        if owned_agent_id == &self.target {
+            self.claims.fetch_add(1, Ordering::AcqRel);
+            if started {
+                self.started_claims.fetch_add(1, Ordering::AcqRel);
+            }
+            self.claim_events.add_permits(1);
+        }
+    }
+
+    async fn before_stage(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        stage: WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError> {
+        if owned_agent_id != &self.target {
+            return Ok(());
+        }
+        *self.calls.lock().unwrap().entry(stage).or_default() += 1;
+        if self.gated_stage == Some(stage) && !self.gated_once.swap(true, Ordering::AcqRel) {
+            self.entered.add_permits(1);
+            self.release.acquire().await.unwrap().forget();
+        }
+        let mut fail_once = self.fail_once.lock().unwrap();
+        if *fail_once == Some(stage) {
+            *fail_once = None;
+            return Err(WorkerExecutorError::runtime(
+                "injected worker deletion stage failure",
+            ));
+        }
+        Ok(())
+    }
+}
+
+test_r::tag_suite!(fenced_outcome, group5);
+test_r::tag_suite!(p2_ready, group5);
+
+mod fenced_outcome;
+mod interruption;
+mod p2_ready;
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn dropping_executor_releases_services(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "release-services");
+    executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    let leak_detector = executor.leak_detector();
+
+    // Verify the sentinel is alive while the executor is running
+    assert!(
+        leak_detector.upgrade().is_some(),
+        "Leak sentinel should be alive while executor is running"
+    );
+
+    drop(executor);
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while leak_detector.upgrade().is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Service graph leaked after dropping an executor with a cached agent");
+
+    Ok(())
+}
+
+async fn deliver_card_transfer(
+    executor: &TestWorkerExecutor,
+    request: golem_api_grpc::proto::golem::workerexecutor::v1::DeliverCardTransferRequest,
+) -> anyhow::Result<Result<(), WorkerExecutorError>> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::deliver_card_transfer_response;
+
+    let response = executor
+        .client
+        .clone()
+        .deliver_card_transfer(request)
+        .await?
+        .into_inner();
+    match response.result {
+        Some(deliver_card_transfer_response::Result::Success(_)) => Ok(Ok(())),
+        Some(deliver_card_transfer_response::Result::Failure(error)) => Ok(Err(
+            WorkerExecutorError::try_from(error).map_err(|error| anyhow!(error))?,
+        )),
+        None => Err(anyhow!("permission card delivery returned no result")),
+    }
+}
+
+async fn get_agent_wallet_cards(
+    executor: &TestWorkerExecutor,
+    agent_id: &AgentId,
+) -> anyhow::Result<Vec<Vec<u8>>> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetAgentWalletRequest, get_agent_wallet_response,
+    };
+
+    let response = executor
+        .client
+        .clone()
+        .get_agent_wallet(GetAgentWalletRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(executor.context.account_id.into()),
+            environment_id: Some(executor.context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+        })
+        .await?
+        .into_inner();
+    match response.result {
+        Some(get_agent_wallet_response::Result::Success(success)) => Ok(success.wallet_cards),
+        Some(get_agent_wallet_response::Result::Failure(error)) => {
+            Err(anyhow!("failed to read agent wallet: {error:?}"))
+        }
+        None => Err(anyhow!("get agent wallet returned no result")),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecordedCardTransfer {
+    target_agent_id: AgentId,
+    environment_id: EnvironmentId,
+    transfer_id: uuid::Uuid,
+    source_card_id: CardId,
+    card: StoredCard,
+}
+
+type LocalCardTransferDelivery = dyn Fn(
+        AgentId,
+        EnvironmentId,
+        uuid::Uuid,
+        CardId,
+        StoredCard,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerProxyError>> + Send>>
+    + Send
+    + Sync;
+
+type LocalWorkerResume = dyn Fn(AgentId, bool, AuthCtx) -> BoxFuture<'static, Result<(), WorkerProxyError>>
+    + Send
+    + Sync;
+
+struct RecordingWorkerProxy {
+    inner: Arc<dyn WorkerProxy>,
+    transfers: Arc<Mutex<Vec<RecordedCardTransfer>>>,
+    forward_transfers: bool,
+    lost_response_transfer_ids: Arc<Mutex<HashSet<uuid::Uuid>>>,
+    local_delivery: Option<Arc<Mutex<Option<Arc<LocalCardTransferDelivery>>>>>,
+    local_resume: Option<Arc<Mutex<Option<Arc<LocalWorkerResume>>>>>,
+}
+
+pub(crate) fn accepting_card_transfer_proxy(inner: Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> {
+    recording_accepting_card_transfer_proxy(inner, Default::default())
+}
+
+pub(crate) fn recording_accepting_card_transfer_proxy(
+    inner: Arc<dyn WorkerProxy>,
+    transfers: Arc<Mutex<Vec<RecordedCardTransfer>>>,
+) -> Arc<dyn WorkerProxy> {
+    Arc::new(RecordingWorkerProxy {
+        inner,
+        transfers,
+        forward_transfers: false,
+        lost_response_transfer_ids: Default::default(),
+        local_delivery: None,
+        local_resume: None,
+    })
+}
+
+#[async_trait]
+impl WorkerProxy for RecordingWorkerProxy {
+    async fn prepare(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        method_name: &str,
+        caller_agent_id: &AgentId,
+        caller_env: HashMap<String, String>,
+        caller_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
+        self.inner
+            .prepare(
+                owned_agent_id,
+                method_name,
+                caller_agent_id,
+                caller_env,
+                caller_stack,
+                config,
+                principal,
+                auth_ctx,
+                idempotency_key,
+                freshness_disposition,
+            )
+            .await
+    }
+
+    async fn start(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        method_name: &str,
+        caller_agent_id: &AgentId,
+        caller_env: HashMap<String, String>,
+        caller_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
+        self.inner
+            .start(
+                owned_agent_id,
+                method_name,
+                caller_agent_id,
+                caller_env,
+                caller_stack,
+                config,
+                principal,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn invoke_agent(
+        &self,
+        agent_id: &AgentId,
+        method_name: String,
+        method_parameters: SchemaValue,
+        mode: AgentInvocationMode,
+        schedule_at: Option<DateTime<Utc>>,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: InvocationFreshnessDisposition,
+        caller_agent_id: AgentId,
+        caller_env: HashMap<String, String>,
+        caller_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        environment_id: EnvironmentId,
+        auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
+    ) -> Result<AgentInvocationOutput, WorkerProxyError> {
+        self.inner
+            .invoke_agent(
+                agent_id,
+                method_name,
+                method_parameters,
+                mode,
+                schedule_at,
+                idempotency_key,
+                freshness_disposition,
+                caller_agent_id,
+                caller_env,
+                caller_stack,
+                config,
+                principal,
+                environment_id,
+                auth_ctx,
+                scope_card,
+            )
+            .await
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: &StoredCard,
+    ) -> Result<(), WorkerProxyError> {
+        self.transfers.lock().unwrap().push(RecordedCardTransfer {
+            target_agent_id: target_agent_id.clone(),
+            environment_id,
+            transfer_id,
+            source_card_id,
+            card: card.clone(),
+        });
+        if !self.forward_transfers {
+            return Ok(());
+        }
+
+        let result = if let Some(local_delivery) = &self.local_delivery {
+            let local_delivery = local_delivery.lock().unwrap().clone().ok_or_else(|| {
+                WorkerProxyError::InternalError(WorkerExecutorError::runtime(
+                    "local card-transfer delivery is not connected",
+                ))
+            })?;
+            local_delivery(
+                target_agent_id.clone(),
+                environment_id,
+                transfer_id,
+                source_card_id,
+                card.clone(),
+            )
+            .await
+        } else {
+            self.inner
+                .deliver_card_transfer(
+                    target_agent_id,
+                    environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card,
+                )
+                .await
+        };
+        if result.is_ok()
+            && self
+                .lost_response_transfer_ids
+                .lock()
+                .unwrap()
+                .remove(&transfer_id)
+        {
+            Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::runtime("simulated lost card-transfer response"),
+            ))
+        } else {
+            result
+        }
+    }
+
+    async fn update(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        target_revision: ComponentRevision,
+        mode: UpdateMode,
+        disable_wakeup: bool,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        self.inner
+            .update(
+                owned_agent_id,
+                target_revision,
+                mode,
+                disable_wakeup,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn resume(
+        &self,
+        owned_agent_id: &AgentId,
+        force: bool,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        if let Some(resume) = &self.local_resume {
+            let resume = resume
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("local resume connected");
+            return resume(owned_agent_id.clone(), force, auth_ctx.clone()).await;
+        }
+        self.inner.resume(owned_agent_id, force, auth_ctx).await
+    }
+
+    async fn fork_worker(
+        &self,
+        source_agent_id: &AgentId,
+        target_agent_id: &AgentId,
+        oplog_index_cutoff: &OplogIndex,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        self.inner
+            .fork_worker(
+                source_agent_id,
+                target_agent_id,
+                oplog_index_cutoff,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn revert(
+        &self,
+        agent_id: &AgentId,
+        target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        self.inner
+            .revert(agent_id, target, resolved_revert, auth_ctx)
+            .await
+    }
+
+    async fn complete_promise(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        self.inner
+            .complete_promise(promise_id, data, auth_ctx)
+            .await
+    }
+
+    async fn cancel_invocation(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        auth_ctx: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        self.inner
+            .cancel_invocation(agent_id, idempotency_key, auth_ctx)
+            .await
+    }
+
+    async fn lookup_invocation_status(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        environment_id: Option<EnvironmentId>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::InvocationStatus, WorkerProxyError> {
+        self.inner
+            .lookup_invocation_status(agent_id, idempotency_key, environment_id, auth_ctx)
+            .await
+    }
+
+    async fn process_oplog_entries(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        component_revision: ComponentRevision,
+        idempotency_key: IdempotencyKey,
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        self.inner
+            .process_oplog_entries(
+                target_agent_id,
+                environment_id,
+                component_revision,
+                idempotency_key,
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                auth_ctx,
+            )
+            .await
+    }
+}
+
+fn connect_local_card_transfer_delivery(
+    local_delivery: &Arc<Mutex<Option<Arc<LocalCardTransferDelivery>>>>,
+    executor: &TestWorkerExecutor,
+) {
+    let client = executor.client.clone();
+    *local_delivery.lock().unwrap() = Some(Arc::new(
+        move |target_agent_id, environment_id, transfer_id, source_card_id, card| {
+            let mut client = client.clone();
+            Box::pin(async move {
+                use golem_api_grpc::proto::golem::workerexecutor::v1::{
+                    DeliverCardTransferRequest, deliver_card_transfer_response,
+                };
+
+                let response = client
+                    .deliver_card_transfer(DeliverCardTransferRequest {
+                        target_agent_id: Some(target_agent_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        transfer_id: Some(transfer_id.into()),
+                        card: desert_rust::serialize_to_byte_vec(&card).map_err(|error| {
+                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
+                                "failed to serialize local card transfer: {error}"
+                            )))
+                        })?,
+                        auth_ctx: Some(AuthCtx::System.into()),
+                        source_card_id: Some(source_card_id.0.into()),
+                    })
+                    .await?
+                    .into_inner();
+                match response.result {
+                    Some(deliver_card_transfer_response::Result::Success(_)) => Ok(()),
+                    Some(deliver_card_transfer_response::Result::Failure(error)) => {
+                        Err(WorkerProxyError::InternalError(
+                            WorkerExecutorError::try_from(error).map_err(|error| {
+                                WorkerProxyError::InternalError(WorkerExecutorError::unknown(error))
+                            })?,
+                        ))
+                    }
+                    None => Err(WorkerProxyError::InternalError(
+                        WorkerExecutorError::unknown(
+                            "local permission-card delivery returned no result",
+                        ),
+                    )),
+                }
+            })
+        },
+    ));
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn card_transfer_recipient_mismatch_does_not_create_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::DeliverCardTransferRequest;
+    use golem_common::model::card::{Card, CardId, StoredCard, parse_permission_fields};
+    use golem_service_base::model::auth::AuthCtx;
+    use golem_worker_executor::grpc::PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let target_agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Counter", "recipient-mismatch-new-target").to_string(),
+    };
+    assert_eq!(
+        executor.get_worker_metadata_opt(&target_agent_id).await?,
+        None
+    );
+
+    let card = StoredCard::Concrete(Card {
+        card_id: CardId::new(),
+        parent_ids: vec![],
+        lower_positive: vec![parse_permission_fields(
+            "card",
+            "*",
+            "nobody@example.com/*/*/*/*",
+            "inspect",
+            "*",
+        )?],
+        lower_negative: vec![],
+        upper_positive: vec![],
+        upper_negative: vec![],
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    });
+
+    assert_eq!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                target_agent_id: Some(target_agent_id.clone().into()),
+                environment_id: Some(context.default_environment_id.into()),
+                transfer_id: Some(uuid::Uuid::new_v4().into()),
+                card: desert_rust::serialize_to_byte_vec(&card)?,
+                auth_ctx: Some(AuthCtx::System.into()),
+                source_card_id: Some(CardId::new().0.into()),
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH
+        ))
+    );
+    assert_eq!(
+        executor.get_worker_metadata_opt(&target_agent_id).await?,
+        None,
+        "recipient validation must happen before creating or mutating the target"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_conflicts(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use futures::future::join_all;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::DeliverCardTransferRequest;
+    use golem_common::base_model::oplog::{PublicQueuedCardEvent, QueuedCardEvent};
+    use golem_common::model::card::{
+        CardId, EffectiveSurface, StoredCard, parse_permission_fields,
+    };
+    use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
+    use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+    use golem_worker_executor::grpc::{
+        PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let target_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", "permission-transfer-target"),
+        )
+        .await?;
+    let mut wallet_before = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    wallet_before.sort();
+    let oplog_before = executor.oplog_max_index(&target_agent_id).await?;
+
+    let transfer_id = uuid::Uuid::new_v4();
+    let source_card_id = CardId::new();
+    let card = registry_test_card();
+    let request = DeliverCardTransferRequest {
+        target_agent_id: Some(target_agent_id.clone().into()),
+        environment_id: Some(context.default_environment_id.into()),
+        transfer_id: Some(transfer_id.into()),
+        card: desert_rust::serialize_to_byte_vec(&card)?,
+        auth_ctx: Some(AuthCtx::System.into()),
+        source_card_id: Some(source_card_id.0.into()),
+    };
+
+    assert_eq!(
+        deliver_card_transfer(&executor, request.clone()).await?,
+        Ok(())
+    );
+    assert_eq!(
+        deliver_card_transfer(&executor, request.clone()).await?,
+        Ok(())
+    );
+
+    let count_receipts = |entries: &[PublicOplogEntryWithIndex],
+                          expected_transfer_id: uuid::Uuid| {
+        entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::CardEventQueued(params)
+                        if matches!(
+                            &params.event,
+                            PublicQueuedCardEvent::TransferReceived(receipt)
+                                if receipt.transfer_id == expected_transfer_id
+                        )
+                )
+            })
+            .count()
+    };
+    let entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(count_receipts(&entries, transfer_id), 1);
+
+    let detached_status_transfer_id = uuid::Uuid::new_v4();
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &target_agent_id,
+            golem_common::model::oplog::OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_received(
+                    detached_status_transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
+            ),
+        )
+        .await?;
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    assert_eq!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(detached_status_transfer_id.into()),
+                ..request.clone()
+            },
+        )
+        .await?,
+        Ok(()),
+        "the durable receipt must deduplicate a retry after status is reconstructed from the oplog"
+    );
+    let entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(count_receipts(&entries, detached_status_transfer_id), 1);
+
+    let mismatching_transfer_id = uuid::Uuid::new_v4();
+    let mut mismatching_card = card.clone();
+    match &mut mismatching_card {
+        StoredCard::Concrete(card) => {
+            card.lower_positive = vec![parse_permission_fields(
+                "card",
+                "*",
+                "nobody@example.com/*/*/*/*",
+                "inspect",
+                "*",
+            )?];
+        }
+        StoredCard::Polymorphic(_) => unreachable!(),
+    }
+    assert_eq!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(mismatching_transfer_id.into()),
+                card: desert_rust::serialize_to_byte_vec(&mismatching_card)?,
+                ..request.clone()
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH
+        ))
+    );
+
+    let mut conflicting_card = card.clone();
+    match &mut conflicting_card {
+        StoredCard::Concrete(card) => card.system_card = true,
+        StoredCard::Polymorphic(_) => unreachable!(),
+    }
+    let conflicting_request = DeliverCardTransferRequest {
+        card: desert_rust::serialize_to_byte_vec(&conflicting_card)?,
+        ..request.clone()
+    };
+    assert_eq!(
+        deliver_card_transfer(&executor, conflicting_request.clone()).await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT
+        ))
+    );
+
+    let non_system_auth = AuthCtx::User(UserAuthCtx {
+        account_id: context.account_id,
+        account_email: golem_common::model::account::AccountEmail::new("caller@golem"),
+        account_plan_id: context.account_plan_id,
+        account_roles: context.account_roles.clone(),
+        effective_surface: EffectiveSurface::default(),
+        delegation_surface: None,
+    });
+    let non_system_transfer_id = uuid::Uuid::new_v4();
+    assert!(matches!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(non_system_transfer_id.into()),
+                auth_ctx: Some(non_system_auth.into()),
+                ..request.clone()
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+    let malformed_transfer_id = uuid::Uuid::new_v4();
+    assert!(matches!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(malformed_transfer_id.into()),
+                card: b"not-a-card".to_vec(),
+                ..request.clone()
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+    let panicking_payload_transfer_id = uuid::Uuid::new_v4();
+    let mut panicking_payload = vec![0, 0, 0];
+    panicking_payload.extend_from_slice(&[0; 16]);
+    panicking_payload.push(0x03);
+    assert!(matches!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(panicking_payload_transfer_id.into()),
+                card: panicking_payload,
+                ..request.clone()
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    assert_eq!(
+        deliver_card_transfer(&executor, request.clone()).await?,
+        Ok(())
+    );
+    assert_eq!(
+        deliver_card_transfer(&executor, conflicting_request.clone()).await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT
+        ))
+    );
+
+    let concurrent_transfer_id = uuid::Uuid::new_v4();
+    let concurrent_request = DeliverCardTransferRequest {
+        transfer_id: Some(concurrent_transfer_id.into()),
+        ..request.clone()
+    };
+    let identical_results = join_all((0..8).map(|_| {
+        let executor = executor.clone();
+        let request = concurrent_request.clone();
+        async move { deliver_card_transfer(&executor, request).await }
+    }))
+    .await;
+    for result in identical_results {
+        assert_eq!(result?, Ok(()));
+    }
+
+    let conflicting_transfer_id = uuid::Uuid::new_v4();
+    let conflicting_source_card_id = CardId::new();
+    let concurrent_conflict_requests = [
+        DeliverCardTransferRequest {
+            transfer_id: Some(conflicting_transfer_id.into()),
+            ..request.clone()
+        },
+        DeliverCardTransferRequest {
+            transfer_id: Some(conflicting_transfer_id.into()),
+            source_card_id: Some(conflicting_source_card_id.0.into()),
+            ..request.clone()
+        },
+    ];
+    let conflict_results = join_all(concurrent_conflict_requests.map(|request| {
+        let executor = executor.clone();
+        async move { deliver_card_transfer(&executor, request).await }
+    }))
+    .await;
+    let mut accepted = 0;
+    let mut conflicted = 0;
+    for result in conflict_results {
+        match result? {
+            Ok(()) => accepted += 1,
+            Err(error)
+                if error
+                    == WorkerExecutorError::invalid_request(
+                        PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+                    ) =>
+            {
+                conflicted += 1
+            }
+            Err(error) => return Err(anyhow!("unexpected concurrent delivery error: {error}")),
+        }
+    }
+    assert_eq!((accepted, conflicted), (1, 1));
+
+    let entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(count_receipts(&entries, transfer_id), 1);
+    assert_eq!(count_receipts(&entries, detached_status_transfer_id), 1);
+    assert_eq!(count_receipts(&entries, concurrent_transfer_id), 1);
+    assert_eq!(count_receipts(&entries, conflicting_transfer_id), 1);
+    assert_eq!(count_receipts(&entries, mismatching_transfer_id), 0);
+    assert_eq!(count_receipts(&entries, non_system_transfer_id), 0);
+    assert_eq!(count_receipts(&entries, malformed_transfer_id), 0);
+    assert_eq!(count_receipts(&entries, panicking_payload_transfer_id), 0);
+    assert!(
+        entries
+            .iter()
+            .filter(|entry| entry.oplog_index > oplog_before)
+            .all(|entry| !matches!(
+                entry.entry,
+                PublicOplogEntry::CardInstalled(_)
+                    | PublicOplogEntry::CardDerived(_)
+                    | PublicOplogEntry::CardTransferred(_)
+            ))
+    );
+
+    let mut wallet_after = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    wallet_after.sort();
+    wallet_before
+        .push(golem_common::serialization::serialize(&card).map_err(|error| anyhow!(error))?);
+    wallet_before.sort();
+    assert_eq!(wallet_after, wallet_before);
+
+    let entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    let transferred = |expected_transfer_id| {
+        entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::CardTransferred(params)
+                    if params.transfer_id == expected_transfer_id =>
+                {
+                    Some(params)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let original_transfer = transferred(transfer_id);
+    let detached_status_transfer = transferred(detached_status_transfer_id);
+    let concurrent_transfer = transferred(concurrent_transfer_id);
+    let conflict_winner = transferred(conflicting_transfer_id);
+    assert_eq!(original_transfer.len(), 1);
+    assert_eq!(detached_status_transfer.len(), 1);
+    assert_eq!(concurrent_transfer.len(), 1);
+    assert_eq!(conflict_winner.len(), 1);
+    assert_eq!(original_transfer[0].source_card_id, source_card_id);
+    assert_eq!(original_transfer[0].installed_card_id, card.card_id());
+    assert_eq!(concurrent_transfer[0].installed_card_id, card.card_id());
+    assert_eq!(conflict_winner[0].installed_card_id, card.card_id());
+    let target_generation = original_transfer[0].target_wallet_generation;
+    assert!(
+        [
+            detached_status_transfer[0],
+            concurrent_transfer[0],
+            conflict_winner[0],
+        ]
+        .into_iter()
+        .all(|transfer| transfer.target_wallet_generation == target_generation),
+        "reinstalling the same card through another transfer must not bump the target generation"
+    );
+
+    let read_exact_before = executor.oplog_service_call_count(&target_agent_id, "read_exact");
+    let commit_before = executor.oplog_service_call_count(&target_agent_id, "commit");
+    assert_eq!(
+        deliver_card_transfer(&executor, request.clone()).await?,
+        Ok(()),
+        "an exact retry after target admission must reuse the terminal receipt"
+    );
+    assert_eq!(
+        executor.oplog_service_call_count(&target_agent_id, "read_exact"),
+        read_exact_before,
+        "an indexed terminal duplicate lookup must not scan the worker oplog"
+    );
+    assert_eq!(
+        executor.oplog_service_call_count(&target_agent_id, "commit"),
+        commit_before,
+        "an indexed terminal duplicate lookup must not force an empty oplog commit"
+    );
+    assert_eq!(
+        deliver_card_transfer(&executor, conflicting_request).await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT
+        ))
+    );
+    let entries_after_terminal_retry = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        count_receipts(&entries_after_terminal_retry, transfer_id),
+        1
+    );
+    assert_eq!(
+        entries_after_terminal_retry
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferred(params) if params.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+
+    let failed_transfer_id = uuid::Uuid::new_v4();
+    let mut unregistered_card = card.clone();
+    match &mut unregistered_card {
+        StoredCard::Concrete(card) => card.card_id = CardId::new(),
+        StoredCard::Polymorphic(_) => unreachable!(),
+    }
+    let failed_request = DeliverCardTransferRequest {
+        transfer_id: Some(failed_transfer_id.into()),
+        card: desert_rust::serialize_to_byte_vec(&unregistered_card)?,
+        ..request.clone()
+    };
+    assert_eq!(
+        deliver_card_transfer(&executor, failed_request.clone()).await?,
+        Ok(())
+    );
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    assert_eq!(
+        deliver_card_transfer(&executor, failed_request.clone()).await?,
+        Ok(()),
+        "an exact retry after terminal admission failure must reuse the failed receipt"
+    );
+    let mut conflicting_failed_card = unregistered_card;
+    match &mut conflicting_failed_card {
+        StoredCard::Concrete(card) => card.system_card = !card.system_card,
+        StoredCard::Polymorphic(_) => unreachable!(),
+    }
+    assert_eq!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                card: desert_rust::serialize_to_byte_vec(&conflicting_failed_card)?,
+                ..failed_request
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT
+        ))
+    );
+    let entries_after_failed_retry = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        count_receipts(&entries_after_failed_retry, failed_transfer_id),
+        1
+    );
+    let failed_receipt_index = entries_after_failed_retry
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardEventQueued(params)
+                if matches!(
+                    &params.event,
+                    PublicQueuedCardEvent::TransferReceived(receipt)
+                        if receipt.transfer_id == failed_transfer_id
+                ) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("failed transfer must retain its durable receipt in the oplog");
+    assert_eq!(
+        entries_after_failed_retry
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardInstallFailed(params)
+                    if params.queued_event_index == failed_receipt_index
+            ))
+            .count(),
+        1,
+        "retrying a terminally failed transfer must not repeat target admission"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mode(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::base_model::oplog::{PublicQueuedCardEvent, QueuedCardEvent};
+    use golem_common::model::card::{AgentCardHolder, CardHolder};
+    use golem_common::model::oplog::{OplogEntry, PublicOplogEntry};
+
+    let recorded_transfers = Arc::new(Mutex::new(Vec::new()));
+    let lost_response_transfer_ids = Arc::new(Mutex::new(HashSet::new()));
+    let overrides = TestExecutorOverrides {
+        wrap_worker_proxy: Some(Arc::new({
+            let recorded_transfers = recorded_transfers.clone();
+            let lost_response_transfer_ids = lost_response_transfer_ids.clone();
+            move |inner| {
+                Arc::new(RecordingWorkerProxy {
+                    inner,
+                    transfers: recorded_transfers.clone(),
+                    forward_transfers: false,
+                    lost_response_transfer_ids: lost_response_transfer_ids.clone(),
+                    local_delivery: None,
+                    local_resume: None,
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let run_id = uuid::Uuid::new_v4();
+    let source_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", format!("pending-transfer-source-{run_id}")),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let target_agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Counter", format!("pending-transfer-target-{run_id}")).to_string(),
+    };
+    let source_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: source_agent_id.clone(),
+    });
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: target_agent_id.clone(),
+    });
+    let card = registry_test_card();
+    let pending_transfer_id = uuid::Uuid::new_v4();
+    let started_transfer_id = uuid::Uuid::new_v4();
+    let completed_transfer_id = uuid::Uuid::new_v4();
+
+    let commit_count_before = executor.oplog_service_call_count(&source_agent_id, "commit");
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_started_with_source(
+                    pending_transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+        )
+        .await?;
+    assert_eq!(
+        executor.oplog_service_call_count(&source_agent_id, "commit"),
+        commit_count_before + 1,
+        "an oplog call counter used to enforce no-commit invariants must observe commits through the Worker's oplog"
+    );
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_started_with_source(
+                    completed_transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+        )
+        .await?;
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_started_with_source(
+                    started_transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+        )
+        .await?;
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_transfer_started(
+                None,
+                started_transfer_id,
+                card.card_id(),
+                source_holder.clone(),
+                target_holder.clone(),
+                0,
+            ),
+        )
+        .await?;
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_transfer_started(
+                None,
+                completed_transfer_id,
+                card.card_id(),
+                source_holder,
+                target_holder.clone(),
+                0,
+            ),
+        )
+        .await?;
+    let pre_recovery_index = executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_transfer_confirmed(
+                None,
+                completed_transfer_id,
+                card.card_id(),
+                card.card_id(),
+                target_holder,
+            ),
+        )
+        .await?;
+    assert!(recorded_transfers.lock().unwrap().is_empty());
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+
+    assert_eq!(
+        *recorded_transfers.lock().unwrap(),
+        [pending_transfer_id, started_transfer_id].map(|transfer_id| RecordedCardTransfer {
+            target_agent_id: target_agent_id.clone(),
+            environment_id: context.default_environment_id,
+            transfer_id,
+            source_card_id: card.card_id(),
+            card: card.clone(),
+        }),
+        "only unconfirmed source transfers should be delivered after replay"
+    );
+
+    let entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    for transfer_id in [
+        pending_transfer_id,
+        started_transfer_id,
+        completed_transfer_id,
+    ] {
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry,
+                    PublicOplogEntry::CardEventQueued(params)
+                        if matches!(
+                            &params.event,
+                            PublicQueuedCardEvent::TransferStarted(transfer)
+                                if transfer.transfer_id == transfer_id
+                        )
+                ))
+                .count(),
+            1,
+            "recovery must not duplicate the queued source retry payload"
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry,
+                    PublicOplogEntry::CardTransferStarted(transfer)
+                        if transfer.transfer_id == transfer_id
+                ))
+                .count(),
+            1,
+            "recovery must append at most one source intent"
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry,
+                    PublicOplogEntry::CardTransferConfirmed(transfer)
+                        if transfer.transfer_id == transfer_id
+                ))
+                .count(),
+            1,
+            "recovery must append at most one source confirmation"
+        );
+    }
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    assert_eq!(
+        recorded_transfers.lock().unwrap().len(),
+        2,
+        "a confirmed source transfer must not be delivered on a later replay"
+    );
+
+    executor
+        .revert(
+            &source_agent_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: pre_recovery_index,
+            }),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    assert_eq!(
+        recorded_transfers.lock().unwrap().len(),
+        2,
+        "reverting source terminal entries must preserve the externally completed transfer"
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    assert_eq!(
+        recorded_transfers.lock().unwrap().len(),
+        2,
+        "a source revert followed by replay must not redeliver completed transfers"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn pending_source_card_transfer_boundary_reads_no_oplog_entry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::base_model::oplog::QueuedCardEvent;
+    use golem_common::model::Timestamp;
+    use golem_common::model::card::{AgentCardHolder, CardHolder};
+    use golem_common::model::oplog::{LogLevel, OplogEntry, PublicOplogEntry};
+
+    // The old boundary read every entry from the queued transfer to the end of the oplog, so its
+    // cost grew with these entries.
+    const ENTRIES_AFTER_QUEUED_TRANSFER: u64 = 50;
+
+    let recorded_transfers = Arc::new(Mutex::new(Vec::new()));
+    let overrides = TestExecutorOverrides {
+        wrap_worker_proxy: Some(Arc::new({
+            let recorded_transfers = recorded_transfers.clone();
+            move |inner| recording_accepting_card_transfer_proxy(inner, recorded_transfers.clone())
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let run_id = uuid::Uuid::new_v4();
+    let source_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", format!("boundary-transfer-source-{run_id}")),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: AgentId {
+            component_id: component.id,
+            agent_id: agent_id!("Counter", format!("boundary-transfer-target-{run_id}"))
+                .to_string(),
+        },
+    });
+    let card = registry_test_card();
+    let transfer_id = uuid::Uuid::new_v4();
+
+    executor
+        .add_and_commit_oplog_entry(
+            &source_agent_id,
+            OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder,
+                )),
+            ),
+        )
+        .await?;
+    for index in 0..ENTRIES_AFTER_QUEUED_TRANSFER {
+        executor
+            .add_and_commit_oplog_entry(
+                &source_agent_id,
+                OplogEntry::Log {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    level: LogLevel::Info,
+                    context: String::new(),
+                    message: format!("after queued transfer {index}"),
+                    trace_context: None,
+                },
+            )
+            .await?;
+    }
+    assert!(recorded_transfers.lock().unwrap().is_empty());
+
+    // The next boundary starts, delivers and confirms the pending transfer. It must take the
+    // progress of the transfer from the status, not from the entries after the queued event.
+    let entries_read_before = executor.oplog_entries_read(&source_agent_id);
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let entries_read = executor.oplog_entries_read(&source_agent_id) - entries_read_before;
+
+    assert_eq!(recorded_transfers.lock().unwrap().len(), 1);
+    let entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferConfirmed(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries_read, 0,
+        "the wallet read, whose card event boundary prepares and confirms the pending source \
+         transfer, read {entries_read} oplog entries"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn pending_self_card_transfer_recovery_does_not_deadlock(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::base_model::oplog::{PublicQueuedCardEvent, QueuedCardEvent};
+    use golem_common::model::card::{AgentCardHolder, CardHolder};
+    use golem_common::model::oplog::{OplogEntry, PublicOplogEntry};
+
+    let recorded_transfers = Arc::new(Mutex::new(Vec::new()));
+    let local_delivery = Arc::new(Mutex::new(None));
+    let overrides = TestExecutorOverrides {
+        wrap_worker_proxy: Some(Arc::new({
+            let recorded_transfers = recorded_transfers.clone();
+            let local_delivery = local_delivery.clone();
+            move |inner| {
+                Arc::new(RecordingWorkerProxy {
+                    inner,
+                    transfers: recorded_transfers.clone(),
+                    forward_transfers: true,
+                    lost_response_transfer_ids: Arc::new(Mutex::new(HashSet::new())),
+                    local_delivery: Some(local_delivery.clone()),
+                    local_resume: None,
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let source_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!(
+                "Counter",
+                format!("pending-self-transfer-{}", uuid::Uuid::new_v4())
+            ),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+
+    let transfer_id = uuid::Uuid::new_v4();
+    let card = registry_test_card();
+    let self_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: source_agent_id.clone(),
+    });
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    self_holder,
+                )),
+            ),
+        )
+        .await?;
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        get_agent_wallet_cards(&executor, &source_agent_id),
+    )
+    .await
+    .map_err(|_| anyhow!("pending self-transfer recovery deadlocked"))??;
+
+    assert_eq!(recorded_transfers.lock().unwrap().len(), 1);
+    let entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardEventQueued(params)
+                    if matches!(
+                        &params.event,
+                        PublicQueuedCardEvent::TransferReceived(receipt)
+                            if receipt.transfer_id == transfer_id
+                    )
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferred(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferConfirmed(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn lost_card_transfer_response_converges_after_source_and_target_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::base_model::oplog::{PublicQueuedCardEvent, QueuedCardEvent};
+    use golem_common::model::card::{AgentCardHolder, CardHolder};
+    use golem_common::model::oplog::{OplogEntry, PublicOplogEntry};
+
+    let recorded_transfers = Arc::new(Mutex::new(Vec::new()));
+    let transfer_id = uuid::Uuid::new_v4();
+    let lost_response_transfer_ids = Arc::new(Mutex::new(HashSet::from([transfer_id])));
+    let local_delivery = Arc::new(Mutex::new(None));
+    let overrides = TestExecutorOverrides {
+        wrap_worker_proxy: Some(Arc::new({
+            let recorded_transfers = recorded_transfers.clone();
+            let lost_response_transfer_ids = lost_response_transfer_ids.clone();
+            let local_delivery = local_delivery.clone();
+            move |inner| {
+                Arc::new(RecordingWorkerProxy {
+                    inner,
+                    transfers: recorded_transfers.clone(),
+                    forward_transfers: true,
+                    lost_response_transfer_ids: lost_response_transfer_ids.clone(),
+                    local_delivery: Some(local_delivery.clone()),
+                    local_resume: None,
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let run_id = uuid::Uuid::new_v4();
+    let source_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", format!("lost-response-source-{run_id}")),
+        )
+        .await?;
+    let target_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", format!("lost-response-target-{run_id}")),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+
+    let card = registry_test_card();
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: target_agent_id.clone(),
+    });
+    let source_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: source_agent_id.clone(),
+    });
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+        )
+        .await?;
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_transfer_started(
+                None,
+                transfer_id,
+                card.card_id(),
+                source_holder,
+                target_holder,
+                0,
+            ),
+        )
+        .await?;
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let first_recovery_error = get_agent_wallet_cards(&executor, &source_agent_id)
+        .await
+        .expect_err("losing the target response must leave source recovery pending");
+    assert!(
+        format!("{first_recovery_error:#}").contains("simulated lost card-transfer response"),
+        "unexpected source recovery failure: {first_recovery_error:#}"
+    );
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+
+    let expected_transfer = RecordedCardTransfer {
+        target_agent_id: target_agent_id.clone(),
+        environment_id: context.default_environment_id,
+        transfer_id,
+        source_card_id: card.card_id(),
+        card: card.clone(),
+    };
+    assert_eq!(
+        *recorded_transfers.lock().unwrap(),
+        vec![expected_transfer.clone()],
+        "the first replay retry must reach the target before its response is lost"
+    );
+    let source_entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        source_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferConfirmed(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        0,
+        "the source must not confirm a transfer whose success response was lost"
+    );
+    let target_entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        target_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardEventQueued(params)
+                    if matches!(
+                        &params.event,
+                        PublicQueuedCardEvent::TransferReceived(receipt)
+                            if receipt.transfer_id == transfer_id
+                    )
+            ))
+            .count(),
+        1,
+        "the target must durably retain the delivery whose response was lost"
+    );
+    assert_eq!(
+        target_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferred(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1,
+        "target admission must complete exactly once before both sides restart"
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    assert_eq!(
+        *recorded_transfers.lock().unwrap(),
+        vec![expected_transfer.clone(), expected_transfer],
+        "source recovery must retry the exact durable transfer payload"
+    );
+
+    let source_entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        source_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardEventQueued(params)
+                    if matches!(
+                        &params.event,
+                        PublicQueuedCardEvent::TransferStarted(transfer)
+                            if transfer.transfer_id == transfer_id
+                    )
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        source_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferStarted(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        source_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferConfirmed(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+    let target_entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        target_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardEventQueued(params)
+                    if matches!(
+                        &params.event,
+                        PublicQueuedCardEvent::TransferReceived(receipt)
+                            if receipt.transfer_id == transfer_id
+                    )
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        target_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferred(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    assert_eq!(
+        recorded_transfers.lock().unwrap().len(),
+        2,
+        "the confirmed source transfer must remain terminal on later replay"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn interruption(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "interruption-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Warmup: ensure the agent constructor has completed before we invoke the
+    // long-running function we intend to interrupt.
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "interruption",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    executor.interrupt(&worker_id).await?;
+    let result = fiber.await?;
+
+    drop(executor);
+
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(err_msg.contains("Interrupted via the Golem API"));
+    Ok(())
+}
+
+/// Shard-assignment recovery must not acknowledge an assignment whose activations failed.
+///
+/// Recovery resolves each running worker's identity and metadata while enumerating the shard,
+/// then resolves its identity again when the worker is activated. This fails the activation read
+/// only, so enumeration succeeds and activation does not. The assignment must fail - the shard
+/// manager retries a failed one, whereas a worker skipped here would stay stopped, unrecorded,
+/// until an unrelated invocation happened to arrive - and the retry, once storage is back, must
+/// restart the worker.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
+    };
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "recovery-activation-fails");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // A long invocation keeps the worker Running, which is what puts it in the recovery index.
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_for", data_value!(60.0f64))
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let shard = ShardId { value: 0 };
+    let mut client = executor.client.clone();
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+            revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
+    // Retire the unloaded shell as the idle-expiry sweep would, so activation must reconstruct the
+    // worker and load its metadata. This is also the shape of an executor restart.
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+
+    // Enumeration resolves the worker's identity, then loads its metadata (which resolves the
+    // identity again); activation resolves it once more. Fail the activation read.
+    faults.fail_after(
+        "read_cached_agent_mode",
+        2,
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    let assigned = client
+        .assign_shards(AssignShardsRequest {
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            number_of_shards: 1,
+            revision: 2,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    let failure = match assigned.result {
+        Some(assign_shards_response::Result::Failure(failure)) => format!("{failure:?}"),
+        other => panic!("an assignment whose activation failed was acknowledged: {other:?}"),
+    };
+    assert!(
+        failure.contains("failed to restart") && failure.contains("injected"),
+        "the assignment failed for a different reason: {failure}"
+    );
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+    // Storage is back: the retried assignment restarts the worker.
+    faults.clear();
+    let assigned = client
+        .assign_shards(AssignShardsRequest {
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            number_of_shards: 1,
+            revision: 3,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    assert!(
+        matches!(
+            assigned.result,
+            Some(assign_shards_response::Result::Success(_))
+        ),
+        "{:?}",
+        assigned.result
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker was not restarted by the retried assignment"))?;
+
+    drop(client);
+    drop(executor);
+    Ok(())
+}
+
+/// A guest invocation exceeding the configured `limits.max_invocation_duration` is aborted and
+/// fails like a trap: no invocation-finished marker is written and normal retry handling
+/// applies. With a single-attempt retry policy the worker ends up `Failed` and the awaiting
+/// client observes the timeout error.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn max_invocation_duration_aborts_long_running_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.limits.max_invocation_duration = Some(Duration::from_secs(2));
+            config.retry = RetryConfig {
+                max_attempts: 1,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_millis(10),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "max-invocation-duration-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // An invocation well under the limit succeeds normally.
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+
+    // `interruption` sleeps for ~10 seconds in 100ms steps, well over the 2s limit.
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "interruption", data_value!())
+        .await;
+
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(
+        err_msg.contains("maximum invocation duration"),
+        "Expected the max invocation duration error, got: {err_msg}"
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(10))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn delete_interrupts_long_rpc_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let unique_id = context.redis_prefix();
+    let agent_id = agent_id!("TestAgent", unique_id);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_agent(
+            &component,
+            &agent_id,
+            "longRpcCall",
+            data_value!(600000f64), // 10 minutes
+        )
+        .await?;
+
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    executor.delete_worker(&worker_id).await?;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await;
+    assert!(metadata.is_err());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn simulated_crash(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "simulated-crash-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let mut rx = executor.capture_output(&worker_id).await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "interruption",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    let _ = executor.simulated_crash(&worker_id).await;
+    let result = fiber.await?;
+
+    let mut events = vec![];
+    rx.recv_many(&mut events, 100).await;
+    drop(executor);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful result after simulated crash recovery, got: {:?}",
+        result.err()
+    );
+    assert_eq!(
+        stdout_events(events.into_iter()),
+        vec!["Starting interruption test\n"]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn shopping_cart_example(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let repo_id = agent_id!("Repository", "test-repo");
+    let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!("G1001", "Golem Cloud Subscription 1y"),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!("G1002", "Mud Golem"),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!("G1002", "Mud Golem"),
+        )
+        .await?;
+
+    let contents = executor
+        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let contents_value = contents
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    assert_eq!(
+        contents_value,
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1000".to_string()),
+                        SchemaValue::String("Golem T-Shirt M".to_string()),
+                        SchemaValue::U64(1),
+                    ],
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1001".to_string()),
+                        SchemaValue::String("Golem Cloud Subscription 1y".to_string()),
+                        SchemaValue::U64(1),
+                    ],
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1002".to_string()),
+                        SchemaValue::String("Mud Golem".to_string()),
+                        SchemaValue::U64(2),
+                    ],
+                },
+            ],
+        }
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn dynamic_worker_creation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Environment", "dynamic-worker-creation-1");
+
+    let args = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_arguments", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let env = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let worker_name = agent_id.to_string();
+    assert_eq!(
+        args,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List { elements: vec![] }))
+        })
+    );
+    assert_eq!(
+        env,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_ID".to_string()),
+                            SchemaValue::String(worker_name.clone()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_WORKER_NAME".to_string()),
+                            SchemaValue::String(worker_name),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_ID".to_string()),
+                            SchemaValue::String(format!("{}", component.id)),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_REVISION".to_string()),
+                            SchemaValue::String("0".to_string()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_TYPE".to_string()),
+                            SchemaValue::String("Environment".to_string()),
+                        ],
+                    },
+                ],
+            }))
+        })
+    );
+    Ok(())
+}
+
+fn get_env_result_from_value(env: SchemaValue) -> HashMap<String, String> {
+    match env {
+        SchemaValue::Result(ResultValuePayload::Ok { value: Some(inner) }) => match *inner {
+            SchemaValue::List { elements: items } => {
+                let pairs = items
+                    .into_iter()
+                    .filter_map(|item| match item {
+                        SchemaValue::Tuple { elements: values } if values.len() == 2 => {
+                            let mut iter = values.into_iter();
+                            match (iter.next(), iter.next()) {
+                                (
+                                    Some(SchemaValue::String(key)),
+                                    Some(SchemaValue::String(value)),
+                                ) => Some((key, value)),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<(String, String)>>();
+                HashMap::from_iter(pairs)
+            }
+            _ => panic!("Unexpected result value"),
+        },
+        _ => panic!("Unexpected result value"),
+    }
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn ephemeral_worker_creation_with_name_is_not_persistent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("EphemeralCounter", "test");
+
+    let _ = executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+
+    drop(executor);
+
+    assert_eq!(result, 1);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn promise(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // The executor checks a blocked guest for suspension after `wait_suspend_grace` and then
+    // every `wait_suspend_check_interval`. The default interval equals the wait for Suspended
+    // below, so a guest that blocks after the first check would never suspend in time.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", "promise-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let promise_data_clone = promise_data.clone();
+
+    let mut fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "await_promise",
+                    promise_data_clone,
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    info!("Waiting for worker to be suspended on promise");
+
+    tokio::select! {
+        result = &mut fiber => {
+            let invoke_result = result??;
+            return Err(anyhow!("await_promise returned immediately instead of suspending: {:?}", invoke_result));
+        }
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10)) => {
+            status?;
+        }
+    }
+
+    info!("Completing promise to resume worker");
+
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx,
+            },
+            vec![42],
+        )
+        .await?;
+
+    let result = fiber.await??;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result_value = result
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(
+        result_value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
+        }
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn p3_promise_suspend_survives_executor_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", "p3-promise-restart");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
+    let await_key = IdempotencyKey::fresh();
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent_id,
+            &await_key,
+            "await_promise",
+            promise_data.clone(),
+        )
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx,
+            },
+            vec![42],
+        )
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &await_key,
+            "await_promise",
+            promise_data,
+        )
+        .await?;
+
+    let result_value = result
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(
+        result_value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
+        }
+    );
+
+    Ok(())
+}
+
+fn extract_oplog_idx_from_promise_id(promise_id_value: &SchemaValue) -> OplogIndex {
+    let SchemaValue::Record { fields } = promise_id_value else {
+        panic!("Expected a record for PromiseId");
+    };
+    let SchemaValue::U64(oplog_idx) = fields[1] else {
+        panic!("Expected u64 oplog-idx field");
+    };
+    OplogIndex::from_u64(oplog_idx)
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn get_workers_from_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id1 = agent_id!("GolemHostApi", "worker-3");
+    let worker_id1 = executor
+        .start_agent(&component.id, agent_id1.clone())
+        .await?;
+
+    let agent_id2 = agent_id!("GolemHostApi", "worker-4");
+    let worker_id2 = executor
+        .start_agent(&component.id, agent_id2.clone())
+        .await?;
+
+    async fn get_check(
+        component: &ComponentDto,
+        caller_agent_id: &golem_common::model::agent::ParsedAgentId,
+        name_filter: Option<String>,
+        expected_count: usize,
+        executor: &TestWorkerExecutor,
+    ) -> anyhow::Result<()> {
+        let component_id_value = {
+            SchemaValue::Record {
+                fields: vec![SchemaValue::Uuid(component.id.0)],
+            }
+        };
+
+        let filter_value = SchemaValue::Option {
+            inner: name_filter.map(|name| {
+                Box::new(SchemaValue::Record {
+                    fields: vec![SchemaValue::List {
+                        elements: vec![SchemaValue::Record {
+                            fields: vec![SchemaValue::List {
+                                elements: vec![SchemaValue::Variant(VariantValuePayload {
+                                    case: 0,
+                                    payload: Some(Box::new(SchemaValue::Record {
+                                        fields: vec![
+                                            // `string-filter-comparator` is a WIT
+                                            // `enum`; `equal` is case 0.
+                                            SchemaValue::Enum { case: 0 },
+                                            SchemaValue::String(name),
+                                        ],
+                                    })),
+                                })],
+                            }],
+                        }],
+                    }],
+                })
+            }),
+        };
+
+        let params = crate::raw_params(vec![
+            component_id_value,
+            filter_value,
+            SchemaValue::Bool(true),
+        ]);
+
+        let result = executor
+            .invoke_and_await_agent(component, caller_agent_id, "get_workers", params)
+            .await?;
+
+        let result_value = result
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
+
+        match result_value {
+            SchemaValue::List { elements: list } => {
+                assert_eq!(list.len(), expected_count);
+            }
+            _ => {
+                panic!("unexpected");
+            }
+        }
+        Ok(())
+    }
+    get_check(&component, &agent_id1, None, 2, &executor).await?;
+    get_check(
+        &component,
+        &agent_id2,
+        Some("GolemHostApi(\"worker-3\")".to_string()),
+        1,
+        &executor,
+    )
+    .await?;
+
+    executor.check_oplog_is_queryable(&worker_id1).await?;
+    executor.check_oplog_is_queryable(&worker_id2).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn malformed_worker_enumeration_cursor_returns_domain_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::Cursor;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetWorkersMetadataRequest, get_workers_metadata_response,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let response = executor
+        .client
+        .clone()
+        .get_workers_metadata(GetWorkersMetadataRequest {
+            component_id: Some(ComponentId::new().into()),
+            environment_id: Some(context.default_environment_id.into()),
+            filter: None,
+            cursor: Some(Cursor {
+                value: "not-a-valid-cursor".to_string(),
+            }),
+            count: 1,
+            precise: false,
+            auth_ctx: Some(executor.auth_ctx().into()),
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(get_workers_metadata_response::Result::Failure(error)) => {
+            let error: WorkerExecutorError = error.try_into().map_err(anyhow::Error::msg)?;
+            assert!(matches!(error, WorkerExecutorError::InvalidRequest { .. }));
+        }
+        other => panic!("expected InvalidRequest domain failure, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[derive(Clone)]
+struct CountingWorkerEnumerationService {
+    inner: Arc<dyn WorkerEnumerationService>,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl WorkerEnumerationService for CountingWorkerEnumerationService {
+    async fn get(
+        &self,
+        environment_id: &EnvironmentId,
+        component_id: &ComponentId,
+        filter: Option<AgentFilter>,
+        cursor: ScanCursor,
+        count: u64,
+        precise: bool,
+    ) -> Result<(Option<ScanCursor>, Vec<golem_common::model::AgentMetadata>), WorkerExecutorError>
+    {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .get(environment_id, component_id, filter, cursor, count, precise)
+            .await
+    }
+}
+
+async fn wait_for_enumeration_before_promise(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+    after: OplogIndex,
+) -> anyhow::Result<()> {
+    loop {
+        let oplog = executor.get_oplog(worker_id, after).await?;
+        let invocation_start = oplog.iter().find_map(|entry| {
+            matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))
+                .then_some(entry.oplog_index)
+        });
+        if let Some(invocation_start) = invocation_start {
+            if oplog.iter().any(|entry| {
+                entry.oplog_index > invocation_start
+                    && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            }) {
+                return Err(anyhow!(
+                    "enumeration invocation finished before reaching the promise wait"
+                ));
+            }
+            let enumeration_start = oplog.iter().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if entry.oplog_index > invocation_start
+                        && start.function_name == "golem::api::get-agents::get-next" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            });
+            if let Some(enumeration_start) = enumeration_start {
+                let enumeration_end = oplog.iter().find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::End(end) if end.start_index == enumeration_start => {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                });
+                if let Some(enumeration_end) = enumeration_end {
+                    let promise_start = oplog.iter().find_map(|entry| match &entry.entry {
+                        PublicOplogEntry::Start(start)
+                            if entry.oplog_index > enumeration_end
+                                && start.function_name == "golem::api::get_promise_result" =>
+                        {
+                            Some(entry.oplog_index)
+                        }
+                        _ => None,
+                    });
+                    if let Some(promise_start) = promise_start {
+                        let settled = oplog.iter().any(|entry| match &entry.entry {
+                            PublicOplogEntry::End(end) => end.start_index == promise_start,
+                            PublicOplogEntry::Cancelled(cancelled) => {
+                                cancelled.start_index == promise_start
+                            }
+                            _ => false,
+                        });
+                        if !settled {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn get_workers_opaque_cursor_replays_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let enumeration_calls = Arc::new(AtomicUsize::new(0));
+    let wrap_calls = enumeration_calls.clone();
+    let overrides = TestExecutorOverrides {
+        wrap_worker_enumeration_service: Some(Arc::new(move |inner| {
+            Arc::new(CountingWorkerEnumerationService {
+                inner,
+                calls: wrap_calls.clone(),
+            })
+        })),
+        ..TestExecutorOverrides::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "opaque-cursor-replay");
+    let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
+
+    let mut expected_ids = HashSet::from([caller.to_string()]);
+    for index in 0..50 {
+        let target = agent_id!("GolemHostApi", format!("opaque-cursor-target-{index}"));
+        executor.start_agent(&component.id, target.clone()).await?;
+        expected_ids.insert(target.to_string());
+    }
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &caller, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected promise id"))?;
+    let component_id_value = SchemaValue::Record {
+        fields: vec![SchemaValue::Uuid(component.id.0)],
+    };
+    let params = crate::raw_params(vec![component_id_value, promise_id_value.clone()]);
+    let resumed_params = params.clone();
+    let invocation_key = IdempotencyKey::fresh();
+    let before_invocation = executor
+        .get_oplog(&caller_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map_or(OplogIndex::INITIAL, |entry| entry.oplog_index.next());
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let caller_clone = caller.clone();
+    let key_clone = invocation_key.clone();
+    let mut pending_invocation =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            executor_clone
+                .invoke_and_await_agent_with_key(
+                    &component_clone,
+                    &caller_clone,
+                    &key_clone,
+                    "get_agents_across_promise",
+                    params,
+                )
+                .await
+        }));
+    tokio::select! {
+        biased;
+        result = &mut pending_invocation => {
+            return Err(anyhow!("enumeration returned before the promise was completed: {:?}", result??));
+        }
+        checkpoint = wait_for_enumeration_before_promise(&executor, &caller_id, before_invocation) => {
+            checkpoint?;
+        }
+    }
+    assert_eq!(enumeration_calls.load(Ordering::SeqCst), 1);
+    pending_invocation.abort();
+    assert!(
+        pending_invocation
+            .await
+            .expect_err("pending invocation should be cancelled")
+            .is_cancelled()
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: caller_id.clone(),
+                oplog_idx,
+            },
+            Vec::new(),
+        )
+        .await?;
+    let pages = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &invocation_key,
+            "get_agents_across_promise",
+            resumed_params,
+        )
+        .await?
+        .into_typed::<Result<Vec<Vec<String>>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].len(), 50);
+    assert_eq!(pages[1].len(), 1);
+    let first_page: HashSet<_> = pages[0].iter().cloned().collect();
+    let second_page: HashSet<_> = pages[1].iter().cloned().collect();
+    assert!(first_page.is_disjoint(&second_page));
+    assert_eq!(
+        first_page
+            .union(&second_page)
+            .cloned()
+            .collect::<HashSet<_>>(),
+        expected_ids
+    );
+    assert_eq!(enumeration_calls.load(Ordering::SeqCst), 2);
+    executor.check_oplog_is_queryable(&caller_id).await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn get_metadata_from_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id1 = agent_id!("GolemHostApi", "worker-1");
+    let worker_id1 = executor
+        .start_agent(&component.id, agent_id1.clone())
+        .await?;
+
+    let agent_id2 = agent_id!("GolemHostApi", "worker-2");
+    let worker_id2 = executor
+        .start_agent(&component.id, agent_id2.clone())
+        .await?;
+
+    fn get_agent_id_schema_value(
+        component_id: &ComponentId,
+        agent_id: &golem_common::model::agent::ParsedAgentId,
+    ) -> SchemaValue {
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::Uuid(component_id.0)],
+                },
+                SchemaValue::String(agent_id.to_string()),
+            ],
+        }
+    }
+
+    async fn get_check(
+        component: &ComponentDto,
+        caller_agent_id: &golem_common::model::agent::ParsedAgentId,
+        other_agent_id: &golem_common::model::agent::ParsedAgentId,
+        executor: &TestWorkerExecutor,
+    ) -> anyhow::Result<()> {
+        let agent_id_val1 = get_agent_id_schema_value(&component.id, caller_agent_id);
+
+        let result = executor
+            .invoke_and_await_agent(component, caller_agent_id, "get_self_uri", data_value!())
+            .await?;
+
+        let result_value = result
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
+
+        match result_value {
+            SchemaValue::Record { fields: values } if !values.is_empty() => {
+                let id_val = values.first().unwrap();
+                assert_eq!(agent_id_val1, *id_val);
+            }
+            _ => {
+                panic!("unexpected");
+            }
+        }
+
+        let agent_id_schema_val2 = get_agent_id_schema_value(&component.id, other_agent_id);
+
+        let params = crate::raw_params(vec![agent_id_schema_val2.clone()]);
+
+        let result = executor
+            .invoke_and_await_agent(component, caller_agent_id, "get_worker_metadata", params)
+            .await?;
+
+        let result_value = result
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
+
+        match result_value {
+            SchemaValue::Option { inner: value } if value.is_some() => {
+                let result = *value.unwrap();
+                match result {
+                    SchemaValue::Record { fields: values } if !values.is_empty() => {
+                        let id_val = values.first().unwrap();
+                        assert_eq!(agent_id_schema_val2, *id_val);
+                    }
+                    _ => {
+                        panic!("unexpected");
+                    }
+                }
+            }
+            _ => {
+                panic!("unexpected");
+            }
+        }
+        Ok(())
+    }
+
+    get_check(&component, &agent_id1, &agent_id2, &executor).await?;
+    get_check(&component, &agent_id2, &agent_id1, &executor).await?;
+
+    executor.check_oplog_is_queryable(&worker_id1).await?;
+    executor.check_oplog_is_queryable(&worker_id2).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn invoking_with_same_idempotency_key_is_idempotent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let repo_id = agent_id!("Repository", "test-repo-2");
+    let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
+
+    let idempotency_key = IdempotencyKey::fresh();
+    executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &repo_id,
+            &idempotency_key,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &repo_id,
+            &idempotency_key,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
+        )
+        .await?;
+
+    let contents = executor
+        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let contents_value = contents
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    assert_eq!(
+        contents_value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("G1000".to_string()),
+                    SchemaValue::String("Golem T-Shirt M".to_string()),
+                    SchemaValue::U64(1),
+                ],
+            }],
+        }
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.invocation_results.recent_capacity = 2;
+            config.invocation_results.bloom_bits = 128;
+            config.invocation_results.bloom_hashes = 2;
+            config.invocation_results.physical_index_catch_up_chunk_size = 2;
+        })),
+        ..TestExecutorOverrides::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let counter_id = agent_id!("Counter", "idempotency-index-after-restart");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    let mut oldest_key = None;
+    for expected in 1..=32 {
+        let idempotency_key = IdempotencyKey::fresh();
+        let result = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &counter_id,
+                &idempotency_key,
+                "increment",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<u32>()?;
+        assert_eq!(result, expected);
+        oldest_key.get_or_insert(idempotency_key);
+    }
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(
+        executor
+            .start_agent(&component.id, counter_id.clone())
+            .await?,
+        worker_id
+    );
+
+    let oldest_key = oldest_key.unwrap();
+    let read_exact_before = executor.oplog_service_call_count(&worker_id, "read_exact");
+    let duplicate_result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &counter_id,
+            &oldest_key,
+            "increment",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(duplicate_result, 1);
+    assert_eq!(
+        executor.oplog_service_call_count(&worker_id, "read_exact"),
+        read_exact_before,
+        "an evicted idempotency result must resolve from the hot physical index without scanning the oplog"
+    );
+
+    let next_key = IdempotencyKey::fresh();
+    let next_result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &counter_id,
+            &next_key,
+            "increment",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(next_result, 33);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn component_env_variables(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Environment", vec![("FOO".to_string(), "bar".to_string())])
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("Environment", "component-env-variables-1");
+    let worker_name = agent_id.to_string();
+
+    let env = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        env,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("FOO".to_string()),
+                            SchemaValue::String("bar".to_string()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_ID".to_string()),
+                            SchemaValue::String(worker_name.clone()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_WORKER_NAME".to_string()),
+                            SchemaValue::String(worker_name),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_ID".to_string()),
+                            SchemaValue::String(format!("{}", component.id)),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_REVISION".to_string()),
+                            SchemaValue::String("0".to_string()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_TYPE".to_string()),
+                            SchemaValue::String("Environment".to_string()),
+                        ],
+                    },
+                ],
+            }))
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn component_env_variables_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Environment", vec![("FOO".to_string(), "bar".to_string())])
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("Environment", "component-env-variables-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Worker metadata env contains only per-worker overrides — agent-type defaults
+    // (FOO=bar is set on the component, not passed as a per-worker override) are
+    // not stored in the worker record; they are applied at runtime in get_environment.
+    let AgentMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
+    env.retain(|k, _| k == "FOO");
+    assert_eq!(env, HashMap::new());
+
+    let updated_component = executor
+        .update_component_with_env(
+            &component.id,
+            "Environment",
+            "golem_it_host_api_tests_release",
+            &[("BAR".to_string(), "baz".to_string())],
+        )
+        .await?;
+
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    let env = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let env = get_env_result_from_value(env);
+
+    // Rust initializes libc's environment cache during agent initialization. Replaying
+    // that initialization restores its recorded values, even after a component update.
+    assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
+    assert_eq!(env.get("BAR"), None);
+    let worker_name = agent_id.to_string();
+    assert_eq!(env.get("GOLEM_AGENT_ID"), Some(&worker_name));
+
+    let fresh_agent = agent_id!("Environment", "component-env-variables-2");
+    executor
+        .start_agent(&updated_component.id, fresh_agent.clone())
+        .await?;
+    let fresh_env = executor
+        .invoke_and_await_agent(
+            &updated_component,
+            &fresh_agent,
+            "get_environment",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let fresh_env = get_env_result_from_value(fresh_env);
+    assert_eq!(fresh_env.get("FOO"), None);
+    assert_eq!(fresh_env.get("BAR"), Some(&"baz".to_string()));
+    assert_eq!(
+        fresh_env.get("GOLEM_AGENT_ID"),
+        Some(&fresh_agent.to_string())
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn component_env_and_worker_env_priority(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Environment", vec![("FOO".to_string(), "bar".to_string())])
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("Environment", "component-env-variables-1");
+    let worker_env = HashMap::from_iter(vec![("FOO".to_string(), "baz".to_string())]);
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), worker_env, Vec::new())
+        .await?;
+
+    let AgentMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
+    env.retain(|k, _| k == "FOO");
+
+    assert_eq!(
+        env,
+        HashMap::from_iter(vec![("FOO".to_string(), "baz".to_string())])
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn delete_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let counter_id = agent_id!("Counter", "delete-worker-1");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    let metadata1 = executor.get_worker_metadata(&worker_id).await;
+
+    let (cursor1, values1) = executor
+        .get_workers_metadata(
+            &worker_id.component_id,
+            Some(AgentFilter::new_name(
+                StringFilterComparator::Equal,
+                worker_id.agent_id.clone(),
+            )),
+            ScanCursor::default(),
+            10,
+            true,
+        )
+        .await?;
+
+    executor.delete_worker(&worker_id).await?;
+
+    let metadata2 = executor.get_worker_metadata(&worker_id).await;
+
+    assert_eq!(values1.len(), 1);
+    assert!(cursor1.is_none());
+    assert!(metadata1.is_ok());
+    assert!(metadata2.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn delete_nonexistent_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let counter_id = agent_id!("Counter", "delete-nonexistent-1");
+    let worker_id = AgentId {
+        component_id: component.id,
+        agent_id: counter_id.to_string(),
+    };
+
+    let result = executor.delete_worker(&worker_id).await;
+
+    let err = result.expect_err("Deleting a non-existent worker should fail");
+    let err_msg = format!("{err:?}");
+    assert!(
+        err_msg.contains("AgentNotFound"),
+        "Expected AgentNotFound error, got: {err_msg}"
+    );
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    assert_eq!(executor.oplog_service_call_count(&worker_id, "create"), 0);
+    assert_eq!(
+        executor.oplog_service_call_count(&worker_id, "create_fresh"),
+        0
+    );
+    assert_eq!(executor.oplog_service_call_count(&worker_id, "open"), 0);
+    assert_eq!(
+        executor.oplog_service_call_count(&worker_id, "get_last_index"),
+        0
+    );
+    assert_eq!(executor.oplog_service_call_count(&worker_id, "commit"), 0);
+    assert_eq!(
+        executor.oplog_service_call_count(&worker_id, "read_exact"),
+        0
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn fork_missing_source_does_not_construct_either_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let source = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Counter", "missing-fork-source").to_string(),
+    };
+    let target = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Counter", "missing-fork-target").to_string(),
+    };
+    let error = executor
+        .fork_worker(&source, &target.agent_id, OplogIndex::from_u64(2))
+        .await
+        .expect_err("fork must not create a missing source");
+    assert!(format!("{error:?}").contains("AgentNotFound"));
+    for agent in [&source, &target] {
+        assert!(
+            !executor
+                .worker_is_cached(&OwnedAgentId::new(context.default_environment_id, agent))
+                .await
+        );
+        assert!(executor.get_worker_metadata(agent).await.is_err());
+        for api in ["create", "create_fresh", "open", "commit"] {
+            assert_eq!(executor.oplog_service_call_count(agent, api), 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::{HasOplog, HasOplogService};
+
+    let context = TestContext::new(last_unique_id);
+    let local_resume: Arc<Mutex<Option<Arc<LocalWorkerResume>>>> = Arc::new(Mutex::new(None));
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_worker_proxy: Some(Arc::new({
+                let local_resume = local_resume.clone();
+                move |inner| {
+                    Arc::new(RecordingWorkerProxy {
+                        inner,
+                        transfers: Arc::new(Mutex::new(Vec::new())),
+                        forward_transfers: true,
+                        lost_response_transfer_ids: Arc::new(Mutex::new(HashSet::new())),
+                        local_delivery: None,
+                        local_resume: Some(local_resume.clone()),
+                    })
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let client = executor.client.clone();
+    let environment_id = context.default_environment_id;
+    *local_resume.lock().unwrap() = Some(Arc::new(move |agent_id, force, auth_ctx| {
+        let mut client = client.clone();
+        Box::pin(async move {
+            use golem_api_grpc::proto::golem::workerexecutor::v1::{
+                ResumeWorkerRequest, resume_worker_response,
+            };
+            let response = client
+                .resume_worker(ResumeWorkerRequest {
+                    agent_id: Some(agent_id.into()),
+                    force: Some(force),
+                    environment_id: Some(environment_id.into()),
+                    auth_ctx: Some(auth_ctx.into()),
+                    principal: None,
+                })
+                .await?
+                .into_inner();
+            match response.result {
+                Some(resume_worker_response::Result::Success(_)) => Ok(()),
+                Some(resume_worker_response::Result::Failure(error)) => {
+                    Err(WorkerProxyError::InternalError(
+                        WorkerExecutorError::try_from(error).map_err(|error| {
+                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(error))
+                        })?,
+                    ))
+                }
+                None => Err(WorkerProxyError::InternalError(
+                    WorkerExecutorError::unknown("local resume returned no result"),
+                )),
+            }
+        })
+    }));
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let source_name = agent_id!("Counter", "fork-source-locked");
+    let source = executor
+        .start_agent(&component.id, source_name.clone())
+        .await?;
+    for expected in [1, 2] {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &source_name, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            expected
+        );
+    }
+    let owned = OwnedAgentId::new(context.default_environment_id, &source);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let cut = worker.oplog().current_oplog_index().await;
+    let target_name = agent_id!("Counter", "fork-target-locked");
+    let target = AgentId {
+        component_id: component.id,
+        agent_id: target_name.to_string(),
+    };
+    let service = worker.oplog_service();
+    let target_guard = service.lock_lifecycle(&target).await;
+    let (copy_entered, release_copy) = executor.gate_next_oplog_read(&source, OplogIndex::INITIAL);
+    let fork = tokio::spawn({
+        let executor = executor.clone();
+        let source = source.clone();
+        let target = target.clone();
+        async move { executor.fork_worker(&source, &target.agent_id, cut).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), copy_entered).await??;
+    let hook = Arc::new(DeletionStageHook::new(
+        owned.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let mut deleting = tokio::spawn({
+        let executor = executor.clone();
+        let source = source.clone();
+        async move { executor.delete_worker(&source).await }
+    });
+    hook.wait_until_gated().await;
+    hook.release();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut deleting)
+            .await
+            .is_err()
+    );
+    assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+    release_copy.send(()).unwrap();
+    // Once the hidden copy is complete, deletion must not wait for target publication.
+    tokio::time::timeout(Duration::from_secs(10), deleting).await???;
+    assert!(!fork.is_finished());
+    drop(target_guard);
+    fork.await??;
+    assert!(executor.get_worker_metadata(&source).await.is_err());
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &target_name, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        3
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocationPayload;
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::{OplogEntry, OplogPayload};
+    use golem_worker_executor::services::{HasOplog, UsesAllDeps};
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+    use golem_worker_executor::worker::Worker;
+
+    for drop_old_shell in [true, false] {
+        let context = TestContext::new(last_unique_id);
+        let faults = KeyValueStorageFaults::default();
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                wrap_key_value_storage: Some(Arc::new({
+                    let faults = faults.clone();
+                    move |storage| {
+                        Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+                    }
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let agent = agent_id!("Counter", "removed-shell-status");
+        let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+            .await?;
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let old = executor.active_agent(&owned).await.unwrap().primary();
+        let all = old.all().clone();
+        let old_oplog = old.oplog();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while executor.worker_is_loaded(&owned).await {
+                if executor.stop_worker_if_idle(&owned).await? {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+
+        faults.apply_before_failing();
+        let gate = faults.gate_next(
+            "add",
+            KeyValueStorageError::Other("injected late recovery-index write failure".into()),
+        );
+        let pending = tokio::spawn({
+            let old = old.clone();
+            async move {
+                old.add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+                    IdempotencyKey::fresh(),
+                    OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+                    TraceId::generate(),
+                    Vec::new(),
+                    Vec::new(),
+                ))
+                .await
+            }
+        });
+        gate.entered().await;
+        executor.retire_unloaded_worker(&owned).await?;
+        let new = Worker::get_or_create_suspended(
+            &all,
+            &owned,
+            None,
+            Vec::new(),
+            None,
+            None,
+            &InvocationContextStack::fresh(),
+            Principal::anonymous(),
+        )
+        .await?;
+        assert!(!Arc::ptr_eq(&old, &new));
+        assert!(std::ptr::eq(
+            old_oplog.task_owner().unwrap(),
+            new.oplog().task_owner().unwrap(),
+        ));
+        let old_weak = Arc::downgrade(&old);
+        pending.abort();
+        assert!(pending.await.unwrap_err().is_cancelled());
+        let mut retained_old = Some(old);
+        if drop_old_shell {
+            drop(retained_old.take());
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while old_weak.upgrade().is_some() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+        }
+
+        let hook = Arc::new(DeletionStageHook::new(owned.clone(), None, None));
+        executor.set_worker_deletion_hook(hook.clone());
+        let mut deleting = tokio::spawn({
+            let executor = executor.clone();
+            let worker_id = worker_id.clone();
+            async move { executor.delete_worker(&worker_id).await }
+        });
+        hook.wait_for_claims(1).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut deleting)
+                .await
+                .is_err()
+        );
+        assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+        gate.release();
+        let failure = deleting.await?.unwrap_err().to_string();
+        assert!(failure.contains("status"), "{failure}");
+        assert!(executor.worker_is_cached(&owned).await);
+        executor.get_worker_metadata(&worker_id).await?;
+        let metadata = Worker::get_latest_metadata(&all, &owned).await?.unwrap();
+        let reconstructed =
+            golem_worker_executor::worker::status::calculate_last_known_status_with_checkpoint(
+                &all,
+                &owned,
+                metadata.fingerprint,
+                metadata.agent_mode,
+                None,
+            )
+            .await
+            .map_err(anyhow::Error::msg)?
+            .unwrap();
+        assert_eq!(metadata.last_known_status, reconstructed);
+
+        // The old attempt keeps its error, but all old writes have finished. An explicit retry
+        // can now remove the persisted generation without a late actor restoring its index.
+        executor.delete_worker(&worker_id).await?;
+        assert!(!executor.worker_is_cached(&owned).await);
+        assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+        assert!(Worker::get_latest_metadata(&all, &owned).await?.is_none());
+        assert_eq!(hook.calls(WorkerDeletionStage::OwnedWorkJoined), 1);
+        // Keeping the old shell alive retains its failed stop result across the explicit retry.
+        assert_eq!(old_weak.upgrade().is_some(), !drop_old_shell);
+        drop(retained_old);
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn concurrent_deletes_share_worker_owned_completion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Counter", "concurrent-delete-completion");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let hook = Arc::new(DeletionStageHook::new(
+        owned_agent_id.clone(),
+        Some(WorkerDeletionStage::CacheRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+
+    let initiating_executor = executor.clone();
+    let initiating_worker_id = worker_id.clone();
+    let initiator = tokio::spawn(async move {
+        initiating_executor
+            .delete_worker(&initiating_worker_id)
+            .await
+    });
+    hook.wait_until_gated().await;
+    initiator.abort();
+    assert!(initiator.await.unwrap_err().is_cancelled());
+    assert!(executor.worker_is_cached(&owned_agent_id).await);
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+    assert!(executor.worker_is_cached(&owned_agent_id).await);
+
+    let first_executor = executor.clone();
+    let first_worker_id = worker_id.clone();
+    let first = tokio::spawn(async move { first_executor.delete_worker(&first_worker_id).await });
+    let second_executor = executor.clone();
+    let second_worker_id = worker_id.clone();
+    let second =
+        tokio::spawn(async move { second_executor.delete_worker(&second_worker_id).await });
+    hook.wait_for_claims(3).await;
+    assert_eq!(hook.claims(), (3, 1));
+    assert!(!first.is_finished());
+    assert!(!second.is_finished());
+
+    hook.release();
+    first.await??;
+    second.await??;
+
+    for stage in [
+        WorkerDeletionStage::ExecutionFenced,
+        WorkerDeletionStage::BarriersClosed,
+        WorkerDeletionStage::RuntimeStopped,
+        WorkerDeletionStage::StreamsCleaned,
+        WorkerDeletionStage::DurableStateRemoved,
+        WorkerDeletionStage::CacheRemoved,
+    ] {
+        assert_eq!(hook.calls(stage), 1, "unexpected calls for {stage:?}");
+    }
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn delete_reacquires_the_same_generation_retired_before_claim(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!(
+        "InstantiationGrowthCounter",
+        "delete-reacquires-retired-generation"
+    );
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    executor
+        .invoke_agent(
+            &component,
+            &agent_id,
+            "delayed_increment",
+            data_value!(30_000u64),
+        )
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+    executor.interrupt(&worker_id).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let hook = Arc::new(BeforeDeletionClaimHook::new(owned_agent_id.clone()));
+    executor.set_worker_deletion_hook(hook.clone());
+
+    let deleting_executor = executor.clone();
+    let deleting_worker_id = worker_id.clone();
+    let deleting =
+        tokio::spawn(async move { deleting_executor.delete_worker(&deleting_worker_id).await });
+    hook.wait_until_gated().await;
+
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    hook.release();
+    deleting.await??;
+
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn stale_delete_does_not_follow_its_agent_id_to_a_replacement_generation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "stale-delete-replacement");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+    let original = executor.get_worker_metadata(&worker_id).await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let hook = Arc::new(BeforeDeletionClaimHook::new(owned_agent_id));
+    executor.set_worker_deletion_hook(hook.clone());
+
+    let stale_executor = executor.clone();
+    let stale_worker_id = worker_id.clone();
+    let stale_delete =
+        tokio::spawn(async move { stale_executor.delete_worker(&stale_worker_id).await });
+    hook.wait_until_gated().await;
+
+    executor.delete_worker(&worker_id).await?;
+    assert!(
+        !executor
+            .worker_is_cached(&OwnedAgentId::new(
+                context.default_environment_id,
+                &worker_id,
+            ))
+            .await
+    );
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+    let replacement = executor.get_worker_metadata(&worker_id).await?;
+    assert_ne!(replacement.fingerprint, original.fingerprint);
+
+    hook.release();
+    stale_delete.await??;
+
+    let after_stale_delete = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(after_stale_delete.fingerprint, replacement.fingerprint);
+    let result = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 1);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn failed_delete_is_shared_and_one_retry_resumes_completed_stages(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Counter", "retry-delete-completion");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let hook = Arc::new(DeletionStageHook::new(
+        owned_agent_id.clone(),
+        Some(WorkerDeletionStage::ExecutionFenced),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+
+    let first_executor = executor.clone();
+    let first_worker_id = worker_id.clone();
+    let first = tokio::spawn(async move { first_executor.delete_worker(&first_worker_id).await });
+    hook.wait_until_gated().await;
+    let second_executor = executor.clone();
+    let second_worker_id = worker_id.clone();
+    let second =
+        tokio::spawn(async move { second_executor.delete_worker(&second_worker_id).await });
+    hook.wait_for_claims(2).await;
+    assert_eq!(hook.claims(), (2, 1));
+    hook.release();
+
+    let first_error = first.await?.unwrap_err().to_string();
+    let second_error = second.await?.unwrap_err().to_string();
+    assert_eq!(first_error, second_error);
+    assert!(first_error.contains("injected worker deletion stage failure"));
+    assert!(executor.worker_is_cached(&owned_agent_id).await);
+
+    let retry_hook = Arc::new(DeletionStageHook::new(
+        owned_agent_id.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(retry_hook.clone());
+    let retry_a_executor = executor.clone();
+    let retry_a_worker_id = worker_id.clone();
+    let retry_a =
+        tokio::spawn(async move { retry_a_executor.delete_worker(&retry_a_worker_id).await });
+    retry_hook.wait_until_gated().await;
+    let retry_b_executor = executor.clone();
+    let retry_b_worker_id = worker_id.clone();
+    let retry_b =
+        tokio::spawn(async move { retry_b_executor.delete_worker(&retry_b_worker_id).await });
+    retry_hook.wait_for_claims(2).await;
+    assert_eq!(retry_hook.claims(), (2, 1));
+    retry_hook.release();
+    retry_a.await??;
+    retry_b.await??;
+
+    for stage in [
+        WorkerDeletionStage::ExecutionFenced,
+        WorkerDeletionStage::BarriersClosed,
+        WorkerDeletionStage::RuntimeStopped,
+        WorkerDeletionStage::StreamsCleaned,
+    ] {
+        assert_eq!(hook.calls(stage), 1, "completed stage reran: {stage:?}");
+    }
+    assert_eq!(hook.calls(WorkerDeletionStage::DurableStateRemoved), 1);
+    assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+    assert_eq!(
+        retry_hook.calls(WorkerDeletionStage::DurableStateRemoved),
+        1
+    );
+    assert_eq!(retry_hook.calls(WorkerDeletionStage::CacheRemoved), 1);
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn deletion_retry_joins_timed_out_cleanup_before_removing_storage(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.suspend_after = Duration::from_secs(3600);
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent = agent_id!("Counter", "delete-cleanup-timeout");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    assert!(executor.worker_is_loaded(&owned).await);
+    let mut hook = DeletionStageHook::new(owned.clone(), None, None);
+    hook.cleanup_gate = true;
+    hook.cleanup_timeout = Some(Duration::from_millis(50));
+    let hook = Arc::new(hook);
+    executor.set_worker_deletion_hook(hook.clone());
+
+    let first_executor = executor.clone();
+    let first_id = worker_id.clone();
+    let first = tokio::spawn(async move { first_executor.delete_worker(&first_id).await });
+    hook.cleanup_entered.acquire().await?.forget();
+    let original_error = first.await?.unwrap_err().to_string();
+    assert!(
+        original_error.contains("unload deadline"),
+        "{original_error}"
+    );
+    assert!(executor.worker_is_cached(&owned).await);
+    executor.get_worker_metadata(&worker_id).await?;
+
+    let retry_executor = executor.clone();
+    let retry_id = worker_id.clone();
+    let retry = tokio::spawn(async move { retry_executor.delete_worker(&retry_id).await });
+    hook.wait_for_claims(2).await;
+    retry.abort();
+    assert!(retry.await.unwrap_err().is_cancelled());
+    let a_executor = executor.clone();
+    let a_id = worker_id.clone();
+    let mut retry_a = tokio::spawn(async move { a_executor.delete_worker(&a_id).await });
+    let b_executor = executor.clone();
+    let b_id = worker_id.clone();
+    let retry_b = tokio::spawn(async move { b_executor.delete_worker(&b_id).await });
+    hook.wait_for_claims(2).await;
+    assert_eq!(hook.claims(), (4, 2));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut retry_a)
+            .await
+            .is_err()
+    );
+    assert!(!retry_b.is_finished());
+    assert_eq!(hook.calls(WorkerDeletionStage::DurableStateRemoved), 0);
+    assert!(executor.worker_is_cached(&owned).await);
+    executor.retire_unloaded_worker(&owned).await?;
+    assert!(executor.worker_is_cached(&owned).await);
+    executor.get_worker_metadata(&worker_id).await?;
+
+    hook.cleanup_release.add_permits(1);
+    retry_a.await??;
+    retry_b.await??;
+    assert_eq!(hook.cleanup_calls.load(Ordering::Acquire), 1);
+    assert_eq!(hook.calls(WorkerDeletionStage::ExecutionFenced), 1);
+    assert_eq!(hook.calls(WorkerDeletionStage::BarriersClosed), 1);
+    assert_eq!(hook.calls(WorkerDeletionStage::RuntimeStopped), 2);
+    assert_eq!(hook.calls(WorkerDeletionStage::DurableStateRemoved), 1);
+    assert!(!executor.worker_is_cached(&owned).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    let first_result = hook.first_result.lock().unwrap().take().unwrap();
+    let late_error = first_result.await.unwrap_err().to_string();
+    assert!(late_error.contains("unload deadline"), "{late_error}");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn deletion_retry_preserves_actual_filesystem_failure_until_verified_cleanup(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let root = tempfile::tempdir()?;
+    let root_path = root.path().to_path_buf();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.suspend.suspend_after = Duration::from_secs(3600);
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                    root: root_path.clone().into(),
+                };
+                config.filesystem_storage.cleanup_retry.max_attempts = 1;
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent = agent_id!("Counter", "delete-native-cleanup-failure");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let mut hook = DeletionStageHook::new(owned.clone(), None, None);
+    hook.cleanup_gate = true;
+    let hook = Arc::new(hook);
+    executor.set_worker_deletion_hook(hook.clone());
+    let first_executor = executor.clone();
+    let first_id = worker_id.clone();
+    let first = tokio::spawn(async move { first_executor.delete_worker(&first_id).await });
+    hook.cleanup_entered.acquire().await?.forget();
+    let component_path = root
+        .path()
+        .join(context.default_environment_id.to_string())
+        .join(component.id.to_string());
+    let moved = component_path.with_extension("moved");
+    std::fs::rename(&component_path, &moved)?;
+    std::fs::write(&component_path, b"block directory traversal")?;
+    hook.cleanup_release.add_permits(1);
+    let first_error = first.await?.unwrap_err().to_string();
+    assert!(first_error.contains("Not a directory"), "{first_error}");
+    let retry_error = executor
+        .delete_worker(&worker_id)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(retry_error.contains("Not a directory"), "{retry_error}");
+    assert!(executor.worker_is_cached(&owned).await);
+    executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(hook.calls(WorkerDeletionStage::DurableStateRemoved), 0);
+
+    std::fs::remove_file(&component_path)?;
+    std::fs::rename(&moved, &component_path)?;
+    executor.delete_worker(&worker_id).await?;
+    assert_eq!(hook.calls(WorkerDeletionStage::ExecutionFenced), 1);
+    assert_eq!(hook.calls(WorkerDeletionStage::BarriersClosed), 1);
+    assert_eq!(hook.calls(WorkerDeletionStage::RuntimeStopped), 3);
+    assert_eq!(hook.calls(WorkerDeletionStage::DurableStateRemoved), 1);
+    assert!(!executor.worker_is_cached(&owned).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn cold_existing_only_acquisition_preserves_persisted_identity_without_starting(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("InstantiationGrowthCounter", "cold-existing-only");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("ACQUISITION_TEST".to_string(), "preserved".to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let (mut rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    executor
+        .invoke_agent(
+            &component,
+            &agent_id,
+            "delayed_increment",
+            data_value!(30_000u64),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(Some(event)) = rx.recv().await {
+            if matches!(
+                event.event,
+                Some(log_event::Event::InvocationStarted(ref started))
+                    if started.function == "delayed_increment"
+            ) {
+                return Ok(());
+            }
+        }
+        Err(anyhow!("Log stream ended before delayed_increment started"))
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for delayed_increment to start"))??;
+    let _ = abort_capture.send(());
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+    executor.interrupt(&worker_id).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    let before = executor.get_worker_metadata(&worker_id).await?;
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+
+    // Interrupting an already-interrupted worker is a no-op after acquisition. It exercises the
+    // cold existing-only constructor without starting a guest generation.
+    executor.interrupt(&worker_id).await?;
+    let after = executor.get_worker_metadata(&worker_id).await?;
+    assert!(executor.worker_is_cached(&owned_agent_id).await);
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+    assert_eq!(after.component_revision, before.component_revision);
+    assert_eq!(after.env, before.env);
+    assert_eq!(after.config, before.config);
+    assert_eq!(after.fingerprint, before.fingerprint);
+    assert_eq!(after.status, AgentStatus::Interrupted);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn existing_only_hydration_repairs_initialization_after_create_only_crash(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "existing-only-initialization-repair");
+    let worker_id = AgentId {
+        component_id: component.id,
+        agent_id: counter_id.to_string(),
+    };
+    let mut gate = executor
+        .gate_next_agent_initialization_enqueue(&worker_id)
+        .await;
+
+    let starting_executor = executor.clone();
+    let component_id = component.id;
+    let starting_counter_id = counter_id.clone();
+    let starting = tokio::spawn(async move {
+        starting_executor
+            .start_agent(&component_id, starting_counter_id)
+            .await
+    });
+    gate.entered().await;
+    starting.abort();
+    assert!(starting.await.unwrap_err().is_cancelled());
+    drop(gate);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    executor.interrupt(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 1);
+
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let initialization_count = entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::PendingAgentInvocation(params)
+                    if matches!(
+                        params.invocation,
+                        PublicAgentInvocation::AgentInitialization(_)
+                    )
+            )
+        })
+        .count();
+    assert_eq!(initialization_count, 1);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn get_workers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    async fn get_check(
+        component_id: &ComponentId,
+        filter: Option<AgentFilter>,
+        expected_count: usize,
+        executor: &TestWorkerExecutor,
+    ) -> anyhow::Result<Vec<AgentMetadataDto>> {
+        let (cursor, values) = executor
+            .get_workers_metadata(component_id, filter, ScanCursor::default(), 20, true)
+            .await?;
+
+        assert_eq!(values.len(), expected_count);
+        assert!(cursor.is_none());
+
+        Ok(values)
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let workers_count = 10;
+    let mut worker_ids = vec![];
+
+    for i in 0..workers_count {
+        let agent_id = agent_id!("Counter", format!("test-worker-{i}"));
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+
+        worker_ids.push((worker_id, agent_id));
+    }
+
+    for (worker_id, agent_id) in worker_ids.clone() {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+
+        get_check(
+            &component.id,
+            Some(AgentFilter::new_name(
+                StringFilterComparator::Equal,
+                worker_id.agent_id.clone(),
+            )),
+            1,
+            &executor,
+        )
+        .await?;
+    }
+
+    get_check(
+        &component.id,
+        Some(AgentFilter::new_name(
+            StringFilterComparator::Like,
+            "test-worker".to_string(),
+        )),
+        workers_count,
+        &executor,
+    )
+    .await?;
+
+    get_check(
+        &component.id,
+        Some(
+            AgentFilter::new_name(StringFilterComparator::Like, "test-worker".to_string())
+                .and(
+                    AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Idle).or(
+                        AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
+                    ),
+                )
+                .and(AgentFilter::new_revision(
+                    FilterComparator::Equal,
+                    ComponentRevision::INITIAL,
+                )),
+        ),
+        workers_count,
+        &executor,
+    )
+    .await?;
+
+    get_check(
+        &component.id,
+        Some(AgentFilter::new_name(StringFilterComparator::Like, "test-worker".to_string()).not()),
+        0,
+        &executor,
+    )
+    .await?;
+
+    get_check(&component.id, None, workers_count, &executor).await?;
+
+    let (cursor1, values1) = executor
+        .get_workers_metadata(
+            &component.id,
+            None,
+            ScanCursor::default(),
+            (workers_count / 2) as u64,
+            true,
+        )
+        .await?;
+
+    assert!(cursor1.is_some());
+    assert!(values1.len() >= workers_count / 2);
+
+    let (cursor2, values2) = executor
+        .get_workers_metadata(
+            &component.id,
+            None,
+            cursor1.unwrap(),
+            (workers_count - values1.len()) as u64,
+            true,
+        )
+        .await?;
+
+    assert_eq!(values2.len(), workers_count - values1.len());
+
+    if let Some(cursor2) = cursor2 {
+        let (_, values3) = executor
+            .get_workers_metadata(&component.id, None, cursor2, workers_count as u64, true)
+            .await?;
+        assert_eq!(values3.len(), 0);
+    }
+
+    for (worker_id, _) in worker_ids {
+        executor.delete_worker(&worker_id).await?;
+    }
+
+    get_check(&component.id, None, 0, &executor).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_parameters(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FailingCounter", "fewer-than-expected-parameters-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let failure = executor
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!())
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert!(failure.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+#[ignore] // TODO: Fix this test as part of the
+async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameters(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("Counter", "more-than-expected-parameters-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let failure = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "increment",
+            data_value!("extra parameter"),
+        )
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert!(failure.is_err());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn get_worker_metadata(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("Clock", "get-worker-metadata-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "sleep",
+                    data_value!(2u64),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    let metadata1 = executor
+        .wait_for_statuses(
+            &worker_id,
+            &[AgentStatus::Running, AgentStatus::Suspended],
+            Duration::from_secs(5),
+        )
+        .await?;
+
+    fiber.await??;
+
+    let metadata2 = executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert!(
+        metadata1.status == AgentStatus::Suspended || // it is sleeping - whether it is suspended or not is the server's decision
+        metadata1.status == AgentStatus::Running
+    );
+    assert_eq!(metadata2.status, AgentStatus::Idle);
+    assert_eq!(metadata1.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(metadata1.agent_id, worker_id);
+    assert_eq!(metadata1.created_by, context.account_id);
+
+    let component_file_size = std::fs::metadata(
+        executor
+            .deps
+            .component_directory
+            .join("golem_it_host_api_tests_release.wasm"),
+    )?
+    .len();
+    assert_eq!(metadata2.component_size, component_file_size);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let initial_memory = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Create(create) => Some(create.initial_total_linear_memory_size),
+            _ => None,
+        })
+        .expect("the worker must have a Create entry");
+    let memory_growth: u64 = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(growth) => Some(growth.delta),
+            _ => None,
+        })
+        .sum();
+    assert!(initial_memory > 0);
+    assert_eq!(
+        metadata2.total_linear_memory_size,
+        initial_memory + memory_growth
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn create_invoke_delete_create_invoke(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let counter_id = agent_id!("Counter", "delete-recreate-test");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    let r1 = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    assert_eq!(r1.into_typed::<u32>()?, 1);
+
+    let r2 = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    assert_eq!(r2.into_typed::<u32>()?, 2);
+
+    executor.delete_worker(&worker_id).await?;
+
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    let r3 = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    assert_eq!(r3.into_typed::<u32>()?, 1);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("6m")]
+async fn recovering_an_old_worker_after_updating_a_component(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let counter_id = agent_id!("Counter", "recover-test");
+    let _worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    let r1 = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    // Updating the component with an incompatible new version
+    executor
+        .update_component(&component.id, "golem_it_agent_rpc")
+        .await?;
+
+    // Creating a new worker of the updated component and call it
+    let new_agent_id = agent_id!("SimpleChildAgent", "recover-test-new");
+    let _worker_id2 = executor
+        .start_agent(&component.id, new_agent_id.clone())
+        .await?;
+
+    let r2 = executor
+        .invoke_and_await_agent(&component, &new_agent_id, "value", data_value!())
+        .await?;
+
+    // Restarting the server to force worker recovery
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    // Call the first worker again to check if it is still working
+    let r3 = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    let worker_id = AgentId::from_agent_id(component.id, &counter_id)
+        .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    assert_eq!(r1.into_typed::<u32>()?, 1);
+    assert_eq!(r2.into_typed::<f64>()?, 1.0);
+    assert_eq!(r3.into_typed::<u32>()?, 2);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let counter_id = agent_id!("Counter", "recreate-after-delete");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    let r1 = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    // Updating the component with an incompatible new version that also has a "counter" agent
+    // but with different methods (get-value -> string instead of increment -> u32)
+    executor
+        .update_component(&component.id, "golem_it_agent_rpc_rust_release")
+        .await?;
+
+    // Deleting the first instance
+    executor.delete_worker(&worker_id).await?;
+
+    // Recreate the same agent (same type name and constructor params) on the updated component
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    let r2 = executor
+        .invoke_and_await_agent(&component, &counter_id, "get_value", data_value!())
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    assert_eq!(r1.into_typed::<u32>()?, 1);
+    assert_eq!(r2.into_typed::<String>()?, "counter-recreate-after-delete");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // case: WASM can be parsed, but wasmtime does not support it
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let target_dir = deps.component_service_directory.clone();
+    let component_path = target_dir.join(format!("wasms/{}-0.wasm", component.id));
+
+    let span = Span::current();
+    tokio::task::spawn_blocking(move || {
+        let _enter = span.enter();
+
+        let mut file = std::fs::File::options()
+            .write(true)
+            .truncate(false)
+            .open(&component_path)
+            .expect("Failed to open component file");
+        file.write_at(&[1, 2, 3, 4], 0)
+            .expect("Failed to write to component file");
+        file.flush().expect("Failed to flush component file");
+    })
+    .await
+    .unwrap();
+
+    let agent_id = agent_id!("Clocks", "bad-wasm-1");
+    let result = executor.try_start_agent(&component.id, agent_id).await?;
+
+    let Err(WorkerExecutorError::ComponentParseFailed {
+        component_id,
+        component_revision,
+        reason,
+    }) = result
+    else {
+        panic!("Expected ComponentParseFailed, got {:?}", result)
+    };
+    assert_eq!(component_id, component.id);
+    assert_eq!(component_revision, ComponentRevision::INITIAL);
+    assert_eq!(reason, "failed to parse WebAssembly module");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("Clocks", "bad-wasm-2");
+    let worker_id = executor
+        .try_start_agent(&component.id, agent_id.clone())
+        .await??;
+
+    // worker is idle. if we restart the server, it will get recovered
+    drop(executor);
+
+    // corrupting the uploaded WASM
+    let component_path = deps
+        .component_service_directory
+        .join(format!("wasms/{}-0.wasm", component.id));
+    let engine = wasmtime::Engine::new(
+        &golem_common::wasmtime_config::create_wasmtime_config_with_fs_cache(),
+    )?;
+    let artifact_fingerprint =
+        golem_common::wasmtime_config::wasmtime_artifact_fingerprint(&engine);
+    let compiled_component_path = join_blob_key(
+        &format!("{}/0", component.id),
+        &format!("{artifact_fingerprint}.cwasm"),
+    );
+
+    let span = Span::current();
+    tokio::task::spawn_blocking(move || {
+        let _enter = span.enter();
+        debug!("Corrupting {:?}", component_path);
+        let mut file = std::fs::File::options()
+            .write(true)
+            .truncate(false)
+            .open(&component_path)
+            .expect("Failed to open component file");
+        file.write_at(&[1, 2, 3, 4], 0)
+            .expect("Failed to write to component file");
+        file.flush().expect("Failed to flush component file");
+    })
+    .await
+    .unwrap();
+
+    debug!("Deleting {:?}", compiled_component_path);
+    FileSystemBlobStorage::new(&deps.blob_storage_root())
+        .await?
+        .delete(
+            "test",
+            "delete-compiled-component",
+            BlobStorageNamespace::CompilationCache {
+                environment_id: component.environment_id,
+            },
+            compiled_component_path.as_ref(),
+        )
+        .await
+        .expect("Failed to delete compiled component");
+
+    let executor = start(deps, &context).await?;
+
+    debug!("Trying to invoke recovered worker");
+
+    // trying to invoke the previously created worker
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await;
+
+    let err = result.expect_err("Expected ComponentParseFailed error");
+    let err_msg = format!("{err}");
+    assert!(
+        err_msg.contains("failed to parse WebAssembly module"),
+        "Expected ComponentParseFailed error, got: {err_msg}"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("6m")]
+async fn long_running_poll_loop_works_as_expected(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "first".to_string();
+    }
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
+struct HttpPollServer {
+    cancel: CancellationToken,
+    thread: Option<std::thread::JoinHandle<anyhow::Result<()>>>,
+}
+
+impl HttpPollServer {
+    fn stop(mut self) -> anyhow::Result<()> {
+        self.cancel.cancel();
+        self.join()
+    }
+
+    fn join(&mut self) -> anyhow::Result<()> {
+        let Some(thread) = self.thread.take() else {
+            return Ok(());
+        };
+        thread
+            .join()
+            .map_err(|_| anyhow!("HTTP poll server thread panicked"))?
+    }
+}
+
+impl Drop for HttpPollServer {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        let _ = self.join();
+    }
+}
+
+async fn start_http_poll_server(
+    response: Arc<Mutex<String>>,
+    forced_port: Option<u16>,
+    stall_on_arrival: Option<usize>,
+) -> anyhow::Result<(
+    u16,
+    HttpPollServer,
+    tokio::sync::mpsc::UnboundedReceiver<Instant>,
+)> {
+    let (arrived_tx, arrived_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let cancel = CancellationToken::new();
+    let thread_cancel = cancel.clone();
+    let arrival_count = Arc::new(AtomicUsize::new(0));
+    let thread = std::thread::Builder::new()
+        .name("http-poll-server".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| anyhow!("Failed to build HTTP poll server runtime: {error}"))?;
+            runtime.block_on(async move {
+                let listener = match tokio::net::TcpListener::bind((
+                    std::net::Ipv4Addr::UNSPECIFIED,
+                    forced_port.unwrap_or(0),
+                ))
+                .await
+                {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        let message = format!("Failed to bind HTTP poll server: {error}");
+                        let _ = started_tx.send(Err(message.clone()));
+                        return Err(anyhow!(message));
+                    }
+                };
+                let host_http_port = listener
+                    .local_addr()
+                    .map_err(|error| anyhow!("Failed to read HTTP poll server address: {error}"))?
+                    .port();
+                let _ = started_tx.send(Ok(host_http_port));
+                let route = Router::new().route(
+                    "/poll",
+                    get(move || {
+                        let arrived_tx = arrived_tx.clone();
+                        let response = response.clone();
+                        let arrival_count = arrival_count.clone();
+                        async move {
+                            let arrival = arrival_count.fetch_add(1, Ordering::Relaxed) + 1;
+                            let body = response.lock().unwrap().clone();
+                            let _ = arrived_tx.send(Instant::now());
+                            if stall_on_arrival == Some(arrival) {
+                                std::future::pending::<()>().await;
+                            }
+                            body
+                        }
+                    }),
+                );
+
+                tokio::select! {
+                    _ = thread_cancel.cancelled() => Ok(()),
+                    result = axum::serve(listener, route) => {
+                        result.map_err(|error| anyhow!("HTTP poll server failed: {error}"))
+                    }
+                }
+            })
+        })
+        .map_err(|error| anyhow!("Failed to spawn HTTP poll server thread: {error}"))?;
+    let server = HttpPollServer {
+        cancel,
+        thread: Some(thread),
+    };
+    let host_http_port = started_rx
+        .await
+        .map_err(|_| anyhow!("HTTP poll server stopped before reporting its port"))?
+        .map_err(|error| anyhow!(error))?;
+
+    Ok((host_http_port, server, arrived_rx))
+}
+
+async fn wait_for_http_polls(
+    arrived: &mut tokio::sync::mpsc::UnboundedReceiver<Instant>,
+    arrivals: &mut Vec<Instant>,
+    count: usize,
+) -> anyhow::Result<()> {
+    while arrivals.len() < count {
+        arrivals.push(
+            arrived
+                .recv()
+                .await
+                .ok_or_else(|| anyhow!("HTTP poll server stopped before the next request"))?,
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("6m")]
+async fn long_running_poll_loop_http_failures_are_retried(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_customized(
+        deps,
+        &context,
+        None,
+        Some(RetryConfig {
+            max_attempts: 30,
+            min_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(500),
+            multiplier: 1.5,
+            max_jitter_factor: None,
+        }),
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+
+    let (host_http_port, http_server, mut poll_arrivals) =
+        start_http_poll_server(response.clone(), None, Some(3)).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("POLL_DELAY_NANOS".to_string(), "10000000".to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    executor
+        .invoke_agent(
+            &component,
+            &agent_id,
+            "start_polling",
+            data_value!("stop now"),
+        )
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match rx.recv().await {
+                Some(Some(event))
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") =>
+                {
+                    return Ok(());
+                }
+                Some(Some(_)) => {}
+                _ => return Err(anyhow!("Poll-loop output ended before the first request")),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
+
+    let initial_wait_started = Instant::now();
+    let mut initial_arrivals = Vec::with_capacity(3);
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_for_http_polls(&mut poll_arrivals, &mut initial_arrivals, 3),
+    )
+    .await
+    .map_err(|_| {
+        let handler_span = initial_arrivals
+            .first()
+            .zip(initial_arrivals.last())
+            .map(|(first, last)| last.duration_since(*first));
+        anyhow!(
+            "Only {}/3 polls arrived in 2 seconds after guest readiness (elapsed {:?}, handler span {:?})",
+            initial_arrivals.len(),
+            initial_wait_started.elapsed(),
+            handler_span
+        )
+    })??;
+
+    // Kill the HTTP server
+    http_server.stop()?;
+
+    // Wait more than the poll cycle time
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Restart the HTTP server (TODO: another test could have taken the port for now - we need to retry until we can bind again)
+    let (_, http_server, mut poll_arrivals) =
+        start_http_poll_server(response.clone(), Some(host_http_port), None).await?;
+
+    // Wait until more polls are coming in
+    let restart_wait_started = Instant::now();
+    let mut restarted_arrivals = Vec::with_capacity(3);
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        wait_for_http_polls(&mut poll_arrivals, &mut restarted_arrivals, 3),
+    )
+    .await
+    .map_err(|_| {
+        let handler_span = restarted_arrivals
+            .first()
+            .zip(restarted_arrivals.last())
+            .map(|(first, last)| last.duration_since(*first));
+        anyhow!(
+            "Only {}/3 polls arrived in 30 seconds after server restart (elapsed {:?}, handler span {:?})",
+            restarted_arrivals.len(),
+            restart_wait_started.elapsed(),
+            handler_span
+        )
+    })??;
+
+    // Finish signal
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "stop now".to_string();
+    }
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation_start = oplog
+        .iter()
+        .position(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .ok_or_else(|| anyhow!("polling invocation start is missing from the oplog"))?;
+    let invocation_end = oplog
+        .iter()
+        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .ok_or_else(|| anyhow!("polling invocation end is missing from the oplog"))?;
+    assert!(
+        oplog[invocation_start..=invocation_end]
+            .iter()
+            .any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Error(error)
+                    if error.kind == OplogErrorKind::Invocation
+                        && error.error.contains("in-function retry")
+            )),
+        "polling invocation did not persist evidence of retrying an HTTP failure"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    http_server.stop()?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("6m")]
+async fn long_running_poll_loop_works_as_expected_async_http(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient3");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "first".to_string();
+    }
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(300_000)]
+async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(20))
+        .await?;
+
+    // Running can describe initialization before the poll invocation starts.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut saw_call = false;
+        let mut saw_initial = false;
+        while !(saw_call && saw_initial) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        saw_call = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        saw_initial = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive expected poll-loop log events"));
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
+
+    let values1 = executor
+        .get_running_workers_metadata(
+            &worker_id.component_id,
+            Some(AgentFilter::new_name(
+                StringFilterComparator::Equal,
+                worker_id.agent_id.clone(),
+            )),
+        )
+        .await?;
+
+    executor.interrupt(&worker_id).await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(5))
+        .await?;
+
+    let values2 = executor
+        .get_running_workers_metadata(
+            &worker_id.component_id,
+            Some(AgentFilter::new_name(
+                StringFilterComparator::Equal,
+                worker_id.agent_id.clone(),
+            )),
+        )
+        .await?;
+
+    executor
+        .invoke_agent(
+            &component,
+            &agent_id,
+            "start_polling",
+            data_value!("second"),
+        )
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(20))
+        .await?;
+
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "first".to_string();
+    }
+
+    // wait for the first invocation to finish
+    {
+        let mut found = false;
+        while !found {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Poll loop finished\n") {
+                        found = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive the expected log events"));
+                }
+            }
+        }
+    }
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "second".to_string();
+    }
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    http_server.abort();
+
+    assert!(!values1.is_empty());
+    // first running
+    assert!(values2.is_empty());
+    // first interrupted
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("6m")]
+async fn long_running_poll_loop_connection_breaks_on_interrupt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    {
+        let mut found1 = false;
+        let mut found2 = false;
+        while !(found1 && found2) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        found1 = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        found2 = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive the expected log events"));
+                }
+            }
+        }
+    }
+
+    executor.interrupt(&worker_id).await?;
+
+    drain_connection(rx).await;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(30))
+        .await?;
+
+    // Wait for the poll loop to actually start before interrupting
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut saw_call = false;
+        let mut saw_initial = false;
+        while !(saw_call && saw_initial) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        saw_call = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        saw_initial = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive expected poll-loop log events"));
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
+
+    executor.interrupt(&worker_id).await?;
+
+    // Drain the log stream with a timeout to verify it terminates naturally after interrupt
+    tokio::time::timeout(Duration::from_secs(30), drain_connection(rx))
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for log stream termination after interrupt"))?;
+
+    let status1 = executor.get_worker_metadata(&worker_id).await?;
+
+    {
+        let result = executor.capture_output_with_termination(&worker_id).await;
+        assert!(result.is_err());
+    };
+
+    sleep(Duration::from_secs(2)).await;
+    let status2 = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    http_server.abort();
+
+    assert_eq!(status1.status, AgentStatus::Interrupted);
+    assert_eq!(status2.status, AgentStatus::Interrupted);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn long_running_poll_loop_connection_can_be_restored_after_resume(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    // AgentStatus::Running is set when the invocation is recorded, before the guest
+    // reaches the poll loop. Wait for the first loop iteration so interrupting this
+    // worker reliably exercises the interrupted-connection path instead of racing a
+    // not-yet-started invocation.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut saw_call = false;
+        let mut saw_initial = false;
+        while !(saw_call && saw_initial) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        saw_call = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        saw_initial = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive expected poll-loop log events"));
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
+
+    executor.interrupt(&worker_id).await?;
+
+    tokio::time::timeout(Duration::from_secs(30), drain_connection(rx))
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for log stream termination after interrupt"))?;
+    let status2 = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.resume(&worker_id, false).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    // wait for one loop to finish
+    {
+        let mut found1 = false;
+        let mut found2 = false;
+        while !(found1 && found2) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        found1 = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        found2 = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive the expected log events"));
+                }
+            }
+        }
+    }
+
+    // check we are getting the full last loop
+    {
+        let mut found1 = false;
+        let mut found2 = false;
+        let mut found3 = false;
+        while !(found1 && found2 && found3) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        found1 = true;
+                    } else if stdout_event_matching(&event, "Received first\n") {
+                        found2 = true;
+                    } else if stdout_event_matching(&event, "Poll loop finished\n") {
+                        found3 = true;
+                    }
+
+                    if found1 && !found2 {
+                        // change the response. Next loop will be the last
+                        {
+                            let mut response = response.lock().unwrap();
+                            *response = "first".to_string();
+                        }
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive the expected log events"));
+                }
+            }
+        }
+    }
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
+        .await?;
+
+    let status4 = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    http_server.abort();
+
+    assert_eq!(status2.status, AgentStatus::Interrupted);
+    assert_eq!(status4.status, AgentStatus::Idle);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    // Running can describe initialization before the poll invocation starts.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut saw_call = false;
+        let mut saw_initial = false;
+        while !(saw_call && saw_initial) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        saw_call = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        saw_initial = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive expected poll-loop log events"));
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
+
+    tokio::time::timeout(Duration::from_secs(30), executor.interrupt(&worker_id))
+        .await
+        .map_err(|_| anyhow!("Timed out interrupting poll-loop worker"))??;
+
+    tokio::time::timeout(Duration::from_secs(30), drain_connection(rx))
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for log stream termination after interrupt"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    executor.delete_worker(&worker_id).await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await;
+
+    drop(executor);
+    http_server.abort();
+
+    assert!(metadata.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn counter_resource_test_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("RpcCounter", "counter1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(5u64))
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?;
+
+    let result_value = result.into_typed::<u64>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(result_value, 5);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn reconstruct_interrupted_state(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_redis_storage(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "interruption-2");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Warmup: ensure the agent constructor has completed before we invoke the
+    // long-running function we intend to interrupt.
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "interruption",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    executor.interrupt(&worker_id).await?;
+    let result = fiber.await?;
+
+    // Explicitly deleting the status information from Redis to check if it can be
+    // reconstructed from Redis
+
+    let mut redis = executor.redis().get_connection(0);
+    let _: () = redis
+        .del(format!(
+            "{}instance:status:{}",
+            context.redis_prefix(),
+            worker_id.to_redis_key()
+        ))
+        .unwrap();
+    debug!("Deleted status information from Redis");
+
+    let status = executor.get_worker_metadata(&worker_id).await?.status;
+
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(err_msg.contains("Interrupted via the Golem API"));
+    assert_eq!(status, AgentStatus::Interrupted);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("6m")]
+async fn invocation_queue_is_persistent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+    let first_poll_release = Arc::new(tokio::sync::Semaphore::new(0));
+    let first_poll_release_clone = first_poll_release.clone();
+    let (first_poll_entered_tx, first_poll_entered_rx) = tokio::sync::oneshot::channel();
+    let first_poll_entered_tx = Arc::new(Mutex::new(Some(first_poll_entered_tx)));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || {
+                    let first_poll_release = first_poll_release_clone.clone();
+                    let first_poll_entered_tx = first_poll_entered_tx.clone();
+                    async move {
+                        let first_poll = first_poll_entered_tx.lock().unwrap().take();
+                        if let Some(entered) = first_poll {
+                            let _ = entered.send(());
+                            let permit = first_poll_release.acquire().await.unwrap();
+                            permit.forget();
+                        }
+                        response_clone.lock().unwrap().clone()
+                    }
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("done"))
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(10), first_poll_entered_rx).await??;
+
+    executor
+        .invoke_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            if metadata.pending_invocation_count == 3 {
+                break Ok::<(), WorkerExecutorError>(());
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+
+    executor.interrupt(&worker_id).await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(5))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "done".to_string();
+    }
+    first_poll_release.add_permits(1);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+
+    http_server.abort();
+
+    assert_eq!(result.into_typed::<u64>()?, 4u64);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn invoke_with_non_existing_function(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let counter_id = agent_id!("Counter", "invoke-with-non-existing-function");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    // First we invoke a function that does not exist and expect a failure
+    let failure = executor
+        .invoke_and_await_agent(&component, &counter_id, "WRONG", data_value!())
+        .await;
+
+    // Then we invoke an existing function, to prove the worker should not be in failed state
+    let success = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    assert!(failure.is_err());
+    assert_eq!(success.into_typed::<u32>()?, 1);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+#[ignore] // TODO: FIX DURING THE FIRST CLASS AGENT SUPPORT EPIC
+async fn invoke_with_wrong_parameters(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let counter_id = agent_id!("Counter", "invoke-with-wrong-parameters");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    // First we invoke an existing function with wrong parameters
+    let failure = executor
+        .invoke_and_await_agent(
+            &component,
+            &counter_id,
+            "increment",
+            data_value!("unexpected"),
+        )
+        .await;
+
+    // Then we invoke an existing function to prove the worker should not be in failed state
+    let success = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    assert!(failure.is_err());
+    assert_eq!(success.into_typed::<u32>()?, 1);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn stderr_returned_for_failed_component(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("FailingCounter", "failing-worker-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5u64))
+        .await?;
+
+    let result2 = executor
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(50u64))
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result3 = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    let (next, all) = executor
+        .get_workers_metadata(&component.id, None, ScanCursor::default(), 100, true)
+        .await?;
+
+    assert!(result2.is_err());
+    assert!(result3.is_err());
+
+    let err2 = format!("{}", result2.err().unwrap());
+    assert!(
+        err2.contains("error log message"),
+        "Expected 'error log message' in error: {err2}"
+    );
+    assert!(
+        err2.contains("value is too large"),
+        "Expected 'value is too large' in error: {err2}"
+    );
+
+    let err3 = format!("{}", result3.err().unwrap());
+    assert!(
+        err3.contains("error log message"),
+        "Expected 'error log message' in error: {err3}"
+    );
+    assert!(
+        err3.contains("value is too large"),
+        "Expected 'value is too large' in error: {err3}"
+    );
+
+    assert_eq!(metadata.status, AgentStatus::Failed);
+    assert!(metadata.last_error.is_some());
+    assert_eq!(metadata.last_error_kind, Some(OplogErrorKind::Invocation));
+    let last_error = metadata.last_error.unwrap();
+    assert!(
+        last_error.contains("error log message"),
+        "Expected 'error log message' in last_error: {last_error}"
+    );
+    assert!(
+        last_error.contains("value is too large"),
+        "Expected 'value is too large' in last_error: {last_error}"
+    );
+
+    assert!(next.is_none());
+    assert_eq!(all.len(), 1);
+    assert!(all[0].last_error.is_some());
+    assert_eq!(all[0].last_error_kind, Some(OplogErrorKind::Invocation));
+    let all_last_error = all[0].last_error.clone().unwrap();
+    assert!(
+        all_last_error.contains("error log message"),
+        "Expected 'error log message' in all[0].last_error: {all_last_error}"
+    );
+    assert!(
+        all_last_error.contains("value is too large"),
+        "Expected 'value is too large' in all[0].last_error: {all_last_error}"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn cancelling_pending_invocations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("RpcBlockingCounter", "cancel-pending");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let ik1 = IdempotencyKey::fresh();
+    let ik2 = IdempotencyKey::fresh();
+    let ik3 = IdempotencyKey::fresh();
+    let ik4 = IdempotencyKey::fresh();
+
+    // inc_by(5) with ik1 - completes immediately
+    executor
+        .invoke_and_await_agent_with_key(&component, &agent_id, &ik1, "inc_by", data_value!(5u64))
+        .await?;
+
+    // create_promise - returns a PromiseId
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    // await_promise (fire-and-forget) - worker suspends
+    executor
+        .invoke_agent(
+            &component,
+            &agent_id,
+            "await_promise",
+            crate::raw_params(vec![promise_id_value.clone()]),
+        )
+        .await?;
+
+    // Queue inc_by(6) with ik2 and inc_by(7) with ik3 while suspended
+    executor
+        .invoke_agent_with_key(&component, &agent_id, &ik2, "inc_by", data_value!(6u64))
+        .await?;
+
+    executor
+        .invoke_agent_with_key(&component, &agent_id, &ik3, "inc_by", data_value!(7u64))
+        .await?;
+
+    let cancel1 = executor.cancel_invocation(&worker_id, &ik1).await;
+    let cancel2 = executor.cancel_invocation(&worker_id, &ik2).await;
+    let cancel4 = executor.cancel_invocation(&worker_id, &ik4).await;
+
+    // Extract oplog_idx from promise value to complete it
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx,
+            },
+            vec![42],
+        )
+        .await?;
+
+    // get_value should be 5 + 7 = 12 (ik1 already done, ik2 cancelled, ik3 goes through)
+    let final_result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let final_value = final_result.into_typed::<u64>()?;
+
+    assert!(cancel1.is_ok() && !cancel1.unwrap()); // cannot cancel a completed invocation
+    assert!(cancel2.is_ok() && cancel2.unwrap());
+    assert!(cancel4.is_err()); // cannot cancel a non-existing invocation
+    assert_eq!(final_value, 12);
+    Ok(())
+}
+
+/// Test resolving a component_id from the name.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn resolve_components_from_name(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_rpc_rust_as_resolve_target")]
+    agent_rpc_rust_as_resolve_target: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // Make sure the name is unique
+    let counter_component = executor
+        .component_dep(
+            &context.default_environment_id,
+            agent_rpc_rust_as_resolve_target,
+        )
+        .store()
+        .await?;
+
+    let resolver_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let target_agent_id = agent_id!("RpcCounter", "counter-1");
+    executor
+        .start_agent(&counter_component.id, target_agent_id)
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", "resolver-1");
+    let resolve_worker = executor
+        .start_agent(&resolver_component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &resolver_component,
+            &agent_id,
+            "resolve_component",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        result,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(false),
+            ],
+        }
+    );
+
+    executor.check_oplog_is_queryable(&resolve_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn scheduled_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let server_agent_name = format!("scheduled-server-{}", context.redis_prefix());
+    let client_agent_name = format!("scheduled-client-{}", context.redis_prefix());
+
+    let server_agent_id = agent_id!("ScheduledInvocationServer", server_agent_name.clone());
+    let client_agent_id = agent_id!("ScheduledInvocationClient", client_agent_name.clone());
+
+    let server_worker = executor
+        .start_agent(&component.id, server_agent_id.clone())
+        .await?;
+    let client_worker = executor
+        .start_agent(&component.id, client_agent_id.clone())
+        .await?;
+
+    // first invocation: schedule increment in the future and poll
+    {
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &client_agent_id,
+                "test1",
+                data_value!(server_agent_name.clone()),
+            )
+            .await?;
+
+        let mut done = false;
+        while !done {
+            let result = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &server_agent_id,
+                    "get_global_value",
+                    data_value!(),
+                )
+                .await?;
+
+            if result.into_typed::<u64>()? == 1 {
+                done = true;
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    // second invocation: schedule increment in the future and cancel beforehand
+    {
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &client_agent_id,
+                "test2",
+                data_value!(server_agent_name.clone()),
+            )
+            .await?;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                &server_agent_id,
+                "get_global_value",
+                data_value!(),
+            )
+            .await?;
+
+        assert_eq!(result.into_typed::<u64>()?, 1);
+    }
+
+    // third invocation: schedule increment on self in the future and poll
+    {
+        executor
+            .invoke_and_await_agent(&component, &client_agent_id, "test3", data_value!())
+            .await?;
+
+        let mut done = false;
+        while !done {
+            let result = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &client_agent_id,
+                    "get_global_value",
+                    data_value!(),
+                )
+                .await?;
+
+            if result.into_typed::<u64>()? == 1 {
+                done = true;
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    executor.check_oplog_is_queryable(&client_worker).await?;
+    executor.check_oplog_is_queryable(&server_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FailingCounter", "wrong-parameter-type-1");
+    let _worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let failure = executor
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!("not-a-number"))
+        .await;
+
+    let success = executor
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5u64))
+        .await;
+
+    executor.check_oplog_is_queryable(&_worker_id).await?;
+    drop(executor);
+
+    assert!(failure.is_err());
+    assert!(success.is_ok());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn delete_worker_during_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("Clock", "delete-worker-during-invocation");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    info!("Enqueuing invocations");
+    // Enqueuing a large number of invocations, each sleeping for 2 seconds
+    for _ in 0..25 {
+        executor
+            .invoke_agent(&component, &agent_id, "sleep", data_value!(2u64))
+            .await?;
+    }
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(2))
+        .await?;
+
+    info!("Deleting the worker");
+    executor.delete_worker(&worker_id).await?;
+
+    info!("Invoking again");
+    // Invoke it one more time - it should create a new instance and return successfully
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(1u64))
+        .await?;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result_value = result
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    // `sleep` returns `Result<(), String>`; in the schema-native model the unit
+    // `()` ok branch carries no payload (`result<_, string>`), so the `Ok`
+    // payload is `None`.
+    assert_eq!(
+        result_value,
+        SchemaValue::Result(ResultValuePayload::Ok { value: None })
+    );
+    assert_eq!(metadata.pending_invocation_count, 0);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("120s")]
+async fn invoking_worker_while_its_getting_deleted_works(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("RpcGlobalState", "worker");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Spawns a task that repeatedly invokes inc_global_by(1) and checks the counter.
+    // Exits when either:
+    // - the counter resets (worker was deleted and recreated), or
+    // - an invocation fails (caught the deletion in-flight)
+    let invoking_task = {
+        let executor = executor.clone();
+        let component_clone = component.clone();
+        let agent_id = agent_id.clone();
+        tokio::spawn(async move {
+            let mut expected_counter: u64 = 0;
+            let mut iteration: u64 = 0;
+            loop {
+                iteration += 1;
+                match executor
+                    .invoke_and_await_agent(
+                        &component_clone,
+                        &agent_id,
+                        "inc_global_by",
+                        data_value!(1u64),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        expected_counter += 1;
+                    }
+                    Err(error) => {
+                        break Err(error);
+                    }
+                }
+
+                match executor
+                    .invoke_and_await_agent(
+                        &component_clone,
+                        &agent_id,
+                        "get_global_value",
+                        data_value!(),
+                    )
+                    .await
+                {
+                    Ok(result) => {
+                        let value = result.into_typed::<u64>();
+                        match value {
+                            Ok(v) => {
+                                if v < expected_counter {
+                                    break Ok(());
+                                }
+                                expected_counter = v;
+                            }
+                            other => {
+                                tracing::warn!(iteration, expected_counter, value = ?other, "Unexpected value while checking global counter")
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        break Err(error);
+                    }
+                }
+            }
+        })
+    };
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let deleting_task_cancel_token = CancellationToken::new();
+    {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        let deleting_task_cancel_token = deleting_task_cancel_token.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = deleting_task_cancel_token.cancelled() => {
+                        break
+                    },
+                    result = executor.delete_worker(&worker_id) => {
+                        let _ = result;
+                    }
+                }
+            }
+        })
+    };
+
+    let _invocation_result = invoking_task.await?;
+    deleting_task_cancel_token.cancel();
+
+    // Either the counter reset was detected (Ok) or the invocation failed (Err).
+    // Both are valid outcomes of invoking while deleting.
+    Ok(())
+}
+
+/// Same environment, different account: when account A lazily creates a worker
+/// for a component owned by account B (e.g. via cross-account RPC), the newly
+/// created worker's `created_by` must be account B (the component owner), not
+/// account A (the caller).
+///
+/// This simulates the `create_worker` gRPC path where `auth_ctx` carries the
+/// caller's account (A) but the component is owned by a different account (B).
+/// The `get_or_create_worker_metadata` code must use the component's
+/// `account_id` for `created_by`, not the caller-provided account.
+#[test]
+#[tracing::instrument]
+async fn worker_created_by_reflects_component_owner_not_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+    use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // Store the component in the default environment.
+    // The component is owned by context.account_id (= account B, the owner).
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let component_owner_account_id = component.account_id;
+
+    // This is account A — the caller who is lazily creating a worker for
+    // account B's component. It must differ from the component owner.
+    let caller_account_id = AccountId::new();
+    assert_ne!(caller_account_id, component_owner_account_id);
+
+    // Build an auth_ctx that carries the caller's account (A), simulating
+    // what happens during cross-account RPC.
+    let caller_auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = AuthCtx::User(UserAuthCtx {
+        account_id: caller_account_id,
+        account_email: golem_common::model::account::AccountEmail::new("caller@golem"),
+        account_plan_id: context.account_plan_id,
+        account_roles: context.account_roles.clone(),
+        effective_surface: golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        },
+        delegation_surface: None,
+    })
+    .into();
+
+    let agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Clock", "cross-account-attribution-test").to_string(),
+    };
+
+    let response = executor
+        .client
+        .clone()
+        .create_worker(CreateWorkerRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(component_owner_account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            env: Default::default(),
+            config: Vec::new(),
+            ignore_already_existing: false,
+            auth_ctx: Some(caller_auth_ctx),
+            principal: None,
+            invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(create_worker_response::Result::Success(_)) => {}
+        Some(create_worker_response::Result::Failure(error)) => {
+            return Err(anyhow!("create_worker failed: {error:?}"));
+        }
+        None => return Err(anyhow!("No response from create_worker")),
+    }
+
+    // Retrieve the worker metadata and verify created_by is the component
+    // owner (account B), not the caller (account A).
+    let metadata = executor.get_worker_metadata(&agent_id).await?;
+
+    drop(executor);
+
+    assert_eq!(
+        metadata.created_by, component_owner_account_id,
+        "Worker created_by should be the component owner's account (B), not the caller's (A)"
+    );
+
+    Ok(())
+}
+
+/// Different environment, different account: when a caller in environment A
+/// creates a worker for a component owned by account B in environment B,
+/// the worker must be stored in environment B's namespace and be retrievable
+/// using the component's environment_id. Both `created_by` and `environment_id`
+/// in the worker metadata must reflect the component owner, not the caller.
+#[test]
+#[tracing::instrument]
+async fn worker_environment_reflects_component_not_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+    use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // Store the component in the default environment (= environment B).
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let component_owner_account_id = component.account_id;
+    let component_environment_id = component.environment_id;
+
+    // These are the caller's values (environment A, account A).
+    let caller_account_id = AccountId::new();
+    let caller_environment_id = EnvironmentId::new();
+    assert_ne!(caller_account_id, component_owner_account_id);
+    assert_ne!(caller_environment_id, component_environment_id);
+
+    let caller_auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = AuthCtx::User(UserAuthCtx {
+        account_id: caller_account_id,
+        account_email: golem_common::model::account::AccountEmail::new("caller@golem"),
+        account_plan_id: context.account_plan_id,
+        account_roles: context.account_roles.clone(),
+        effective_surface: golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        },
+        delegation_surface: None,
+    })
+    .into();
+
+    let agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Clock", "cross-env-attribution-test").to_string(),
+    };
+
+    // Create the worker with the CALLER's environment_id and account.
+    // This simulates what construct_wasm_rpc_resource does: it builds an
+    // OwnedAgentId using the caller's environment_id rather than the target
+    // component's.
+    let response = executor
+        .client
+        .clone()
+        .create_worker(CreateWorkerRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(caller_account_id.into()),
+            environment_id: Some(caller_environment_id.into()),
+            env: Default::default(),
+            config: Vec::new(),
+            ignore_already_existing: false,
+            auth_ctx: Some(caller_auth_ctx),
+            principal: None,
+            invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(create_worker_response::Result::Success(_)) => {}
+        Some(create_worker_response::Result::Failure(error)) => {
+            return Err(anyhow!("create_worker failed: {error:?}"));
+        }
+        None => return Err(anyhow!("No response from create_worker")),
+    }
+
+    // The worker must be findable using the component's environment_id, not
+    // the caller's. get_worker_metadata looks up using the component's
+    // environment, so if the worker was stored under the wrong namespace this
+    // call will fail with "Worker not found".
+    let metadata = executor.get_worker_metadata(&agent_id).await?;
+
+    drop(executor);
+
+    assert_eq!(
+        metadata.environment_id, component_environment_id,
+        "Worker environment_id should be the component's environment (B), not the caller's (A)"
+    );
+    assert_eq!(
+        metadata.created_by, component_owner_account_id,
+        "Worker created_by should be the component owner's account (B), not the caller's (A)"
+    );
+
+    Ok(())
+}
+
+/// When a worker is created with a caller account that differs from the
+/// component owner, the resource limits (fuel, storage quotas) must be
+/// initialized for the **component owner's** account, not the caller's.
+/// Otherwise, all resource consumption is attributed to the wrong account.
+#[test]
+#[tracing::instrument]
+#[timeout("30s")]
+async fn resource_limits_initialized_for_component_owner_not_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use async_trait::async_trait;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+    use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+    use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
+    use golem_worker_executor_test_utils::start_with_resource_limits;
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    /// Records every `account_id` passed to `initialize_account`, while
+    /// returning unlimited resources so the worker can run normally.
+    struct RecordingResourceLimits {
+        initialized_accounts: Mutex<Vec<AccountId>>,
+    }
+
+    impl RecordingResourceLimits {
+        fn new() -> Self {
+            Self {
+                initialized_accounts: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn initialized_accounts(&self) -> Vec<AccountId> {
+            self.initialized_accounts.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl ResourceLimits for RecordingResourceLimits {
+        async fn initialize_account(
+            &self,
+            account_id: AccountId,
+        ) -> Result<
+            Arc<AtomicResourceEntry>,
+            golem_service_base::error::worker_executor::WorkerExecutorError,
+        > {
+            self.initialized_accounts.lock().unwrap().push(account_id);
+            Ok(Arc::new(AtomicResourceEntry::new(
+                u64::MAX,
+                usize::MAX,
+                usize::MAX,
+                u64::MAX,
+                u64::MAX,
+            )))
+        }
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let recording = Arc::new(RecordingResourceLimits::new());
+    let executor = start_with_resource_limits(deps, &context, recording.clone()).await?;
+
+    // Store the component — it is owned by context.account_id (= account B).
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let component_owner_account_id = component.account_id;
+
+    // This is account A — the "caller" who creates the worker on behalf of
+    // account B's component.
+    let caller_account_id = AccountId::new();
+    assert_ne!(caller_account_id, component_owner_account_id);
+
+    let caller_auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = AuthCtx::User(UserAuthCtx {
+        account_id: caller_account_id,
+        account_email: golem_common::model::account::AccountEmail::new("caller@golem"),
+        account_plan_id: context.account_plan_id,
+        account_roles: context.account_roles.clone(),
+        effective_surface: golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        },
+        delegation_surface: None,
+    })
+    .into();
+
+    let agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Clock", "resource-limits-attribution-test").to_string(),
+    };
+
+    // Create the worker with the CALLER's auth_ctx (account A).
+    let response = executor
+        .client
+        .clone()
+        .create_worker(CreateWorkerRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(component_owner_account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            env: Default::default(),
+            config: Vec::new(),
+            ignore_already_existing: false,
+            auth_ctx: Some(caller_auth_ctx),
+            principal: None,
+            invocation_context: None,
+            idempotency_key: None,
+            freshness_disposition: 0,
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(create_worker_response::Result::Success(_)) => {}
+        Some(create_worker_response::Result::Failure(error)) => {
+            return Err(anyhow!("create_worker failed: {error:?}"));
+        }
+        None => return Err(anyhow!("No response from create_worker")),
+    }
+
+    // The resource limits service must have been initialized for the
+    // component owner (account B), not the caller (account A).
+    let initialized: HashSet<AccountId> = recording.initialized_accounts().into_iter().collect();
+
+    drop(executor);
+
+    assert_eq!(
+        initialized,
+        HashSet::from([component_owner_account_id]),
+        "Resource limits must be initialized only for the component owner (B), \
+         not the caller (A = {caller_account_id})"
+    );
+
+    Ok(())
+}
+
+/// Control for [`a_caller_is_answered_when_its_agents_shard_is_taken_away`].
+///
+/// An agent's shard leaves this executor and comes straight back, and the
+/// promise it is parked on is then completed here. A revoke gives the agent up
+/// rather than restarting it in place - a restart would reopen its oplog at an
+/// epoch this executor no longer holds - so the caller is answered at once with
+/// an error it can retry, and the shard returning a moment later does not
+/// un-answer it. What has to survive the round trip is the work: the agent is
+/// this executor's again, the invocation it was running finishes here, and the
+/// retry worker-service makes under the same idempotency key is handed that
+/// result instead of running it a second time. So the test below is measuring
+/// the handoff and not the giving-up.
+///
+/// It does *not* prove the `select!` is cancel-safe, though it did have to stop
+/// claiming that twice. Only the `wait_for` future is dropped on a tick;
+/// `EventsSubscription` keeps the same `broadcast::Receiver`, which holds its
+/// cursor and buffers anything published while no `recv()` is pending. Nothing
+/// is rebuilt, so nothing can be lost, and no test here could tell you
+/// otherwise: the promise below is completed at a moment uncorrelated with the
+/// tick, so a genuinely lossy variant would pass this almost every time.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_answered_when_its_agents_shard_comes_back(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let mut parked = park_a_caller_on_a_promise(
+        &executor,
+        &context,
+        host_api_tests,
+        "promise-shard-returned",
+    )
+    .await?;
+
+    info!("Revoking the shard, then handing it straight back");
+
+    revoke_shard_zero(&executor).await?;
+    assign_shard_zero(&executor).await?;
+
+    // Answered by the giving-up, not left to the ownership re-check: the revoke reached this
+    // executor, so nothing here waits to find out that the agent moved.
+    let answer = parked
+        .answer_within(
+            Duration::from_secs(20),
+            "caller parked in invoke_and_await was never answered, although the revoke had \
+             already given its agent up here",
+        )
+        .await?;
+    let error = answer.expect_err(
+        "the agent was given up when its shard was revoked, so the parked call cannot have \
+         been handed a value",
+    );
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("ShardingNotReady") || rendered.contains("Sharding not ready"),
+        "the caller has to be told to retry rather than handed a failure it would surface to \
+         the user; instead it got: {rendered}"
+    );
+
+    // Sit here long enough for the re-check to have run several times, so the retry below is
+    // answered by an agent that survived the window rather than one that happened to be quick.
+    sleep(INVOCATION_OWNERSHIP_RECHECK_INTERVAL * 3).await;
+
+    parked.complete_the_promise(&executor, vec![42]).await?;
+
+    let value = parked
+        .retry_within(
+            &executor,
+            Duration::from_secs(60),
+            "the retry was never answered even though the shard came back and the promise \
+             was completed on this executor",
+        )
+        .await?;
+    assert_eq!(
+        value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
+        }
+    );
+
+    // The value alone cannot tell the retry being handed the parked call's own answer apart from
+    // a second, independent run of `await_promise` that happened to read the same completed
+    // promise: both return `[42]`. Count the method's oplog pair instead - the idempotency key
+    // must have deduplicated the retry into the original invocation, so there can only be one.
+    use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
+    let oplog = executor
+        .get_oplog(&parked.agent_id, OplogIndex::INITIAL)
+        .await?;
+    let started = oplog
+        .iter()
+        .filter(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => matches!(
+                &params.invocation,
+                PublicAgentInvocation::AgentMethodInvocation(m)
+                    if m.method_name.replace('-', "_") == "await_promise"
+            ),
+            _ => false,
+        })
+        .count();
+    let finished = oplog
+        .iter()
+        .filter(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationFinished(params) => params
+                .method_name
+                .as_deref()
+                .is_some_and(|name| name.replace('-', "_") == "await_promise"),
+            _ => false,
+        })
+        .count();
+    assert_eq!(
+        (started, finished),
+        (1, 1),
+        "the retry under the same idempotency key must be answered from the recorded run, not \
+         by executing await_promise a second time"
+    );
+    Ok(())
+}
+
+/// An executor that loses an agent must answer anyone still awaiting it.
+///
+/// [`Worker::wait_for_invocation_result`] can end in exactly two ways: the
+/// result turns up in this `Worker`'s in-memory state, or an
+/// `Event::InvocationCompleted` lands on *this executor's* event bus. Once the
+/// agent belongs to a different executor, neither can happen here - the work is
+/// finished over there, on a bus this caller does not subscribe to. There is no
+/// timeout and no ownership re-check, so the caller waits for as long as it is
+/// willing to. Chaos scenario S11 measured that as the client's own
+/// timeout, 120s, on an executor that was never killed and whose transport was
+/// never disturbed, so nothing below the application layer had anything to
+/// notice.
+///
+/// What it should get is an error worker-service answers by invalidating its
+/// routing table and retrying against the new owner. Two errors carry that
+/// meaning, and which one arrives depends on how the agent was lost: a revoke
+/// that reaches this executor gives the agent up and answers its callers with
+/// `ShardingNotReady` at once, while a shard that moves without a revoke
+/// arriving is caught by the periodic ownership re-check, which reports
+/// `InvalidShardId`. Either is a retry; silence is not.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_answered_when_its_agents_shard_is_taken_away(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let mut parked =
+        park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-shard-taken")
+            .await?;
+
+    info!("Revoking the shard that owns the suspended agent, for good");
+
+    revoke_shard_zero(&executor).await?;
+
+    // The agent is somebody else's now. Whatever this executor does about that,
+    // the caller holding an open invoke_and_await has to be told something: an
+    // error it can retry against the new owner is fine, silence is not.
+    // Four turns of INVOCATION_OWNERSHIP_RECHECK_INTERVAL, which is 5s. Left
+    // absolute on purpose: a bound derived from that constant would stretch
+    // along with it, and this test has to stay red when it is neutralised.
+    let answer = parked
+        .answer_within(
+            Duration::from_secs(20),
+            "caller parked in invoke_and_await was never answered, although this \
+             executor no longer owns the agent and can never finish the call",
+        )
+        .await?;
+    info!(result = ?answer, "caller was answered");
+
+    let error =
+        answer.expect_err("nobody completed the promise, so the only honest answer is an error");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("ShardingNotReady")
+            || rendered.contains("Sharding not ready")
+            || rendered.contains("InvalidShardId"),
+        "the caller has to be told the shard moved, because that is what makes \
+         worker-service invalidate its routing table and retry against the new \
+         owner; instead it got: {rendered}"
+    );
+    Ok(())
+}
+
+/// A result that lands while ownership is being checked must still win.
+///
+/// The check and the completion are not ordered against each other. If the
+/// check comes back "not ours" a moment after the invocation finished here, the
+/// caller has to be handed its result rather than sent to a new owner that
+/// would run the work a second time. Mutation testing is what found this:
+/// deleting the re-poll from the timer arm left every other test green.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_result_that_lands_while_ownership_is_being_checked_still_reaches_the_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let (overrides, controls) = fake_ownership();
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let parked =
+        park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-check-race")
+            .await?;
+
+    controls.hold_the_next_check().await?;
+
+    info!("Ownership check is held open; landing the result behind it");
+
+    parked.complete_the_promise(&executor, vec![42]).await?;
+    executor
+        .wait_for_status(&parked.agent_id, AgentStatus::Idle, Duration::from_secs(20))
+        .await?;
+
+    // Only now does the held check report that the agent is not ours. The
+    // result is already sitting in the agent's invocation results.
+    controls.release_the_held_check()?;
+
+    let value = parked
+        .value_within(
+            Duration::from_secs(20),
+            "caller was never answered, although its result had already landed",
+        )
+        .await?;
+    assert_eq!(
+        value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
+        }
+    );
+
+    // Without this the test also passes when the held check reports that the
+    // agent is still ours, which exercises none of the code it is aimed at.
+    assert_eq!(
+        controls.agent_moved_reports(),
+        1,
+        "the caller's re-check should have been told exactly once that the agent had moved"
+    );
+    Ok(())
+}
+
+/// An executor that does not know its shards yet has not lost the agent.
+///
+/// `check_worker` fails in that state too, with the `Unknown` that
+/// `sharding_not_ready_error` produces, and only `InvalidShardId` means the
+/// agent has moved. Treating any failure as a move would fail callers during
+/// startup and rebalance windows, when an assignment is simply on its way.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_not_given_up_on_while_the_shard_assignment_is_missing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let (overrides, controls) = fake_ownership();
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let parked =
+        park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-not-ready")
+            .await?;
+
+    info!("Reporting no shard assignment for long enough to span several re-checks");
+
+    controls.pretend_the_assignment_is_missing();
+    sleep(INVOCATION_OWNERSHIP_RECHECK_INTERVAL * 2 + Duration::from_secs(1)).await;
+    controls.stop_pretending();
+
+    // Both bounds earn their place. Without the lower one this passes against an
+    // executor that never had the fake installed and reported nothing at all.
+    // Without the upper one it passes just as happily when the re-check stops
+    // being paced and spins: dropping the deadline reset in
+    // `wait_for_invocation_result` turns these two checks into millions, and
+    // every other assertion in this file is blind to that.
+    let checks = controls.assignment_missing_reports();
+    assert!(
+        (2..=5).contains(&checks),
+        "expected a handful of re-checks across an 11s window while the assignment \
+         was missing, got {checks}"
+    );
+
+    parked.complete_the_promise(&executor, vec![42]).await?;
+
+    let value = parked
+        .value_within(
+            Duration::from_secs(30),
+            "caller was given up on while this executor merely did not know its \
+             shards yet",
+        )
+        .await?;
+    assert_eq!(
+        value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
+        }
+    );
+    Ok(())
+}
+
+/// The ownership re-check has to run while the event bus is lagging, too.
+///
+/// A subscriber that has fallen `invocation_result_broadcast_capacity` events
+/// behind is handed `Lagged` the instant it is polled, and the wait backs off
+/// 100ms and starts over. When unrelated events keep overflowing the buffer
+/// inside that 100ms, every restart is handed `Lagged` at once. A `select!`
+/// that polls the subscription ahead of the deadline then takes that arm every
+/// time and never reaches the deadline, so the caller whose agent moved is
+/// back to waiting out its own timeout, which is the one thing the re-check
+/// exists to prevent.
+///
+/// The buffer is shrunk to 16 so a burst of 64 every 50ms is enough to keep
+/// the receiver behind; with the default 100000 the flood would have to be
+/// that much larger to say the same thing.
+///
+/// The agent is moved by [`fake_ownership`] rather than by a real revoke. A
+/// revoke that reaches this executor gives the agent up and answers its callers
+/// itself, so the re-check this test exists for would never run and the flood
+/// would prove nothing.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_event_bus_lags(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let (mut overrides, controls) = fake_ownership();
+    overrides.configure = Some(Arc::new(|config| {
+        config.limits.invocation_result_broadcast_capacity = 16;
+    }));
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let mut parked = park_a_caller_on_a_promise(
+        &executor,
+        &context,
+        host_api_tests,
+        "promise-shard-taken-bus-lagging",
+    )
+    .await?;
+
+    let events = executor.event_bus(&parked.agent_id).await?;
+
+    info!("Reporting the agent as moved, then flooding the event bus with somebody else's news");
+
+    controls.pretend_the_agent_moved();
+
+    let somebody_else = AgentId {
+        component_id: parked.agent_id.component_id,
+        agent_id: agent_id!("GolemHostApi", "somebody-else-entirely").to_string(),
+    };
+    // A probe that is never read, on the same bus. A quiet bus answers the
+    // caller too, so without this the assertion below passes whether or not
+    // the flood reaches the buffer at all.
+    let mut probe = events.subscribe();
+    let flood = tokio::spawn(async move {
+        loop {
+            for _ in 0..64 {
+                events.publish(Event::WorkerLoaded {
+                    agent_id: somebody_else.clone(),
+                    start_attempt: uuid::Uuid::new_v4(),
+                    result: Ok(()),
+                });
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    });
+
+    // Left unread while the flood runs, so the buffer overflows under it however
+    // the runtime schedules the two. Reading it straight away races the flood:
+    // a reader on another worker thread can keep pace with it and never lag.
+    sleep(Duration::from_millis(200)).await;
+    let overflowed =
+        tokio::time::timeout(Duration::from_secs(2), probe.wait_for(|_| None::<()>)).await;
+    if !matches!(overflowed, Ok(Err(RecvError::Lagged(_)))) {
+        flood.abort();
+        bail!(
+            "the flood did not overflow the event bus (probe saw {overflowed:?}), so this \
+             test would say nothing about a lagging subscription"
+        );
+    }
+
+    // Same absolute bound as the quiet-bus test, for the same reason.
+    let answer = parked
+        .answer_within(
+            Duration::from_secs(20),
+            "caller parked in invoke_and_await was never answered: this executor no \
+             longer owns the agent, and the lagging event bus kept the ownership \
+             re-check from ever running",
+        )
+        .await;
+    flood.abort();
+    let answer = answer?;
+    info!(result = ?answer, "caller was answered");
+
+    let error =
+        answer.expect_err("nobody completed the promise, so the only honest answer is an error");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("InvalidShardId"),
+        "the caller has to be told the shard moved; instead it got: {rendered}"
+    );
+    // Without this the test also passes when the answer came from somewhere other than the
+    // re-check, which is the one path the flood is here to starve.
+    assert!(
+        controls.agent_moved_reports() >= 1,
+        "the ownership re-check never ran while the bus was lagging, so nothing here says the \
+         deadline arm survives a starved subscription"
+    );
+    Ok(())
+}
+
+/// A stop that reaches a generation already given up must leave the generation that replaced it
+/// alone.
+///
+/// A given-up agent passes through the stop's removal more than once - from its own loop and
+/// again from the give-up that waited for it - and a handle kept past its generation can stop it
+/// once more. Removal keyed by agent id alone would let any of those passes evict whatever was
+/// cached under that id by then: here, the newer generation the shard's return created.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_stop_through_a_given_up_generation_leaves_the_next_generation_cached(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "stale-generation-stop");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let stale = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after its first invocation"))?
+        .primary();
+
+    revoke_shard_zero(&executor).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the agent stayed cached after its shard was revoked"))?;
+
+    assign_shard_zero(&executor).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let fresh = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after the shard came back"))?
+        .primary();
+    assert!(
+        !Arc::ptr_eq(&stale, &fresh),
+        "the shard's return must have created a new generation, or this test proves nothing"
+    );
+
+    // The stale generation is already unloaded and given up, so this goes straight to the
+    // removal.
+    stale.test_stop().await;
+
+    assert!(
+        executor.worker_is_cached(&owned_agent_id).await,
+        "a stop through the given-up generation evicted the generation that replaced it"
+    );
+    let cached = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is no longer cached"))?
+        .primary();
+    assert!(
+        Arc::ptr_eq(&cached, &fresh),
+        "the cached generation changed under a stop through a stale handle"
+    );
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    Ok(())
+}
+
+/// A retry scheduled before the shard moved must not resume the agent afterwards.
+///
+/// A crash schedules the loop's own restart. If the shard is revoked in that window, the agent is
+/// retired, and the loop's gate on the retirement token (invocation_loop.rs, ahead of any new
+/// generation) has to stop it instead: no restart here, no `Resumed` written to an oplog the new
+/// owner is taking over, and the caller told to reroute. Without the gate the retry would win the
+/// race and resume an agent this executor no longer owns.
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn a_retry_scheduled_before_a_revoke_does_not_resume_the_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "retry-after-revoke");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        tokio::spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent(&component, &agent_id, "interruption", data_value!())
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // The crash schedules the loop's restart; the revoke lands while it is pending.
+    let _ = executor.simulated_crash(&worker_id).await;
+    revoke_shard_zero(&executor).await?;
+
+    // Given up, so the pending retry must not bring it back: the agent leaves the cache and stays
+    // out of it.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the agent stayed cached after its shard was revoked"))?;
+
+    let result = tokio::time::timeout(Duration::from_secs(30), invocation)
+        .await
+        .map_err(|_| anyhow!("the caller was never answered after the revoke"))??;
+    assert!(
+        result.is_err(),
+        "the invocation must be handed back to the caller to reroute, not completed by an \
+         executor that no longer owns the shard"
+    );
+
+    sleep(Duration::from_secs(2)).await;
+    assert!(
+        !executor.worker_is_cached(&owned_agent_id).await,
+        "a retry scheduled before the revoke resumed an agent this executor had given up"
+    );
+
+    // The shard coming back is what may start it again, from the oplog, as a new generation.
+    assign_shard_zero(&executor).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    Ok(())
+}
+
+/// The other half of the stale-handle contract: a handle kept past its generation must not be able
+/// to *start* it either.
+///
+/// The stop-side test above pins that a stale handle cannot evict the generation that replaced it.
+/// This one pins the guard at the other end (`start_if_needed_internal`, worker/mod.rs): a start
+/// through a given-up generation would take permits, could append `Resumed` to an oplog the new
+/// owner is now writing, and would publish its failures, by agent id, to the waiters of the
+/// generation that replaced it. The caller gets a retriable error instead, and the live generation
+/// is untouched.
+#[test]
+#[tracing::instrument]
+async fn a_start_through_a_given_up_generation_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "stale-generation-start");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let stale = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after its first invocation"))?
+        .primary();
+
+    revoke_shard_zero(&executor).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the agent stayed cached after its shard was revoked"))?;
+
+    assign_shard_zero(&executor).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let fresh = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after the shard came back"))?
+        .primary();
+    assert!(
+        !Arc::ptr_eq(&stale, &fresh),
+        "the shard's return must have created a new generation, or this test proves nothing"
+    );
+
+    let refused = Worker::start_if_needed(stale.clone()).await;
+    match refused {
+        Err(WorkerExecutorError::ShardingNotReady | WorkerExecutorError::OplogFenced { .. }) => {}
+        Err(other) => panic!(
+            "a start through a given-up generation must be answered with something the caller can \
+             retry on the new owner, got {other}"
+        ),
+        Ok(_) => panic!("a start through a given-up generation was allowed"),
+    }
+
+    let cached = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is no longer cached"))?
+        .primary();
+    assert!(
+        Arc::ptr_eq(&cached, &fresh),
+        "the cached generation changed under a start through a stale handle"
+    );
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    Ok(())
+}
+
+/// A caller awaiting an invocation whose oplog write was refused inside a host call must be told
+/// to reroute.
+///
+/// A fence found in a host call surfaces as a `ShardLost` trap: the agent marks itself
+/// given up and its loop stops without failing anyone. The executor's own assignment still
+/// names the shard - this is the zombie, and nobody has told it - so the waiter's ownership
+/// re-check keeps passing. Two things can answer the caller: the give-up spawned when the loop's
+/// exit commit is refused, and the loop's own stop. The spawned one misses the caller whenever the
+/// loop removes the agent before it looks, and nothing in a test can hold it back, so this pins
+/// the outcome rather than that ordering.
+///
+/// The takeover lands while the guest is parked in `poll` inside `sleep_for`, after
+/// `subscribe_duration` has committed through the status actor. The first write after it is then
+/// the gated monotonic-clock hook's own commit when the guest reads the elapsed time: a refusal in
+/// the host call, not in the status actor.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_waiting_on_an_invocation_fenced_inside_a_host_call_is_told_to_reroute(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "fenced-inside-a-host-call");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let mut caller = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        tokio::spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(6.0f64))
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let subscribed = oplog.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => oplog.iter().any(|start| {
+                    start.oplog_index == end.start_index
+                        && matches!(
+                            &start.entry,
+                            PublicOplogEntry::Start(params)
+                                if params.function_name == "monotonic_clock::subscribe_duration"
+                        )
+                }),
+                _ => false,
+            });
+            if subscribed {
+                return anyhow::Ok(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the guest never subscribed to its sleep"))??;
+    // Lets `subscribe_duration`'s own commit finish, so the guest is parked in `poll` with about
+    // five seconds of sleep left and nothing else is due to write.
+    sleep(Duration::from_secs(1)).await;
+    // Baseline for the no-further-progress check below: from here on, the guest's only next
+    // durable operation is the monotonic-clock read that must be refused.
+    let oplog_before_takeover = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    let mut clock = executor
+        .gate_next_monotonic_clock_start(&owned_agent_id)
+        .await?;
+    take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
+
+    let answer = match tokio::time::timeout(Duration::from_secs(30), &mut caller).await {
+        Ok(joined) => joined?,
+        Err(_) => {
+            caller.abort();
+            bail!(
+                "the caller was never answered, although its agent's oplog has a new owner and \
+                 this executor gave the agent up"
+            );
+        }
+    };
+    info!(result = ?answer, "caller was answered");
+    let error =
+        answer.expect_err("the invocation's writes were refused, so it cannot have a value");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("ShardingNotReady") || rendered.contains("Sharding not ready"),
+        "the caller has to be given the error worker-service reroutes on; instead it got: \
+         {rendered}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the fenced agent stayed cached on this executor"))?;
+
+    // `entered()` only fires once the gated commit *succeeds* (`OwnerExecution::
+    // test_after_monotonic_clock_start` sends it after the commit, not before), so its timing out
+    // here does not by itself prove the guest ever reached the gate: the same timeout would be
+    // observed if the agent had been interrupted by something else first, well before the
+    // monotonic-clock read. Prove reachability directly from the oplog instead: nothing may follow
+    // `subscribe_duration`'s `End` on this executor once the shard is taken away, since the
+    // guest's only next durable operation is the monotonic-clock read the fence must have refused.
+    let oplog_after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog_after.len(),
+        oplog_before_takeover.len(),
+        "no oplog entries may follow `subscribe_duration`'s `End` once the shard is taken away; \
+         the guest's next durable call is the monotonic-clock read the fence must have refused"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), clock.entered())
+            .await
+            .is_err(),
+        "the gated clock commit went through, so the refusal was not the host call's"
+    );
+    Ok(())
+}
+
+/// An invocation enqueued onto an oplog that has a new owner must be refused, not accepted.
+///
+/// Enqueueing buffers the pending-invocation entry and commits it through the status actor, and
+/// that commit is where the takeover is found. A refusal folded into "status unchanged" would
+/// report the enqueue a success for a key that never reached the status, and neither the give-up
+/// the refusal spawns nor the stop's removal fails keys the status does not hold - so nothing
+/// would ever answer the caller.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn an_invocation_enqueued_onto_a_fenced_oplog_is_refused_rather_than_accepted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "fenced-enqueue");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let idle = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the agent is not cached after its first invocation"))?
+        .primary();
+
+    take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
+
+    // The refusal has to come from the enqueue's own commit. Had anything written to the idle
+    // agent first, the give-up that write spawned could evict it, and the invocation would then
+    // be refused at a fresh generation's open instead, which proves nothing about the enqueue.
+    let cached = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .ok_or_else(|| anyhow!("the idle agent left the cache before the enqueue reached it"))?
+        .primary();
+    assert!(
+        Arc::ptr_eq(&idle, &cached),
+        "the generation that opened the oplog at the old epoch is no longer the cached one"
+    );
+
+    let answer = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64)),
+    )
+    .await
+    .map_err(|_| {
+        anyhow!(
+            "the caller was never answered: the invocation was accepted onto an oplog whose \
+             pending entry the storage refused"
+        )
+    })?;
+    info!(result = ?answer, "caller was answered");
+    let error = answer.expect_err("the pending entry was never committed, so there is no value");
+    let rendered = format!("{error:#}");
+    assert!(
+        // Refused before acceptance, the fence arrives as a rejection carrying the error the
+        // worker service reroutes on.
+        rendered.contains("Sharding not ready") || rendered.contains("fenced"),
+        "the caller has to be given the error worker-service reroutes on; instead it got: \
+         {rendered}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the fenced agent stayed cached on this executor"))?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_deletion_that_outlived_the_shard_leaves_the_agent_to_its_new_owner(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let name = agent_id!("Clocks", "deleted-after-its-shard-moved");
+    let worker_id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let hook = Arc::new(DeletionStageHook::new(
+        owned.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }.in_current_span()
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated())
+        .await
+        .map_err(|_| anyhow!("the deletion never reached the removal of the durable state"))?;
+
+    // The deletion was accepted while this executor owned the shard. Before it gets to the agent's
+    // state the shard moves on, and the new owner takes the oplog over.
+    take_agent_oplog_over_at_epoch(deps, &context, &owned, 1).await?;
+    let entries = agent_oplog_length(deps, &context, &owned).await?;
+    assert!(entries > 0);
+    hook.release();
+
+    let result = tokio::time::timeout(Duration::from_secs(30), deleting).await??;
+    let rendered = format!(
+        "{:#}",
+        result.expect_err("the deletion belongs to the shard's new owner now")
+    );
+    assert!(
+        rendered.contains("ShardingNotReady")
+            || rendered.contains("Sharding not ready")
+            || rendered.contains("fenced"),
+        "the caller has to be sent to the new owner; instead it got: {rendered}"
+    );
+    assert_eq!(
+        agent_oplog_length(deps, &context, &owned).await?,
+        entries,
+        "a deletion that lost the shard removes nothing from the new owner's oplog"
+    );
+
+    // The failed deletion stays cached with the stages it completed, so a retry here meets the
+    // fence again instead of repeating them. It leaves once the shard leaves this executor.
+    assert!(
+        executor.worker_is_cached(&owned).await,
+        "the failed deletion left the cache before its shard left this executor"
+    );
+    revoke_shard_zero(&executor).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the failed deletion stayed cached after its shard was revoked"))?;
+    Ok(())
+}
+
+/// A deletion removes the agent's derived state first and its oplog last. When a removal before
+/// the oplog fails, the oplog is still there, and the retry finishes the job from it.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_deletion_that_fails_before_the_oplog_is_finished_by_its_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let name = agent_id!("Clocks", "deletion-retried-before-the-oplog-went");
+    let worker_id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // Armed once the deletion reaches the durable state, so the failure lands in the removal of the
+    // derived state, before the oplog delete, rather than in an earlier stage.
+    let hook = Arc::new(DeletionStageHook::new(
+        owned.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }.in_current_span()
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated())
+        .await
+        .map_err(|_| anyhow!("the deletion never reached the removal of the durable state"))?;
+    faults.fail(
+        "remove",
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    hook.release();
+
+    let first = tokio::time::timeout(Duration::from_secs(30), deleting).await??;
+    assert!(
+        first.is_err(),
+        "the injected failure has to fail the first attempt"
+    );
+    assert!(
+        agent_oplog_length(deps, &context, &owned).await? > 0,
+        "the first attempt failed before it reached the oplog, which has to still be there"
+    );
+
+    executor.delete_worker(&worker_id).await?;
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
+/// A stop can be the first write to find that the shard has a new owner. Its final commit is
+/// then refused, and the waiters of the invocations it cuts short have to be told to retry on the
+/// new owner - not handed the stop's own error, which is cached as a failure the new owner's run
+/// of the invocation never corrects.
+///
+/// The invocation is paused with its `AgentInvocationStarted` buffered and not yet committed,
+/// so the stop's commit is not empty: an empty commit queries nothing and finds no fence.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_stop_that_finds_the_fence_on_its_own_commit_tells_the_caller_to_reroute(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "fenced-on-the-stops-commit");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+
+    let mut started = executor
+        .gate_next_invocation_started(&owned_agent_id)
+        .await?;
+    let idempotency_key = IdempotencyKey::fresh();
+    let mut caller = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        let idempotency_key = idempotency_key.clone();
+        tokio::spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &agent_id,
+                        &idempotency_key,
+                        "sleep_for",
+                        data_value!(0.0f64),
+                    )
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(10), started.entered())
+        .await
+        .map_err(|_| anyhow!("the invocation never buffered its start entry"))?;
+
+    take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
+    // An external stop carrying an error of its own, which the waiters must not be given.
+    let deletion = {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        tokio::spawn(async move { executor.delete_worker(&worker_id).await }.in_current_span())
+    };
+    // The stop waits for the paused guest; let it go once the stop is under way.
+    sleep(Duration::from_millis(500)).await;
+    started.release();
+    let _ = tokio::time::timeout(Duration::from_secs(30), deletion).await;
+
+    let answer = match tokio::time::timeout(Duration::from_secs(30), &mut caller).await {
+        Ok(joined) => joined?,
+        Err(_) => {
+            caller.abort();
+            bail!("the caller was never answered");
+        }
+    };
+    info!(result = ?answer, "caller was answered");
+    let error = answer.expect_err("the invocation moved to the shard's new owner");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("Sharding not ready") || rendered.contains("fenced"),
+        "the caller has to be told to retry on the new owner; instead it got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("deleted"),
+        "the stop's own error reached the caller: {rendered}"
+    );
+
+    // Nothing was cached for the key. A retry on this executor is turned away at admission - the
+    // agent is being deleted here - but never answered from a cached failure, which comes back as
+    // an invocation failure rather than a rejection.
+    let retried = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "sleep_for",
+            data_value!(0.0f64),
+        )
+        .await;
+    if let Err(error) = &retried {
+        let rendered = format!("{error:#}");
+        assert!(
+            !(rendered.contains("invocation failed") && rendered.contains("deleted")),
+            "the retry was answered from a cached failure: {rendered}"
+        );
+    }
+    Ok(())
+}
+
+/// The test executor runs `ShardManagerServiceSingleShard`, so every agent in
+/// these tests lives on shard 0. Moving that one shard moves all of them.
+async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        RevokeShardsRequest, revoke_shards_response,
+    };
+
+    let revoked = executor
+        .client
+        .clone()
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![ShardId { value: 0 }],
+            revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    match revoked.result {
+        Some(revoke_shards_response::Result::Success(_)) => Ok(()),
+        other => bail!("the executor refused the revoke: {other:?}"),
+    }
+}
+
+/// Hands shard 0 back, so the agents on it are this executor's again.
+async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, assign_shards_response,
+    };
+
+    let assigned = executor
+        .client
+        .clone()
+        .assign_shards(AssignShardsRequest {
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                epoch: 0,
+            }],
+            number_of_shards: 1,
+            revision: 2,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    match assigned.result {
+        Some(assign_shards_response::Result::Success(_)) => Ok(()),
+        other => bail!("the executor refused the assignment: {other:?}"),
+    }
+}
+
+/// Starts an agent, opens an `invoke_and_await` against it, and returns once
+/// that call is parked on a promise.
+///
+/// The returned fiber is the caller. It is deliberately left running: every test
+/// using this asks what the executor does to a caller it has stopped being able
+/// to answer.
+async fn park_a_caller_on_a_promise(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    host_api_tests: &PrecompiledComponent,
+    agent_name: &str,
+) -> anyhow::Result<ParkedCaller> {
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", agent_name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
+
+    // Parked under an explicit key so a test can reissue the call the way worker-service reissues
+    // one it was told to reroute: the retry lands on this same invocation instead of starting a
+    // second run of it.
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let key_clone = idempotency_key.clone();
+    let params = promise_data.clone();
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent_with_key(
+                    &component_clone,
+                    &agent_id_clone,
+                    &key_clone,
+                    "await_promise",
+                    params,
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    Ok(ParkedCaller {
+        agent_id: worker_id,
+        promise_id: promise_id_value,
+        caller: fiber,
+        component,
+        parsed_agent_id: agent_id,
+        idempotency_key,
+        promise_data,
+    })
+}
+
+/// A caller left parked inside `invoke_and_await`, and what a test needs to
+/// either answer it or take its agent away.
+struct ParkedCaller {
+    agent_id: AgentId,
+    promise_id: SchemaValue,
+    caller: JoinHandle<anyhow::Result<AgentResult>>,
+    /// What it takes to reissue the parked call under its own idempotency key.
+    component: ComponentDto,
+    parsed_agent_id: golem_common::model::agent::ParsedAgentId,
+    idempotency_key: IdempotencyKey,
+    promise_data: golem_common::schema::TypedSchemaValue,
+}
+
+impl ParkedCaller {
+    /// Waits for the parked call to come back. The outer result says whether it
+    /// was answered at all; the inner one is what it was told.
+    async fn answer_within(
+        &mut self,
+        patience: Duration,
+        gave_up: &str,
+    ) -> anyhow::Result<anyhow::Result<AgentResult>> {
+        match tokio::time::timeout(patience, &mut self.caller).await {
+            Ok(joined) => Ok(joined?),
+            Err(_) => {
+                self.caller.abort();
+                Err(anyhow!("{gave_up}"))
+            }
+        }
+    }
+
+    /// Completes the promise this caller is parked on, which is what lets the
+    /// invocation it is waiting for finish.
+    async fn complete_the_promise(
+        &self,
+        executor: &TestWorkerExecutor,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let oplog_idx = extract_oplog_idx_from_promise_id(&self.promise_id);
+        executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: self.agent_id.clone(),
+                    oplog_idx,
+                },
+                payload,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Reissues the parked call under its original idempotency key, the way
+    /// worker-service reissues one an executor told it to reroute, and returns
+    /// the value that retry is given.
+    ///
+    /// The key is what makes this a retry rather than a second run: an
+    /// invocation already recorded under it is not executed again, so the answer
+    /// here is the answer to the call that was parked.
+    async fn retry_within(
+        &self,
+        executor: &TestWorkerExecutor,
+        patience: Duration,
+        gave_up: &str,
+    ) -> anyhow::Result<SchemaValue> {
+        tokio::time::timeout(
+            patience,
+            executor.invoke_and_await_agent_with_key(
+                &self.component,
+                &self.parsed_agent_id,
+                &self.idempotency_key,
+                "await_promise",
+                self.promise_data.clone(),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow!("{gave_up}"))??
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))
+    }
+
+    /// Waits for the parked call and returns the value it was given, failing if
+    /// it was not answered in time or was answered with an error.
+    async fn value_within(
+        mut self,
+        patience: Duration,
+        gave_up: &str,
+    ) -> anyhow::Result<SchemaValue> {
+        self.answer_within(patience, gave_up)
+            .await??
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))
+    }
+}
+
+/// Recovery enumerates the running workers of the delivered shards, and only then activates each
+/// one. When the shard is revoked in between, the activation is refused (`ShardingNotReady`: the
+/// shard is no longer held), and that agent belongs to whoever holds the shard next. It has to be
+/// skipped: failing the whole assignment for it would stop every other agent from being resumed,
+/// and, at executor startup, fail the start.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_scan(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
+    };
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "recovery-revoked-mid-scan");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // A long invocation keeps the worker Running, which is what puts it in the recovery index.
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_for", data_value!(60.0f64))
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let shard = ShardId { value: 0 };
+    let mut client = executor.client.clone();
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+            revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+
+    // Pause recovery at its first read, during enumeration, and revoke the shard again while it
+    // waits: enumeration has already listed the agent, activation will find the shard gone.
+    let gate = faults.pause_next("read_cached_agent_mode");
+    let assigning = {
+        let mut client = client.clone();
+        tokio::spawn(
+            async move {
+                client
+                    .assign_shards(AssignShardsRequest {
+                        shard_epochs: vec![ShardEpochEntry {
+                            shard_id: Some(shard),
+                            epoch: 0,
+                        }],
+                        number_of_shards: 1,
+                        revision: 2,
+                        incarnation_id: TEST_SHARD_MANAGER.to_string(),
+                    })
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(10), gate.entered())
+        .await
+        .map_err(|_| anyhow!("recovery never reached its enumeration read"))?;
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+            revision: 3,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    gate.release();
+
+    let assigned = tokio::time::timeout(Duration::from_secs(30), assigning)
+        .await
+        .map_err(|_| anyhow!("the assignment never answered"))???
+        .into_inner();
+    assert!(
+        matches!(
+            assigned.result,
+            Some(assign_shards_response::Result::Success(_))
+        ),
+        "an agent whose shard left mid-recovery failed the whole assignment: {:?}",
+        assigned.result
+    );
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+    drop(client);
+    drop(executor);
+    Ok(())
+}

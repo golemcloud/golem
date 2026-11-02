@@ -358,7 +358,9 @@ impl ForwardingOplog {
 
 impl Debug for ForwardingOplog {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ForwardingOplog").finish()
+        f.debug_struct("ForwardingOplog")
+            .field("inner", &self.inner)
+            .finish()
     }
 }
 
