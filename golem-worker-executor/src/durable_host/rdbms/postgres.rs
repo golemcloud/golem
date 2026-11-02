@@ -16,7 +16,7 @@ use crate::durable_host::rdbms::{
     FromRdbmsValue, RdbmsConnection, RdbmsDurabilityPairs, RdbmsResultStreamEntry,
     RdbmsTransactionEntry, begin_db_transaction, db_connection_drop, db_connection_durable_execute,
     db_connection_durable_query, db_connection_durable_query_stream, db_result_stream_drop,
-    db_result_stream_durable_get_columns, db_result_stream_durable_get_next, db_transaction_drop,
+    db_result_stream_durable_get_columns, db_result_stream_durable_get_next,
     db_transaction_durable_commit, db_transaction_durable_execute, db_transaction_durable_query,
     db_transaction_durable_query_stream, db_transaction_durable_rollback, open_db_connection,
 };
@@ -170,9 +170,17 @@ impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), Error>> {
         db_transaction_durable_rollback(self, &self_).await
     }
+}
 
-    async fn drop(&mut self, rep: Resource<DbTransactionEntry>) -> anyhow::Result<()> {
-        db_transaction_drop(self, rep).await
+impl<U: Send + 'static, Ctx: WorkerCtx>
+    crate::preview2::golem::rdbms::postgres::HostDbTransactionWithStore<U>
+    for wasmtime::component::HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn drop(
+        accessor: &wasmtime::component::Accessor<U, Self>,
+        rep: Resource<DbTransactionEntry>,
+    ) -> anyhow::Result<()> {
+        super::drop::drop_transaction(accessor, accessor.getter(), rep).await
     }
 }
 

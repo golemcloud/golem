@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::sandbox_filesystem::{AgentAccounting, FilesystemStorageError};
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::sandbox::FilesystemStorageError;
+use crate::filesystem::volume::AgentAccounting;
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::byte_time_accumulator::{
@@ -89,7 +91,7 @@ impl FilesystemUsageSource {
     }
 }
 
-trait MeteringClock: Send + Sync {
+pub(super) trait MeteringClock: Send + Sync {
     fn now(&self) -> Instant;
 
     fn utc_now(&self) -> DateTime<Utc>;
@@ -595,7 +597,7 @@ fn create_configured_meter_with_clock(
     meter
 }
 
-fn create_unbound_meter_with_clock(
+pub(super) fn create_unbound_meter_with_clock(
     config: ResourceUsageMeteringConfig,
     account: ResourceUsageAccount,
     clock: Arc<dyn MeteringClock>,
@@ -1079,10 +1081,10 @@ impl WindowShared {
         let timeout_at = observation.active.started_at.instant + timeout;
         tokio::select! {
             result = &mut observation.receiver => PeriodicAttempt::Completed(result.unwrap_or_else(|_| {
-                Err(FilesystemStorageError::verification(
+                Err(FilesystemStorageError::from(OperationContext::verification(
                     "observe filesystem usage task completion",
-                    std::path::Path::new("<resource-usage-meter>"),
-                ))
+                    None,
+                )))
             })),
             () = self.clock.sleep_until(timeout_at) => PeriodicAttempt::TimedOut,
         }
@@ -1410,3 +1412,6 @@ pub(crate) fn check_filesystem_metering(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::TestClock;

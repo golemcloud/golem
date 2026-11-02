@@ -23,7 +23,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
-    ) -> Result<Self, WorkerExecutorError> {
+    ) -> wasmtime::Result<Self> {
         Self::start_with_options(ctx, request, function_type, AccessClaimOptions::default()).await
     }
 
@@ -32,7 +32,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         request: Pair::Req,
         function_type: DurableFunctionType,
         options: AccessClaimOptions,
-    ) -> Result<Self, WorkerExecutorError> {
+    ) -> wasmtime::Result<Self> {
         Self::start_with_options_and_authorize(ctx, request, function_type, options, async |_| {
             Ok(None)
         })
@@ -42,7 +42,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Resolves replay and scope readiness before authorizing a new immutable Start.
     pub(crate) async fn start_with_options_and_authorize<
         Ctx: WorkerCtx,
-        E: From<WorkerExecutorError>,
+        E: DurableCallTrapError,
     >(
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
@@ -50,7 +50,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         mut options: AccessClaimOptions,
         authorize: impl AsyncFnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<Option<String>, E>,
     ) -> Result<Self, E> {
-        let mut begun = Self::begin_inner(ctx, function_type, false).await?;
+        let mut begun = Self::begin_inner(ctx, function_type, false)
+            .await
+            .map_err(|error| E::from_durable_call_trap(error.into()))?;
         let started_replaying = !begun.is_live();
         let _readiness_permit =
             started_replaying.then(|| LiveCallPermit::new(ctx.state.live_host_call_counter()));
@@ -94,7 +96,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
-    ) -> Result<Self, WorkerExecutorError> {
+    ) -> wasmtime::Result<Self> {
         Self::start_inner(ctx, request, function_type, true).await
     }
 
@@ -103,7 +105,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         request: Pair::Req,
         function_type: DurableFunctionType,
         mut capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
-    ) -> Result<(Self, Option<T>), WorkerExecutorError> {
+    ) -> wasmtime::Result<(Self, Option<T>)> {
         let (begun, mut captured) =
             Self::begin_with_agent_authority_capture(ctx, function_type, &mut capture).await?;
         let handle = match begun.resolve(ctx).await? {
@@ -123,10 +125,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         request: Pair::Req,
         function_type: DurableFunctionType,
         requires_agent_authority: bool,
-    ) -> Result<Self, WorkerExecutorError> {
+    ) -> wasmtime::Result<Self> {
         let begun = Self::begin_inner(ctx, function_type, requires_agent_authority).await?;
         match begun.resolve(ctx).await? {
-            ResolvedCall::Live(begun) => begun.start_live(ctx, request).await,
+            ResolvedCall::Live(begun) => Ok(begun.start_live(ctx, request).await?),
             ResolvedCall::Replay(handle) => Ok(handle),
         }
     }
@@ -136,7 +138,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         prepared: PreparedContextStart<Pair, P, Ctx>,
         build_request: F,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -148,7 +150,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             store,
             get_ctx,
             prepared,
-            async |context, _| build_request(context).await,
+            async |context, _| Ok(build_request(context).await?),
             None,
             None,
             None::<fn(&mut DurableWorkerCtx<Ctx>)>,
@@ -171,12 +173,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
         F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
-        E: From<WorkerExecutorError>,
+        E: DurableCallTrapError,
     {
         let PreparedContextStart { prepared } = prepared;
         let host_internal_calls = prepared.claim_options.host_internal_calls;
         if let Err(err) = drain_dropped_call_events_context(store, get_ctx).await {
-            return Err(err.source.into());
+            return Err(E::from_durable_call_trap(err.into_marked_anyhow()));
         }
 
         let executed = Self::execute_access_start(
@@ -795,14 +797,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     pub(crate) async fn begin<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
-    ) -> Result<BegunCall<Pair, P, Ctx>, WorkerExecutorError> {
+    ) -> wasmtime::Result<BegunCall<Pair, P, Ctx>> {
         Self::begin_inner(ctx, function_type, false).await
     }
 
     pub(crate) async fn begin_with_agent_authority<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
-    ) -> Result<BegunCall<Pair, P, Ctx>, WorkerExecutorError> {
+    ) -> wasmtime::Result<BegunCall<Pair, P, Ctx>> {
         Self::begin_inner(ctx, function_type, true).await
     }
 
@@ -810,7 +812,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
-    ) -> Result<(BegunCall<Pair, P, Ctx>, Option<T>), WorkerExecutorError> {
+    ) -> wasmtime::Result<(BegunCall<Pair, P, Ctx>, Option<T>)> {
         let custom_invocation_scope =
             wasmtime::component::current_guest_task_context::<CustomInvocationContext>()
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
@@ -818,9 +820,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .and_then(CustomInvocationContext::current);
         let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
         let invocation_id = ctx.direct_call_invocation_id()?;
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(|err| err.source)?;
+        drain_queued_dropped_call_events(ctx).await?;
         DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
         let captured = DurableCallCoordinator::new(ctx)
             .admit_with_agent_authority_capture(
@@ -846,7 +846,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         requires_agent_authority: bool,
-    ) -> Result<BegunCall<Pair, P, Ctx>, WorkerExecutorError> {
+    ) -> wasmtime::Result<BegunCall<Pair, P, Ctx>> {
         // Capture and validate the host task's immutable initiation-time context before the first
         // await. Calls already in flight retain this owner after the guest leaves the lexical scope.
         let custom_invocation_scope =
@@ -857,9 +857,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
         // A direct call holds the Store, so it reserves its invocation id in guest call order.
         let invocation_id = ctx.direct_call_invocation_id()?;
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(|err| err.source)?;
+        drain_queued_dropped_call_events(ctx).await?;
         DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
 
         // Read-only guard, pending replay events and durable-scope recovery all happen inside the

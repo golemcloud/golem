@@ -220,6 +220,10 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
         stdout,
         stderr,
     };
+    let replay = retained
+        .context_mut()
+        .shared
+        .with_ctx(|ctx| ctx.state.replay_state.clone());
     let completed = async move {
         let result = await_native_entity_body(
             &runner_abort,
@@ -230,6 +234,7 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
                     biased;
                     error = monitor.wait_for_failure() => Err(error),
                     error = monitor.wait_for_body_failure() => Err(error),
+                    error = replay.await_disposal_admission_refusal(operation.clone()) => Err(error),
                     result = async {
                         match handler {
                             Some(handler) => handler.invoke(retained.context_mut(), native_invocation).await,
@@ -245,6 +250,15 @@ pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
                 return (Ok(EntityBodyOutcome::Cancelled), Some(Box::new(retained) as Box<dyn RetainedEntityStore>));
             }
             Err(error) => Err(error),
+        };
+        let result = if result.is_ok() {
+            match replay.disposal_admission_refusal(&operation).await {
+                Ok(Some(refusal)) => Err(operation.reproduce_admission_refusal(refusal).await),
+                Ok(None) => result,
+                Err(error) => Err(error),
+            }
+        } else {
+            result
         };
         if result.is_err() {
             durability::abort_producer_disposals(&mut retained.context_mut().shared).await;

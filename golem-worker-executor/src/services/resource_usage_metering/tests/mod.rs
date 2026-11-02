@@ -1,4 +1,5 @@
 use super::*;
+use crate::filesystem::errors::OperationContext;
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use chrono::TimeZone;
 use golem_common::model::AgentId;
@@ -117,9 +118,8 @@ fn window_open_failures_keep_bounded_typed_reasons() {
         (MeteringOpenError::MemoryMeterStopped, Failure::MeterFault),
         (MeteringOpenError::OpeningCancelled, Failure::Other),
         (
-            MeteringOpenError::FilesystemObservation(FilesystemStorageError::verification(
-                "opening observation",
-                Path::new("unused"),
+            MeteringOpenError::FilesystemObservation(FilesystemStorageError::from(
+                OperationContext::verification("opening observation", Some(Path::new("unused"))),
             )),
             Failure::FilesystemObservation,
         ),
@@ -134,7 +134,7 @@ fn ordinary_utc() -> DateTime<Utc> {
         .unwrap()
 }
 
-struct TestClock {
+pub(crate) struct TestClock {
     base: Instant,
     base_utc: DateTime<Utc>,
     offset_nanos: AtomicU64,
@@ -147,7 +147,7 @@ impl TestClock {
         Self::new_at(base, ordinary_utc())
     }
 
-    fn new_at(base: Instant, base_utc: DateTime<Utc>) -> Arc<Self> {
+    pub(crate) fn new_at(base: Instant, base_utc: DateTime<Utc>) -> Arc<Self> {
         Arc::new(Self {
             base,
             base_utc,
@@ -157,7 +157,7 @@ impl TestClock {
         })
     }
 
-    async fn set(&self, duration: Duration) {
+    pub(crate) async fn set(&self, duration: Duration) {
         self.offset_nanos.store(
             u64::try_from(duration.as_nanos()).unwrap(),
             Ordering::Release,
@@ -166,7 +166,7 @@ impl TestClock {
         tokio::task::yield_now().await;
     }
 
-    async fn wait_for_sleep_until(&self, deadline: Duration) {
+    pub(crate) async fn wait_for_sleep_until(&self, deadline: Duration) {
         let deadline_nanos = u64::try_from(deadline.as_nanos()).unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             while self.sleep_deadline_nanos.load(Ordering::Acquire) != deadline_nanos {
@@ -295,7 +295,10 @@ fn authoritative(bytes: u64) -> Result<FilesystemUsage, FilesystemStorageError> 
 }
 
 fn observation_error() -> FilesystemStorageError {
-    FilesystemStorageError::verification("observe scripted filesystem usage", Path::new("<test>"))
+    FilesystemStorageError::from(OperationContext::verification(
+        "observe scripted filesystem usage",
+        None,
+    ))
 }
 
 fn configured_account(

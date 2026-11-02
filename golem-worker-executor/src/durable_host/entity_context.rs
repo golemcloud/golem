@@ -125,9 +125,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    pub(in crate::durable_host) fn entity_tool_operation(
-        &self,
-    ) -> Option<tool::operation::OwnerToolOperation> {
+    pub(crate) fn entity_tool_operation(&self) -> Option<tool::operation::OwnerToolOperation> {
         self.entity_tool_operation.clone()
     }
 

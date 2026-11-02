@@ -315,7 +315,7 @@ impl EntityInvocationDurability {
         plan: EntityInvocationPlanReference,
         input: TypedSchemaValue,
         invocation_id: InvocationIdSource,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -324,7 +324,8 @@ impl EntityInvocationDurability {
         if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
             return Err(WorkerExecutorError::runtime(
                 "live entity invocation Start requested during historical replay",
-            ));
+            )
+            .into());
         }
         let parent_start_index = parent.start_index();
         let metadata = EntityInvocationRequest {
@@ -376,7 +377,7 @@ impl EntityInvocationDurability {
                 span_started.clone(),
             )
             .await?;
-        Self::from_started_request(
+        Ok(Self::from_started_request(
             store,
             get_ctx,
             parent,
@@ -387,7 +388,7 @@ impl EntityInvocationDurability {
             started_input,
             Some(span_started),
         )
-        .await
+        .await?)
     }
 
     pub(crate) async fn replay_tool_access<T, D, Ctx>(
@@ -1192,7 +1193,7 @@ pub(crate) async fn record_tool_rejection_access<T, D, Ctx>(
     parent: OwnerInvocationId,
     mut request: HostRequestGolemToolInvocationRejected,
     invocation_id: InvocationIdSource,
-) -> Result<HostResponseEntityInvocation, WorkerExecutorError>
+) -> anyhow::Result<HostResponseEntityInvocation>
 where
     T: 'static,
     D: HasData + ?Sized,
@@ -1253,7 +1254,7 @@ where
     handle
         .complete_access_with_span(store, get_ctx, response, span_finished)
         .await
-        .map_err(|error| error.source)
+        .map_err(|error| error.into_marked_anyhow())
 }
 
 pub(crate) async fn encode_tool_terminal(

@@ -218,6 +218,10 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::ToolAttachmentControl {
                 entity_parent_start_index,
                 ..
+            }
+            | OplogEntry::SpanClosed {
+                entity_parent_start_index,
+                ..
             } => *entity_parent_start_index,
             OplogEntry::BeginRemoteTransaction {
                 original_begin_index: begin_index,

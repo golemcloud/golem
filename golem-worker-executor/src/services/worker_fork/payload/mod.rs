@@ -113,7 +113,8 @@ where
         | OplogEntry::CompletionDiscarded { .. }
         | OplogEntry::CompletionDelivered { .. }
         | OplogEntry::ToolAttachmentControl { .. }
-        | OplogEntry::SnapshotConfirmed { .. } => {}
+        | OplogEntry::SnapshotConfirmed { .. }
+        | OplogEntry::SpanClosed { .. } => {}
     }
     Ok(())
 }

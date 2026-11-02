@@ -6,10 +6,10 @@ description: "Explains how the Golem worker executor implements durable executio
 # Understanding Durable Execution
 
 The worker executor runs WASM agents whose progress survives the loss of the process running
-them. Read this guide alongside `golem-worker-executor/src/` and `tests/`; when code
+them. Read this guide alongside `golem-worker-executor/src/` and `golem-worker-executor-tests/tests/`; when code
 and guide disagree, the code wins and the guide needs a fix. Combined verification of
 the instrumentation removal and adapted tests is pending. The scoped `AGENTS.md` files under
-`golem-worker-executor/` state the mandatory rules; this skill explains the mechanisms.
+`golem-worker-executor/` and `golem-worker-executor-tests/` state the mandatory rules; this skill explains the mechanisms.
 
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong
@@ -223,7 +223,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 
 ```diagram
 ┌─────────────────────────────────────────────────────────────────────┐
-│ outer loop (one iteration = one resident instance)                  │
+│ outer loop (one iteration = one instance attempt)                   │
 │  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ replay       │
 │    ephemeral:      constructor-only replay, append Restart          │
@@ -232,6 +232,17 @@ run loop (`worker/invocation_loop.rs::run`) is:
 │  ──▶ RetryDecision: Immediate | Delayed | ReacquirePermits | None | TryStop │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+Only `prepare_instance` returning `Ok(None)` completes filesystem replay and reconstruction,
+activates the resident generation, and enters the inner loop. `Ok(Some(decision))` is an aborted
+preparation, including `Some(RetryDecision::None)`. `PreparedAgent::finish` seals that reconstructing
+filesystem without drainage and retains the runtime for the ordinary teardown and retry tail.
+The unload continuation drops the Store before it drains the sealed filesystem, closes the execution
+window, releases the permit, and deletes the filesystem. A P2 output stream can retain a pending
+`FilesystemCall` after interruption cancels only its borrowed readiness future; draining replay
+with that Store still alive would wait on a call that only Store destruction can detach.
+The original retry decision, later interrupt arbitration, ephemeral fail-stop conversion, and
+cleanup-failure handling remain in the common tail.
 
 `DurableWorkerCtx::replay` (`durable_host/recovery.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
 each recorded invocation in `InvocationMode::Replay`, and when there is no further
@@ -265,7 +276,9 @@ reconstructing, that generation is retired — stopped without writing its statu
 this executor and never restarted — and the executor that now holds the shard reconstructs it.
 
 Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a
-worker that is executing or holds non-durable in-memory work. Ephemeral agents are fail-stop:
+worker that is executing or holds non-durable in-memory work. A `WarmRunnable` eviction starts the
+worker again in a spawned task (`stop_if_evictable_with_outcome`): the callers of its pending
+invocations already started it and only wait, and the start waits for memory admission. Ephemeral agents are fail-stop:
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
@@ -1035,6 +1048,13 @@ finalization, joins Store destruction and retained callbacks, then joins those c
 layers. These distinctions prevent an old owner from removing, reopening, or writing lifecycle
 state for its replacement without adding a second recovery path.
 
+The production shutdown token closes construction admission, fences oplogs and cancels worker
+tasks through the `InvocationLoops` watcher before gRPC stops. `server.rs` waits for tracked
+shutdown work within `SHUTDOWN_GRACE`, then stops the server join set. This interval can therefore
+refuse requests even though the transport remains open. `wait_for_exit()` also stops worker roots
+and joins cleanup; it is an active drain, not a passive wait. Concurrent drain callers serialize,
+and a failed drain keeps registrations for retry.
+
 On executor shutdown, the active-agent cache task removes its cached workers regardless of TTL.
 Each worker owns the service graph that owns the cache, so leaving the entries cached would
 retain the graph and its storage pools after task cancellation. This drops cache references only;
@@ -1169,7 +1189,9 @@ even the empty status baseline are corrupt history; they do not mean the worker 
 status can still name an invocation whose completion was committed and published as current, so
 the hydrated result cache keeps the keys of committed completions that the status has not folded
 yet, apart from the evictable payloads, and the terminal stop (`fail_pending_invocations`) does not
-fail those keys. When
+fail those keys. For a key that it fails, it caches the typed agent error and stderr of an
+`InvocationFailed` (any other error as `AgentError::Unknown`), so a later lookup of the key returns
+the same error as its waiters. When
 `on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
 classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
 that failed for good fails the invocation with its cause. A storage that did not answer returns
@@ -1242,6 +1264,18 @@ filesystem generation. Durable storage and cache authority remain fenced until v
 succeeds; old attempt handles retain their original error. Cleanup with no verifiable
 owning-component repair remains a failure: successful filesystem deletion cannot erase an
 unverified metering settlement, including `ObserverLost` during startup rollback.
+
+For a resident owner, retained module-owned unload destroys the primary runtime, drains the
+filesystem, settles final metering and releases the scheduler permit, then waits for the current
+`OwnerToolOperations` registry to become empty before deleting the filesystem and reporting
+successful unload. `wait_owner_settled` observes registry settlement; it does not join every
+supervisor. Entity Store destruction and lane drainage remain separate, necessary barriers.
+`begin_generation` still rejects active operations rather than clearing them. Do not put this wait
+in `EntityFence::drain`: its caller can hold an operation and would wait on itself. The existing
+unload deadline observer may report `CleanupFailed` while retained final cleanup keeps waiting;
+an early metering error can also report before this wait. Neither error permits successful
+reconstruction. Startup cleanup without a resident owner skips the registry barrier.
+
 Before awaiting startup filesystem cleanup, drop any filesystem context, worker context or Store
 that owns open nodes. Cleanup drains those nodes; retaining one across the drain waits on itself.
 
@@ -1276,9 +1310,12 @@ captured oplog generations, then cancels executor-owned invocation and entity ta
 above, and joins their destruction before closing those generations.
 Already-spawned metadata loads and attachment queries finish independently, so a suspended Store
 cannot retain their locks; registration occurs once per spawned task, never on cached no-spawn
-queries. Attachment queries may spawn every time. Worker-state actors register once at construction
-and drain lifecycle jobs before status jobs and the status flusher, including on ordinary worker
-drop. Final retirement also joins oplog actors, payload uploads, archive transfers, and monitors.
+queries. A replay claim that such a task runs (`owned_access_claim`) and that waits for cursor
+progress or an active body ends with `Interrupted(Jump)` once the owner's tasks are stopped: no
+Store remains to move the cursor, so the wait must not keep retirement pending. Attachment queries
+may spawn every time. Worker-state actors register once at construction and drain lifecycle jobs
+before status jobs and the status flusher, including on ordinary worker drop. Final retirement
+also joins oplog actors, payload uploads, archive transfers, and monitors.
 An error is reported only after all owned work finishes. Deletion records that completion separately
 so an explicit retry can remove storage without reusing a retained stop error; the original attempt
 keeps its error. A later cold acquisition reloads persisted state rather than inheriting a stopped
@@ -1456,8 +1493,60 @@ claims the operation by its invocation id, function name and owner, then the own
 restores `SpanStarted` and applies `SpanFinished` or successful attribute updates. Span ids,
 timestamps, parents, and links never select a claim, and the generic cursor performs no
 span-specific terminal-tail consumption. Long-lived resource and guest spans therefore open on
-one operation and close through a later short local operation; a span lifetime never keeps the
-opening durable call open.
+one operation and close later; a span lifetime never keeps the opening durable call open. An
+explicit `span.finish` closes through a short local operation. Releasing a host resource whose
+only durable content is its span (`wasm-rpc`, `span`, and HTTP response drops) or an in-memory reservation
+(`cache::vacancy` drop) is not a durable call: a garbage-collected guest, or a heap restored from
+a snapshot, releases handles at points that differ between runs, so such a release must not take
+an invocation id or a replay position. It deletes the table entry and finishes the span in
+memory; a live Store with a recorded opening also appends a `SpanClosed` hint naming the opening
+`Start`. Replay never claims the hint. HTTP closure also checks whether the send terminal already
+closed the span. A drop that terminates a real durable call (an un-awaited RPC/cache future, a
+cache fill, an open transaction) keeps its recorded terminal. A replayed drop must not await that
+terminal on the guest thread: the guest may drop the handle earlier than recorded, before an
+entry only the guest can consume, or in an earlier invocation. A runtime-owned task awaits the
+resolution without holding the guest. Only passive sibling-history waits release tail activity;
+queued and running cursor work remains active through invocation settlement. It validates the operation's
+terminal kind; a cancellation cannot consume a successful result. If the recorded run never
+terminated it, continuation waits for the natural replay tail, then performs the live disposal
+under the original call. Durable input cancellation likewise waits outside cleanup drains and
+producer drop polling. An exact source terminal also satisfies input disposal, including a
+terminal supplied by session finalization without a consumer cancellation intent. Inspection
+consumes no guest read. Missing cancellation requires the normal published-live transition and
+attachment admission; producer mutation admission alone does not authorize replay continuation.
+The Store applies pending replay events before forwarding cancellation. Admission failures return
+through the cleanup queue with their original trap context. Completed entity replay still rejects
+an unrecorded effect.
+
+Disposal admission refusal identifies the persisted session, binding and cancellation role, or
+the tool attachment. It overrides a terminal supplied by later owner finalization. Since GC need
+not run again, reconstruction also restores the refusal at the recorded owner boundary after
+earlier real calls and guest observations have replayed. It neither requires another destructor
+callback nor permits a different read or call to satisfy retained history.
+
+Refusal readiness uses `AgentStatusRecord.entity_replay_progress`, folded incrementally with
+the status. Completed entity boundaries freeze the terminal and last required entry; open scopes
+retain the routes needed to continue a later fold. Replay installs horizon-covering evidence
+through the FIFO repaired-status path before exposing its generation or an extended target.
+Readiness checks read no oplog entries or payloads: they require the matching boundary, cursor
+progress through its watermark, no retained Start in the entity subtree, and acknowledged guest
+delivery without a latched failure. Missing evidence is not readiness.
+
+GC timing does not permit a different sequence of consumed reads. An idle stream endpoint may
+disappear before or after another host call; an awaited JS read retains its native handle until
+that read settles. Do not weaken completion validation to accommodate a test that replaces a
+recorded read with an explicit cancellation.
+
+Invocation finalization attempts cleanup before closing the parent, but a cleanup failure does
+not skip parent closure or child settlement. Failure election and settlement run inside the Store
+driver, retaining their futures across secondary Store-task errors. Settlement waits for election;
+the Store still drives terminal continuations that a pending election needs. An already committed
+entity terminal is published before retained-resource cleanup, so cleanup cannot wait for its own
+terminal selection. Its filesystem lane stays held until cleanup succeeds or owner-failure cleanup
+drains it. Classify retained error chains before transport conversion; preserve the original body
+failure and its retry metadata over secondary cleanup errors. Shard loss remains authoritative
+over later cancellation and an earlier ordinary owner failure. A typed snapshot divergence must
+remain recognizable after the old generation's deferred admissions have settled.
 
 `AgentInvocationStarted` records the executing context, including the invocation span added by
 the invocation loop, for every invocation kind. The live hook passes that context explicitly to
@@ -1542,9 +1631,15 @@ resolve its terminal through `ConcurrentReplayResolver`, then classify with
 |---|---|---|
 | `End` + `CompletionDelivered` | `Delivered`, `AtMarker` | released exactly at the recorded marker boundary (`ReplayDeliveryBarrier` holds the cursor gate) |
 | `End`, no marker (guest-facing accessor) | `Delivered`, `AtReplayTail` | crash after host completion, before observation: withheld until the cursor drains (`await_natural_tail_end`, `replay_state/resolution.rs`), then delivered live-armed; the effect is **not** re-run |
-| `Cancelled { partial: Some }` | `Delivered`, `Immediate` | guest-initiated, deterministic drop point; no gating |
-| `Cancelled { partial: None }` or `End` + `CompletionDiscarded` | `Undelivered` | the guest never saw a value; the future is parked for the guest's deterministic drop |
+| `Cancelled { partial: Some }` | `Delivered`, `Immediate` | recorded partial response available without a delivery-marker gate; this is not permission to change guest observations |
+| `Cancelled { partial: None }` or `End` + `CompletionDiscarded` | `Undelivered` | no value reached the guest; accessor delivery stays pending, while resource disposal may resolve the recorded terminal in a runtime-owned task without blocking guest progress |
 | `Start` without terminal | `Incomplete` | see below |
+
+These classifications describe completion delivery, not deterministic resource-release timing.
+GC and snapshot restoration can move an unobserved handle's drop. Deferred cancellation must
+preserve its original call identity and terminal kind; a missing terminal permits live disposal
+only after the natural replay-to-live transition. A recorded partial response is distinct from
+an unread cancellation, and actual guest observations must still be reproduced.
 
 **Custom durable invocations** (`golem:durability/durability.begin-custom-durable-invocation`,
 `durability.rs::begin_custom_durable_invocation`) wrap a whole guest block as one logical durable
@@ -1724,8 +1819,8 @@ would capture host-task context too early for the per-poll switch.
   (`direct_call_invocation_id`, `entity_context.rs`). Store-holding host code that runs between
   guest calls takes the next ordinal under the root.
 - A call recorded inside an open durable scope records the id of the call that opened the scope,
-  and a host-internal child records the id of its owner. Records the host adds for a call, such
-  as the span cleanup of a P3 HTTP send, carry the id of that call.
+  and a host-internal child records the id of its owner. Span-only resource cleanup is a hint
+  referencing its opening Start, not another call carrying an invocation id.
 - A tool invocation records the id of the guest import that dispatched it, on both the accepted
   entity invocation `Start` and the rejection `Start`.
 - Calls observed by a custom invocation, calls while snapshotting, and calls outside an
@@ -1821,9 +1916,17 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   against the entry the cursor stops at: the replay target is `ReplayEnded`, and anything else
   (including the call of a settled body, or a foreign id under an ordinary call) is
   divergence. An unclaimed `Start` with the claim's own invocation id was recorded by the
-  claiming guest call itself and is divergence before the cursor moves. Tests:
+  claiming guest call itself and is divergence before the cursor moves. This identity check
+  also precedes `ReplayEnded` and `StoreAlreadyLive`: cursor exhaustion can leave unclaimed
+  retained calls, and neither exhaustion nor Store liveness permits replacing their function,
+  type, parent, or observational owner. Tests:
+  `replay_state/tests.rs::retained_invocation_identity_is_checked_before_live_continuation`,
   `replay_state/tests.rs::missing_start_claim_*`,
   `tests/websocket.rs::websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start`.
+- RPC connection reconstruction also validates the requested remote agent against the recorded
+  constructor request before restoring its span or resource. Matching a call's invocation id
+  and function does not authorize a different RPC target. The snapshot negative controls in
+  `tests/rpc/gc_timed_cleanup.rs` require rejection and full replay without duplicate effects.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
@@ -2217,10 +2320,79 @@ retaining the underlying cause.
 
 ### Filesystem snapshots
 
+`filesystem` groups the low-level volume, sandbox and host-directory modules as siblings. Their
+shared helpers are `filesystem::errors`, `filesystem::blocking` and the private `path_removal` module.
+Agent lifecycle, pressure recovery and snapshot policy remain outside this group.
+
+Executor startup creates `.scratch` and `.initial-files` through
+`services/agent_filesystem/executor_directories/mod.rs`. The generic `filesystem::host_directories` module owns
+their filesystem operations and does not know about sandbox provisioning or filesystem-specific
+quotas. Executor setup first opens and validates `filesystem::volume::FilesystemVolume`, then creates
+the host directories and constructs sandbox provisioning on that shared volume.
+On executor shutdown, `AgentFilesystems::track_shutdown` joins invocation loops and snapshot-store shutdown before
+`AgentFilesystems::shut_down` removes both directories. The file loader stops new loads and drains
+entered downloads and outstanding source leases before removing its cache. `Drop` remains a
+best-effort cleanup safety net. That fallback is synchronous: without explicit shutdown, dropping
+the last cache lease after its loader can remove the cache directory on the caller's thread.
+
+Filesystem creation and source loads use `services/work_admission` registrations. Closing admission
+refuses a new operation immediately and waits for existing registrations without holding a lock.
+Source leases retain their registration, so a multi-file load interrupted by shutdown fails its
+next source request as `InitialFileLoadFailure::Unavailable` instead of deadlocking behind its
+own earlier lease. In-process executor `release()` waits for tracked shutdown cleanup as well as
+the service graph. `shutdown_and_wait_for_invocation_loops()` keeps the invocation-drain timeout
+separate from its tracked-cleanup grace. Only a successful return proves both completed. It does
+not drop the service graph or release its root lock. A fixed-root replacement
+must not start while old cleanup still owns the XFS lock or can remove its directories. A failed
+invocation drain disables fallback removal of both host directories and retains their temporary
+parent on disk. Production drain and cleanup share the existing shutdown grace, not a new budget.
+Bootstrap owns a cancellation guard until it returns `RunDetails`. `bootstrap::epoch_ticker::EpochTicker`
+owns its thread from creation, before snapshot binding or service construction can fail. Every
+drop stops and joins that thread. An ordinary bootstrap error cancels only this executor's token
+and waits up to `SHUTDOWN_GRACE` for tracked cleanup. It never shuts down the caller's join set,
+which can also contain other services. A timeout logs that resources may still be held and returns
+the original error. Neither that error nor cancellation of the bootstrap future is a completed
+cleanup receipt. The cancellation guard exists for abandoned futures; normal error paths must
+signal before awaiting their bounded cleanup.
+Both failed bootstrap and process termination use `Shutdown::cancel_and_wait_for_tracked` for
+the cancel, bounded wait and warning. The caller still owns termination of its server join set.
+
+`filesystem::volume` owns shared storage roots, capacity observations, native cloning and XFS project
+allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
+`filesystem::sandbox` owns one capability-confined tree, its handles, provisioning and verified
+deletion, and seed/copy orchestration. XFS quotas account and limit allocation; root capabilities
+confine path access. Physical pressure recovery observes the volume without accessing a sandbox.
+Sandbox, volume and host-directory errors embed `filesystem::errors::OperationContext`. It owns
+the operation, optional path and typed `OperationFailure`, plus their construction, formatting
+and cause access. It carries no domain classification, cleanup flag or error-selection policy.
+The domains own those decisions. Pressure validation returns its own configuration error. At service binding,
+`FilesystemSetupError` keeps that cause distinct from storage failures; filesystem and active-agent
+constructors use explicit `Result<_, FilesystemSetupError>` contracts. Task errors retain
+`BlockingTaskError`; they do not acquire an invented I/O kind. Conversion to sandbox errors retains
+these facts without classifying a storage failure as a sandbox escape. A primary host-directory
+discard or preflight stale-probe removal is not a cleanup failure. Only the owning cleanup path
+applies that flag. Volume probes, executor directory setup and sandbox creation
+rollback retain both diagnostics when the operation and its cleanup fail, with the actual cleanup
+failure's classification. A failed rollback deletion always sets `cleanup_failed`, even if the
+lower-level error was unflagged. Worker startup then retains its cleanup obligation instead of
+treating the result only as a creation error. Task failures have no I/O kind and remain terminal.
+
+Plain construction uses `OperationContext` and `From` rather than domain constructor forwarders.
+The sandbox I/O factory remains because it classifies capability escapes. `filesystem::errors::CleanupFailure<E>`
+shares the flag, original-error chain and formatting without choosing when a domain marks cleanup.
+Its type parameter preserves original error types. Conversions consume the chain and map its
+original errors; they do not detach them through a mutator. Debug output uses the stored context
+and chain directly.
+
+Native cloning uses source-first arguments. APFS `clone_file_at` creates a directory entry;
+XFS `clone_file_contents` fills an already-open target. The XFS project-aware operation keeps
+the same source and target order. Tree-copy dispatch calls these operations without aliases or
+argument-swapping wrappers.
+
 `AgentFilesystemSnapshots::bind` requires a volume that makes copy-on-write copies. Production
 uses Linux 5.8 or later with XFS and reflink, through `ManagedXfs` or `ReflinkXfs`. Local development
 and tests on macOS use `Apfs`. Project quotas are not required for snapshots. `Temporary` and
-`Directory` make byte copies, so binding `Enabled` on them fails at startup. The sandbox reports
+`Directory` make byte copies, so binding `Enabled` on them fails at startup. The volume reports
 `copies_on_write`; the snapshot service owns this rule.
 
 `seed` and `copy_contents` make copy-on-write copies on XFS or `Apfs`, and byte copies on other
@@ -2321,6 +2493,58 @@ tail: it keeps the busy count of the agent, starts no run and no write, never co
 (`run_job` checks `ticket.replaced()`), and its capture is discarded after the call returns. A clean
 successful save is never replaced, and neither is a job whose call has returned. A periodic
 admission never waits.
+
+`filesystem_snapshot/mod.rs` holds the store contract and `create_store` factory.
+`agent_snapshots`, `snapshot_name`, `errors` and `run_admission` hold the shared caller vocabulary.
+`operation_drain` tracks store-local operation cohorts by incarnation, not queued jobs.
+Its `OperationLease` stays alive through retained tasks. `drain_before` establishes the
+`delete_all` cutoff before admission and links each old cohort to its successor, so a later drain
+still waits for earlier work when the first drain's caller drops.
+
+The two store backends live in `filesystem_snapshot/backend/in_memory` and `backend/rustic`.
+The in-memory backend remains available only for tests and `test-utils`.
+`backend/rustic/mod.rs` owns the concrete rustic backend, construction, shutdown and operation
+routing. Operations are free functions with explicit dependencies. `operation::Operation::new`
+borrows the lease and a named `Resources` input without acquiring a tracker token or capturing
+a runtime. `Resources` is explicit borrowed wiring rather than a store reference or store trait.
+The operation's fields are private. Its agent comes only from that lease, and `files`
+accepts no separate agent. Accessors expose the key, clock and priority; task and backend methods
+own registration. `BackendRun` keeps an untransferred backend before its cancellation guard in
+field order. Transferring the backend into a blocking task retains no extra backend owner.
+Its private backend `Option` records the one-way transfer, not an optional run mode.
+`Operation::cleanup_tasks` creates one `CleanupTasks` owner for the shutdown registration, tracker,
+runtime and incarnation lease. It spawns directly through the tracker. Registration still precedes
+the shutdown check, and runtime capture follows it.
+`tracked_tasks::check_local_path` counts read-only local checks through store shutdown, not
+incarnation drainage. These two lifetimes are distinct.
+`Operation::read_existing` opens and reads a repository in one tracked blocking task. It uses the
+caller's backend and starts no run or retry. Save keeps its cancellation link, per-run tracker and
+late-write recorders in its own setup order. `SaveRun` owns backup inputs across missing-index
+retries; `SaveSettlement` owns the outcome and recorders while late writes settle.
+`run_outcome` defines one `RunResult` for all operations: `Result<Ran<_>, Ended>`. An `Err` is the
+only run failure path. An `Ok` holds an answer or settlement; settlement returns the same result
+shape. `call_execution::CallDriver` drives runs and settlement, identified by `CallMethod`.
+`clock` provides the wall clock and a shared monotonic helper. The prune metric uses
+`std::time::Instant::now()` directly, so paused test clocks do not change its elapsed time.
+`retry` owns the delay calculation used by the driver and the feature-gated test limiters.
+`blob_io` is the single blob-call policy;
+`blob_backend` bridges blocking rustic calls to it. `save`, `restore`, `snapshot_catalog`,
+`snapshot_deletion` and `repository_namespace` own their operations. Save and restore also own
+their operation-specific failure classification, settings and rustic options. `store_policy`
+constructs `SaveSettings`, `RestoreSettings` and `PruneSettings` through matching factory methods.
+Restore owns its reader-thread count by value. Restore and deletion inputs hold their own
+test observations; the generic operation resources do not depend on restore hooks.
+`pruning` owns its defaults, options, eligibility criteria, durable records, claims
+and timing. `tracked_tasks` retains the runtime supplied by each operation.
+Direct repository pruning is private in production; shared race fixtures use the test-only
+`pruning::test_support::prune_repository` entry.
+Tests and single-consumer fixtures live beside their owners. The `test_support` modules hold
+shared fixtures; shared prune inputs and timing constants live in `pruning/test_support`. The shared contract cases in
+`filesystem_snapshot/tests.rs` register for both adapters and own their counting limiter. They
+use independent tree fixtures and own their `one_file` and `files_and_bytes` helpers.
+The rustic shared fixtures have one fixture-tree builder, one default key and one 10-second limit.
+The rustic root tests cover cross-operation races, shutdown and contract registration.
+`filesystem_snapshot/time_zone_tests.rs` checks the executor image.
 
 `StoreCalls` is the only owner of the store. The store takes a slot of its caller's limiter
 (`RunSlots`, `max_concurrent_uploads` for the uploads and deletes) for each run of a call, and
@@ -2502,6 +2726,50 @@ checks the policy before appending its `Start`. P3 imports that await before the
 RDBMS connection query-stream and transaction query, execute and query-stream authorize through
 `start_with_options_and_authorize`, after replay and protocol readiness resolve but before `Start`.
 Their denial builders record the same query-execution failure for all database engines.
+SQL authorization analyzes the statement first and checks every extracted table target. A denied
+table check never falls back. Only unsupported analysis checks the explicit `rdbms` verb
+`unanalyzed` on `database(name)`. Default agent cards, table wildcards and wildcard verbs do not
+grant this capability; the operator-authorized oplog-processor path does not bypass this check.
+Connections resolve and cache their database identity on first live authorization; their
+transactions share that resident cache. The cache holds no authority decisions or mutable SQL
+namespace state. Completed replay does not resolve it.
+Explicit executable expressions must belong to the supported analysis subset, including inside
+the separately parsed partial-index conflict predicate. Trusted PostgreSQL dispatch receives
+catalog qualifications in executable SQL. Analyzed unqualified physical relations execute in
+`public`, not native `search_path`: reads, writes, created tables, index target tables and
+foreign-key references use the same namespace for authorization and execution. Explicit schemas
+remain explicit; PostgreSQL `RENAME` destinations stay in the source schema. CTE references,
+aliases, columns and comments remain unchanged. Temporary `CREATE TABLE` is unsupported analysis
+and requires explicit `unanalyzed` authority. No session `SET` changes implement this contract.
+Unquoted PostgreSQL relation-modifier `ONLY` in SELECT/UPDATE/DELETE fails closed and requires
+explicit `unanalyzed`; supported `LOCK TABLE ONLY` retains ordinary grants. Bare built-in
+`DEFAULT CURRENT_TIMESTAMP` works with ordinary grants alongside supported `now()`, not every
+timestamp routine or form.
+Approved regclass/UUID cast placeholders require actual built-in text values. Approved regclass
+string literals normalize one-part relation names offline into safely escaped `E'public.name'`
+literals; explicitly schema-qualified literals remain unchanged. Keep these casts constant to
+preserve PostgreSQL early OID binding, stored constraints after table renames and index predicate
+immutability. Only built-in Text placeholders use trusted runtime `pg_catalog.regexp_match` to
+detect dots outside double quotes, then `pg_catalog.format('public.%s', input)` to prefix one-part
+names. Offline literals use the same quote/dot boundary rule. Both follow PostgreSQL's leading-quote
+rule: a double quote starts quoting only at the beginning of a name part. Explicit multi-part input remains
+unchanged. Preserve native regclass spelling, including unquoted `migration-log`, rather than
+enforce SQL identifier grammar. Both forms preserve
+quoted case and explicit schemas. Original bound parameters and durable request SQL remain unchanged.
+Both offline literals and bound Text normalization use exactly PostgreSQL scanner whitespace:
+ASCII space, tab, LF, CR, vertical tab and form feed, not Unicode trim or locale `[:space:]`.
+Unicode whitespace stays part of an unquoted name.
+Unsupported analysis executes the unchanged original without deterministic namespace rewriting,
+only under an admitted `unanalyzed` grant. Ordinary supported migrations keep ordinary grants.
+PostgreSQL guest dispatch does not populate SQLx's statement cache, whose SQL-only key would
+otherwise permit reuse of an earlier custom source type. This sacrifices guest statement reuse.
+SQLx metadata queries do not pass through the analyzer; catalog qualifications of guest SQL do
+not secure driver queries. The session namespace remains administrator-trusted, including
+`search_path` and protection against shadow built-in types or routines. Golem does not enforce a
+safe `search_path`.
+Approved expressions do not establish transitive table isolation: implicit
+behavior of authorized objects and trusted types, including ordinary operators on custom
+parameter or column types, remains the database administrator's responsibility.
 `replay_or_persist_failure` restores a recorded denial before considering resource loss: an
 incomplete denied call remains denied; an admitted incomplete call still reports transaction or
 stream loss without repeating its database effect.
@@ -2578,14 +2846,19 @@ is not — the properties replay relies on), `replay_state` unit tests
 
 For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
 cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's
-span-only cleanup is a short local durable operation: live drop submits its complete pair to the
-oplog actor, and replay cleanup is retained as one shared future so cancelling a waiter cannot
-re-submit or lose ownership. Failure terminals and response/body owners claim the same close once.
-This machinery changes only span ownership; network execution, call drop policy, terminals, and
-the existing non-span cancellation behavior stay with their original owners.
+span-only cleanup appends a live `SpanClosed` hint when the send terminal did not already close
+the span. Replay performs resident cleanup without claiming or waiting for a cleanup operation.
+Network execution, call drop policy, terminals, and non-span cancellation retain their own
+owners; collecting a response does not create a second durable call.
 
-Spawned tasks may park across invocation settlement at guest-driven waits or passive markerless replay-tail waits after durable finalization.
-Cursor operations and recorded-marker waits stay active; durable `Start`/`End` work must precede `AgentInvocationFinished` (`tail_work.rs`).
+Spawned tasks may park across invocation settlement at guest-driven waits, passive markerless
+replay-tail waits after durable finalization, or a destructor's passive wait for sibling history.
+Cursor operations and recorded-marker waits stay active (`tail_work.rs`). A missing destructor
+terminal can repair only after the natural replay-to-live transition. Recovery can return before
+the parked Store task resumes; a subsequent invocation then drives the repair after its own
+`AgentInvocationStarted`. The task restores activity before effects or terminal recording, so
+that invocation's settlement waits for the repair. The original Start retains the effect's identity.
+Test: `completed_invocation_cache_drops_repair_inside_next_invocation`.
 
 A replayed websocket handle is reconstructed per handle while concurrent accessor calls race to
 use it. `connect` on replay installs `WebSocketConnectionEntry::Replay(Arc<Mutex<()>>)` — the

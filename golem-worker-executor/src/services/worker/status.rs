@@ -13,6 +13,20 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::{EntityReplayBoundary, EntityReplayProgress, OpenEntityReplayScope};
+
+// Presence marker only. All continuation maps use per-key fields, including their inverse
+// membership indexes, so one new call never serializes an entire open entity's history.
+const STATUS_ENTITY_REPLAY_CONTINUATION_FIELD: &str = "entity-replay";
+const STATUS_ENTITY_REPLAY_BOUNDARY_PREFIX: &str = "er:";
+const STATUS_ENTITY_REPLAY_OPEN_PREFIX: &str = "eo:";
+const STATUS_ENTITY_REPLAY_ROUTE_PREFIX: &str = "ep:";
+const STATUS_ENTITY_REPLAY_MEMBER_PREFIX: &str = "em:";
+const STATUS_ENTITY_REPLAY_CHILD_PREFIX: &str = "ec:";
+
+#[cfg(test)]
+#[path = "entity_replay_tests.rs"]
+mod entity_replay_tests;
 
 /// Hash field holding the small part of the cached `AgentStatusRecord`. Always present for a cached
 /// status; its absence is treated as a cache miss.
@@ -44,6 +58,7 @@ pub(super) fn split_status(status: &mut AgentStatusRecord) -> SplitStatusParts {
         ),
         received_card_transfers: std::mem::take(&mut status.received_card_transfers),
         source_card_transfers: std::mem::take(&mut status.source_card_transfers),
+        entity_replay_progress: std::mem::take(&mut status.entity_replay_progress),
         failed_updates: std::mem::take(&mut status.failed_updates),
         successful_updates: std::mem::take(&mut status.successful_updates),
         skipped_regions: std::mem::replace(&mut status.skipped_regions, DeletedRegions::new()),
@@ -65,6 +80,7 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         invocation_results: InvocationResultMembership::new(0, 1, 1),
         received_card_transfers: ReceivedCardTransferIndex::default(),
         source_card_transfers: SourceCardTransferIndex::default(),
+        entity_replay_progress: EntityReplayProgress::default(),
         durable_stream_sessions: status.durable_stream_sessions.clone(),
         pending_durable_stream_cancellations: status.pending_durable_stream_cancellations.clone(),
         has_durable_stream_history: status.has_durable_stream_history,
@@ -96,7 +112,7 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
 /// `core` must be the already-split (emptied) record. When `previous` is `Some`, the result is a
 /// delta against it (this is the hot path, where `dels` is usually empty). When `previous` is
 /// `None` (cold path: create / cache-miss recompute / detach reload), every part is written and
-/// `existing_split_fields` is used to delete stale `tr:` and `ts:` fields.
+/// `existing_split_fields` is used to delete stale transfer and entity-replay fields.
 ///
 /// `core` is always part of `sets` (it carries the `oplog_idx` marker), so the marker and every
 /// written part advance together in one atomic `set_many` by the caller.
@@ -110,6 +126,64 @@ pub(super) fn compute_status_field_writes(
     let mut dels: Vec<String> = Vec::new();
 
     sets.push((STATUS_CORE_FIELD.to_string(), serialize(core)?));
+
+    let progress = &parts.entity_replay_progress;
+    let previous_progress = previous.map(|status| &status.entity_replay_progress);
+    if previous_progress.is_none() {
+        sets.push((
+            STATUS_ENTITY_REPLAY_CONTINUATION_FIELD.to_string(),
+            serialize(&true)?,
+        ));
+    }
+    write_entity_replay_fields(
+        previous_progress.map(|p| &p.completed),
+        &progress.completed,
+        existing_split_fields,
+        STATUS_ENTITY_REPLAY_BOUNDARY_PREFIX,
+        |i| u64::from(*i).to_string(),
+        &mut sets,
+        &mut dels,
+    )?;
+    write_entity_replay_fields(
+        previous_progress.map(|p| &p.open),
+        &progress.open,
+        existing_split_fields,
+        STATUS_ENTITY_REPLAY_OPEN_PREFIX,
+        |i| u64::from(*i).to_string(),
+        &mut sets,
+        &mut dels,
+    )?;
+    write_entity_replay_fields(
+        previous_progress.map(|p| &p.routes),
+        &progress.routes,
+        existing_split_fields,
+        STATUS_ENTITY_REPLAY_ROUTE_PREFIX,
+        |i| u64::from(*i).to_string(),
+        &mut sets,
+        &mut dels,
+    )?;
+    for (prefix, current, previous) in [
+        (
+            STATUS_ENTITY_REPLAY_MEMBER_PREFIX,
+            &progress.route_members,
+            previous_progress.map(|p| &p.route_members),
+        ),
+        (
+            STATUS_ENTITY_REPLAY_CHILD_PREFIX,
+            &progress.entity_children,
+            previous_progress.map(|p| &p.entity_children),
+        ),
+    ] {
+        write_entity_replay_fields(
+            previous,
+            current,
+            existing_split_fields,
+            prefix,
+            |(parent, child)| format!("{}:{}", u64::from(*parent), u64::from(*child)),
+            &mut sets,
+            &mut dels,
+        )?;
+    }
 
     let membership_changed = match previous {
         Some(previous) => previous.invocation_results != parts.invocation_results,
@@ -172,6 +246,44 @@ pub(super) fn compute_status_field_writes(
     Ok((sets, dels))
 }
 
+/// Publishes only changed persistent-map entries; no open scope rewrites unrelated routes.
+fn write_entity_replay_fields<K: Ord + Clone, V: Clone + PartialEq + BinarySerializer>(
+    previous: Option<&im::OrdMap<K, V>>,
+    current: &im::OrdMap<K, V>,
+    existing: &[String],
+    prefix: &str,
+    key: impl Fn(&K) -> String,
+    sets: &mut Vec<(String, Vec<u8>)>,
+    dels: &mut Vec<String>,
+) -> Result<(), String> {
+    let field = |k: &K| format!("{prefix}{}", key(k));
+    if let Some(previous) = previous {
+        use im::ordmap::DiffItem;
+        for change in previous.diff(current) {
+            match change {
+                DiffItem::Add(k, value)
+                | DiffItem::Update {
+                    new: (k, value), ..
+                } => {
+                    sets.push((field(k), serialize(value)?));
+                }
+                DiffItem::Remove(k, _) => dels.push(field(k)),
+            }
+        }
+    } else {
+        let fields: HashSet<_> = current.keys().map(&field).collect();
+        for (k, value) in current {
+            sets.push((field(k), serialize(value)?));
+        }
+        for old in existing {
+            if old.starts_with(prefix) && !fields.contains(old) {
+                dels.push(old.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Adds the writes of the per-transfer fields of one transfer index: a delta against `previous`
 /// when it is given, otherwise every transfer, and a delete of each stale `prefix` field.
 fn write_card_transfer_fields<S: PartialEq + BinarySerializer>(
@@ -224,6 +336,8 @@ pub(super) fn reassemble_cached_status(
     let mut updates: Option<(Vec<FailedUpdateRecord>, Vec<SuccessfulUpdateRecord>)> = None;
     let mut received_card_transfers = ReceivedCardTransferIndex::default();
     let mut source_card_transfers = SourceCardTransferIndex::default();
+    let mut entity_replay_progress = EntityReplayProgress::default();
+    let mut has_entity_replay_progress = false;
 
     for (name, bytes) in fields {
         if name == STATUS_CORE_FIELD {
@@ -236,6 +350,41 @@ pub(super) fn reassemble_cached_status(
             updates = Some(
                 deserialize::<(Vec<FailedUpdateRecord>, Vec<SuccessfulUpdateRecord>)>(&bytes)
                     .ok()?,
+            );
+        } else if name == STATUS_ENTITY_REPLAY_CONTINUATION_FIELD {
+            has_entity_replay_progress = deserialize::<bool>(&bytes).ok()?;
+        } else if let Some(index) = name.strip_prefix(STATUS_ENTITY_REPLAY_BOUNDARY_PREFIX) {
+            let index = OplogIndex::from_u64(index.parse().ok()?);
+            entity_replay_progress
+                .completed
+                .insert(index, deserialize::<EntityReplayBoundary>(&bytes).ok()?);
+        } else if let Some(index) = name.strip_prefix(STATUS_ENTITY_REPLAY_OPEN_PREFIX) {
+            let index = OplogIndex::from_u64(index.parse().ok()?);
+            entity_replay_progress
+                .open
+                .insert(index, deserialize::<OpenEntityReplayScope>(&bytes).ok()?);
+        } else if let Some(index) = name.strip_prefix(STATUS_ENTITY_REPLAY_ROUTE_PREFIX) {
+            let index = OplogIndex::from_u64(index.parse().ok()?);
+            entity_replay_progress
+                .routes
+                .insert(index, deserialize::<OplogIndex>(&bytes).ok()?);
+        } else if let Some(pair) = name.strip_prefix(STATUS_ENTITY_REPLAY_MEMBER_PREFIX) {
+            let (entity, start) = pair.split_once(':')?;
+            entity_replay_progress.route_members.insert(
+                (
+                    OplogIndex::from_u64(entity.parse().ok()?),
+                    OplogIndex::from_u64(start.parse().ok()?),
+                ),
+                deserialize::<()>(&bytes).ok()?,
+            );
+        } else if let Some(pair) = name.strip_prefix(STATUS_ENTITY_REPLAY_CHILD_PREFIX) {
+            let (parent, child) = pair.split_once(':')?;
+            entity_replay_progress.entity_children.insert(
+                (
+                    OplogIndex::from_u64(parent.parse().ok()?),
+                    OplogIndex::from_u64(child.parse().ok()?),
+                ),
+                deserialize::<()>(&bytes).ok()?,
             );
         } else if let Some(transfer_id) = name.strip_prefix(STATUS_RECEIVED_CARD_TRANSFER_PREFIX) {
             let transfer_id = uuid::Uuid::parse_str(transfer_id).ok()?;
@@ -250,6 +399,10 @@ pub(super) fn reassemble_cached_status(
     }
 
     let mut status = core?;
+    if !has_entity_replay_progress {
+        return None;
+    }
+    status.entity_replay_progress = entity_replay_progress;
     status.invocation_results = invocation_results?;
     if let Some((skipped_regions, deleted_regions)) = regions {
         status.skipped_regions = skipped_regions;
@@ -266,7 +419,8 @@ pub(super) fn reassemble_cached_status(
 
 impl DefaultWorkerService {
     /// Namespace holding the agent's split cached status (one per-agent hash whose fields are
-    /// `core`, `membership`, `regions`, `updates`, `tr:{transfer_id}`, and `ts:{transfer_id}`).
+    /// `core`, `membership`, `regions`, `updates`, per-transfer `tr:`/`ts:` fields, and the
+    /// `entity-replay` marker with per-entry `er:`/`eo:`/`ep:`/`em:`/`ec:` replay indexes).
     pub(super) fn status_namespace(
         agent_id: &AgentId,
         fingerprint: AgentFingerprint,
@@ -492,6 +646,7 @@ impl DefaultWorkerService {
         reassembled.successful_updates = parts.successful_updates;
         reassembled.received_card_transfers = parts.received_card_transfers;
         reassembled.source_card_transfers = parts.source_card_transfers;
+        reassembled.entity_replay_progress = parts.entity_replay_progress;
         Ok(reassembled)
     }
 

@@ -592,6 +592,15 @@ sealed trait JsSnapshotConfirmedParameters extends js.Object {
   def filesystemSnapshot: String = js.native
 }
 
+// --- SpanClosedParameters ---
+
+@js.native
+sealed trait JsSpanClosedParameters extends js.Object {
+  def timestamp: JsDatetime                     = js.native
+  def resourceStartIndex: js.UndefOr[js.BigInt] = js.native
+  def spanFinished: JsSpanFinished              = js.native
+}
+
 // --- OplogProcessorCheckpointParameters ---
 
 @js.native

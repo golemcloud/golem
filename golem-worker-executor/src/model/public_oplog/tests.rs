@@ -373,6 +373,34 @@ fn raw_log_trace_context_survives_wit_roundtrip() {
     }
 }
 
+fn span_closed(
+    entity_parent_start_index: Option<OplogIndex>,
+    resource_start_index: OplogIndex,
+) -> OplogEntry {
+    let timestamp = Timestamp::now_utc().rounded();
+    OplogEntry::SpanClosed {
+        timestamp,
+        entity_parent_start_index,
+        resource_start_index: Some(resource_start_index),
+        span_finished: SpanFinished {
+            span_id: SpanId::generate(),
+            finished_at: timestamp,
+            outcome: SpanOutcome::Completed,
+        },
+    }
+}
+
+#[test]
+fn raw_span_closed_survives_wit_roundtrip() {
+    use crate::preview2::golem_api_1_x::oplog;
+
+    for entity_parent_start_index in [None, Some(OplogIndex::from_u64(4))] {
+        let entry = span_closed(entity_parent_start_index, OplogIndex::from_u64(9));
+        let wire: oplog::OplogEntry = entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(wire).unwrap(), entry);
+    }
+}
+
 /// Component service stub for entries whose rendering must not need component
 /// metadata (`Start`/`End`/`Cancelled` host call entries).
 struct PanicComponentService;
@@ -746,6 +774,10 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         ))
         .await
         .unwrap();
+    let agent_span_closed = oplog
+        .add(span_closed(None, observational_owner))
+        .await
+        .unwrap();
     let child_start = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -857,6 +889,10 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             kind: HostStreamKind::P3HttpRequestBody,
             payload: OplogPayload::Inline(Box::new(HostRequestNoInput {}.into())),
         })
+        .await
+        .unwrap();
+    let entity_span_closed = oplog
+        .add(span_closed(Some(tool_start), tool_start))
         .await
         .unwrap();
 
@@ -1083,6 +1119,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         observational_start,
         observational_log,
         observational_end,
+        agent_span_closed,
     ] {
         assert!(matches!(
             chunk.entries[index.as_u64() as usize - 1].attribution,
@@ -1108,6 +1145,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         entity_marker,
         log_index,
         stream_frame_index,
+        entity_span_closed,
         reveal_start,
         reveal_end,
         transaction_start,
@@ -1142,6 +1180,17 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             PublicOplogEntryAttribution::Agent(_)
         ));
     }
+
+    let PublicOplogEntry::SpanClosed(span_closed_params) =
+        &chunk.entries[entity_span_closed.as_u64() as usize - 1].entry
+    else {
+        panic!("expected SpanClosed");
+    };
+    assert_eq!(span_closed_params.resource_start_index, Some(tool_start));
+    assert_eq!(
+        span_closed_params.span_finished.outcome,
+        PublicSpanOutcome::Completed
+    );
 
     let tool = &chunk.entries[tool_start.as_u64() as usize - 1];
     let PublicOplogEntry::Start(tool_params) = &tool.entry else {

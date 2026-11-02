@@ -29,10 +29,10 @@ pub use status::{
     AuthoritativeSnapshotKind, AutomaticSnapshot, DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
     DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
     DURABLE_STREAM_SESSION_RECENT_CAPACITY, DurableStreamPublicBinding, DurableStreamSessionIndex,
-    DurableStreamSessionStatus, ExportForkAdmissions, ExportForkReservation, FailedUpdateRecord,
-    InvocationResultBloom, InvocationResultMembership, OplogProcessorCheckpointState,
-    PendingCardEventRef, PendingUpdateKind, PendingUpdateRef, SnapshotFiles,
-    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    DurableStreamSessionStatus, EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions,
+    ExportForkReservation, FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership,
+    OpenEntityReplayScope, OplogProcessorCheckpointState, PendingCardEventRef, PendingUpdateKind,
+    PendingUpdateRef, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 
 #[cfg(test)]

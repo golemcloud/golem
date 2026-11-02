@@ -163,6 +163,7 @@ pub(super) fn calculate_latest_worker_status(
             }
             OplogEntry::Snapshot { .. } => {}
             OplogEntry::SnapshotConfirmed { .. } => {}
+            OplogEntry::SpanClosed { .. } => {}
             OplogEntry::OplogProcessorCheckpoint { .. } => {}
             OplogEntry::CardEventQueued { .. } => {}
             OplogEntry::CardInstalled { .. } => {}

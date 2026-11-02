@@ -99,11 +99,15 @@ honours the request's idempotency key.
 #13 CompletionDiscarded { start_index: 11 } (h)   guest dropped the future without reading it
 ```
 
-Replay: classification `Undelivered`; the future is parked and the guest's deterministic drop
-happens at the same point, nothing is delivered. If the drop happened before host completion the
-entry is `Cancelled { start_index: 11, partial }` instead — guest-initiated and markerless:
-`partial: Some` classifies as `Delivered`/`Immediate` (the guest saw the partial value),
-`partial: None` as `Undelivered`.
+Replay: classification `Undelivered`; accessor delivery stays pending, so no value reaches the
+guest. Resource disposal need not occur at the same point: GC or snapshot restoration can move
+the drop. Runtime-owned deferred resolution preserves the recorded terminal without blocking
+the guest on intervening history. If the drop happened before host completion the entry is
+`Cancelled { start_index: 11, partial }` instead — guest-initiated and markerless:
+`partial: Some` classifies as `Delivered`/`Immediate` and replays the recorded partial response
+without a delivery-marker gate; `partial: None` is `Undelivered`. Partial completion is not a
+license to change actual guest observations. A missing terminal waits for the natural
+replay-to-live transition before live disposal under the original `Start`.
 
 ## 5. One invocation, end to end
 
@@ -175,9 +179,14 @@ Synchronous local denials remain spanless and persist the denial decision in the
 Asynchronous validation and activation denials use their existing short durable operation with
 an embedded opening and failed/denied close; their baked future owns no later cleanup.
 
-Resource and guest-created spans can outlive their opening call. Finish, drop, and successful
+Resource and guest-created spans can outlive their opening call. Explicit finish and successful
 attribute mutation are short ordinary local operations whose terminals carry the close or
-applied updates; they do not hold the opening call for the span lifetime.
+applied updates; they do not hold the opening call for the span lifetime. A span-only resource
+drop instead closes resident state without a durable call or replay claim. Only a live Store
+with a recorded opening appends a `SpanClosed` hint naming that opening `Start`; replay does
+not claim the hint. HTTP response disposal avoids a second close when the send terminal
+already closed the span. Drops that terminate real durable effects retain their terminals and
+defer replay waits outside the guest thread.
 
 ## 7. Individual call repair keeps the RPC key
 

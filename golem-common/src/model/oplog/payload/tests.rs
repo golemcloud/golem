@@ -1837,12 +1837,6 @@ fn p3_keyvalue_cache_host_payload_pairs_roundtrip() {
         },
         HostResponseKVUnit { result: Ok(()) },
     );
-    assert_host_payload_pair_roundtrip::<host_functions::P3KeyvalueCacheVacancyDrop>(
-        HostRequestKVCacheKey {
-            key: "cache-key".to_string(),
-        },
-        HostResponseKVUnit { result: Ok(()) },
-    );
 }
 
 #[test]

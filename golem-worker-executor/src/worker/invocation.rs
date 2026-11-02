@@ -260,40 +260,108 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .as_ref()
         .and_then(|primary_body| primary_body.invocation().cloned())
     {
-        if let Err(error) =
+        for error in
             crate::durable_host::tool::prepare_tool_parent_end(&mut store, parent.clone()).await
         {
-            call_result = Err(error);
-        }
-        if let Some(primary_body) = primary_body {
-            primary_body.complete();
-        }
-        if let Err(error) =
-            crate::durable_host::tool::settle_tool_children(&mut store, parent).await
-        {
-            call_result = Err(error);
-        }
-        if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
             let consumed_fuel = call_result
                 .as_ref()
                 .map(InvokeResult::consumed_fuel)
                 .unwrap_or_default();
-            call_result = match owner_failure {
-                OwnerFailureWinner::Trap(trap) => {
-                    Ok(InvokeResult::from_trap_type(consumed_fuel, trap))
-                }
-                OwnerFailureWinner::Lifecycle(interrupt_kind) => Ok(InvokeResult::Interrupted {
-                    consumed_fuel,
-                    interrupt_kind,
-                }),
-                OwnerFailureWinner::Infrastructure(error) => Err(error),
-            };
+            let failure = invoke_result_from_trap(
+                &mut store,
+                consumed_fuel,
+                wasmtime::Error::from_anyhow(error),
+            )
+            .await;
+            retain_invocation_failure(&mut call_result, failure);
+        }
+        if let Some(primary_body) = primary_body {
+            primary_body.complete();
+        }
+        for error in crate::durable_host::tool::settle_tool_children(&mut store, parent).await {
+            let consumed_fuel = call_result
+                .as_ref()
+                .map(InvokeResult::consumed_fuel)
+                .unwrap_or_default();
+            let failure = invoke_result_from_trap(
+                &mut store,
+                consumed_fuel,
+                wasmtime::Error::from_anyhow(error),
+            )
+            .await;
+            retain_invocation_failure(&mut call_result, failure);
+        }
+        if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
+            apply_selected_owner_failure(&mut call_result, owner_failure);
         }
     }
 
     store.data_mut().on_agent_invocation_finished().await;
 
     apply_invocation_deadline(&mut store, deadline, call_result).await
+}
+
+fn apply_selected_owner_failure(
+    result: &mut Result<InvokeResult, WorkerExecutorError>,
+    owner_failure: OwnerFailureWinner,
+) {
+    if matches!(
+        result,
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::ShardLost,
+            ..
+        }) | Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost
+        } | WorkerExecutorError::OplogFenced { .. })
+    ) {
+        return;
+    }
+    let consumed_fuel = result
+        .as_ref()
+        .map(InvokeResult::consumed_fuel)
+        .unwrap_or_default();
+    *result = match owner_failure {
+        OwnerFailureWinner::Trap(trap) => Ok(InvokeResult::from_trap_type(consumed_fuel, trap)),
+        OwnerFailureWinner::Lifecycle(interrupt_kind) => Ok(InvokeResult::Interrupted {
+            consumed_fuel,
+            interrupt_kind,
+        }),
+        OwnerFailureWinner::Infrastructure(error) => Err(error),
+    };
+}
+
+fn retain_invocation_failure(
+    result: &mut Result<InvokeResult, WorkerExecutorError>,
+    failure: Result<InvokeResult, WorkerExecutorError>,
+) {
+    let shard_lost = matches!(
+        result,
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::ShardLost,
+            ..
+        }) | Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost
+        } | WorkerExecutorError::OplogFenced { .. })
+    );
+    // Lifecycle interruption must stop the generation even after a body failure;
+    // retaining that failure must not keep a stopped or fenced generation running.
+    if !shard_lost
+        && (matches!(
+            result,
+            Ok(InvokeResult::Succeeded { .. } | InvokeResult::Exited { .. })
+        ) || matches!(
+            &failure,
+            Ok(InvokeResult::Interrupted {
+                interrupt_kind: InterruptKind::ShardLost,
+                ..
+            }) | Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost
+            } | WorkerExecutorError::OplogFenced { .. })
+        ) || (matches!(&failure, Ok(InvokeResult::Interrupted { .. }))
+            && !matches!(result, Ok(InvokeResult::Interrupted { .. }))))
+    {
+        *result = failure;
+    }
 }
 
 /// Publishes the early stream-bearing result and drives its producers to completion.
@@ -1949,6 +2017,152 @@ mod tests {
     use golem_common::schema::schema_type::SchemaType;
     use std::collections::BTreeMap;
     use test_r::test;
+
+    #[test]
+    async fn finalization_selected_owner_failure_cannot_replace_later_shard_loss() {
+        let operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
+        assert!(
+            operations
+                .select_owner_failure(OwnerFailureWinner::Infrastructure(
+                    WorkerExecutorError::runtime("earlier failure")
+                ))
+                .await
+        );
+        let mut result = Ok(InvokeResult::Interrupted {
+            consumed_fuel: 41,
+            interrupt_kind: InterruptKind::ShardLost,
+        });
+        apply_selected_owner_failure(&mut result, operations.selected_owner_failure().unwrap());
+        assert!(matches!(
+            result,
+            Ok(InvokeResult::Interrupted {
+                consumed_fuel: 41,
+                interrupt_kind: InterruptKind::ShardLost
+            })
+        ));
+
+        let mut ordinary = Err(WorkerExecutorError::unexpected_oplog_entry(
+            "expected", "actual",
+        ));
+        apply_selected_owner_failure(&mut ordinary, operations.selected_owner_failure().unwrap());
+        assert!(matches!(ordinary, Err(WorkerExecutorError::Runtime { .. })));
+    }
+
+    #[test]
+    fn finalization_preserves_original_failure_and_semantic_retry_fields() {
+        use crate::durable_host::durability::{
+            SemanticTrapRetryOverride, SemanticTrapRetryVerdict,
+        };
+        use golem_common::model::RetryPolicyState;
+
+        let mut result = Ok(InvokeResult::Failed {
+            consumed_fuel: 42,
+            timed_out: true,
+            error: OplogAgentError::InternalError("original".into()),
+            retry_from: OplogIndex::from_u64(17),
+            semantic_trap_retry_override: Some(SemanticTrapRetryOverride {
+                retry_from: OplogIndex::from_u64(19),
+                policy_name: "selected".into(),
+                verdict: SemanticTrapRetryVerdict::GiveUp,
+                retry_policy_state: RetryPolicyState::Counter(3),
+            }),
+        });
+        retain_invocation_failure(&mut result, Err(WorkerExecutorError::runtime("cleanup")));
+        let Ok(InvokeResult::Failed {
+            consumed_fuel,
+            timed_out,
+            error,
+            retry_from,
+            semantic_trap_retry_override: Some(policy),
+        }) = result
+        else {
+            panic!("cleanup replaced the original failure");
+        };
+        assert_eq!(consumed_fuel, 42);
+        assert!(timed_out);
+        assert_eq!(error, OplogAgentError::InternalError("original".into()));
+        assert_eq!(retry_from, OplogIndex::from_u64(17));
+        assert_eq!(policy.retry_from, OplogIndex::from_u64(19));
+        assert_eq!(policy.policy_name, "selected");
+        assert_eq!(policy.verdict, SemanticTrapRetryVerdict::GiveUp);
+        assert_eq!(policy.retry_policy_state, RetryPolicyState::Counter(3));
+    }
+
+    #[test]
+    fn finalization_preserves_divergence_but_not_over_shard_loss() {
+        let mut result = Err(WorkerExecutorError::unexpected_oplog_entry(
+            "observation",
+            "disposal",
+        ));
+        retain_invocation_failure(&mut result, Err(WorkerExecutorError::runtime("cleanup")));
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ));
+        retain_invocation_failure(
+            &mut result,
+            Ok(InvokeResult::Interrupted {
+                consumed_fuel: 0,
+                interrupt_kind: InterruptKind::ShardLost,
+            }),
+        );
+        retain_invocation_failure(
+            &mut result,
+            Err(WorkerExecutorError::runtime("later cleanup")),
+        );
+        assert!(matches!(
+            result,
+            Ok(InvokeResult::Interrupted {
+                interrupt_kind: InterruptKind::ShardLost,
+                ..
+            })
+        ));
+
+        for failure in [
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            },
+            WorkerExecutorError::OplogFenced {
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "fenced".into(),
+                },
+                expected_epoch: 1,
+                actual_epoch: Some(2),
+            },
+        ] {
+            let mut result = Err(WorkerExecutorError::unexpected_oplog_entry(
+                "observation",
+                "disposal",
+            ));
+            retain_invocation_failure(&mut result, Err(failure.clone()));
+            retain_invocation_failure(
+                &mut result,
+                Ok(InvokeResult::Interrupted {
+                    consumed_fuel: 0,
+                    interrupt_kind: InterruptKind::Restart,
+                }),
+            );
+            assert_eq!(result.unwrap_err(), failure);
+        }
+    }
+
+    #[test]
+    fn finalization_failure_replaces_only_a_successful_body() {
+        let mut result = Ok(InvokeResult::Exited { consumed_fuel: 7 });
+        retain_invocation_failure(
+            &mut result,
+            Err(WorkerExecutorError::unexpected_oplog_entry(
+                "observation",
+                "disposal",
+            )),
+        );
+        retain_invocation_failure(&mut result, Err(WorkerExecutorError::runtime("settlement")));
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ));
+    }
 
     #[test]
     fn snapshot_divergence_excludes_deadlines_and_infrastructure_failures() {

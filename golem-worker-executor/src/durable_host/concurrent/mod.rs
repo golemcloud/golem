@@ -92,7 +92,7 @@ pub(crate) use context::{
 pub use delivery::*;
 pub(crate) use demand_stream::*;
 #[cfg(test)]
-pub(crate) use drop_events::tests::cleanup_recorder;
+pub(crate) use drop_events::tests::{cleanup_recorder, cleanup_recorder_for_store};
 pub use drop_events::*;
 pub use replay::*;
 
