@@ -30,9 +30,8 @@ Build the Rust tool-streaming caller and provider with the local SDK, following
 `test-components/tool-streaming/AGENTS.md`. Tests consume prebuilt Wasm and never
 invoke a compiler. Inspect existing artifacts rather than assuming they are fresh.
 
-From the repository root, with a `wasm-rquickjs` CLI that includes the generic
-`wasm-rquickjs:child-process` and runtime-init hooks on `PATH` (released 0.4.13
-does not include them):
+From the repository root, with `wasm-rquickjs` 0.4.14 or later on `PATH` (it adds
+the generic `wasm-rquickjs:child-process` and runtime-init hooks):
 
 ```sh
 CARGO_BUILD_JOBS=1 node golem-common/tests/fixtures/node-tool-processes/build.mjs /absolute/path/to/new-output-directory
