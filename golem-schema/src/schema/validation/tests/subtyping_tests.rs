@@ -16,10 +16,13 @@ use super::wellformed_strategy::wellformed_schema_graph_strategy;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
-    BinaryRestrictions, NamedFieldType, NumericBound, NumericRestrictions, PermissionCardSpec,
-    QuantitySpec, QuantityValue, SchemaType, TextRestrictions, UrlRestrictions, VariantCaseType,
+    BinaryRestrictions, NamedFieldType, NumericBound, NumericRestrictions, PathDirection, PathKind,
+    PathSpec, PermissionCardSpec, QuantitySpec, QuantityValue, SchemaType, TextRestrictions,
+    UrlRestrictions, VariantCaseType,
 };
-use crate::schema::validation::subtyping::{is_assignable, is_equivalent_cross_graph};
+use crate::schema::validation::subtyping::{
+    is_assignable, is_equivalent_cross_graph, is_refinement_cross_graph,
+};
 use proptest::prelude::*;
 use test_r::test;
 
@@ -673,4 +676,126 @@ fn numeric_different_repr_is_not_assignable() {
     let s = SchemaType::s32();
     assert!(!is_assignable(&graph, &u, &s));
     assert!(!is_assignable(&graph, &s, &u));
+}
+
+// --- Tool argument refinements ---
+
+fn is_refinement(refined: &SchemaType, base: &SchemaType) -> bool {
+    is_refinement_cross_graph(
+        &SchemaGraph::anonymous(refined.clone()),
+        refined,
+        &SchemaGraph::anonymous(base.clone()),
+        base,
+    )
+}
+
+fn max_length_text(max_length: u32, languages: Option<Vec<String>>) -> SchemaType {
+    SchemaType::text(TextRestrictions {
+        languages,
+        min_length: None,
+        max_length: Some(max_length),
+        regex: Some("^[a-z]+$".to_string()),
+    })
+}
+
+#[test]
+fn refined_text_is_a_refinement_of_string() {
+    let refined = max_length_text(8, None);
+    assert!(is_refinement(&refined, &SchemaType::string()));
+    assert!(is_refinement(
+        &SchemaType::option(refined.clone()),
+        &SchemaType::option(SchemaType::string())
+    ));
+    assert!(is_refinement(
+        &SchemaType::list(refined.clone()),
+        &SchemaType::list(SchemaType::string())
+    ));
+    assert!(!is_equivalent_cross_graph(
+        &SchemaGraph::anonymous(refined.clone()),
+        &refined,
+        &SchemaGraph::anonymous(SchemaType::string()),
+        &SchemaType::string()
+    ));
+}
+
+#[test]
+fn text_with_a_language_restriction_is_not_a_refinement_of_string() {
+    let languages = Some(vec!["en".to_string()]);
+    assert!(!is_refinement(
+        &max_length_text(8, languages.clone()),
+        &SchemaType::string()
+    ));
+    assert!(is_refinement(
+        &max_length_text(8, languages.clone()),
+        &max_length_text(16, languages)
+    ));
+    assert!(!is_refinement(
+        &max_length_text(8, Some(vec!["en".to_string()])),
+        &max_length_text(8, Some(vec!["de".to_string()]))
+    ));
+}
+
+#[test]
+fn refinement_relation_is_directed_from_refined_to_base() {
+    assert!(!is_refinement(
+        &SchemaType::string(),
+        &max_length_text(8, None)
+    ));
+}
+
+#[test]
+fn refined_numeric_is_a_refinement_of_the_same_numeric_type_only() {
+    let refined = u32_bounds(None, Some(3), Some("items"));
+    assert!(is_refinement(&refined, &SchemaType::u32()));
+    assert!(!is_refinement(&refined, &SchemaType::u64()));
+    assert!(!is_refinement(&refined, &SchemaType::s32()));
+    assert!(!is_refinement(&refined, &SchemaType::string()));
+}
+
+#[test]
+fn refined_path_and_url_are_refinements_of_their_base_types() {
+    let path = SchemaType::path(PathSpec {
+        direction: PathDirection::InOut,
+        kind: PathKind::Any,
+        allowed_mime_types: None,
+        allowed_extensions: None,
+    });
+    let refined_path = SchemaType::path(PathSpec {
+        direction: PathDirection::Input,
+        kind: PathKind::File,
+        allowed_mime_types: None,
+        allowed_extensions: Some(vec!["wasm".to_string()]),
+    });
+    assert!(is_refinement(&refined_path, &path));
+    assert!(!is_refinement(&refined_path, &SchemaType::string()));
+
+    let url = SchemaType::url(UrlRestrictions::default());
+    let refined_url = SchemaType::url(UrlRestrictions {
+        allowed_schemes: Some(vec!["https".to_string()]),
+        allowed_hosts: None,
+    });
+    let host_restricted_url = SchemaType::url(UrlRestrictions {
+        allowed_schemes: None,
+        allowed_hosts: Some(vec!["golem.cloud".to_string()]),
+    });
+    assert!(is_refinement(&refined_url, &url));
+    assert!(!is_refinement(&host_restricted_url, &url));
+}
+
+#[test]
+fn refinement_keeps_structure_and_other_scalars_exact() {
+    let refined = max_length_text(8, None);
+    assert!(!is_refinement(
+        &SchemaType::list(refined.clone()),
+        &SchemaType::option(SchemaType::string())
+    ));
+    assert!(!is_refinement(&refined, &SchemaType::char()));
+    assert!(!is_refinement(
+        &SchemaType::binary(BinaryRestrictions {
+            mime_types: None,
+            min_bytes: Some(1),
+            max_bytes: None,
+        }),
+        &SchemaType::binary(BinaryRestrictions::default())
+    ));
 }
