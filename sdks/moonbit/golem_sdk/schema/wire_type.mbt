@@ -179,6 +179,11 @@ pub impl WireSchema for Int with fn append_wire_type(encoder) {
 }
 
 ///|
+pub impl WireSchema for Int16 with fn append_wire_type(encoder) {
+  encoder.push(@types.SchemaTypeBody::S16Type(None))
+}
+
+///|
 pub impl WireSchema for UInt16 with fn append_wire_type(encoder) {
   encoder.push(@types.SchemaTypeBody::U16Type(None))
 }
@@ -278,11 +283,6 @@ pub impl WireSchema for Bytes with fn append_wire_type(encoder) {
 ///|
 pub impl WireSchema for Uuid with fn append_wire_type(encoder) {
   encoder.push(@types.SchemaTypeBody::UuidType)
-}
-
-///|
-pub impl WireSchema for @types.Datetime with fn append_wire_type(encoder) {
-  encoder.push(@types.SchemaTypeBody::DatetimeType)
 }
 
 ///|

@@ -152,8 +152,10 @@ impl RustBridgeGenerator {
                 }
             }
             SchemaType::Datetime { .. } if !prepare => quote! {
-                chrono::DateTime::parse_from_rfc3339(#value)
-                    .map_err(|__error| format!("Invalid RFC3339 datetime: {__error}"))?;
+                crate::__golem_bridge_runtime::check_datetime(#value)?;
+            },
+            SchemaType::Duration { .. } if !prepare => quote! {
+                crate::__golem_bridge_runtime::duration_nanoseconds(#value)?;
             },
             _ => quote! {},
         })
@@ -392,18 +394,20 @@ impl RustBridgeGenerator {
                 push(quote! { __wire::SchemaValueNode::PathValue(#val.clone()) })
             }
             SchemaType::Url { .. } => {
-                push(quote! { __wire::SchemaValueNode::UrlValue(#val.clone()) })
+                push(quote! { __wire::SchemaValueNode::UrlValue(#val.to_string()) })
             }
             SchemaType::Uuid { .. } => quote! {
                 golem_rust::schema::wit::direct::IntoWire::write_wire(#val, __writer)
                     .map_err(|__error| __error.to_string())
             },
-            SchemaType::Duration { .. } => push(quote! {
-                __wire::SchemaValueNode::DurationValue(__wire::DurationValuePayload { nanoseconds: *#val })
-            }),
+            SchemaType::Duration { .. } => quote! {
+                crate::__golem_bridge_runtime::duration_nanoseconds(#val)
+                    .map(|__nanoseconds| __writer.push(__wire::SchemaValueNode::DurationValue(
+                        __wire::DurationValuePayload { nanoseconds: __nanoseconds }
+                    )))
+            },
             SchemaType::Datetime { .. } => quote! {
-                chrono::DateTime::parse_from_rfc3339(&#val)
-                    .map_err(|__error| format!("Invalid RFC3339 datetime: {__error}"))
+                crate::__golem_bridge_runtime::check_datetime(#val)
                     .map(|__datetime| __writer.push(__wire::SchemaValueNode::DatetimeValue(
                         __wire::Datetime {
                             seconds: __datetime.timestamp(),
@@ -605,14 +609,20 @@ impl RustBridgeGenerator {
             SchemaType::Char { .. } => scalar!(CharValue, "char"),
             SchemaType::String { .. } => scalar!(StringValue, "string"),
             SchemaType::Path { .. } => scalar!(PathValue, "path"),
-            SchemaType::Url { .. } => scalar!(UrlValue, "url"),
+            SchemaType::Url { .. } => {
+                quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
+                    __wire::SchemaValueNode::UrlValue(__value) => url::Url::parse(&__value)
+                        .map_err(|__error| format!("Invalid url {__value:?}: {__error}")),
+                    __other => Err(format!("Expected url value, got {:?}", __other)),
+                }}
+            }
             SchemaType::Uuid { .. } => quote! {
                 <golem_rust::Uuid as golem_rust::schema::wit::direct::FromWire>::read_wire(__reader, #index)
                     .map_err(|__error| __error.to_string())
             },
             SchemaType::Duration { .. } => {
                 quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
-                    __wire::SchemaValueNode::DurationValue(__value) => Ok(__value.nanoseconds),
+                    __wire::SchemaValueNode::DurationValue(__value) => Ok(chrono::TimeDelta::nanoseconds(__value.nanoseconds)),
                     __other => Err(format!("Expected duration value, got {:?}", __other)),
                 }}
             }
@@ -620,8 +630,8 @@ impl RustBridgeGenerator {
                 quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
                     __wire::SchemaValueNode::DatetimeValue(__value) =>
                         chrono::DateTime::<chrono::Utc>::from_timestamp(__value.seconds, __value.nanoseconds)
-                            .map(|__value| __value.to_rfc3339())
-                            .ok_or_else(|| "Expected valid datetime value".to_string()),
+                            .ok_or_else(|| format!("Invalid datetime {}s {}ns", __value.seconds, __value.nanoseconds))
+                            .and_then(|__datetime| crate::__golem_bridge_runtime::check_datetime(&__datetime)),
                     __other => Err(format!("Expected datetime value, got {:?}", __other)),
                 }}
             }

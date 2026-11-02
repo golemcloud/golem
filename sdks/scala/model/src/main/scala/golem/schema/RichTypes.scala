@@ -18,10 +18,10 @@ package golem.schema
 
 import zio.blocks.schema.{Modifier, Schema}
 
+import java.net.{URI, URISyntaxException}
 import java.time.{Duration => JDuration, Instant}
 import scala.annotation.publicInBinary
 import scala.collection.immutable.ListMap
-import scala.util.control.NonFatal
 
 final case class GolemPath(value: String) extends AnyVal
 
@@ -48,28 +48,33 @@ object GolemPath {
     }
 }
 
-final case class Url(value: String) extends AnyVal
-
-object Url {
+private[golem] object UrlText {
   val defaultRestrictions: UrlRestrictions = UrlRestrictions.empty
 
-  implicit val schema: Schema[Url] = Schema.derived
+  def encode(value: URI): String = UnicodeText.encodeText("url", value.toString)
 
-  implicit val intoSchema: IntoSchema[Url] =
-    new IntoSchema[Url] {
-      override lazy val graph: SchemaGraph =
-        SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.UrlType(defaultRestrictions)))
-      override def toValue(value: Url): SchemaValue = SchemaValue.UrlValue(UnicodeText.encodeText("url", value.value))
-    }
+  def parse(value: String): Either[String, URI] =
+    try Right(new URI(value))
+    catch { case e: URISyntaxException => Left(s"invalid url '$value': ${e.getReason}") }
+}
 
-  implicit val fromSchema: FromSchema[Url] =
-    new FromSchema[Url] {
-      override def fromValue(value: SchemaValue): Either[FromSchemaError, Url] =
-        value match {
-          case SchemaValue.UrlValue(v) => Right(Url(v))
-          case other                   => Left(FromSchemaError(s"expected url value for Url, got $other"))
-        }
+private[golem] object DurationNanos {
+
+  /**
+   * The signed nanoseconds of a duration. Throws [[SchemaEncodeError]] outside
+   * the s64 range. Computed here because the Scala.js `java.time` overflows at
+   * the most negative value.
+   */
+  def of(value: JDuration): Long = {
+    val seconds = value.getSeconds
+    try
+      if (seconds < 0)
+        Math.addExact(Math.multiplyExact(seconds + 1, 1000000000L), value.getNano.toLong - 1000000000L)
+      else Math.addExact(Math.multiplyExact(seconds, 1000000000L), value.getNano.toLong)
+    catch {
+      case _: ArithmeticException => throw SchemaEncodeError(s"Duration is out of i64 nanoseconds range: $value")
     }
+  }
 }
 
 /**
@@ -192,6 +197,25 @@ object RichSchemas {
   implicit val durationSchema: Schema[JDuration] =
     Schema[Long].transform[JDuration](JDuration.ofNanos, _.toNanos)
 
+  implicit val uriSchema: Schema[URI] =
+    Schema[String].transform[URI](new URI(_), _.toString)
+
+  implicit val uriIntoSchema: IntoSchema[URI] =
+    new IntoSchema[URI] {
+      override lazy val graph: SchemaGraph =
+        SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.UrlType(UrlText.defaultRestrictions)))
+      override def toValue(value: URI): SchemaValue = SchemaValue.UrlValue(UrlText.encode(value))
+    }
+
+  implicit val uriFromSchema: FromSchema[URI] =
+    new FromSchema[URI] {
+      override def fromValue(value: SchemaValue): Either[FromSchemaError, URI] =
+        value match {
+          case SchemaValue.UrlValue(v) => UrlText.parse(v).left.map(FromSchemaError(_))
+          case other                   => Left(FromSchemaError(s"expected url value for URI, got $other"))
+        }
+    }
+
   implicit val instantIntoSchema: IntoSchema[Instant] =
     new IntoSchema[Instant] {
       override lazy val graph: SchemaGraph              = SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.DatetimeType))
@@ -212,10 +236,7 @@ object RichSchemas {
     new IntoSchema[JDuration] {
       override lazy val graph: SchemaGraph                = SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.DurationType))
       override def toValue(value: JDuration): SchemaValue =
-        try SchemaValue.DurationValue(value.toNanos)
-        catch {
-          case NonFatal(e) => throw SchemaEncodeError(s"Duration is out of i64 nanoseconds range: ${e.getMessage}")
-        }
+        SchemaValue.DurationValue(DurationNanos.of(value))
     }
 
   implicit val durationFromSchema: FromSchema[JDuration] =
@@ -237,4 +258,5 @@ trait RichSchemaImplicits {
   implicit def golemInstantFromSchema: FromSchema[Instant]    = RichSchemas.instantFromSchema
   implicit def golemDurationIntoSchema: IntoSchema[JDuration] = RichSchemas.durationIntoSchema
   implicit def golemDurationFromSchema: FromSchema[JDuration] = RichSchemas.durationFromSchema
+  implicit def golemUriSchema: Schema[URI]                    = RichSchemas.uriSchema
 }

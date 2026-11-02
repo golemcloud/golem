@@ -23,6 +23,7 @@ export {
   typedSchemaValueToWit,
 } from '../internal/schema-model/wit';
 export { Uuid } from '../uuid';
+export { Datetime } from '../datetime';
 export { Result } from '../host/result';
 export { UnstructuredText } from '../newTypes/textInput';
 export { UnstructuredBinary } from '../newTypes/binaryInput';

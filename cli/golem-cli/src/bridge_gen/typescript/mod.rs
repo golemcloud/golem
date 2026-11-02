@@ -2170,7 +2170,7 @@ impl TypeScriptBridgeGenerator {
             | SchemaType::Url { .. }
             | SchemaType::Datetime { .. } => {
                 let kind = match typ { SchemaType::Bool { .. } => "bool", SchemaType::S8 { .. } => "s8", SchemaType::S16 { .. } => "s16", SchemaType::S32 { .. } => "s32", SchemaType::U8 { .. } => "u8", SchemaType::U16 { .. } => "u16", SchemaType::U32 { .. } => "u32", SchemaType::Char { .. } => "char", SchemaType::String { .. } => "string", SchemaType::Path { .. } => "path", SchemaType::Url { .. } => "url", SchemaType::Datetime { .. } => "datetime", _ => unreachable!() };
-                let payload = match typ { SchemaType::Path { .. } => format!("{{ path: {value} }}"), SchemaType::Url { .. } => format!("{{ url: {value} }}"), SchemaType::Datetime { .. } => format!("{{ value: {value} }}"), _ => value.to_string() };
+                let payload = match typ { SchemaType::Path { .. } => format!("{{ path: {value} }}"), SchemaType::Url { .. } => format!("{{ url: {value} }}"), SchemaType::Datetime { .. } => format!("{{ value: base.Datetime.toISOString({value}) }}"), _ => value.to_string() };
                 format!("({{ kind: '{kind}', value: {payload} }})")
             },
             SchemaType::Uuid { .. } => {
@@ -2517,7 +2517,9 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Uuid { .. } => {
                 format!("base.Uuid.parse(({value} as any).value as string)")
             }
-            SchemaType::Datetime { .. } => format!("(({value} as any).value.value as string)"),
+            SchemaType::Datetime { .. } => {
+                format!("base.Datetime.parse(({value} as any).value.value as string)")
+            }
             SchemaType::Text { .. } => format!("(({value} as any).value as base.AgentText)"),
             SchemaType::Enum { cases, .. } => format!(
                 "((v: any) => {{ {} throw new Error('unknown enum'); }})(({value} as any).value.case)",
@@ -3281,7 +3283,7 @@ impl TypeScriptBridgeGenerator {
                 format!("((n: any) => base.Uuid.from(n.value))({value})")
             }
             SchemaType::Datetime { .. } => {
-                format!("((n: any) => base.datetimeToISOString(n.value))({value})")
+                format!("((n: any) => n.value as base.Datetime)({value})")
             }
             SchemaType::Duration { .. } => format!("((n: any) => n.nanoseconds)({value})"),
             SchemaType::Stream {
@@ -3552,7 +3554,7 @@ impl TypeScriptBridgeGenerator {
                 format!("((n: any) => base.Uuid.parse(n.value as string))({value})")
             }
             SchemaType::Datetime { .. } => {
-                format!("((n: any) => n.value.value as string)({value})")
+                format!("((n: any) => base.Datetime.parse(n.value.value as string))({value})")
             }
             SchemaType::Duration { .. } => {
                 format!("((n: any) => BigInt(n.value.nanoseconds))({value})")
@@ -3723,7 +3725,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Url { .. } => format!("{{ tag: 'url', value: {value} }}"),
             SchemaType::Uuid { .. } => format!("{{ tag: 'uuid', value: {value} }}"),
             SchemaType::Datetime { .. } => {
-                format!("{{ tag: 'datetime', value: base.datetimeFromISOString({value}) }}")
+                format!("{{ tag: 'datetime', value: {value} }}")
             }
             SchemaType::Duration { .. } => format!("{{ tag: 'duration', nanoseconds: {value} }}"),
             SchemaType::Stream {
@@ -3980,7 +3982,9 @@ impl TypeScriptBridgeGenerator {
                 format!("{{ kind: 'uuid', value: ({value}).toString() }}")
             }
             SchemaType::Datetime { .. } => {
-                format!("{{ kind: 'datetime', value: {{ value: {value} }} }}")
+                format!(
+                    "{{ kind: 'datetime', value: {{ value: base.Datetime.toISOString({value}) }} }}"
+                )
             }
             SchemaType::Duration { .. } => {
                 format!("{{ kind: 'duration', value: {{ nanoseconds: ({value}).toString() }} }}")
@@ -4299,8 +4303,8 @@ impl TypeScriptBridgeGenerator {
             SchemaType::String { .. }
             | SchemaType::Char { .. }
             | SchemaType::Path { .. }
-            | SchemaType::Url { .. }
-            | SchemaType::Datetime { .. } => "string".to_string(),
+            | SchemaType::Url { .. } => "string".to_string(),
+            SchemaType::Datetime { .. } => "base.Datetime".to_string(),
             SchemaType::Uuid { .. } => "base.Uuid".to_string(),
             SchemaType::Enum { .. } => self.streaming_type_definition(typ)?,
             SchemaType::F64 { .. }
@@ -4493,8 +4497,8 @@ impl TypeScriptBridgeGenerator {
             SchemaType::String { .. }
             | SchemaType::Char { .. }
             | SchemaType::Path { .. }
-            | SchemaType::Url { .. }
-            | SchemaType::Datetime { .. } => "string".to_string(),
+            | SchemaType::Url { .. } => "string".to_string(),
+            SchemaType::Datetime { .. } => "base.Datetime".to_string(),
             SchemaType::Uuid { .. } => "base.Uuid".to_string(),
             SchemaType::F64 { .. }
             | SchemaType::F32 { .. }
@@ -4626,7 +4630,7 @@ impl TypeScriptBridgeGenerator {
                     SchemaType::Path { .. } => Ok("string".to_string()),
                     SchemaType::Url { .. } => Ok("string".to_string()),
                     SchemaType::Uuid { .. } => Ok("base.Uuid".to_string()),
-                    SchemaType::Datetime { .. } => Ok("string".to_string()),
+                    SchemaType::Datetime { .. } => Ok("base.Datetime".to_string()),
                     SchemaType::Duration { .. } => Ok("bigint".to_string()),
                     SchemaType::Secret { .. }
                         if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
@@ -4796,7 +4800,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Path { .. } => Ok("string".to_string()),
             SchemaType::Url { .. } => Ok("string".to_string()),
             SchemaType::Uuid { .. } => Ok("base.Uuid".to_string()),
-            SchemaType::Datetime { .. } => Ok("string".to_string()),
+            SchemaType::Datetime { .. } => Ok("base.Datetime".to_string()),
             SchemaType::Duration { .. } => Ok("bigint".to_string()),
             SchemaType::Secret { .. } if self.mode == TypeScriptBridgeMode::GuestWasmRpc => {
                 Ok("base.SecretHandle".to_string())

@@ -80,11 +80,12 @@ sdks/moonbit/
 │   │   └── validation_test.mbt
 │   ├── schema/                        # Serialization traits + primitive/compound impls
 │   │   ├── schema.mbt                 # IntoSchema / FromSchema traits, TypeTag, helpers
-│   │   ├── primitives.mbt            # Impls for String, Bool, Int, UInt, Int64, UInt64, Float, Double, Byte, Char, Unit
+│   │   ├── primitives.mbt            # Impls for String, Bool, Int, Int16, UInt16, UInt, Int64, UInt64, Float, Double, Byte, Char, Unit
 │   │   ├── compounds.mbt             # Impls for Option[T], Array[T], Result[T,E], Map[K,V], Bytes
 │   │   ├── tuples.mbt                # Impls for tuples (arity 2–8)
 │   │   ├── records.mbt              # record/enum/variant helpers used by generated code
-│   │   ├── rich_types.mbt           # Path, Url, Text[S], Duration, Quantity[U], Uuid, Datetime
+│   │   ├── rich_types.mbt           # Path, Url, Text[S], Duration, Quantity[U], Uuid
+│   │   ├── datetime.mbt             # Datetime (RFC 3339 parse/print)
 │   │   ├── unstructured.mbt         # UnstructuredText[L] / UnstructuredBinary[M] (role-marked inline/url variants)
 │   │   ├── schema_test.mbt
 │   │   └── records_test.mbt
@@ -275,16 +276,23 @@ pub(open) trait FromSchema {
 - `type_id()` defaults to the package-qualified MoonBit type name (bare name at module root); a
   `named` override is reserved for intentional cross-SDK identity. Exact cross-SDK string identity is
   *not* required.
-- Implemented for: `Unit`, `String`, `Bool`, `Int` (S32), `UInt` (U32), `Int64` (S64), `UInt64`
-  (U64), `Float` (F32), `Double` (F64), `Byte` (U8), `Char`, `Bytes`, `Option[T]`, `Array[T]`,
+- Implemented for: `Unit`, `String`, `Bool`, `Int` (S32), `Int16` (S16), `UInt16` (U16), `UInt`
+  (U32), `Int64` (S64), `UInt64` (U64), `Float` (F32), `Double` (F64), `Byte` (U8), `Char`, `Bytes`,
+  `Option[T]`, `Array[T]` (a `list`; there is no fixed-list type, because MoonBit types cannot carry
+  the length; generated bridges map `fixed-list` to `FixedArray[T]`),
   `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8; the rich types `Path`, `Url`, `Text[S]`,
-  `Duration`, `Quantity[U]`, `Uuid`, and `@types.Datetime`; and `UnstructuredText[L]` /
+  `Duration`, `Quantity[U]`, `Uuid`, and `Datetime`; and `UnstructuredText[L]` /
   `UnstructuredBinary[M]` (see below).
 - `Uuid` is the SDK's UUID type, used by every user-facing API (phantom ids, idempotency keys,
   permission holders). It has `parse` (hyphenated, case-insensitive), `Show` (lowercase
   hyphenated), `Eq`/`Compare`/`Hash`, `random` (version 4 from `wasi:random/random`, which Golem
   records durably), and `from_wit`/`to_wit`. The raw `@types.Uuid` record appears only at WIT
   boundaries and in `@model.SchemaValue::Uuid`.
+- `Datetime` is the SDK's point in time (seconds since the Unix epoch plus nanoseconds, UTC year
+  `0000..9999`). It has `new`, `parse` (RFC 3339 with any offset, converted to UTC), `Show`
+  (canonical UTC `Z` form with up to nine fraction digits), `Eq`/`Compare`/`Hash`, and
+  `from_wit`/`to_wit`. The raw `@types.Datetime` record appears only at WIT boundaries and in
+  `@model.SchemaValue::Datetime`.
 
 **Helpers** (in `schema.mbt`):
 - `type_tag[T]() -> TypeTag[T]` — a zero-sized handle to ask for a type's schema without a value

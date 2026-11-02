@@ -112,11 +112,8 @@ test "rich type round-trips" {
     (Text::new("deadbeef") : Text[DigestText]),
   )
   assert_eq(
-    rich_roundtrip(@types.Datetime::{
-      seconds: 1_700_000_000L,
-      nanoseconds: 123U,
-    }),
-    @types.Datetime::{ seconds: 1_700_000_000L, nanoseconds: 123U, },
+    rich_roundtrip(Datetime::new(1_700_000_000L, 123U)),
+    Datetime::new(1_700_000_000L, 123U),
   )
   assert_eq(rich_roundtrip(Duration::new(-42L)), Duration::new(-42L))
   assert_eq(
@@ -233,7 +230,7 @@ test "rich schema shapes" {
       #|)
     ),
   )
-  let datetime_tag : TypeTag[@types.Datetime] = type_tag()
+  let datetime_tag : TypeTag[Datetime] = type_tag()
   debug_inspect(
     register_in_with(@model.SchemaBuilder::new(), datetime_tag).body,
     content=(

@@ -1391,7 +1391,12 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
     assert!(cargo_toml.contains("name = \"alpha-agent-guest-client\""));
     assert!(cargo_toml.contains("golem-rust"));
     assert!(cargo_toml.contains("export_golem_agentic"));
-    assert!(cargo_toml.contains("chrono = \"0.4\""));
+    assert!(cargo_toml.contains("chrono = \"0.4.42\""));
+    assert!(
+        cargo_toml.contains("features = [\"export_golem_agentic\", \"macro\"]"),
+        "{cargo_toml}"
+    );
+    assert!(cargo_toml.contains("url = \"2.5.7\""));
     assert!(cargo_toml.contains("serde = { version = \"1\""));
     assert!(cargo_toml.contains("uuid = { version = \"1.18.1\""));
     assert!(!cargo_toml.contains("[features]"));
@@ -3129,9 +3134,350 @@ mod rich_scalar_codec {
     cargo_test_lib(&package_dir);
 }
 
+fn time_url_agent() -> AgentTypeSchema {
+    use golem_common::schema::schema_type::{PathDirection, PathKind, PathSpec, UrlRestrictions};
+    let path = SchemaType::path(PathSpec {
+        direction: PathDirection::InOut,
+        kind: PathKind::Any,
+        allowed_mime_types: None,
+        allowed_extensions: None,
+    });
+    agent(
+        "TimeUrlAgent",
+        "typescript",
+        vec![field("start", SchemaType::datetime())],
+        vec![
+            method(
+                "plan",
+                vec![field("schedule", ref_to("schedule"))],
+                Some(ref_to("schedule")),
+            ),
+            method(
+                "wait",
+                vec![field("until", SchemaType::datetime())],
+                Some(SchemaType::duration()),
+            ),
+        ],
+        vec![def(
+            "schedule",
+            SchemaType::record(vec![
+                named_field("at", SchemaType::datetime()),
+                named_field("every", SchemaType::duration()),
+                named_field("link", SchemaType::url(UrlRestrictions::default())),
+                named_field("file", path),
+                named_field(
+                    "labels",
+                    SchemaType::map(SchemaType::string(), SchemaType::u32()),
+                ),
+                named_field("next", SchemaType::option(SchemaType::datetime())),
+            ]),
+        )],
+        AgentMode::Durable,
+    )
+}
+
+fn assert_time_url_types(source: &str) {
+    for expected in [
+        "pub at: chrono::DateTime<chrono::Utc>",
+        "pub every: chrono::TimeDelta",
+        "pub link: url::Url",
+        "pub file: String",
+        "pub labels: Vec<(String, u32)>",
+        "pub next: Option<chrono::DateTime<chrono::Utc>>",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+}
+
+const TIME_URL_FIXTURE: &str = r#"
+        fn at() -> chrono::DateTime<chrono::Utc> {
+            chrono::DateTime::parse_from_rfc3339("2026-01-02T05:04:05.123456789+02:00").unwrap().with_timezone(&chrono::Utc)
+        }
+
+        fn schedule() -> Schedule {
+            Schedule {
+                at: at(),
+                every: chrono::TimeDelta::nanoseconds(-1_500_000_001),
+                link: url::Url::parse("https://example.com/a?b=c").unwrap(),
+                file: "/data/report.txt".to_string(),
+                labels: vec![("z".to_string(), 1), ("a".to_string(), 2), ("z".to_string(), 3)],
+                next: Some(chrono::DateTime::from_timestamp(0, 0).unwrap()),
+            }
+        }
+
+        fn year(year: i32) -> chrono::DateTime<chrono::Utc> {
+            chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc()
+        }
+"#;
+
+#[test]
+fn external_datetime_duration_url_use_chrono_and_url_types() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("time-url-agent-client");
+    RustBridgeGenerator::new(time_url_agent(), &package_dir, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let source = std::fs::read_to_string(&lib_path).unwrap();
+    assert_time_url_types(&source);
+    assert!(
+        source.contains("until: chrono::DateTime<chrono::Utc>"),
+        "{source}"
+    );
+
+    let client_module = "mod __golem_bridge_client {\n    use super::*;\n";
+    assert!(source.contains(client_module), "{source}");
+    let source = source.replacen(
+        client_module,
+        &format!(
+            "{client_module}{}{TIME_URL_FIXTURE}{}",
+            r#"
+    #[cfg(test)]
+    mod time_url_codec {
+        use super::*;
+        use crate::__golem_bridge_runtime::schema::{DurationValuePayload, SchemaValue};
+"#,
+            r#"
+        fn encoded_fields() -> Vec<SchemaValue> {
+            let SchemaValue::Record { fields } = encode_Schedule(schedule()).unwrap() else { panic!() };
+            fields
+        }
+
+        #[test]
+        fn schedule_round_trips() {
+            let fields = encoded_fields();
+            assert_eq!(fields[0], SchemaValue::Datetime { value: at() });
+            assert_eq!(fields[1], SchemaValue::Duration(DurationValuePayload { nanoseconds: -1_500_000_001 }));
+            assert_eq!(fields[2], SchemaValue::Url { url: "https://example.com/a?b=c".to_string() });
+            assert_eq!(fields[3], SchemaValue::Path { path: "/data/report.txt".to_string() });
+            let SchemaValue::Map { entries } = &fields[4] else { panic!("{:?}", fields[4]) };
+            assert_eq!(entries[0].0, SchemaValue::String("z".to_string()));
+            assert_eq!(entries[1].0, SchemaValue::String("a".to_string()));
+            let decoded = decode_Schedule(SchemaValue::Record { fields }).unwrap();
+            let expected = schedule();
+            assert_eq!(decoded.at, expected.at);
+            assert_eq!(decoded.every, expected.every);
+            assert_eq!(decoded.link, expected.link);
+            assert_eq!(decoded.file, expected.file);
+            assert_eq!(decoded.labels, expected.labels);
+            assert_eq!(decoded.next, expected.next);
+        }
+
+        #[test]
+        fn duration_covers_the_s64_nanosecond_range() {
+            for nanoseconds in [i64::MIN, i64::MAX] {
+                let mut value = schedule();
+                value.every = chrono::TimeDelta::nanoseconds(nanoseconds);
+                let fields = encoded_fields_of(value);
+                assert_eq!(fields[1], SchemaValue::Duration(DurationValuePayload { nanoseconds }));
+                let decoded = decode_Schedule(SchemaValue::Record { fields }).unwrap();
+                assert_eq!(decoded.every.num_nanoseconds(), Some(nanoseconds));
+            }
+            let mut value = schedule();
+            value.every = chrono::TimeDelta::MAX;
+            let error = encode_Schedule(value).unwrap_err();
+            assert!(error.contains("nanosecond range"), "{error}");
+        }
+
+        fn encoded_fields_of(value: Schedule) -> Vec<SchemaValue> {
+            let SchemaValue::Record { fields } = encode_Schedule(value).unwrap() else { panic!() };
+            fields
+        }
+
+        #[test]
+        fn datetime_years_outside_0_to_9999_are_rejected() {
+            for edge in [0, 9999] {
+                let mut value = schedule();
+                value.at = year(edge);
+                assert!(encode_Schedule(value).is_ok());
+            }
+            for outside in [-1, 10000] {
+                let mut value = schedule();
+                value.next = Some(year(outside));
+                let error = encode_Schedule(value).unwrap_err();
+                assert!(error.contains("outside the supported range"), "{error}");
+
+                let mut fields = encoded_fields();
+                fields[0] = SchemaValue::Datetime { value: year(outside) };
+                let error = decode_Schedule(SchemaValue::Record { fields }).unwrap_err();
+                assert!(error.contains("outside the supported range"), "{error}");
+            }
+        }
+
+        #[test]
+        fn invalid_url_is_rejected_on_decode() {
+            let mut fields = encoded_fields();
+            fields[2] = SchemaValue::Url { url: "not a url".to_string() };
+            let error = decode_Schedule(SchemaValue::Record { fields }).unwrap_err();
+            assert!(error.contains("not a url"), "{error}");
+        }
+
+        #[cfg(feature = "serde")]
+        #[test]
+        fn serde_uses_canonical_utc_datetime_text() {
+            let json = serde_json::to_value(schedule()).unwrap();
+            assert_eq!(json["at"], "2026-01-02T03:04:05.123456789Z");
+            assert_eq!(json["next"], "1970-01-01T00:00:00Z");
+            assert_eq!(json["link"], "https://example.com/a?b=c");
+            let mut offset = json.clone();
+            offset["at"] = serde_json::Value::String("2026-01-02T05:04:05.123456789+02:00".to_string());
+            let decoded: Schedule = serde_json::from_value(offset).unwrap();
+            assert_eq!(decoded.at, at());
+            let decoded: Schedule = serde_json::from_value(json).unwrap();
+            assert_eq!(decoded.every, schedule().every);
+        }
+    }
+"#
+        ),
+        1,
+    );
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check_with_args(&package_dir, &["--no-default-features"]);
+    cargo_check_with_args(
+        &package_dir,
+        &["--no-default-features", "--features", "serde"],
+    );
+    cargo_test_lib_with_args(&package_dir, &["--features", "serde"]);
+}
+
+#[test]
+fn guest_datetime_duration_url_use_chrono_and_url_types() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("time-url-agent-guest");
+    RustBridgeGenerator::new_with_mode(
+        time_url_agent(),
+        &package_dir,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let mut source = std::fs::read_to_string(&lib_path).unwrap();
+    assert_time_url_types(&source);
+    source.push_str(&format!(
+        "{}{TIME_URL_FIXTURE}{}",
+        r#"
+#[cfg(test)]
+mod time_url_codec {
+    use super::*;
+    use golem_rust::schema::wit::direct::{WirePreflight, WireReader, WireWriter};
+"#,
+        r#"
+    fn encode(value: &Schedule) -> Result<__wire::SchemaValueTree, String> {
+        let mut writer = WireWriter::default();
+        let root = encode_Schedule(value, &mut writer)?;
+        Ok(writer.finish(root))
+    }
+
+    fn field_index(tree: &__wire::SchemaValueTree, field: usize) -> usize {
+        let __wire::SchemaValueNode::RecordValue(fields) = &tree.value_nodes[tree.root as usize] else { panic!() };
+        fields[field] as usize
+    }
+
+    fn decode(tree: __wire::SchemaValueTree) -> Result<Schedule, String> {
+        let root = tree.root;
+        let mut reader = WireReader::new(tree.value_nodes);
+        decode_Schedule(root, &mut reader)
+    }
+
+    #[test]
+    fn schedule_round_trips() {
+        let tree = encode(&schedule()).unwrap();
+        let nodes = &tree.value_nodes;
+        let expected_at = at();
+        assert!(matches!(&nodes[field_index(&tree, 0)], __wire::SchemaValueNode::DatetimeValue(d) if d.seconds == expected_at.timestamp() && d.nanoseconds == 123_456_789), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 1)], __wire::SchemaValueNode::DurationValue(d) if d.nanoseconds == -1_500_000_001), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 2)], __wire::SchemaValueNode::UrlValue(u) if u == "https://example.com/a?b=c"), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 3)], __wire::SchemaValueNode::PathValue(p) if p == "/data/report.txt"), "{nodes:?}");
+        let decoded = decode(tree).unwrap();
+        let expected = schedule();
+        assert_eq!(decoded.at, expected.at);
+        assert_eq!(decoded.every, expected.every);
+        assert_eq!(decoded.link, expected.link);
+        assert_eq!(decoded.file, expected.file);
+        assert_eq!(decoded.labels, expected.labels);
+        assert_eq!(decoded.next, expected.next);
+    }
+
+    #[test]
+    fn duration_covers_the_s64_nanosecond_range() {
+        for nanoseconds in [i64::MIN, i64::MAX] {
+            let mut value = schedule();
+            value.every = chrono::TimeDelta::nanoseconds(nanoseconds);
+            let decoded = decode(encode(&value).unwrap()).unwrap();
+            assert_eq!(decoded.every.num_nanoseconds(), Some(nanoseconds));
+        }
+        let mut value = schedule();
+        value.every = chrono::TimeDelta::MAX;
+        let error = encode(&value).unwrap_err();
+        assert!(error.contains("nanosecond range"), "{error}");
+        let error = preflight_Schedule(&value, &mut WirePreflight::default()).unwrap_err();
+        assert!(error.contains("nanosecond range"), "{error}");
+    }
+
+    #[test]
+    fn datetime_years_outside_0_to_9999_are_rejected() {
+        for edge in [0, 9999] {
+            let mut value = schedule();
+            value.at = year(edge);
+            assert!(encode(&value).is_ok());
+            assert!(preflight_Schedule(&value, &mut WirePreflight::default()).is_ok());
+        }
+        for outside in [-1, 10000] {
+            let mut value = schedule();
+            value.next = Some(year(outside));
+            let error = encode(&value).unwrap_err();
+            assert!(error.contains("outside the supported range"), "{error}");
+            let error = preflight_Schedule(&value, &mut WirePreflight::default()).unwrap_err();
+            assert!(error.contains("outside the supported range"), "{error}");
+
+            let mut tree = encode(&schedule()).unwrap();
+            let index = field_index(&tree, 0);
+            let outside = year(outside);
+            tree.value_nodes[index] = __wire::SchemaValueNode::DatetimeValue(__wire::Datetime {
+                seconds: outside.timestamp(),
+                nanoseconds: 0,
+            });
+            let error = decode(tree).unwrap_err();
+            assert!(error.contains("outside the supported range"), "{error}");
+        }
+    }
+
+    #[test]
+    fn invalid_url_is_rejected_on_decode() {
+        let mut tree = encode(&schedule()).unwrap();
+        let index = field_index(&tree, 2);
+        tree.value_nodes[index] = __wire::SchemaValueNode::UrlValue("not a url".to_string());
+        let error = decode(tree).unwrap_err();
+        assert!(error.contains("not a url"), "{error}");
+    }
+}
+"#
+    ));
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check(&package_dir);
+    cargo_test_lib(&package_dir);
+}
+
 fn cargo_test_lib(target_path: &Utf8Path) {
+    cargo_test_lib_with_args(target_path, &[]);
+}
+
+fn cargo_test_lib_with_args(target_path: &Utf8Path, args: &[&str]) {
     let output = std::process::Command::new("cargo")
         .args(["test", "--lib"])
+        .args(args)
         .arg("--target-dir")
         .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(target_path)

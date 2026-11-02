@@ -1467,8 +1467,8 @@ pub async fn CanonicalGitStashClient::apply(
 pub async fn CanonicalGitClient::log(
   self : CanonicalGitClient,
   max_count : Int64?,
-  since : @types.Datetime?,
-  until : @types.Datetime?,
+  since : @schema.Datetime?,
+  until : @schema.Datetime?,
   author : Array[String],
   grep : Array[String],
   all_match : Bool,
@@ -1533,7 +1533,7 @@ pub async fn CanonicalGitClient::log(
               @types.OptionType(
                 @tool.wire_tool_type(
                   __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                  (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Datetime]),
                 ).index,
               ),
             ),
@@ -1545,7 +1545,7 @@ pub async fn CanonicalGitClient::log(
               @types.OptionType(
                 @tool.wire_tool_type(
                   __golem_schema,
-                  (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                  (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Datetime]),
                 ).index,
               ),
             ),

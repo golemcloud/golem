@@ -20,11 +20,14 @@ import golem.host.SchemaWireInterop
 import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.autowire.SchemaPayload
 import golem.schema._
+import golem.schema.Implicits.golemUriSchema
 import golem.schema.wire.SchemaWire
 import scala.concurrent.{Future, Promise}
 import zio.ZIO
 import zio.blocks.schema.Schema
 import zio.test._
+
+import java.net.URI
 
 /**
  * Slice 4b — [[SchemaRpcCodec]] is the v2 (`golem:agent/host@2.0.0`)
@@ -41,7 +44,7 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
     implicit val schema: Schema[Args2] = Schema.derived
   }
 
-  final case class Link(url: Url, path: GolemPath)
+  final case class Link(url: URI, path: GolemPath)
   object Link {
     implicit val schema: Schema[Link] = Schema.derived
   }
@@ -268,11 +271,30 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
           assertTrue(
             encodeFailure(scala.util.Try(SchemaRpcCodec.encodeArgs(Args2(1, "a\ud800")))),
             encodeFailure(scala.util.Try(SchemaRpcCodec.encodeChar('\udc00'))),
-            encodeFailure(scala.util.Try(SchemaRpcCodec.encodeArgs(Link(Url("a\ud800"), GolemPath("ok"))))),
-            encodeFailure(scala.util.Try(SchemaRpcCodec.encodeArgs(Link(Url("ok"), GolemPath("\udfff"))))),
+            scala.util.Try(new URI("a\ud800")).failed.toOption.exists(_.isInstanceOf[java.net.URISyntaxException]),
+            encodeFailure(scala.util.Try(SchemaRpcCodec.encodeArgs(Link(new URI("ok"), GolemPath("\udfff"))))),
             decodeFailure(scala.util.Try(SchemaRpcCodec.asChar(SchemaValue.CharValue(0xd800)))),
             SchemaRpcCodec.asChar(SchemaRpcCodec.encodeChar('\uffff')) == '\uffff',
             SchemaRpcCodec.decodeArgs[Args2](SchemaRpcCodec.encodeArgs(paired)) == Right(paired)
+          )
+        },
+        test("bridge accessors use GolemPath, URI and Duration") {
+          val uri = new URI("https://example.com/a?q=1")
+          assertTrue(
+            SchemaRpcCodec.asPath(SchemaRpcCodec.encodePath(GolemPath("/a/b"))) == GolemPath("/a/b"),
+            SchemaRpcCodec.asUrl(SchemaRpcCodec.encodeUrl(uri)) == uri,
+            scala.util
+              .Try(SchemaRpcCodec.asUrl(SchemaValue.UrlValue("a b")))
+              .failed
+              .toOption
+              .exists(_.isInstanceOf[SchemaDecodeError]),
+            SchemaRpcCodec.asDuration(SchemaRpcCodec.encodeDuration(java.time.Duration.ofNanos(Long.MinValue))) ==
+              java.time.Duration.ofNanos(Long.MinValue),
+            scala.util
+              .Try(SchemaRpcCodec.encodeDuration(java.time.Duration.ofSeconds(Long.MaxValue)))
+              .failed
+              .toOption
+              .exists(_.isInstanceOf[SchemaEncodeError])
           )
         },
         test("asDatetime rejects nanoseconds outside 0..999999999") {

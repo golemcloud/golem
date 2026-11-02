@@ -417,25 +417,91 @@ object SchemaValueCodec {
     case StringValue(x) => x
     case o              => mismatch("string", o)
   }
-  def asPath(v: SchemaValue): String = v match {
-    case PathValue(x) => x
+  def asPath(v: SchemaValue): GolemPath = v match {
+    case PathValue(x) => GolemPath(x)
     case o            => mismatch("path", o)
   }
-  def asUrl(v: SchemaValue): String = v match {
-    case UrlValue(x) => x
-    case o           => mismatch("url", o)
+  def asUrl(v: SchemaValue): java.net.URI = v match {
+    case UrlValue(x) =>
+      try new java.net.URI(x)
+      catch {
+        case e: java.net.URISyntaxException => throw BridgeException(s"Invalid url '$x': ${e.getReason}")
+      }
+    case o => mismatch("url", o)
   }
   def asDatetime(v: SchemaValue): java.time.Instant = v match {
-    case DatetimeValue(x) =>
-      try java.time.Instant.parse(x)
-      catch {
-        case e: Exception => throw BridgeException(s"Invalid datetime '$x': ${e.getMessage}")
-      }
-    case o => mismatch("datetime", o)
+    case DatetimeValue(x) => parseDatetime(x)
+    case o                => mismatch("datetime", o)
   }
-  def asDuration(v: SchemaValue): Long = v match {
-    case DurationValue(x) => x
+  def asDuration(v: SchemaValue): java.time.Duration = v match {
+    case DurationValue(x) => java.time.Duration.ofNanos(x)
     case o                => mismatch("duration", o)
+  }
+
+  def encodePath(v: GolemPath): SchemaValue        = PathValue(v.value)
+  def encodeUrl(v: java.net.URI): SchemaValue      = UrlValue(v.toString)
+  def encodeDatetime(v: java.time.Instant): SchemaValue = DatetimeValue(formatDatetime(v))
+  def encodeDuration(v: java.time.Duration): SchemaValue =
+    try DurationValue(v.toNanos)
+    catch {
+      case _: ArithmeticException => throw BridgeException(s"Duration $v is outside the s64 nanoseconds range")
+    }
+
+  // RFC 3339 text is limited to four-digit years: 0000-01-01T00:00:00Z ..= 9999-12-31T23:59:59.999999999Z.
+  private val MinDatetimeSeconds = -62167219200L
+  private val MaxDatetimeSeconds = 253402300799L
+  private val Rfc3339 = java.util.regex.Pattern.compile(
+    "([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt ]([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\\.([0-9]+))?(?:[Zz]|([+-])([0-9]{2}):([0-9]{2}))"
+  )
+
+  /**
+   * Formats an instant as RFC 3339 in UTC with a trailing `Z` and up to nine
+   * fraction digits (trailing zeros removed). Throws for instants outside the
+   * years 0000..9999.
+   */
+  def formatDatetime(value: java.time.Instant): String = {
+    val seconds = value.getEpochSecond
+    if (seconds < MinDatetimeSeconds || seconds > MaxDatetimeSeconds)
+      throw BridgeException(s"Datetime $value is outside the years 0000..9999 in UTC")
+    val t        = java.time.LocalDateTime.ofEpochSecond(seconds, 0, java.time.ZoneOffset.UTC)
+    val fraction =
+      if (value.getNano == 0) "" else "." + f"${value.getNano}%09d".reverse.dropWhile(_ == '0').reverse
+    f"${t.getYear}%04d-${t.getMonthValue}%02d-${t.getDayOfMonth}%02dT${t.getHour}%02d:${t.getMinute}%02d:${t.getSecond}%02d${fraction}Z"
+  }
+
+  /**
+   * Parses an RFC 3339 datetime with any UTC offset and converts it to UTC.
+   * Throws for malformed text, more than nine fraction digits, and instants
+   * outside the years 0000..9999 in UTC.
+   */
+  def parseDatetime(value: String): java.time.Instant = {
+    val m = Rfc3339.matcher(value)
+    if (!m.matches()) throw BridgeException(s"Invalid RFC 3339 datetime '$value'")
+    val fraction = Option(m.group(7)).getOrElse("")
+    if (fraction.length > 9) throw BridgeException(s"Datetime '$value' has more than nine fraction digits")
+    val local =
+      try
+        java.time.LocalDateTime.of(
+          m.group(1).toInt,
+          m.group(2).toInt,
+          m.group(3).toInt,
+          m.group(4).toInt,
+          m.group(5).toInt,
+          m.group(6).toInt
+        )
+      catch { case _: java.time.DateTimeException => throw BridgeException(s"Invalid RFC 3339 datetime '$value'") }
+    val offsetSeconds = Option(m.group(8)) match {
+      case None       => 0
+      case Some(sign) =>
+        val hours   = m.group(9).toInt
+        val minutes = m.group(10).toInt
+        if (hours > 23 || minutes > 59) throw BridgeException(s"Invalid RFC 3339 datetime '$value'")
+        (if (sign == "-") -1 else 1) * (hours * 3600 + minutes * 60)
+    }
+    val seconds = local.toEpochSecond(java.time.ZoneOffset.UTC) - offsetSeconds
+    if (seconds < MinDatetimeSeconds || seconds > MaxDatetimeSeconds)
+      throw BridgeException(s"Datetime '$value' is outside the years 0000..9999 in UTC")
+    java.time.Instant.ofEpochSecond(seconds, fraction.padTo(9, '0').toLong)
   }
   def asBinary(v: SchemaValue): (Vector[Byte], Option[String]) = v match {
     case BinaryValue(bytes, mimeType) => (bytes, mimeType)

@@ -8,6 +8,7 @@ import {
   agentStream,
   createAgent,
   createStreamingRemoteMethod,
+  Datetime,
   encodeOption,
   encodeStreamSessionBinaryEnvelope,
   encodeStreamSessionTextFrame,
@@ -124,6 +125,35 @@ test('config application JSON preserves ordinary reserved-looking fields and nes
     $option: 'ordinary-option-field',
     $result: 'ordinary-result-field',
   });
+});
+
+test('Datetime is the TypeScript SDK Datetime', async () => {
+  const [bridgeSource, sdkSource] = await Promise.all([
+    readFile(new URL('../src/datetime.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../golem-ts-sdk/src/datetime.ts', import.meta.url), 'utf8'),
+  ]);
+  assert.equal(bridgeSource, sdkSource);
+});
+
+test('Datetime parses any RFC 3339 offset and emits canonical UTC text', () => {
+  const datetime = Datetime.parse('2024-03-01T01:04:56.120+02:30');
+  assert.deepEqual(datetime, { seconds: 1709246096n, nanoseconds: 120000000 });
+  assert.equal(Datetime.toISOString(datetime), '2024-02-29T22:34:56.12Z');
+  assert.equal(
+    Datetime.toISOString({ seconds: 253402300799n, nanoseconds: 999999999 }),
+    '9999-12-31T23:59:59.999999999Z',
+  );
+  assert.throws(() => Datetime.parse('2024-01-01T00:00:00'), /Invalid RFC 3339 datetime/);
+  assert.throws(
+    () => Datetime.parse('0000-01-01T00:00:00+00:01'),
+    /outside the years 0000\.\.9999/,
+  );
+  assert.throws(
+    () => Datetime.toISOString({ seconds: 253402300800n, nanoseconds: 0 }),
+    /outside the years 0000\.\.9999/,
+  );
+  assert.deepEqual(Datetime.fromDate(new Date(-1)), { seconds: -1n, nanoseconds: 999000000 });
+  assert.equal(Datetime.toDate({ seconds: 1n, nanoseconds: 2_999_999 }).getTime(), 1002);
 });
 
 test('config application JSON canonicalizes f32 and datetime and rejects exceptional floats', () => {
