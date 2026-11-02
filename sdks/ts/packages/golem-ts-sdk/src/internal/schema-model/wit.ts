@@ -1212,6 +1212,11 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         const val = object(n.val, 'datetime-value.val');
         rangedBigint(val.seconds, 'datetime-value.val.seconds', -(1n << 63n), (1n << 63n) - 1n);
         integer(val.nanoseconds, 'datetime-value.val.nanoseconds', 0, 999_999_999);
+        try {
+          checkDatetime(val as { seconds: bigint; nanoseconds: number });
+        } catch (error) {
+          fail(`invalid datetime-value: ${(error as Error).message}`);
+        }
         return;
       }
       case 'duration-value': {
