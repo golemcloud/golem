@@ -262,6 +262,31 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
     })
 }
 
+fn arg_has_value_refinement(arg: &ArgIr) -> bool {
+    arg.regex.is_some()
+        || arg.min_length.is_some()
+        || arg.max_length.is_some()
+        || arg.path_kind.is_some()
+        || arg.direction.is_some()
+        || arg.mime.is_some()
+        || arg.extensions.is_some()
+        || arg.schemes.is_some()
+        || arg.raw_min.is_some()
+        || arg.raw_max.is_some()
+        || arg.bounds.is_some()
+        || arg.unit.is_some()
+}
+
+/// Whether the generated client must encode its input from the tool
+/// descriptor. A value refinement makes the published schema of an argument
+/// differ from the schema of its Rust type. A subtree client encodes against the
+/// root tool, whose input records also carry the globals inherited from the root.
+pub(crate) fn client_needs_descriptor_input(ir: &ToolDefinitionIr) -> bool {
+    ir.commands
+        .iter()
+        .any(|cmd| cmd.subtree.is_some() || cmd.args.iter().any(arg_has_value_refinement))
+}
+
 fn constraint_has_value_is(constraint: &ConstraintIr) -> bool {
     let has = |refs: &[RefIr]| refs.iter().any(|r| matches!(r, RefIr::ValueIs { .. }));
     match constraint {
@@ -279,21 +304,7 @@ fn schema_checks(ir: &ToolDefinitionIr) -> TokenStream {
     // Refinement attributes change the graph after Rust's Schema implementation
     // produced it. Error schemas are supplied by an independent user trait.
     if ir.commands.iter().any(|cmd| {
-        split_result(&cmd.output).1.is_some()
-            || cmd.args.iter().any(|arg| {
-                arg.regex.is_some()
-                    || arg.min_length.is_some()
-                    || arg.max_length.is_some()
-                    || arg.path_kind.is_some()
-                    || arg.direction.is_some()
-                    || arg.mime.is_some()
-                    || arg.extensions.is_some()
-                    || arg.schemes.is_some()
-                    || arg.raw_min.is_some()
-                    || arg.raw_max.is_some()
-                    || arg.bounds.is_some()
-                    || arg.unit.is_some()
-            })
+        split_result(&cmd.output).1.is_some() || cmd.args.iter().any(arg_has_value_refinement)
     }) {
         return quote! { golem_rust::agentic::ToolSchemaChecks::dynamic() };
     }

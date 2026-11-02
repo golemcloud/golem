@@ -432,6 +432,315 @@ mod tests {
     }
 
     #[tool_definition]
+    trait RefinedClientArgs {
+        #[arg(name = "positional", max_length = 8, regex = "^[a-z]+$")]
+        #[arg(tags = "option", max_length = 4)]
+        #[arg(label = "option", max_length = 5)]
+        fn slug(&self, name: String, tags: Vec<String>, label: Option<String>) -> String;
+
+        #[arg(count = "positional", max = 3)]
+        fn limit(&self, count: u32) -> u32;
+    }
+
+    #[tool_definition]
+    trait RefinedClientChild {
+        #[arg(name = "positional", max_length = 4)]
+        fn leaf(&self, name: String) -> String;
+    }
+
+    struct RefinedClientChildSubtree;
+
+    #[tool_definition]
+    trait RefinedClientParent {
+        #[command(subtree = RefinedClientChild, name = "child")]
+        #[arg(region = "global", max_length = 6)]
+        fn child(&self, region: String) -> RefinedClientChildSubtree;
+    }
+
+    fn published_input_schema(
+        descriptor: golem_rust::agentic::WireToolDescriptorFn,
+        command_path: &[String],
+    ) -> golem_rust::schema::graph::SchemaGraph {
+        let schema = golem_rust::agentic::WireToolSchema::default();
+        let tool = descriptor(&schema)
+            .and_then(|tool| tool.into_wire(schema))
+            .expect("wire descriptor builds");
+        let tool = golem_rust::schema::tool::wit::decode_tool(tool).expect("wire tool decodes");
+        let index = tool
+            .command_index_by_path(command_path)
+            .expect("command path resolves");
+        tool.canonical_input_record_schema(index)
+            .expect("canonical input record schema builds")
+    }
+
+    async fn encode_with_descriptor(
+        values: &[golem_rust::agentic::DirectInputValue],
+        descriptor: golem_rust::agentic::WireToolDescriptorFn,
+        command_path: &[String],
+    ) -> Result<golem_rust::TypedSchemaValue, String> {
+        let wire = golem_rust::agentic::encode_direct_tool_input_with_descriptor(
+            values,
+            &[],
+            Some(descriptor),
+            command_path,
+        )
+        .await?;
+        Ok(golem_rust::schema::wit::decode_typed(&wire).expect("encoded input decodes"))
+    }
+
+    fn assert_matches_published(
+        input: &golem_rust::TypedSchemaValue,
+        published: &golem_rust::schema::graph::SchemaGraph,
+    ) {
+        assert!(
+            golem_rust::schema::validation::subtyping::is_equivalent_cross_graph(
+                input.graph(),
+                &input.graph().root,
+                published,
+                &published.root,
+            ),
+            "the encoded input schema must be equivalent to the published input schema"
+        );
+    }
+
+    fn input_is_valid(input: &golem_rust::TypedSchemaValue) -> bool {
+        golem_rust::schema::validation::validate_value(
+            input.graph(),
+            &input.graph().root,
+            input.value(),
+        )
+        .is_ok()
+    }
+
+    fn record_fields(input: &golem_rust::TypedSchemaValue) -> Vec<golem_rust::SchemaValue> {
+        match input.value() {
+            golem_rust::SchemaValue::Record { fields } => fields.clone(),
+            other => panic!("tool input must be a record, got {other:?}"),
+        }
+    }
+
+    fn text_value(value: &golem_rust::SchemaValue) -> Option<&str> {
+        match value {
+            golem_rust::SchemaValue::Text(payload) => Some(payload.text.as_str()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    async fn refined_client_input_follows_the_published_input_schema() {
+        use golem_rust::agentic::DirectInputValue;
+        let descriptor: golem_rust::agentic::WireToolDescriptorFn =
+            __golem_standalone_wire_tool_descriptor_for_RefinedClientArgs;
+        let slug_path = vec!["slug".to_string()];
+        let slug_values = |name: &str| {
+            vec![
+                DirectInputValue::new("label", vec![], None, Some("tiny".to_string())),
+                DirectInputValue::new("tags", vec![], None, vec!["a".to_string(), "b".to_string()]),
+                DirectInputValue::new("name", vec![], None, name.to_string()),
+            ]
+        };
+
+        let published = published_input_schema(descriptor, &slug_path);
+        let input = encode_with_descriptor(&slug_values("golem"), descriptor, &slug_path)
+            .await
+            .unwrap();
+        assert_matches_published(&input, &published);
+        assert!(input_is_valid(&input));
+        let fields = record_fields(&input);
+        assert_eq!(fields.len(), 3);
+        assert_eq!(text_value(&fields[0]), Some("golem"));
+        let golem_rust::SchemaValue::List { elements } = &fields[1] else {
+            panic!("tags must be a list, got {:?}", fields[1]);
+        };
+        assert_eq!(
+            elements.iter().map(text_value).collect::<Vec<_>>(),
+            vec![Some("a"), Some("b")]
+        );
+        let golem_rust::SchemaValue::Option { inner: Some(label) } = &fields[2] else {
+            panic!("label must be a present option, got {:?}", fields[2]);
+        };
+        assert_eq!(text_value(label), Some("tiny"));
+
+        for invalid in ["toolongslug", "Golem"] {
+            let input = encode_with_descriptor(&slug_values(invalid), descriptor, &slug_path)
+                .await
+                .unwrap();
+            assert_matches_published(&input, &published);
+            assert!(
+                !input_is_valid(&input),
+                "`{invalid}` must break the published text refinement"
+            );
+        }
+
+        let limit_path = vec!["limit".to_string()];
+        let published = published_input_schema(descriptor, &limit_path);
+        let refined = encode_with_descriptor(
+            &[DirectInputValue::new("count", vec![], None, 2u32)],
+            descriptor,
+            &limit_path,
+        )
+        .await
+        .unwrap();
+        assert_matches_published(&refined, &published);
+        assert!(input_is_valid(&refined));
+        let unrefined = golem_rust::agentic::encode_direct_tool_input(
+            &[DirectInputValue::new("count", vec![], None, 2u32)],
+            &["count"],
+        )
+        .await
+        .unwrap();
+        let unrefined = golem_rust::schema::wit::decode_typed(&unrefined).unwrap();
+        assert!(
+            !golem_rust::schema::validation::subtyping::is_equivalent_cross_graph(
+                unrefined.graph(),
+                &unrefined.graph().root,
+                &published,
+                &published.root,
+            ),
+            "the `u32` field must carry the published `max` restriction"
+        );
+        let too_large = encode_with_descriptor(
+            &[DirectInputValue::new("count", vec![], None, 9u32)],
+            descriptor,
+            &limit_path,
+        )
+        .await
+        .unwrap();
+        assert!(!input_is_valid(&too_large));
+
+        let missing = encode_with_descriptor(
+            &[DirectInputValue::new(
+                "name",
+                vec![],
+                None,
+                "golem".to_string(),
+            )],
+            descriptor,
+            &slug_path,
+        )
+        .await
+        .unwrap_err();
+        assert!(missing.contains("missing tool input field"), "{missing}");
+        let mut unknown = slug_values("golem");
+        unknown.push(DirectInputValue::new("other", vec![], None, 1u32));
+        let unknown = encode_with_descriptor(&unknown, descriptor, &slug_path)
+            .await
+            .unwrap_err();
+        assert!(unknown.contains("matches no field"), "{unknown}");
+    }
+
+    #[tool_definition]
+    trait UncheckedRegexClientArgs {
+        #[arg(name = "positional", regex = "[")]
+        fn run(&self, name: String) -> String;
+    }
+
+    #[test]
+    async fn client_input_carries_a_regex_refinement_without_checking_the_pattern() {
+        use golem_rust::agentic::DirectInputValue;
+        let descriptor: golem_rust::agentic::WireToolDescriptorFn =
+            __golem_standalone_wire_tool_descriptor_for_UncheckedRegexClientArgs;
+        let command_path = vec!["run".to_string()];
+
+        let schema = golem_rust::agentic::WireToolSchema::default();
+        let tool = descriptor(&schema)
+            .and_then(|tool| tool.into_wire(schema))
+            .expect("wire descriptor builds");
+        let tool = golem_rust::schema::tool::wit::decode_tool(tool).expect("wire tool decodes");
+        let index = tool
+            .command_index_by_path(&command_path)
+            .expect("command path resolves");
+        assert!(
+            tool.canonical_input_record_schema(index).is_err(),
+            "schema validation must reject the `[` pattern"
+        );
+
+        let input = encode_with_descriptor(
+            &[DirectInputValue::new(
+                "name",
+                vec![],
+                None,
+                "golem".to_string(),
+            )],
+            descriptor,
+            &command_path,
+        )
+        .await
+        .expect("the client encodes against the unvalidated descriptor");
+        let golem_rust::schema::schema_type::SchemaType::Record { fields, .. } =
+            &input.graph().root
+        else {
+            panic!("tool input schema must be a record");
+        };
+        let mut body = &fields[0].body;
+        while let golem_rust::schema::schema_type::SchemaType::Ref { id, .. } = body {
+            body = &input
+                .graph()
+                .defs
+                .iter()
+                .find(|def| &def.id == id)
+                .expect("reference resolves")
+                .body;
+        }
+        assert!(
+            matches!(
+                body,
+                golem_rust::schema::schema_type::SchemaType::Text { restrictions, .. }
+                    if restrictions.regex.as_deref() == Some("[")
+            ),
+            "the encoded field must carry the descriptor's regex restriction, got {body:?}"
+        );
+        assert_eq!(text_value(&record_fields(&input)[0]), Some("golem"));
+    }
+
+    // Never called: it only has to compile, which shows that a generated subtree wrapper carries
+    // the root descriptor, the command path and the inherited prefix.
+    fn generated_subtree_wrapper_carries_the_root_descriptor_typechecks() {
+        let wrapper = RefinedClientParentClient::default().child("europe".to_string());
+        let _: Option<golem_rust::agentic::WireToolDescriptorFn> = wrapper.root_descriptor;
+        let _: &[String] = &wrapper.command_path;
+        let _: &str = &wrapper.inherited_prefix[0].name;
+    }
+
+    #[test]
+    async fn refined_subtree_client_input_follows_the_published_input_schema() {
+        use golem_rust::agentic::DirectInputValue;
+        let descriptor: golem_rust::agentic::WireToolDescriptorFn =
+            __golem_standalone_wire_tool_descriptor_for_RefinedClientParent;
+        let command_path = vec!["child".to_string(), "leaf".to_string()];
+
+        let encode = |name: &str| {
+            let values = vec![
+                DirectInputValue::new("region", vec![], None, "europe".to_string()),
+                DirectInputValue::new("name", vec![], None, name.to_string()),
+            ];
+            let command_path = command_path.clone();
+            async move { encode_with_descriptor(&values, descriptor, &command_path).await }
+        };
+
+        let published = published_input_schema(descriptor, &command_path);
+        let input = encode("abc").await.unwrap();
+        assert_matches_published(&input, &published);
+        assert!(input_is_valid(&input));
+        let fields = record_fields(&input);
+        let golem_rust::SchemaValue::Option {
+            inner: Some(region),
+        } = &fields[0]
+        else {
+            panic!(
+                "the inherited global must be a present option, got {:?}",
+                fields[0]
+            );
+        };
+        assert_eq!(text_value(region), Some("europe"));
+        assert_eq!(text_value(&fields[1]), Some("abc"));
+
+        let too_long = encode("abcdef").await.unwrap();
+        assert_matches_published(&too_long, &published);
+        assert!(!input_is_valid(&too_long));
+    }
+
+    #[tool_definition]
     trait RefinedTextDirectRoundTrip {
         #[arg(value = "positional", regex = "[a-z]+")]
         #[arg(items = "option", regex = "[a-z]+")]
