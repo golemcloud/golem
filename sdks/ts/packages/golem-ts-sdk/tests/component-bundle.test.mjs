@@ -140,23 +140,27 @@ describe('Node HTTP automatic registration', () => {
       if (key.startsWith('__golemAuto')) delete globalThis[key];
   });
 
-  it('discovers a listen-only component and reports logical registration, not a socket', async () => {
-    const main = path.join(fixtures, 'node-http-auto.ts');
-    expect(discoverCapabilities(configuration(main)).agents).toBe(false);
-    const output = await build('node-http-auto', { nodeHttpRouters: mapping }, 'es');
-    const exports = await instantiate(output.code, {}, 'es');
-    const [agent] = exports.guest.discoverAgentTypes();
-    expect(agent.typeName).toBe('AutoWeb');
-    expect(agent.httpMount.pathPrefix).toEqual([{ tag: 'literal', val: 'auto' }]);
-    expect(agent.httpMount.authDetails.required).toBe(true);
-    expect(agent.httpMount.corsOptions.allowedPatterns).toEqual(['https://example.test']);
-    expect(globalThis.__golemAutoServer.listening).toBe(true);
-    expect(globalThis.__golemAutoServer.address()).toBeNull();
-    expect(globalThis.__golemAutoEvents).toBe(1);
-    expect(globalThis.__golemAutoCallback).toBe(true);
-    expect(() => globalThis.__golemAutoServer.close()).toThrow(/deployment/);
-    expect(() => globalThis.__golemAutoCreateServer().listen(3000)).toThrow(/initialization/);
-  }, 30000);
+  it.each([true, false])(
+    'preserves HTTP registration with minify=%s',
+    async (minify) => {
+      const main = path.join(fixtures, 'node-http-auto.ts');
+      expect(discoverCapabilities(configuration(main)).agents).toBe(false);
+      const output = await build('node-http-auto', { nodeHttpRouters: mapping, minify }, 'es');
+      const exports = await instantiate(output.code, {}, 'es');
+      const [agent] = exports.guest.discoverAgentTypes();
+      expect(agent.typeName).toBe('AutoWeb');
+      expect(agent.httpMount.pathPrefix).toEqual([{ tag: 'literal', val: 'auto' }]);
+      expect(agent.httpMount.authDetails.required).toBe(true);
+      expect(agent.httpMount.corsOptions.allowedPatterns).toEqual(['https://example.test']);
+      expect(globalThis.__golemAutoServer.listening).toBe(true);
+      expect(globalThis.__golemAutoServer.address()).toBeNull();
+      expect(globalThis.__golemAutoEvents).toBe(1);
+      expect(globalThis.__golemAutoCallback).toBe(true);
+      expect(() => globalThis.__golemAutoServer.close()).toThrow(/deployment/);
+      expect(() => globalThis.__golemAutoCreateServer().listen(3000)).toThrow(/initialization/);
+    },
+    30000,
+  );
 
   it('brackets static/CJS dependency initialization and a controllable top-level await', async () => {
     let release;
@@ -192,12 +196,17 @@ describe('Node HTTP automatic registration', () => {
     expect(() => globalThis.__golemAutoCreateServer().listen(3001)).toThrow(/initialization/);
   }, 30000);
 
-  it.each(['sync', 'async'])(
-    'closes registration and preserves a %s application failure',
-    async (kind) => {
+  it.each([
+    ['sync', true],
+    ['sync', false],
+    ['async', true],
+    ['async', false],
+  ])(
+    'closes registration and preserves a %s application failure with minify=%s',
+    async (kind, minify) => {
       globalThis.__golemAutoFail = kind;
       globalThis.__golemAutoError = new Error('application initialization failed');
-      const output = await build('node-http-auto', { nodeHttpRouters: mapping }, 'es');
+      const output = await build('node-http-auto', { nodeHttpRouters: mapping, minify }, 'es');
       await expect(instantiate(output.code, {}, 'es')).rejects.toBe(globalThis.__golemAutoError);
       expect(() => globalThis.__golemAutoCreateServer().listen(3000)).toThrow(/initialization/);
     },
@@ -1321,6 +1330,28 @@ describe('component exports', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 30000);
+
+  it('keeps readable application code while preserving initialization failures', async () => {
+    const normal = await build('readable-errors', {}, 'es');
+    const explicit = await build('readable-errors', { minify: true }, 'es');
+    const readable = await build('readable-errors', { minify: false }, 'es');
+    expect(explicit.code).toBe(normal.code);
+    expect(readable.code).toContain('diagnosticMessage');
+    expect(normal.code).not.toContain('diagnosticMessage');
+    expect(readable.code).not.toBe(normal.code);
+    for (const output of [normal, explicit, readable])
+      await expect(
+        Promise.resolve().then(() => instantiate(output.code, {}, 'es')),
+      ).rejects.toThrow('readable application failure');
+  }, 30000);
+
+  it('rejects non-boolean minify values before building', () => {
+    const main = path.join(fixtures, 'empty.ts');
+    for (const minify of ['false', 0, null])
+      expect(() => componentPlugin(configuration(main), main, { minify })).toThrow(
+        'must be a boolean',
+      );
+  });
 
   it('is one-shot, rejects watch/cache, and permits multiple outputs', async () => {
     const main = path.join(fixtures, 'empty.ts');

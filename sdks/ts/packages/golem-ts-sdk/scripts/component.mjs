@@ -212,7 +212,13 @@ export default (async () => {
 `;
 }
 
-export function componentPlugin(parsedConfig, main, { nodeHttpRouters = {} } = {}) {
+export function componentPlugin(
+  parsedConfig,
+  main,
+  { nodeHttpRouters = {}, minify: minifyBundle = true } = {},
+) {
+  if (typeof minifyBundle !== 'boolean')
+    throw new TypeError('The Golem component plugin minify option must be a boolean');
   const capabilities = discoverCapabilities(parsedConfig);
   const automatic =
     !nodeHttpRouters ||
@@ -325,6 +331,7 @@ try { ${body}\nreturn await ${result}; }
 finally { ${lifecycle}?.close(); }
 })();`;
       }
+      if (!minifyBundle) return { code, map: null };
       const result = await minify(code, {
         module: options.format === 'es',
         keep_fnames: true,

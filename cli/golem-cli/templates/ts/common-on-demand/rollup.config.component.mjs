@@ -50,6 +50,12 @@ function loadComponentTsConfig(componentDir) {
     return parsed;
 }
 
+const minifySetting = process.env.GOLEM_COMPONENT_MINIFY ?? "true";
+if (minifySetting !== "true" && minifySetting !== "false") {
+    throw new Error('GOLEM_COMPONENT_MINIFY must be "true" or "false"');
+}
+const minifyBundle = minifySetting === "true";
+
 const sdkPackage = "@golemcloud/golem-ts-sdk";
 
 function visit(node, callback) {
@@ -237,6 +243,7 @@ function componentRollupConfig() {
         },
         componentPlugin(parsedTsConfig, path.join(componentDir, "src/main.ts"), {
             nodeHttpRouters: JSON.parse(process.env.GOLEM_NODE_HTTP_ROUTERS ?? "{}"),
+            minify: minifyBundle,
         }),
         nodeResolve({ extensions: [".mjs", ".js", ".node", ".ts"] }),
         commonjs(),
