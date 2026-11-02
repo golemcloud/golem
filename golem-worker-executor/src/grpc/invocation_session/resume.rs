@@ -18,7 +18,7 @@ use super::{
     PersistedInvocationTarget, ResponseLease, ResumeAttach, SessionError, SessionStreamRole,
     UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, build_resume_attempt,
     detach_durable_attachment, durable_stream_mapping_to_proto, ends_only_the_attachment,
-    invocation_response, is_attachment_termination, mpsc, persisted_invocation_result,
+    invocation_response, is_attachment_termination, mpsc, persisted_result_and_finished,
     pre_acceptance_rejection_reason, resumed_input_schema, route_durable_request,
     send_attachment_revocation, send_protocol_failure, send_resumed_finished,
     until_response_closed,
@@ -316,20 +316,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let changed = streams.producer.session_records_changed().notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            let persisted_result = match persisted_invocation_result(&streams, native_tool).await {
-                Ok(result) => result,
-                Err(error) => {
-                    send_protocol_failure(&responses, error).await;
-                    return;
-                }
-            };
-            let already_finished = match streams.persisted_finished().await {
-                Ok(finished) => finished,
-                Err(error) => {
-                    send_protocol_failure(&responses, error).await;
-                    return;
-                }
-            };
+            let (persisted_result, already_finished) =
+                match persisted_result_and_finished(&streams, native_tool).await {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        send_protocol_failure(&responses, error).await;
+                        return;
+                    }
+                };
             if persisted_result.is_some() || already_finished.is_some() {
                 break (persisted_result, already_finished);
             }

@@ -23,6 +23,8 @@
  * postgres so the schema is `Schema.Struct({})`.
  */
 import { Effect, Redacted, Schema } from "effect"
+import * as Migrator from "effect/sql/Migrator"
+import * as SqlClient from "effect/sql/SqlClient"
 import { defineAgent, defineConfig, method, Snapshot } from "@golemcloud/effect-golem"
 import { PgClient } from "@golemcloud/effect-golem/postgres"
 import type { PgClient as PgClientType } from "@golemcloud/effect-golem/postgres"
@@ -62,6 +64,10 @@ const PgCounterSpec = defineAgent({
       input: {},
       success: Schema.Array(Schema.Struct({ id: Schema.String, count: Schema.Number })),
     }),
+    migrate: method({
+      input: {},
+      success: Schema.String,
+    }),
   },
 })
 
@@ -77,6 +83,22 @@ const pgMethods = ({ name, sql }: PgState) => {
     )
   return {
     value: () => readCount(name),
+    migrate: () =>
+      Effect.gen(function* () {
+        const table = `pg_migrated_${name}`
+        const applied = yield* Migrator.make({})({
+          table: `pg_migrations_${name}`,
+          loader: Migrator.fromRecord({
+            "001_create": Effect.gen(function* () {
+              yield* sql`CREATE TABLE ${sql(table)} (id integer PRIMARY KEY, active boolean NOT NULL)`
+              yield* sql`CREATE UNIQUE INDEX ${sql(`${table}_active`)} ON ${sql(table)} (id) WHERE active`
+              yield* sql`INSERT INTO ${sql(table)} (id, active) VALUES (7, true) ON CONFLICT (id) WHERE active DO NOTHING`
+            }),
+          }),
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql))
+        const rows = yield* sql`SELECT id FROM ${sql(table)} WHERE active`
+        return `applied=${applied.length},rows=${rows.length}`
+      }),
     add: ({ by }: { by: number }) =>
       sql`UPDATE pg_counters SET count = count + ${by} WHERE id = ${name}`.pipe(
         Effect.flatMap(() => readCount(name)),

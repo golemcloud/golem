@@ -13,7 +13,8 @@ use super::{
     unload_resident_agent_ownership, wait_for_resident_wakeup, with_end,
 };
 use crate::durable_host::tool::operation::OwnerToolOperations;
-use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::sandbox::ScriptedSandboxFilesystem;
 use crate::services::active_agents::stop_loaded_idle_if_eligible;
 use crate::services::agent_filesystem::{
     AccessError, FilesystemStorageError, FlushLevel, Follow, OpenNode, PathTarget, Target,
@@ -53,7 +54,6 @@ use golem_common::model::oplog::AgentError;
 use golem_common::model::{OplogIndex, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::VecDeque;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -620,7 +620,7 @@ async fn loaded_idle_wait_wakes_for_a_terminal_filesystem_failure() {
         tokio::spawn(async move { wait_for_resident_wakeup(&mut receiver, &activity).await });
     control.push_flush(Err(FilesystemStorageError::io(
         "detached terminal flush",
-        Path::new("<idle-wakeup-test>"),
+        None,
         std::io::ErrorKind::Other.into(),
     )));
 
@@ -635,9 +635,11 @@ async fn loaded_idle_wait_wakes_for_a_terminal_filesystem_failure() {
         ResidentWakeup::FilesystemTerminalFailure
     ));
 
-    control.push_observe_allocation(Err(FilesystemStorageError::verification(
-        "observe unsupported allocation during idle wakeup cleanup",
-        Path::new("<idle-wakeup-test>"),
+    control.push_observe_allocation(Err(FilesystemStorageError::from(
+        OperationContext::verification(
+            "observe unsupported allocation during idle wakeup cleanup",
+            None,
+        ),
     )));
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
@@ -903,7 +905,7 @@ async fn unload_deadline_during_drain_keeps_final_sample_and_deletion_owned() {
         billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
     let close = control.block("close");
-    control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1028,14 +1030,14 @@ async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() 
     let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
     let store_dropped = Arc::new(AtomicBool::new(false));
 
-    let observer = InvocationLoop::<Context>::unload_running_agent(
-        RunningAgent {
+    let observer = super::unload_prepared_agent(
+        crate::worker::PreparedAgent::Resident(RunningAgent {
             runtime: TestStoreOwner {
                 node: Some(node),
                 dropped: Arc::clone(&store_dropped),
             },
             filesystem,
-        },
+        }),
         OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1132,9 +1134,8 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
         metered_resident_with_open_node_for_unload_test().await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
-    control.push_delete_and_verify(Err(FilesystemStorageError::verification(
-        "injected verified deletion failure",
-        Path::new("<unload-test>"),
+    control.push_delete_and_verify(Err(FilesystemStorageError::from(
+        OperationContext::verification("injected verified deletion failure", None),
     )));
     let held = Arc::new(AtomicBool::new(false));
     let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
@@ -1144,14 +1145,14 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
     ));
     let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
 
-    let observer = InvocationLoop::<Context>::unload_running_agent(
-        RunningAgent {
+    let observer = super::unload_prepared_agent(
+        crate::worker::PreparedAgent::Resident(RunningAgent {
             runtime: TestStoreOwner {
                 node: Some(node),
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
-        },
+        }),
         OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_secs(1),
@@ -1264,7 +1265,7 @@ async fn production_unload_starts_final_observation_after_native_close_drains() 
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
     let close = control.block("close");
-    control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1329,6 +1330,84 @@ async fn production_unload_starts_final_observation_after_native_close_drains() 
 
 #[test]
 #[timeout("5s")]
+async fn aborted_preparation_unloads_a_retained_pending_write_before_draining() {
+    use crate::filesystem::sandbox::SandboxWriteAttempt;
+    use crate::services::agent_filesystem::{
+        WritePlacement, reconstructing_with_open_file_for_unload_test, write,
+    };
+    use crate::worker::PreparedAgent;
+    use bytes::Bytes;
+    use futures::FutureExt;
+
+    for decision in [
+        RetryDecision::Immediate,
+        RetryDecision::None,
+        RetryDecision::TryStop(Timestamp::now_utc()),
+        RetryDecision::Delayed(Duration::from_millis(37)),
+        RetryDecision::ReacquirePermits,
+    ] {
+        let (filesystem, control, generation, file) =
+            reconstructing_with_open_file_for_unload_test().await;
+        control.push_write(Ok(SandboxWriteAttempt::completed(4)));
+        control.push_close(Ok(()));
+        control.push_delete_and_verify(Ok(()));
+        let write_gate = control.block("write");
+        let deletion = control.block("delete_and_verify");
+        let mut pending = Box::pin(
+            write(
+                &generation,
+                &file,
+                WritePlacement::At(3),
+                Bytes::from_static(b"data"),
+            )
+            .unwrap(),
+        );
+        assert!(pending.as_mut().now_or_never().is_none());
+        write_gate.wait_started().await;
+        let dropped = Arc::new(AtomicBool::new(false));
+        let runtime = (
+            pending,
+            TestStoreOwner {
+                node: Some(OpenNode::File(file)),
+                dropped: dropped.clone(),
+            },
+        );
+
+        // The interrupted readiness future has gone, but the runtime still owns the write.
+        // Finishing replay here would wait forever for the runtime's retained call lease.
+        let prepared = PreparedAgent::finish(runtime, filesystem, &Some(decision))
+            .now_or_never()
+            .expect("aborted preparation must not drain filesystem calls")
+            .unwrap_or_else(|_| panic!("aborted preparation must seal its filesystem"));
+        assert!(matches!(prepared, PreparedAgent::Aborted { .. }));
+        assert!(!dropped.load(Ordering::Acquire));
+        let mut permits = ConcurrentAgentPermitState::new(None, Arc::new(AtomicBool::new(false)));
+        let mut unloading = Box::pin(super::unload_prepared_agent(
+            prepared,
+            OwnerToolOperations::new(),
+            UnloadReason::Restart,
+            Instant::now() + Duration::from_secs(2),
+            &mut permits,
+            &Arc::new(Mutex::new(None)),
+            None,
+        ));
+        let cleanup = unloading.cleanup.clone();
+        while !dropped.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+        assert!(unloading.as_mut().now_or_never().is_none());
+        assert!(deletion.wait_started().now_or_never().is_none());
+
+        write_gate.release();
+        deletion.wait_started().await;
+        deletion.release();
+        assert!(unloading.await.is_none());
+        cleanup.wait().await.unwrap();
+    }
+}
+
+#[test]
+#[timeout("5s")]
 async fn startup_disposal_releases_execution_before_failed_deletion_and_repair() {
     let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let scope = metrics.scope();
@@ -1336,13 +1415,12 @@ async fn startup_disposal_releases_execution_before_failed_deletion_and_repair()
         billing_metered_resident_with_open_node_for_unload_test(None).await;
     filesystem.set_release_metrics_for_test(metrics.scope());
     control.push_close(Ok(()));
-    control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
-    control.push_delete_and_verify(Err(FilesystemStorageError::verification(
-        "startup deletion failure",
-        Path::new("<startup-disposal>"),
+    control.push_delete_and_verify(Err(FilesystemStorageError::from(
+        OperationContext::verification("startup deletion failure", None),
     )));
     let deletion = control.block("delete_and_verify");
     let settled = window.settlement_observer();
@@ -1406,7 +1484,7 @@ async fn unload_preparation_defers_allocation_to_window_close() {
     let (filesystem, control, window, _generation_handle, node) =
         billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
-    control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1452,7 +1530,7 @@ async fn execution_window_closes_before_filesystem_deletion() {
     let (filesystem, control, window, _generation_handle, node) =
         billing_metered_resident_with_open_node_for_unload_test(None).await;
     control.push_close(Ok(()));
-    control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1547,16 +1625,15 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
         let (filesystem, control, window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test(Some(clock.clone())).await;
         clock.wait_for_sleep_until(Duration::from_millis(10)).await;
-        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+        control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
             allocated_bytes: 50,
             filesystem_objects: 1,
         }));
         clock.set(Duration::from_millis(10)).await;
         clock.wait_for_sleep_until(Duration::from_millis(100)).await;
         if metering_failed {
-            control.push_observe_allocation(Err(FilesystemStorageError::verification(
-                "held-operation metering failure",
-                Path::new("<operation-unload>"),
+            control.push_observe_allocation(Err(FilesystemStorageError::from(
+                OperationContext::verification("held-operation metering failure", None),
             )));
             let observation = control.block("observe_allocation");
             let mut health = window.subscribe_enforcement_failure();
@@ -1567,7 +1644,7 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
                 .await;
         }
         control.push_close(Ok(()));
-        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+        control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
             allocated_bytes: 100,
             filesystem_objects: 1,
         }));
@@ -1665,9 +1742,8 @@ async fn active_allocation_failure_remains_failed_after_successful_physical_dele
     let (filesystem, control, window, _generation_handle, node) =
         billing_metered_resident_with_open_node_for_unload_test(None).await;
     filesystem.set_release_metrics_for_test(metrics.scope());
-    control.push_observe_allocation(Err(FilesystemStorageError::verification(
-        "active allocation observation failed",
-        Path::new("<disposal-observation>"),
+    control.push_observe_allocation(Err(FilesystemStorageError::from(
+        OperationContext::verification("active allocation observation failed", None),
     )));
     let observation = control.block("observe_allocation");
     let mut health = window.subscribe_enforcement_failure();
@@ -1681,7 +1757,7 @@ async fn active_allocation_failure_remains_failed_after_successful_physical_dele
             .contains("active allocation observation failed")
     );
     control.push_close(Ok(()));
-    control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+    control.push_observe_allocation(Ok(crate::filesystem::volume::FilesystemAllocation {
         allocated_bytes: 100,
         filesystem_objects: 1,
     }));
@@ -1753,14 +1829,14 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
     ));
     let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
 
-    let observer = InvocationLoop::<Context>::unload_running_agent(
-        RunningAgent {
+    let observer = super::unload_prepared_agent(
+        crate::worker::PreparedAgent::Resident(RunningAgent {
             runtime: TestStoreOwner {
                 node: Some(node),
                 dropped: Arc::new(AtomicBool::new(false)),
             },
             filesystem,
-        },
+        }),
         OwnerToolOperations::new(),
         UnloadReason::ExplicitStop,
         Instant::now() + Duration::from_millis(20),
@@ -1862,9 +1938,8 @@ async fn concrete_failed_unload_retains_retry_owner_and_immutable_results() {
     let scope = metrics.scope();
     let (filesystem, control) = resident_for_unload_test().await;
     filesystem.set_release_metrics_for_test(metrics.scope());
-    control.push_delete_and_verify(Err(FilesystemStorageError::verification(
-        "first cleanup failure",
-        Path::new("<unload-retry>"),
+    control.push_delete_and_verify(Err(FilesystemStorageError::from(
+        OperationContext::verification("first cleanup failure", None),
     )));
     let mut permits = ConcurrentAgentPermitState::new(None, Arc::new(AtomicBool::new(false)));
     permits.release_scope = scope.clone();
@@ -1886,9 +1961,8 @@ async fn concrete_failed_unload_retains_retry_owner_and_immutable_results() {
     assert!(original_error.to_string().contains("first cleanup failure"));
     assert_eq!(cleanup.wait().await.unwrap_err(), original_error);
 
-    control.push_delete_and_verify(Err(FilesystemStorageError::verification(
-        "persistent cleanup failure",
-        Path::new("<unload-retry>"),
+    control.push_delete_and_verify(Err(FilesystemStorageError::from(
+        OperationContext::verification("persistent cleanup failure", None),
     )));
     let failed_retry = cleanup.retry();
     let retry_error = failed_retry.wait().await.unwrap_err();
@@ -1942,9 +2016,8 @@ async fn startup_rollback_retains_cleanup_retry_without_clearing_close_failure()
         let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
         let (filesystem, control) = resident_for_unload_test().await;
         filesystem.set_release_metrics_for_test(metrics.scope());
-        control.push_delete_and_verify(Err(FilesystemStorageError::verification(
-            "startup cleanup failure",
-            Path::new("<startup-retry>"),
+        control.push_delete_and_verify(Err(FilesystemStorageError::from(
+            OperationContext::verification("startup cleanup failure", None),
         )));
         let failure = crate::worker::cleanup_typed_agent_filesystem(
             seal(filesystem),
@@ -2029,14 +2102,14 @@ async fn filesystem_pressure_stop_seam_reaches_concrete_unload_with_exact_deadli
             assert_eq!(expected_eligibility, Some(eligibility));
             assert_eq!(unload_request.reason, UnloadReason::FilesystemPressure);
             assert_eq!(unload_request.deadline, deadline);
-            InvocationLoop::<Context>::unload_running_agent(
-                RunningAgent {
+            super::unload_prepared_agent(
+                crate::worker::PreparedAgent::Resident(RunningAgent {
                     runtime: TestStoreOwner {
                         node: Some(node),
                         dropped: Arc::new(AtomicBool::new(false)),
                     },
                     filesystem,
-                },
+                }),
                 OwnerToolOperations::new(),
                 unload_request.reason,
                 unload_request.deadline,

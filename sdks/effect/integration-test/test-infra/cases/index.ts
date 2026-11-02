@@ -15,7 +15,7 @@ import { case_ as blob } from "./blob.ts"
 import { case_ as webhook } from "./webhook.ts"
 import { case_ as websocket } from "./websocket.ts"
 import { case_ as sqliteCounter } from "./sqlite-counter.ts"
-import { case_ as pgCounter } from "./pg-counter.ts"
+import { case_ as pgCounter, migrationsCase as pgMigrations } from "./pg-counter.ts"
 import { case_ as mysqlCounter } from "./mysql-counter.ts"
 import { case_ as igniteCounter } from "./ignite-counter.ts"
 import { case_ as inventorySaga } from "./inventory-saga.ts"
@@ -40,6 +40,7 @@ export const allCases: ReadonlyArray<TestCase> = [
   toolMiddleware,
   sqliteCounter,
   pgCounter,
+  pgMigrations,
   mysqlCounter,
   igniteCounter,
   inventorySaga,

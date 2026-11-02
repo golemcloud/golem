@@ -246,6 +246,52 @@ yield* sql.withTransaction(
 
 Do not manually call `begin`, `commit`, or `rollback`; those are not public methods on this client.
 
+## SQL Permissions and Migrations
+
+Declare the agent's database grants in `golem.yaml` when it uses an explicit `initialCard`.
+Ordinary reads need `query`; writes, table DDL, index creation, and table locks need `mutate`.
+Resources use `database.schema.table`, with `*` allowed per component. For example:
+
+```text
+rdbms(?env) @ ?agent : query : app.public.notes
+rdbms(?env) @ ?agent : mutate : app.public.notes
+```
+
+The verb follows the SQL operation, not the client method. Golem analyzes SQL first and authorizes
+every table target. A statement that reads one table and writes another needs both grants.
+Starting a transaction currently requires both `query` and `mutate` on `app.*.*`; grants limited
+to one table do not satisfy this requirement. Statements inside the transaction are still checked.
+
+Use `Migrator` from `effect/sql` with `PgClient.layer` through the canonical `SqlClient` service.
+Normal migrations should work with ordinary grants for their tracking table and application
+tables. Supported SQL includes reads, writes, table creation and alteration, index creation,
+table locks, and CTEs whose underlying reads and writes can be determined. Row-locking
+`SELECT ... FOR UPDATE` or `FOR SHARE` needs `mutate` on the locked tables, including those selected
+by an `OF` alias. Not every SQL form or dialect-specific clause is supported. Send one statement
+per call. The adapter and Migrator do not automatically grant broad permissions.
+
+If a required migration statement cannot be analyzed, such as `CREATE SCHEMA` or
+`CREATE EXTENSION`, review its effects and database-role privileges before explicitly granting:
+
+```text
+rdbms(?env) @ ?agent : unanalyzed : database(app)
+```
+
+Only the explicit `unanalyzed` verb with a `database(...)` resource grants this fallback.
+The default agent card, wildcard table grants, and wildcard verbs do not include it;
+prefer a concrete database name over the deliberately broad `unanalyzed : database(*)` form.
+Never add it automatically for migrations or to fix an ordinary table-permission denial.
+
+Golem always attempts analysis first. If analysis succeeds, insufficient table permission denies
+the statement even when the agent holds an `unanalyzed` grant. Only unsupported analysis can use
+the explicit fallback for the connection's database. Analysis and permission denials surface as
+query-execution failures through the adapter's `SqlError`; inspect the error message before
+changing grants. The database can still reject SQL that Golem permits.
+
+The database role still enforces its privileges. `database(app)` selects the connection database;
+it does not guarantee that arbitrary SQL affects only that database. Use a least-privilege role
+and reserve unanalyzed SQL for trusted code, not model-generated statements.
+
 ## Connection Configuration
 
 Hardcode a connection URI only when a test explicitly requires it. For application code, declare a
