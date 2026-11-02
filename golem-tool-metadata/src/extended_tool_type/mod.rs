@@ -16,7 +16,7 @@ use crate::tool_literal::{ToolLiteral, value_is_literal_to_schema_value};
 use golem_schema::schema::tool as native;
 use golem_schema::schema::tool as wire;
 use golem_schema::schema::tool::validation::ToolValidationError;
-use golem_schema::schema::validation::{is_equivalent_cross_graph, validate_value};
+use golem_schema::schema::validation::{is_refinement_cross_graph, validate_value};
 
 use golem_schema::schema::{SchemaGraph, SchemaType, SchemaValue, merge_agent_graphs};
 use std::collections::{BTreeMap, BTreeSet};

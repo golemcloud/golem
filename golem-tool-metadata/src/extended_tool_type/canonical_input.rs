@@ -59,12 +59,17 @@ impl CanonicalInputModel {
 /// absent. Generated Rust methods keep their authored parameter type, so a
 /// present carrier is unwrapped when the destination is required and a bare
 /// value is wrapped when the destination retains the optional carrier.
+///
+/// The field schema can be a refinement of the destination schema (see
+/// [`is_refinement_cross_graph`]): `#[arg]` refinements change the published
+/// field type, not the Rust parameter type. The value is not changed, so a
+/// text-refined `String` parameter receives a text value.
 pub fn adapt_canonical_input_value(
     source: CanonicalInputValue,
     target_name: &str,
     target_schema: &SchemaGraph,
 ) -> Result<SchemaValue, String> {
-    if is_equivalent_cross_graph(
+    if is_refinement_cross_graph(
         &source.schema,
         &source.schema.root,
         target_schema,
@@ -74,7 +79,7 @@ pub fn adapt_canonical_input_value(
     }
 
     if let SchemaType::Option { inner, .. } = &source.schema.root
-        && is_equivalent_cross_graph(&source.schema, inner, target_schema, &target_schema.root)
+        && is_refinement_cross_graph(&source.schema, inner, target_schema, &target_schema.root)
     {
         return match source.value {
             SchemaValue::Option { inner: Some(value) } => Ok(*value),
@@ -90,7 +95,7 @@ pub fn adapt_canonical_input_value(
     }
 
     if let SchemaType::Option { inner, .. } = &target_schema.root
-        && is_equivalent_cross_graph(&source.schema, &source.schema.root, target_schema, inner)
+        && is_refinement_cross_graph(&source.schema, &source.schema.root, target_schema, inner)
     {
         return Ok(SchemaValue::Option {
             inner: Some(Box::new(source.value)),
@@ -585,7 +590,7 @@ pub fn build_canonical_input_with_prefix(
 }
 
 fn canonical_input_carrier(field: &CanonicalInputField, value: SchemaValue) -> SchemaValue {
-    if matches!(field.schema.root, SchemaType::Option { .. })
+    let mut value = if matches!(field.schema.root, SchemaType::Option { .. })
         && !matches!(value, SchemaValue::Option { .. })
     {
         SchemaValue::Option {
@@ -593,6 +598,44 @@ fn canonical_input_carrier(field: &CanonicalInputField, value: SchemaValue) -> S
         }
     } else {
         value
+    };
+    conform_text_values(&field.schema, &field.schema.root, &mut value);
+    value
+}
+
+/// Rewrites `string` values to `text` values where the field schema says
+/// `text`. A text-refined `String` parameter is published as `text`, but its
+/// Rust value is a `string`. Refinements of every other kind restrict the
+/// type only, so their values stay unchanged.
+fn conform_text_values(graph: &SchemaGraph, ty: &SchemaType, value: &mut SchemaValue) {
+    let mut ty = ty;
+    for _ in 0..=graph.defs.len() {
+        let SchemaType::Ref { id, .. } = ty else {
+            break;
+        };
+        let Some(definition) = graph.lookup(id) else {
+            return;
+        };
+        ty = &definition.body;
+    }
+    match (ty, &mut *value) {
+        (SchemaType::Text { .. }, SchemaValue::String(text)) => {
+            let text = std::mem::take(text);
+            *value = SchemaValue::Text(golem_schema::schema::TextValuePayload {
+                text,
+                language: None,
+            });
+        }
+        (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: Some(value) }) => {
+            conform_text_values(graph, inner, value)
+        }
+        (SchemaType::List { element, .. }, SchemaValue::List { elements })
+        | (SchemaType::FixedList { element, .. }, SchemaValue::FixedList { elements }) => {
+            for item in elements {
+                conform_text_values(graph, element, item);
+            }
+        }
+        _ => {}
     }
 }
 
