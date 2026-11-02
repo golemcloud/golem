@@ -106,9 +106,9 @@ use crate::durable_host::{
     agent_effective_surface_from_component_metadata, agent_monomorphization_context,
     recover_stderr_logs,
 };
+use crate::filesystem::sandbox::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LookupResult, TrapType};
-use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::active_agents::{
     ActiveAgent, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
 };

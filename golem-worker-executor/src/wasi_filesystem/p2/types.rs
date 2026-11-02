@@ -1778,7 +1778,7 @@ mod tests {
         {
             let sandbox = FilesystemStorageError::io(
                 "hard link",
-                std::path::Path::new("<p2-namespace-test>"),
+                None,
                 std::io::Error::from_raw_os_error(libc::EXDEV),
             );
             assert_eq!(

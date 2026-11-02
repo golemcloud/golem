@@ -1048,6 +1048,13 @@ finalization, joins Store destruction and retained callbacks, then joins those c
 layers. These distinctions prevent an old owner from removing, reopening, or writing lifecycle
 state for its replacement without adding a second recovery path.
 
+The production shutdown token closes construction admission, fences oplogs and cancels worker
+tasks through the `InvocationLoops` watcher before gRPC stops. `server.rs` waits for tracked
+shutdown work within `SHUTDOWN_GRACE`, then stops the server join set. This interval can therefore
+refuse requests even though the transport remains open. `wait_for_exit()` also stops worker roots
+and joins cleanup; it is an active drain, not a passive wait. Concurrent drain callers serialize,
+and a failed drain keeps registrations for retry.
+
 On executor shutdown, the active-agent cache task removes its cached workers regardless of TTL.
 Each worker owns the service graph that owns the cache, so leaving the entries cached would
 retain the graph and its storage pools after task cancellation. This drops cache references only;
@@ -2313,10 +2320,79 @@ retaining the underlying cause.
 
 ### Filesystem snapshots
 
+`filesystem` groups the low-level volume, sandbox and host-directory modules as siblings. Their
+shared helpers are `filesystem::errors`, `filesystem::blocking` and the private `path_removal` module.
+Agent lifecycle, pressure recovery and snapshot policy remain outside this group.
+
+Executor startup creates `.scratch` and `.initial-files` through
+`services/agent_filesystem/executor_directories/mod.rs`. The generic `filesystem::host_directories` module owns
+their filesystem operations and does not know about sandbox provisioning or filesystem-specific
+quotas. Executor setup first opens and validates `filesystem::volume::FilesystemVolume`, then creates
+the host directories and constructs sandbox provisioning on that shared volume.
+On executor shutdown, `AgentFilesystems::track_shutdown` joins invocation loops and snapshot-store shutdown before
+`AgentFilesystems::shut_down` removes both directories. The file loader stops new loads and drains
+entered downloads and outstanding source leases before removing its cache. `Drop` remains a
+best-effort cleanup safety net. That fallback is synchronous: without explicit shutdown, dropping
+the last cache lease after its loader can remove the cache directory on the caller's thread.
+
+Filesystem creation and source loads use `services/work_admission` registrations. Closing admission
+refuses a new operation immediately and waits for existing registrations without holding a lock.
+Source leases retain their registration, so a multi-file load interrupted by shutdown fails its
+next source request as `InitialFileLoadFailure::Unavailable` instead of deadlocking behind its
+own earlier lease. In-process executor `release()` waits for tracked shutdown cleanup as well as
+the service graph. `shutdown_and_wait_for_invocation_loops()` keeps the invocation-drain timeout
+separate from its tracked-cleanup grace. Only a successful return proves both completed. It does
+not drop the service graph or release its root lock. A fixed-root replacement
+must not start while old cleanup still owns the XFS lock or can remove its directories. A failed
+invocation drain disables fallback removal of both host directories and retains their temporary
+parent on disk. Production drain and cleanup share the existing shutdown grace, not a new budget.
+Bootstrap owns a cancellation guard until it returns `RunDetails`. `bootstrap::epoch_ticker::EpochTicker`
+owns its thread from creation, before snapshot binding or service construction can fail. Every
+drop stops and joins that thread. An ordinary bootstrap error cancels only this executor's token
+and waits up to `SHUTDOWN_GRACE` for tracked cleanup. It never shuts down the caller's join set,
+which can also contain other services. A timeout logs that resources may still be held and returns
+the original error. Neither that error nor cancellation of the bootstrap future is a completed
+cleanup receipt. The cancellation guard exists for abandoned futures; normal error paths must
+signal before awaiting their bounded cleanup.
+Both failed bootstrap and process termination use `Shutdown::cancel_and_wait_for_tracked` for
+the cancel, bounded wait and warning. The caller still owns termination of its server join set.
+
+`filesystem::volume` owns shared storage roots, capacity observations, native cloning and XFS project
+allocation and quota operations. Its XFS and APFS implementations do not construct sandboxes.
+`filesystem::sandbox` owns one capability-confined tree, its handles, provisioning and verified
+deletion, and seed/copy orchestration. XFS quotas account and limit allocation; root capabilities
+confine path access. Physical pressure recovery observes the volume without accessing a sandbox.
+Sandbox, volume and host-directory errors embed `filesystem::errors::OperationContext`. It owns
+the operation, optional path and typed `OperationFailure`, plus their construction, formatting
+and cause access. It carries no domain classification, cleanup flag or error-selection policy.
+The domains own those decisions. Pressure validation returns its own configuration error. At service binding,
+`FilesystemSetupError` keeps that cause distinct from storage failures; filesystem and active-agent
+constructors use explicit `Result<_, FilesystemSetupError>` contracts. Task errors retain
+`BlockingTaskError`; they do not acquire an invented I/O kind. Conversion to sandbox errors retains
+these facts without classifying a storage failure as a sandbox escape. A primary host-directory
+discard or preflight stale-probe removal is not a cleanup failure. Only the owning cleanup path
+applies that flag. Volume probes, executor directory setup and sandbox creation
+rollback retain both diagnostics when the operation and its cleanup fail, with the actual cleanup
+failure's classification. A failed rollback deletion always sets `cleanup_failed`, even if the
+lower-level error was unflagged. Worker startup then retains its cleanup obligation instead of
+treating the result only as a creation error. Task failures have no I/O kind and remain terminal.
+
+Plain construction uses `OperationContext` and `From` rather than domain constructor forwarders.
+The sandbox I/O factory remains because it classifies capability escapes. `filesystem::errors::CleanupFailure<E>`
+shares the flag, original-error chain and formatting without choosing when a domain marks cleanup.
+Its type parameter preserves original error types. Conversions consume the chain and map its
+original errors; they do not detach them through a mutator. Debug output uses the stored context
+and chain directly.
+
+Native cloning uses source-first arguments. APFS `clone_file_at` creates a directory entry;
+XFS `clone_file_contents` fills an already-open target. The XFS project-aware operation keeps
+the same source and target order. Tree-copy dispatch calls these operations without aliases or
+argument-swapping wrappers.
+
 `AgentFilesystemSnapshots::bind` requires a volume that makes copy-on-write copies. Production
 uses Linux 5.8 or later with XFS and reflink, through `ManagedXfs` or `ReflinkXfs`. Local development
 and tests on macOS use `Apfs`. Project quotas are not required for snapshots. `Temporary` and
-`Directory` make byte copies, so binding `Enabled` on them fails at startup. The sandbox reports
+`Directory` make byte copies, so binding `Enabled` on them fails at startup. The volume reports
 `copies_on_write`; the snapshot service owns this rule.
 
 `seed` and `copy_contents` make copy-on-write copies on XFS or `Apfs`, and byte copies on other
@@ -2417,6 +2493,58 @@ tail: it keeps the busy count of the agent, starts no run and no write, never co
 (`run_job` checks `ticket.replaced()`), and its capture is discarded after the call returns. A clean
 successful save is never replaced, and neither is a job whose call has returned. A periodic
 admission never waits.
+
+`filesystem_snapshot/mod.rs` holds the store contract and `create_store` factory.
+`agent_snapshots`, `snapshot_name`, `errors` and `run_admission` hold the shared caller vocabulary.
+`operation_drain` tracks store-local operation cohorts by incarnation, not queued jobs.
+Its `OperationLease` stays alive through retained tasks. `drain_before` establishes the
+`delete_all` cutoff before admission and links each old cohort to its successor, so a later drain
+still waits for earlier work when the first drain's caller drops.
+
+The two store backends live in `filesystem_snapshot/backend/in_memory` and `backend/rustic`.
+The in-memory backend remains available only for tests and `test-utils`.
+`backend/rustic/mod.rs` owns the concrete rustic backend, construction, shutdown and operation
+routing. Operations are free functions with explicit dependencies. `operation::Operation::new`
+borrows the lease and a named `Resources` input without acquiring a tracker token or capturing
+a runtime. `Resources` is explicit borrowed wiring rather than a store reference or store trait.
+The operation's fields are private. Its agent comes only from that lease, and `files`
+accepts no separate agent. Accessors expose the key, clock and priority; task and backend methods
+own registration. `BackendRun` keeps an untransferred backend before its cancellation guard in
+field order. Transferring the backend into a blocking task retains no extra backend owner.
+Its private backend `Option` records the one-way transfer, not an optional run mode.
+`Operation::cleanup_tasks` creates one `CleanupTasks` owner for the shutdown registration, tracker,
+runtime and incarnation lease. It spawns directly through the tracker. Registration still precedes
+the shutdown check, and runtime capture follows it.
+`tracked_tasks::check_local_path` counts read-only local checks through store shutdown, not
+incarnation drainage. These two lifetimes are distinct.
+`Operation::read_existing` opens and reads a repository in one tracked blocking task. It uses the
+caller's backend and starts no run or retry. Save keeps its cancellation link, per-run tracker and
+late-write recorders in its own setup order. `SaveRun` owns backup inputs across missing-index
+retries; `SaveSettlement` owns the outcome and recorders while late writes settle.
+`run_outcome` defines one `RunResult` for all operations: `Result<Ran<_>, Ended>`. An `Err` is the
+only run failure path. An `Ok` holds an answer or settlement; settlement returns the same result
+shape. `call_execution::CallDriver` drives runs and settlement, identified by `CallMethod`.
+`clock` provides the wall clock and a shared monotonic helper. The prune metric uses
+`std::time::Instant::now()` directly, so paused test clocks do not change its elapsed time.
+`retry` owns the delay calculation used by the driver and the feature-gated test limiters.
+`blob_io` is the single blob-call policy;
+`blob_backend` bridges blocking rustic calls to it. `save`, `restore`, `snapshot_catalog`,
+`snapshot_deletion` and `repository_namespace` own their operations. Save and restore also own
+their operation-specific failure classification, settings and rustic options. `store_policy`
+constructs `SaveSettings`, `RestoreSettings` and `PruneSettings` through matching factory methods.
+Restore owns its reader-thread count by value. Restore and deletion inputs hold their own
+test observations; the generic operation resources do not depend on restore hooks.
+`pruning` owns its defaults, options, eligibility criteria, durable records, claims
+and timing. `tracked_tasks` retains the runtime supplied by each operation.
+Direct repository pruning is private in production; shared race fixtures use the test-only
+`pruning::test_support::prune_repository` entry.
+Tests and single-consumer fixtures live beside their owners. The `test_support` modules hold
+shared fixtures; shared prune inputs and timing constants live in `pruning/test_support`. The shared contract cases in
+`filesystem_snapshot/tests.rs` register for both adapters and own their counting limiter. They
+use independent tree fixtures and own their `one_file` and `files_and_bytes` helpers.
+The rustic shared fixtures have one fixture-tree builder, one default key and one 10-second limit.
+The rustic root tests cover cross-operation races, shutdown and contract registration.
+`filesystem_snapshot/time_zone_tests.rs` checks the executor image.
 
 `StoreCalls` is the only owner of the store. The store takes a slot of its caller's limiter
 (`RunSlots`, `max_concurrent_uploads` for the uploads and deletes) for each run of a call, and
