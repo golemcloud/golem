@@ -31,12 +31,12 @@ use test_r::test;
 type StoredExternalPayload = (PayloadId, Vec<u8>, Vec<u8>);
 
 /// Minimal in-memory `Oplog` used to drive a [`ReplayState`] over hand-built entries.
-#[derive(Debug)]
 struct InMemoryOplog {
     entries: std::sync::Mutex<Vec<OplogEntry>>,
     /// Every index served by `read_exact`, in order.
     reads: std::sync::Mutex<Vec<OplogIndex>>,
     external_payloads: tokio::sync::Mutex<Vec<StoredExternalPayload>>,
+    tasks: crate::worker::tasks::WorkerTasks,
 }
 
 impl InMemoryOplog {
@@ -45,12 +45,25 @@ impl InMemoryOplog {
             entries: std::sync::Mutex::new(Vec::new()),
             reads: std::sync::Mutex::new(Vec::new()),
             external_payloads: tokio::sync::Mutex::new(Vec::new()),
+            tasks: Default::default(),
         }
+    }
+}
+
+impl std::fmt::Debug for InMemoryOplog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InMemoryOplog")
+            .field("entries", &self.entries)
+            .finish_non_exhaustive()
     }
 }
 
 #[async_trait]
 impl Oplog for InMemoryOplog {
+    fn task_owner(&self) -> Option<&crate::worker::tasks::WorkerTasks> {
+        Some(&self.tasks)
+    }
+
     async fn add(
         &self,
         entry: OplogEntry,
@@ -11620,6 +11633,46 @@ async fn missing_start_claim_waits_while_an_active_body_owns_the_head_start() {
     assert!(matches!(
         finished_claim(claim).await.unwrap(),
         ReplayStartClaimOutcome::ReplayEnded
+    ));
+    reconstruction.body_settled();
+}
+
+#[test]
+async fn blocked_claim_task_ends_when_the_owner_tasks_stop() {
+    // [RecoverySucceeded(1), Start(entity=2), Start(3, parent 2), End(3→4), End(2→5)] — a claim
+    // task waits for the active body, as when executor shutdown drops the Store that replays.
+    // Nothing drives the body afterwards, so only the stop of the owner's tasks can end the wait;
+    // otherwise the owner's retirement never completes.
+    let (rs, _handle, mut reconstruction, oplog) = replay_with_undrained_reconstruction(vec![
+        start_with_parent(2),
+        end_for(3, 1),
+        end_for(2, 2),
+    ])
+    .await;
+    let tasks = oplog.tasks.clone();
+    let mut claim = tasks
+        .spawn_metadata({
+            let rs = rs.clone();
+            async move {
+                rs.claim_start_or_replay_end(StartClaim::unowned(
+                    &HostFunctionName::WallClockNow,
+                    &DurableFunctionType::ReadLocal,
+                ))
+                .await
+            }
+        })
+        .unwrap();
+    wait_until_claim_parked(&rs, &mut claim, 1).await;
+
+    tokio::time::timeout(Duration::from_secs(5), tasks.stop_and_wait())
+        .await
+        .expect("a parked claim task kept the owner's retirement pending")
+        .unwrap();
+    assert!(matches!(
+        claim.await.unwrap(),
+        Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump
+        })
     ));
     reconstruction.body_settled();
 }

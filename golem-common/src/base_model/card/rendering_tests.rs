@@ -619,6 +619,13 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
             })
             .boxed()
         ),
+        class_permission::<RdbmsClass>(
+            environment_owner(),
+            Just(Some(RdbmsVerb::Unanalyzed)).boxed(),
+            prop_oneof![ident(), Just("*".to_string())]
+                .prop_map(|database| RdbmsResourcePattern::Database { database })
+                .boxed()
+        ),
         class_permission::<CardClass>(
             account_owner(),
             option_verb(vec![

@@ -1590,14 +1590,15 @@ mod tests {
     #[test]
     #[test_r::timeout("5s")]
     async fn cancelled_active_body_drains_its_write_and_close_before_releasing_the_lane() {
-        use crate::sandbox_filesystem::{SandboxOpened, SandboxWriteAttempt};
+        use crate::filesystem::sandbox::{SandboxHandle, SandboxWriteAttempt};
+
         use crate::services::agent_filesystem as fs;
         use futures::FutureExt;
 
         let (filesystem, control) = fs::resident_for_unload_test().await;
         let generation = fs::resident_generation_handle(&filesystem);
         let (body_filesystem, drain) = generation.for_invocation();
-        control.push_open(Ok(SandboxOpened::scripted_file(706)));
+        control.push_open(Ok(SandboxHandle::scripted_file(706)));
         let file = fs::open(
             &body_filesystem,
             fs::PathTarget::at_root(&body_filesystem, "active").unwrap(),
@@ -1923,13 +1924,13 @@ mod tests {
     #[test]
     #[test_r::timeout("5s")]
     async fn abandoned_failure_release_holds_lane_until_filesystem_close_finishes() {
-        use crate::sandbox_filesystem::SandboxOpened;
+        use crate::filesystem::sandbox::SandboxHandle;
         use crate::services::agent_filesystem as fs;
         use futures::FutureExt;
 
         let (filesystem, control) = fs::resident_for_unload_test().await;
         let (body, invocation) = fs::resident_generation_handle(&filesystem).for_invocation();
-        control.push_open(Ok(SandboxOpened::scripted_file(705)));
+        control.push_open(Ok(SandboxHandle::scripted_file(705)));
         let file = fs::open(
             &body,
             fs::PathTarget::at_root(&body, "retained").unwrap(),

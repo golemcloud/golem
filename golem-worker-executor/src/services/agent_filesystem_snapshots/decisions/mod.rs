@@ -20,7 +20,7 @@
 
 use super::transitions::{JobId, Refusal, RunningJob};
 use super::{ConfirmOutcome, JobDecision, SnapshotKind, SnapshotSkip};
-use crate::sandbox_filesystem::FilesystemSpace;
+use crate::filesystem::volume::FilesystemSpace;
 use crate::services::golem_config::{
     FilesystemPressureConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
 };

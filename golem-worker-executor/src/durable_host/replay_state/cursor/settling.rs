@@ -285,7 +285,7 @@ impl ReplayState {
             .expect("the replay cursor owns the active-body wait counter");
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn test_is_settling(&self) -> bool {
         self.cursor.transition_phase.load(Ordering::Acquire)
             == ReplayTransitionPhase::Settling as u8

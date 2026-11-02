@@ -29,7 +29,7 @@ cargo make test-component-middleware-unit-tests
 ```
 
 Deployed coverage lives in
-`golem-worker-executor/tests/tool_streaming/k3_persistent_rate_limit_acceptance.rs` and
+`golem-worker-executor-tests/tests/tool_streaming/k3_persistent_rate_limit_acceptance.rs` and
 `middleware_acceptance.rs`. It exercises principal isolation, concurrent owners, configuration
 changes, and crashes before or after leaf dispatch. Build through the `tool-streaming` application
 using the normal test-component workflow before running those tests.

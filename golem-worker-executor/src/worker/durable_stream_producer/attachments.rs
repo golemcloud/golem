@@ -760,7 +760,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         });
         this.durable_stream_attachment_reconciler.start(handle);
     }
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub async fn wait_for_durable_stream_attachment_reconciler(&self) {
         self.durable_stream_attachment_reconciler.wait().await;
     }
