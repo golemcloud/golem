@@ -16,6 +16,7 @@ members = [
     "golem-shard-manager",
     "golem-worker-executor",
     "golem-worker-executor-test-utils",
+    "golem-worker-executor-tests",
     "golem-worker-service",
     "golem-xfs-quotad",
     "integration-tests",
