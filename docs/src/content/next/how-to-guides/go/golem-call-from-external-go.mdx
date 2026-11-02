@@ -136,6 +136,7 @@ _, err = c.Upload(ctx, upload)
 - Cancelling `ctx` before the result arrives cancels the call and the streams it sent.
 - If the connection drops, the session reconnects and resumes on its own: unacknowledged input is resent, and output continues after the last item you read.
 - A rejected call or a failed invocation is a `*bridge.SessionError` with the protocol's error code.
+- While the server accepts neither the start nor a resume, the session keeps reconnecting with a growing delay (50 ms up to 3 s) for `Configuration.ReconnectWindow` (default `bridge.DefaultReconnectWindow`, 5 minutes; `bridge.NoReconnectLimit` keeps trying until `ctx` ends). HTTP 429 and 5xx on the upgrade and retryable rejections are retried too. Past the window the call fails with `*bridge.UnreachableError`, which names the endpoint and the window and wraps the last cause.
 
 ## Approach 2: the CLI
 

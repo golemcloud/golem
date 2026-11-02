@@ -90,6 +90,21 @@ Generated Scala bridge clients follow the same conventions as agent-to-agent RPC
 - Bridge clients omit trigger and schedule helpers for recursively stream-bearing methods; use awaited streaming calls.
 - A bare `text` schema, also a refined one with languages, a length or a regex, maps to `golem.bridge.runtime.Text(text, language)` in external bridges and to the SDK's `golem.schema.Text(text, language)` in internal clients. The client does not check the restrictions; the server does.
 
+### Streaming Calls: Reconnect Window and Cancellation
+
+A streaming call reconnects with a growing delay (50 ms up to 3 s) while the server accepts neither its start nor a resume; HTTP 429 and 5xx on the upgrade and retryable rejections are retried too. The `reconnectWindow` argument of `configure` bounds the time without progress (default `Configuration.DefaultReconnectWindow`, 5 minutes; `Duration.Inf` removes the limit). Past the window the call fails with `golem.bridge.runtime.BridgeUnreachableException` (a `BridgeException` with `endpoint`, `reconnectWindow` and `lastCause`).
+
+```scala
+CounterAgentClient.configure(GolemServer.Local, "my-app", "local", reconnectWindow = 30.seconds)
+```
+
+Every streaming method also has a `cancelable` form that returns the future and a `golem.bridge.runtime.CancellationToken`. Cancelling stops the reconnect attempts before the server accepted the call and cancels the invocation after it; the future fails with `BridgeCancelledException`.
+
+```scala
+val (result, cancellation) = agent.numbers.cancelable()
+cancellation.cancel()
+```
+
 ## Generate Scala Internal Clients for Component-to-Component Calls
 
 When one Golem component needs to call another agent or tool from Scala code, generate an **internal** Scala client instead of an external REST bridge:

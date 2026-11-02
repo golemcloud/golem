@@ -839,6 +839,101 @@ counter-agent-client = {{ path = {package_dir:?} }}
 }
 
 #[test]
+fn bridge_rust_external_streaming_start_is_unreachable_after_the_reconnect_window() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "StreamerAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "numbers",
+            vec![],
+            Some(SchemaType::stream(Some(SchemaType::u32()))),
+        )],
+        vec![],
+        AgentMode::Ephemeral,
+    );
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
+    let mut generator = RustBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
+    generator.generate().unwrap();
+
+    let consumer_dir = target_dir.join("consumer");
+    std::fs::create_dir_all(consumer_dir.join("src")).unwrap();
+    std::fs::write(
+        consumer_dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+name = "generated-bridge-reconnect-consumer"
+version = "0.0.1"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+streamer-agent-client = {{ path = {package_dir:?} }}
+tokio = {{ version = "1", features = ["macros", "rt"] }}
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        consumer_dir.join("src/main.rs"),
+        r#"use std::time::{Duration, Instant};
+use streamer_agent_client::__golem_bridge_runtime::ClientError;
+use streamer_agent_client::{GolemServer, ReconnectPolicy, StreamerAgent};
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    streamer_agent_client::configure_with_reconnect(
+        GolemServer::Custom {
+            url: format!("http://{address}").parse().unwrap(),
+            token: "token".to_string(),
+        },
+        "app",
+        "local",
+        ReconnectPolicy::Within(Duration::from_millis(300)),
+    );
+    let agent = StreamerAgent::new_phantom().await.unwrap();
+    let started = Instant::now();
+    match agent.numbers().await {
+        Err(ClientError::Unreachable { endpoint, window, .. }) => {
+            assert!(endpoint.contains(&address.to_string()), "{endpoint}");
+            assert_eq!(window, Duration::from_millis(300));
+            assert!(started.elapsed() < Duration::from_secs(5));
+        }
+        Err(error) => panic!("expected an unreachable error, got {error}"),
+        Ok(_) => panic!("a closed port answered"),
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let shared_target_dir = crate::workspace_path().join("target/shared_bridge_tests");
+    let output = std::process::Command::new("cargo")
+        .arg("run")
+        .arg("--target-dir")
+        .arg(&shared_target_dir)
+        .current_dir(&consumer_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "generated bridge consumer failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn external_type_only_crate_is_portable_serializable_and_client_free() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();

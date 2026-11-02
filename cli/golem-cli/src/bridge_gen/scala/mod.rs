@@ -137,6 +137,7 @@ const BRIDGE: &str = "_root_.golem.bridge.runtime.Bridge";
 
 /// Fully-qualified runtime `Configuration` object/type.
 const CONFIGURATION: &str = "_root_.golem.bridge.runtime.Configuration";
+const CANCELLATION_TOKEN: &str = "_root_.golem.bridge.runtime.CancellationToken";
 
 /// Fully-qualified runtime `ResolvedAgent` case class.
 const RESOLVED_AGENT: &str = "_root_.golem.bridge.runtime.ResolvedAgent";
@@ -190,6 +191,7 @@ const GUEST_SCOPE_CARD_MEMBER_NAMES: &[&str] = &["withDefaultScopeCard", "withou
 
 /// Scala `Future`, `ExecutionContext`, `String`, `Unit`.
 const FUTURE: &str = "_root_.scala.concurrent.Future";
+const DURATION: &str = "_root_.scala.concurrent.duration.Duration";
 const EXECUTION_CONTEXT: &str = "_root_.scala.concurrent.ExecutionContext";
 const STRING: &str = "_root_.scala.Predef.String";
 const UNIT: &str = "_root_.scala.Unit";
@@ -1625,11 +1627,11 @@ impl ScalaBridgeGenerator {
 
         // Configuration convenience, delegating to the shared runtime cell.
         writer.line(format!(
-            "def configure(server: {GOLEM_SERVER}, appName: {STRING}, envName: {STRING}, executionContext: {EXECUTION_CONTEXT} = {EXECUTION_CONTEXT}.global): {UNIT} ="
+            "def configure(server: {GOLEM_SERVER}, appName: {STRING}, envName: {STRING}, executionContext: {EXECUTION_CONTEXT} = {EXECUTION_CONTEXT}.global, reconnectWindow: {DURATION} = {CONFIGURATION}.DefaultReconnectWindow): {UNIT} ="
         ));
         writer.indent();
         writer.line(format!(
-            "{CONFIGURATION}.configure(server, appName, envName, executionContext)"
+            "{CONFIGURATION}.configure(server, appName, envName, executionContext, reconnectWindow)"
         ));
         writer.dedent();
         writer.blank();
@@ -1742,9 +1744,19 @@ impl ScalaBridgeGenerator {
         } else {
             ret_ty.clone()
         };
-        writer.line(format!(
-            "def apply({param_decls}): {FUTURE}[{awaited_ty}] = {{"
-        ));
+        if uses_streams {
+            writer.line(format!(
+                "def apply({param_decls}): {FUTURE}[{awaited_ty}] = this.cancelable({invoke_args})._1"
+            ));
+            writer.blank();
+            writer.line(format!(
+                "def cancelable({param_decls}): ({FUTURE}[{awaited_ty}], {CANCELLATION_TOKEN}) = {{"
+            ));
+        } else {
+            writer.line(format!(
+                "def apply({param_decls}): {FUTURE}[{awaited_ty}] = {{"
+            ));
+        }
         writer.indent();
         writer.line(format!(
             "implicit val ec: {EXECUTION_CONTEXT} = resolved.configuration.executionContext"
@@ -1764,8 +1776,9 @@ impl ScalaBridgeGenerator {
                 );
             let config_codecs = self.public_config_codecs()?;
             writer.line(format!(
-                "{BRIDGE}.invokeStreamingAgent(resolved, {method_name_lit}, () => methodParameters({invoke_args}), {constructor_codec}, {input_codec}, {output_codec}, {config_codecs}).map {{ __result =>"
+                "val (__invocation, __cancellation) = {BRIDGE}.invokeStreamingAgentCancelable(resolved, {method_name_lit}, () => methodParameters({invoke_args}), {constructor_codec}, {input_codec}, {output_codec}, {config_codecs})"
             ));
+            writer.line("(__invocation.map { __result =>");
         } else {
             writer.line(format!(
                 "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.None).map {{ __result =>",
@@ -1780,7 +1793,11 @@ impl ScalaBridgeGenerator {
             writer.line(decode_block);
         }
         writer.dedent();
-        writer.line("}");
+        writer.line(if uses_streams {
+            "}, __cancellation)"
+        } else {
+            "}"
+        });
         writer.dedent();
         writer.line("}");
         writer.blank();

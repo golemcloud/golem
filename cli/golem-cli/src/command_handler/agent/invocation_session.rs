@@ -29,8 +29,8 @@ use anyhow::{Context as _, anyhow, bail};
 use golem_client::invocation_session::{
     AdmittedInput, DeliveryTracker, InputReplayBuffer, InvocationSession,
     InvocationSessionRequestProvider, InvocationSessionSender, InvocationSessionStateObserver,
-    InvocationSessionStateSnapshot, ReplayableInput, ServerFrame, SessionTransportError,
-    StableStreamIdentity, send_replayable_input,
+    InvocationSessionStateSnapshot, ReconnectPolicy, ReplayableInput, ServerFrame,
+    SessionTransportError, StableStreamIdentity, send_replayable_input,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::AgentConfigEntryDto;
@@ -446,6 +446,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         result = InvocationSession::open(
             request_provider,
             connector,
+            ReconnectPolicy::Unlimited,
             initial_state,
             pending_operation_is_retry,
             checkpoint_observer,

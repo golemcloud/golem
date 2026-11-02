@@ -12,17 +12,56 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::invocation_session::SessionTransportError;
 use crate::{Error, api};
+use std::time::Duration;
+
+pub use crate::invocation_session::ReconnectPolicy;
+
+/// The reconnect window of a configuration that does not set one.
+pub const DEFAULT_RECONNECT_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone)]
 pub enum ClientError {
-    InvocationFailed { message: String },
+    InvocationFailed {
+        message: String,
+    },
+    /// A streaming call could not reach the server within its reconnect window.
+    Unreachable {
+        endpoint: String,
+        window: Duration,
+        last_cause: String,
+    },
 }
 
 impl std::fmt::Display for ClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ClientError::InvocationFailed { message } => write!(f, "{}", message),
+            ClientError::Unreachable {
+                endpoint,
+                window,
+                last_cause,
+            } => write!(f, "{endpoint} was unreachable for {window:?}: {last_cause}"),
+        }
+    }
+}
+
+impl From<SessionTransportError> for ClientError {
+    fn from(error: SessionTransportError) -> Self {
+        match error {
+            SessionTransportError::Unreachable {
+                endpoint,
+                window,
+                last_cause,
+            } => ClientError::Unreachable {
+                endpoint,
+                window,
+                last_cause: last_cause.to_string(),
+            },
+            error => ClientError::InvocationFailed {
+                message: error.to_string(),
+            },
         }
     }
 }
@@ -69,4 +108,7 @@ pub struct Configuration {
     pub app_name: String,
     pub env_name: String,
     pub server: GolemServer,
+    /// How long a streaming call keeps reconnecting without progress. Progress is a connection
+    /// that stays up for 5 seconds after the server accepted its start or a resume.
+    pub reconnect: ReconnectPolicy,
 }
