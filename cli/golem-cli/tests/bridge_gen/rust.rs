@@ -2853,6 +2853,282 @@ mod uuid_codec {
     cargo_test_lib(&package_dir);
 }
 
+fn rich_scalar_agent() -> AgentTypeSchema {
+    use golem_common::schema::schema_type::{QuantitySpec, ResultSpec};
+    let weight = SchemaType::quantity(QuantitySpec {
+        base_unit: "kg".to_string(),
+        allowed_suffixes: vec!["kg".to_string(), "g".to_string()],
+        min: None,
+        max: None,
+    });
+    let size = SchemaType::quantity(QuantitySpec {
+        base_unit: "B".to_string(),
+        allowed_suffixes: vec![],
+        min: None,
+        max: None,
+    });
+    agent(
+        "RichScalarAgent",
+        "typescript",
+        vec![field("limit", weight.clone())],
+        vec![
+            method(
+                "weigh",
+                vec![field("weight", weight.clone())],
+                Some(ref_to("measures")),
+            ),
+            method(
+                "describe",
+                vec![
+                    field("note", SchemaType::text(TextRestrictions::default())),
+                    field("blob", SchemaType::binary(BinaryRestrictions::default())),
+                ],
+                Some(SchemaType::text(TextRestrictions::default())),
+            ),
+            method("size", vec![], Some(size.clone())),
+        ],
+        vec![
+            def(
+                "choice",
+                SchemaType::variant(vec![
+                    variant_case("heavy", Some(weight.clone())),
+                    variant_case("empty", None),
+                ]),
+            ),
+            def(
+                "measures",
+                SchemaType::record(vec![
+                    named_field("weight", weight),
+                    named_field("size", size),
+                    named_field("note", SchemaType::text(TextRestrictions::default())),
+                    named_field("blob", SchemaType::binary(BinaryRestrictions::default())),
+                    named_field(
+                        "outcome",
+                        SchemaType::result(ResultSpec {
+                            ok: None,
+                            err: None,
+                        }),
+                    ),
+                    named_field("choice", ref_to("choice")),
+                ]),
+            ),
+        ],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn external_rich_scalars_follow_the_schema_and_round_trip() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("rich-scalar-agent-client");
+    RustBridgeGenerator::new(rich_scalar_agent(), &package_dir, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let source = std::fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        source.contains("pub weight: crate::__golem_bridge_types::Quantity<crate::units::UnitKg>"),
+        "{source}"
+    );
+    assert!(
+        source.contains("pub note: crate::__golem_bridge_types::AgentText"),
+        "{source}"
+    );
+
+    let client_module = "mod __golem_bridge_client {\n    use super::*;\n";
+    assert!(source.contains(client_module), "{source}");
+    let source = source.replacen(
+        client_module,
+        &format!(
+            "{client_module}{}",
+            r#"
+    #[cfg(test)]
+    mod rich_scalar_codec {
+        use super::*;
+        use crate::__golem_bridge_runtime::schema::{
+            BinaryValuePayload, QuantityValue as SchemaQuantity, ResultValuePayload, SchemaValue,
+            TextValuePayload, VariantValuePayload,
+        };
+
+        fn measures() -> Measures {
+            Measures {
+                weight: Quantity::new(1500, 3, "kg").unwrap(),
+                size: Quantity::new(42, 0, "B").unwrap(),
+                note: AgentText { text: "hi".to_string(), language: Some("en".to_string()) },
+                blob: AgentBinary { bytes: vec![1, 2], mime_type: Some("image/png".to_string()) },
+                outcome: Err(()),
+                choice: Choice::Empty,
+            }
+        }
+
+        fn encoded_fields() -> Vec<SchemaValue> {
+            let SchemaValue::Record { fields } = encode_Measures(measures()).unwrap() else { panic!() };
+            fields
+        }
+
+        #[test]
+        fn measures_round_trip() {
+            let fields = encoded_fields();
+            assert_eq!(fields[0], SchemaValue::Quantity(SchemaQuantity { mantissa: 1500, scale: 3, unit: "kg".to_string() }));
+            assert_eq!(fields[2], SchemaValue::Text(TextValuePayload { text: "hi".to_string(), language: Some("en".to_string()) }));
+            assert_eq!(fields[3], SchemaValue::Binary(BinaryValuePayload { bytes: vec![1, 2], mime_type: Some("image/png".to_string()) }));
+            let decoded = decode_Measures(SchemaValue::Record { fields }).unwrap();
+            let expected = measures();
+            assert_eq!(decoded.weight, expected.weight);
+            assert_eq!(decoded.size, expected.size);
+            assert_eq!(decoded.note, expected.note);
+            assert_eq!(decoded.blob, expected.blob);
+            assert_eq!(decoded.outcome, Err(()));
+            assert!(matches!(decoded.choice, Choice::Empty));
+        }
+
+        #[test]
+        fn quantity_units_follow_the_schema() {
+            assert!(Quantity::<crate::units::UnitKg>::new(1, 0, "g").is_ok());
+            assert!(Quantity::<crate::units::UnitKg>::new(1, 0, "lb").is_err());
+            assert!(Quantity::<crate::units::UnitB>::new(1, 0, "kB").is_err());
+
+            let mut fields = encoded_fields();
+            fields[0] = SchemaValue::Quantity(SchemaQuantity { mantissa: 1, scale: 0, unit: "lb".to_string() });
+            let error = decode_Measures(SchemaValue::Record { fields }).unwrap_err();
+            assert!(error.contains("lb"), "{error}");
+        }
+
+        #[test]
+        fn unit_cases_and_arms_reject_payloads() {
+            let mut fields = encoded_fields();
+            fields[4] = SchemaValue::Result(ResultValuePayload::Err { value: Some(Box::new(SchemaValue::Bool(true))) });
+            assert!(decode_Measures(SchemaValue::Record { fields }).is_err());
+
+            let mut fields = encoded_fields();
+            fields[4] = SchemaValue::Result(ResultValuePayload::Ok { value: Some(Box::new(SchemaValue::Bool(true))) });
+            assert!(decode_Measures(SchemaValue::Record { fields }).is_err());
+
+            let mut fields = encoded_fields();
+            fields[5] = SchemaValue::Variant(VariantValuePayload { case: 1, payload: Some(Box::new(SchemaValue::Bool(true))) });
+            assert!(decode_Measures(SchemaValue::Record { fields }).is_err());
+        }
+    }
+"#
+        ),
+        1,
+    );
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check_with_args(&package_dir, &[]);
+    cargo_check_with_args(&package_dir, &["--no-default-features"]);
+    cargo_check_with_args(
+        &package_dir,
+        &["--no-default-features", "--features", "serde"],
+    );
+    cargo_test_lib(&package_dir);
+}
+
+#[test]
+fn guest_rich_scalars_use_the_sdk_quantity_and_round_trip() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("rich-scalar-agent-guest");
+    RustBridgeGenerator::new_with_mode(
+        rich_scalar_agent(),
+        &package_dir,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let mut source = std::fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        source.contains("pub weight: golem_rust::Quantity<crate::units::UnitKg>"),
+        "{source}"
+    );
+    assert!(
+        source.contains("impl golem_rust::QuantityUnit for UnitKg"),
+        "{source}"
+    );
+    source.push_str(
+        r#"
+#[cfg(test)]
+mod rich_scalar_codec {
+    use super::*;
+    use golem_rust::schema::wit::direct::{WireReader, WireWriter};
+
+    fn measures() -> Measures {
+        Measures {
+            weight: golem_rust::Quantity::new(1500, 3, "kg").unwrap(),
+            size: golem_rust::Quantity::new(42, 0, "B").unwrap(),
+            note: AgentText { text: "hi".to_string(), language: Some("en".to_string()) },
+            blob: AgentBinary { bytes: vec![1, 2], mime_type: Some("image/png".to_string()) },
+            outcome: Err(()),
+            choice: Choice::Empty,
+        }
+    }
+
+    fn encode(value: &Measures) -> __wire::SchemaValueTree {
+        let mut writer = WireWriter::default();
+        let root = encode_Measures(value, &mut writer).unwrap();
+        writer.finish(root)
+    }
+
+    fn field_index(tree: &__wire::SchemaValueTree, field: usize) -> usize {
+        let __wire::SchemaValueNode::RecordValue(fields) = &tree.value_nodes[tree.root as usize] else { panic!() };
+        fields[field] as usize
+    }
+
+    #[test]
+    fn measures_round_trip() {
+        let tree = encode(&measures());
+        let nodes = &tree.value_nodes;
+        assert!(matches!(&nodes[field_index(&tree, 0)], __wire::SchemaValueNode::QuantityValueNode(q) if q.mantissa == 1500 && q.scale == 3 && q.unit == "kg"), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 2)], __wire::SchemaValueNode::TextValue(t) if t.text == "hi" && t.language.as_deref() == Some("en")), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 3)], __wire::SchemaValueNode::BinaryValue(b) if b.bytes == vec![1, 2] && b.mime_type.as_deref() == Some("image/png")), "{nodes:?}");
+        let root = tree.root;
+        let mut reader = WireReader::new(tree.value_nodes);
+        let decoded = decode_Measures(root, &mut reader).unwrap();
+        let expected = measures();
+        assert_eq!(decoded.weight, expected.weight);
+        assert_eq!(decoded.size, expected.size);
+        assert_eq!(decoded.note, expected.note);
+        assert_eq!(decoded.blob, expected.blob);
+        assert_eq!(decoded.outcome, Err(()));
+        assert!(matches!(decoded.choice, Choice::Empty));
+    }
+
+    #[test]
+    fn quantity_units_follow_the_schema() {
+        assert!(golem_rust::Quantity::<units::UnitKg>::new(1, 0, "g").is_ok());
+        assert!(golem_rust::Quantity::<units::UnitKg>::new(1, 0, "lb").is_err());
+        assert!(golem_rust::Quantity::<units::UnitB>::new(1, 0, "kB").is_err());
+
+        let mut tree = encode(&measures());
+        let weight = field_index(&tree, 0);
+        tree.value_nodes[weight] = __wire::SchemaValueNode::QuantityValueNode(__wire::QuantityValue {
+            mantissa: 1,
+            scale: 0,
+            unit: "lb".to_string(),
+        });
+        let root = tree.root;
+        let mut reader = WireReader::new(tree.value_nodes);
+        let error = decode_Measures(root, &mut reader).unwrap_err();
+        assert!(error.contains("lb"), "{error}");
+    }
+}
+"#,
+    );
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check(&package_dir);
+    cargo_test_lib(&package_dir);
+}
+
 fn cargo_test_lib(target_path: &Utf8Path) {
     let output = std::process::Command::new("cargo")
         .args(["test", "--lib"])

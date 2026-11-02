@@ -37,15 +37,17 @@ import (
 //
 // A remote failure — the callee failed, or was unreachable after the runtime
 // exhausted its retries, or returned a value that does not decode as Out — is
-// returned as a [RemoteCallError]. The runtime handles transient failures and
-// replays deterministically, so a failure that reaches the guest is terminal.
+// returned as a [RemoteCallError], and so is an input that does not encode as
+// the callee's parameters, before anything is sent. The runtime handles
+// transient failures and replays deterministically, so a failure that reaches
+// the guest is terminal.
 // Each call form has a Must variant ([MethodDef.MustCall], [Future.MustGet], …)
 // that panics instead; a panic in an agent method traps the component, as in
 // Rust, so the worker fails. Model *expected* outcomes as a [Result] in the
 // method's output.
 //
-// Misuse — a zero Client, an input that does not encode, a stream on a
-// fire-and-forget form — panics in every form.
+// Misuse — a zero Client, a stream on a fire-and-forget form — panics in every
+// form.
 
 // noScopeCard is the scope card of the invocations that do not wait for their
 // result: the host accepts a scope card only on an awaited call.
@@ -136,9 +138,9 @@ func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) (InvocationID, erro
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
 	m.refuseStreams("Trigger")
-	tree, err := m.encodeInput(in)
+	tree, err := m.encodeInput(c.agentID, in)
 	if err != nil {
-		panic(err)
+		return InvocationID{}, err
 	}
 	res := c.rpc.Invoke(m.name, tree, noScopeCard())
 	if res.IsErr() {
@@ -164,9 +166,9 @@ func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*Sc
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
 	m.refuseStreams("Schedule")
-	tree, err := m.encodeInput(in)
+	tree, err := m.encodeInput(c.agentID, in)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	res := c.rpc.ScheduleCancelableInvocation(instantFrom(at), m.name, tree, noScopeCard())
 	if res.IsErr() {
@@ -189,8 +191,9 @@ func (m MethodDef[Id, In, Out]) MustSchedule(c Client[Id], at time.Time, in In) 
 }
 
 // CallAsync starts the invocation and returns immediately with a future. A
-// failure to start is reported by the future's Get, as the host's
-// asynchronous import has no error result of its own.
+// failure to start, including an input that does not encode, is reported by
+// the future's Get, as the host's asynchronous import has no error result of
+// its own.
 //
 // This is the only way to have several invocations in flight: `invoke-and-await`
 // is a synchronous import and blocks the component, whereas the future's Get is
@@ -212,7 +215,7 @@ func (m MethodDef[Id, In, Out]) callAsync(c Client[Id], in In, scope ScopeCard) 
 	}
 	tree, card, err := m.awaitedCallArgs(c, in, scope)
 	if err != nil {
-		panic(err)
+		return &Future[Out]{method: m.name, target: c.agentID, done: true, err: err}
 	}
 	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree, card)
 	return &Future[Out]{
@@ -236,24 +239,27 @@ func (m MethodDef[Id, In, Out]) awaitedCallArgs(c Client[Id], in In, scope Scope
 		scope = c.scopeCard
 	}
 	card := scopeCardHandle(scope)
-	tree, err := m.encodeInput(in)
+	tree, err := m.encodeInput(c.agentID, in)
 	return tree, card, err
 }
 
 // encodeInput encodes the In value into a parameter-list value tree. The callee
 // derives the same field list from the same Go type, which is what keeps the two
-// sides symmetric.
-func (m MethodDef[Id, In, Out]) encodeInput(in In) (tree types.SchemaValueTree, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("golem: %s: encoding input: %v", m.name, r)
-		}
-	}()
+// sides symmetric. A value that does not encode is a [RemoteProtocolError] of
+// the call to target.
+func (m MethodDef[Id, In, Out]) encodeInput(target string, in In) (types.SchemaValueTree, error) {
 	inType := reflect.TypeFor[In]()
 	if problem := engine.ParamsTypeProblem("In", inType); problem != "" {
-		return tree, fmt.Errorf("golem: %s: %s", m.name, problem)
+		panic(fmt.Errorf("golem: %s: %s", m.name, problem))
 	}
-	return encodeParams(defs.StructFields(inType), reflect.ValueOf(&in).Elem()), nil
+	tree, err := tryEncodeParams(defs.StructFields(inType), reflect.ValueOf(&in).Elem())
+	if err != nil {
+		return tree, &RemoteCallError{
+			Target: target, Method: m.name, Kind: RemoteProtocolError,
+			Message: "the input does not encode: " + err.Error(),
+		}
+	}
+	return tree, nil
 }
 
 // decodeOutput decodes a remote result through the LOCAL descriptor's Out codec.

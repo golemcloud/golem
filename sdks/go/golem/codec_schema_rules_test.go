@@ -208,7 +208,7 @@ func TestAQuantityUnitIsCheckedBothWays(t *testing.T) {
 // An argument that is not valid UTF-8 is an error from the call, not a panic.
 func TestInvalidUTF8InACallArgumentIsAnError(t *testing.T) {
 	note := "ok\xffno"
-	_, err := tCharge.encodeInput(tChargeIn{AmountCents: 1, Note: &note})
+	_, err := tCharge.encodeInput("target", tChargeIn{AmountCents: 1, Note: &note})
 	if err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
 		t.Fatalf("got %v", err)
 	}

@@ -281,6 +281,17 @@ object ConcreteCodec {
     ) { case WitSchemaValueNode.UrlValue(value) =>
       new Url(value)
     }
+  val text: ConcreteCodec[Text] =
+    scalar[Text](WitSchemaTypeBody.TextType(Text.defaultRestrictions)) { value =>
+      WitSchemaValueNode.TextValue(
+        WitTextValuePayload(
+          UnicodeText.encodeText("text", value.text),
+          value.language.map(UnicodeText.encodeText("text language", _))
+        )
+      )
+    } { case WitSchemaValueNode.TextValue(WitTextValuePayload(text, language)) =>
+      Text(text, language)
+    }
   private val MaxU64: BigInt = (BigInt(1) << 64) - 1
 
   private def outOfRange(name: String, value: Any, max: Any): SchemaEncodeError =

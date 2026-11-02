@@ -17,9 +17,9 @@
 package golem.schema
 
 import zio.blocks.schema.{Modifier, Schema}
-import zio.blocks.typeid.TypeId
 
 import java.time.{Duration => JDuration, Instant}
+import scala.annotation.publicInBinary
 import scala.collection.immutable.ListMap
 import scala.util.control.NonFatal
 
@@ -72,6 +72,41 @@ object Url {
     }
 }
 
+/**
+ * Bare text with an optional language code. Its schema is `text` without
+ * restrictions; a callee may publish a refined `text` schema (languages,
+ * length, regex), which the server checks.
+ */
+final case class Text(text: String, language: Option[String] = None)
+
+object Text {
+  val defaultRestrictions: TextRestrictions = TextRestrictions.empty
+
+  implicit val schema: Schema[Text] = Schema.derived
+
+  private[golem] def toSchemaValue(value: Text): SchemaValue =
+    SchemaValue.TextValue(
+      UnicodeText.encodeText("text", value.text),
+      value.language.map(UnicodeText.encodeText("text language", _))
+    )
+
+  implicit val intoSchema: IntoSchema[Text] =
+    new IntoSchema[Text] {
+      override lazy val graph: SchemaGraph =
+        SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.TextType(defaultRestrictions)))
+      override def toValue(value: Text): SchemaValue = toSchemaValue(value)
+    }
+
+  implicit val fromSchema: FromSchema[Text] =
+    new FromSchema[Text] {
+      override def fromValue(value: SchemaValue): Either[FromSchemaError, Text] =
+        value match {
+          case SchemaValue.TextValue(text, language) => Right(Text(text, language))
+          case other                                 => Left(FromSchemaError(s"expected text value for Text, got $other"))
+        }
+    }
+}
+
 final case class Quantity[U](mantissa: Long, scale: Int, unit: String)
 
 object Quantity {
@@ -79,6 +114,12 @@ object Quantity {
 
   private[golem] def encodeSpec(spec: QuantitySpec): String =
     (spec.baseUnit :: spec.allowedSuffixes).mkString("\u001f")
+
+  /**
+   * Only the base unit when there are no suffixes, otherwise only the suffixes.
+   */
+  private[golem] def allows(spec: QuantitySpec, unit: String): Boolean =
+    if (spec.allowedSuffixes.isEmpty) unit == spec.baseUnit else spec.allowedSuffixes.contains(unit)
 
   private[golem] def decodeSpec(value: String): Option[QuantitySpec] =
     value.split("\u001f", -1).toList match {
@@ -101,6 +142,16 @@ object Quantity {
       }
     }
 
+  def concreteCodec[U](implicit unit: QuantityUnit[U]): wire.ConcreteCodec[Quantity[U]] =
+    wire.ConcreteCodec.scalar[Quantity[U]](wire.WitSchemaTypeBody.QuantityType(unit.spec)) { value =>
+      UnicodeText.encodeText("quantity unit", value.unit)
+      if (!unit.allows(value.unit)) throw SchemaEncodeError(s"unit '${value.unit}' is not allowed for quantity")
+      wire.WitSchemaValueNode.QuantityValueNode(QuantityValue(value.mantissa, value.scale, value.unit))
+    } { case wire.WitSchemaValueNode.QuantityValueNode(v) =>
+      if (!unit.allows(v.unit)) throw SchemaDecodeError(s"unit '${v.unit}' is not allowed for quantity")
+      Quantity[U](v.mantissa, v.scale, v.unit)
+    }
+
   implicit def fromSchema[U](implicit unit: QuantityUnit[U]): FromSchema[Quantity[U]] =
     new FromSchema[Quantity[U]] {
       override def fromValue(value: SchemaValue): Either[FromSchemaError, Quantity[U]] =
@@ -114,17 +165,19 @@ object Quantity {
     }
 }
 
-trait QuantityUnit[U] {
-  def baseUnit: String
-  def allowedSuffixes: List[String]
-  def typeId: TypeId[U]
-
-  final def spec: QuantitySpec            = QuantitySpec(baseUnit, allowedSuffixes, None, None)
-  final def allows(unit: String): Boolean = unit == baseUnit || allowedSuffixes.contains(unit)
+/**
+ * The units of the quantity marker `U`, derived by the compiler from the
+ * [[golem.runtime.annotations.quantityUnit]] annotation on `U`.
+ */
+final class QuantityUnit[U] @publicInBinary private[golem] (val baseUnit: String, val allowedSuffixes: List[String]) {
+  def spec: QuantitySpec            = QuantitySpec(baseUnit, allowedSuffixes, None, None)
+  def allows(unit: String): Boolean = Quantity.allows(spec, unit)
 }
 
 object QuantityUnit {
   def apply[U](implicit unit: QuantityUnit[U]): QuantityUnit[U] = unit
+
+  inline given derived[U]: QuantityUnit[U] = ${ QuantityUnitMacro.derive[U] }
 }
 
 object RichSchemas {

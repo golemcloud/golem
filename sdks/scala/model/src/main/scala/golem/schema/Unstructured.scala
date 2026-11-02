@@ -101,7 +101,6 @@ object UnstructuredText {
             in.at(payload) { case WitSchemaValueNode.TextValue(text) => inlineValue(text) }
           case WitSchemaValueNode.VariantValue(WitVariantValuePayload(Unstructured.UrlCase, Some(payload))) =>
             in.at(payload) { case WitSchemaValueNode.UrlValue(url) => Url[L](url) }
-          case WitSchemaValueNode.TextValue(text) => inlineValue(text)
         }
       }
 
@@ -202,7 +201,6 @@ object UnstructuredBinary {
             in.at(payload) { case WitSchemaValueNode.BinaryValue(binary) => inlineValue(binary) }
           case WitSchemaValueNode.VariantValue(WitVariantValuePayload(Unstructured.UrlCase, Some(payload))) =>
             in.at(payload) { case WitSchemaValueNode.UrlValue(url) => Url[M](url) }
-          case WitSchemaValueNode.BinaryValue(binary) => inlineValue(binary)
         }
       }
 
@@ -306,7 +304,7 @@ private[golem] object Unstructured {
 
   def disallowed(value: Option[String], allowed: Option[List[String]], what: String): Option[String] =
     (value, allowed) match {
-      case (Some(v), Some(vs)) if !vs.contains(v) =>
+      case (Some(v), Some(vs)) if vs.nonEmpty && !vs.contains(v) =>
         Some(s"$what '$v' is not allowed; allowed: ${vs.mkString(", ")}")
       case _ => None
     }
@@ -352,7 +350,7 @@ private[golem] object Unstructured {
         )
     }
 
-  /** Accepts the `variant { inline, url }` value or a bare `text` value. */
+  /** Accepts only the `variant { inline, url }` value the schema states. */
   def textFromSchemaValue(
     value: SchemaValue,
     allowed: Option[List[String]]
@@ -367,9 +365,8 @@ private[golem] object Unstructured {
         inlineValue(text, language)
       case SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(url))) =>
         Right(UnstructuredText.Url[String](url))
-      case SchemaValue.TextValue(text, language) => inlineValue(text, language)
-      case other                                 =>
-        Left(FromSchemaError(s"expected unstructured-text variant or text value, got $other"))
+      case other =>
+        Left(FromSchemaError(s"expected unstructured-text variant, got $other"))
     }
   }
 
@@ -383,7 +380,7 @@ private[golem] object Unstructured {
         SchemaValue.VariantValue(InlineCase, Some(SchemaValue.BinaryValue(data.toVector, mime)))
     }
 
-  /** Accepts the `variant { inline, url }` value or a bare `binary` value. */
+  /** Accepts only the `variant { inline, url }` value the schema states. */
   def binaryFromSchemaValue(
     value: SchemaValue,
     allowed: Option[List[String]]
@@ -398,9 +395,8 @@ private[golem] object Unstructured {
         inlineValue(bytes, mimeType)
       case SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(url))) =>
         Right(UnstructuredBinary.Url[String](url))
-      case SchemaValue.BinaryValue(bytes, mimeType) => inlineValue(bytes, mimeType)
-      case other                                    =>
-        Left(FromSchemaError(s"expected unstructured-binary variant or binary value, got $other"))
+      case other =>
+        Left(FromSchemaError(s"expected unstructured-binary variant, got $other"))
     }
   }
 

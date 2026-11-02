@@ -924,14 +924,30 @@ fn quantity_agent() -> AgentTypeSchema {
     agent(
         "ScaleAgent",
         "rust",
-        vec![field("name", SchemaType::string())],
+        vec![
+            field("name", SchemaType::string()),
+            field("limit", kilograms.clone()),
+        ],
         vec![
             method(
                 "weigh",
                 vec![field("load", kilograms.clone())],
-                Some(kilograms),
+                Some(kilograms.clone()),
             ),
-            method("measure", vec![], Some(SchemaType::list(lengths))),
+            method(
+                "calibrate",
+                vec![
+                    field("readings", SchemaType::stream(Some(SchemaType::u32()))),
+                    field("reference", kilograms),
+                ],
+                None,
+            ),
+            method("measure", vec![], Some(SchemaType::list(lengths.clone()))),
+            method(
+                "record",
+                vec![field("legs", SchemaType::list(lengths))],
+                None,
+            ),
         ],
         vec![],
         AgentMode::Durable,
@@ -967,7 +983,13 @@ fn go_clients_spell_quantities_with_unit_markers(env: &GoEnv) {
             r#"package {package}
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/golemcloud/golem/sdks/go/bridge"
 	"github.com/golemcloud/golem/sdks/go/core/schema"
@@ -985,6 +1007,44 @@ func TestQuantitiesTravelInTheirUnit(t *testing.T) {{
 	}}
 	if _, err := bridge.DecodeQuantity[UnitKg](schema.QuantityValueNode{{Value: schema.QuantityValue{{Unit: "lb"}}}}); err == nil {{
 		t.Fatal("a quantity in a unit it does not accept was decoded")
+	}}
+}}
+
+func TestAUnitTheCalleeDoesNotAcceptIsRefusedBeforeSending(t *testing.T) {{
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {{
+		t.Error("a value its schema refuses reached the server")
+	}}))
+	defer server.Close()
+	configuration := bridge.WithConfiguration(bridge.Configuration{{
+		Server: bridge.Custom(server.URL, "token"), AppName: "app", EnvName: "env",
+	}})
+	refused := func(what string, err error) {{
+		t.Helper()
+		var ee *bridge.EncodeError
+		if !errors.As(err, &ee) || !strings.Contains(err.Error(), `unit "`) {{
+			t.Fatalf("%s: got %v, want a *bridge.EncodeError", what, err)
+		}}
+	}}
+	_, err := GetScaleAgent(ScaleAgentID{{Name: "s", Limit: values.Quantity[UnitKg]{{Mantissa: 1, Unit: "lb"}}}}, configuration)
+	refused("id", err)
+	client, err := GetScaleAgent(ScaleAgentID{{Name: "s", Limit: values.Quantity[UnitKg]{{Mantissa: 1}}}}, configuration)
+	if err != nil {{
+		t.Fatal(err)
+	}}
+	ctx := context.Background()
+	pound := values.Quantity[UnitKg]{{Mantissa: 1, Unit: "lb"}}
+	_, err = client.Weigh(ctx, pound)
+	refused("call", err)
+	_, err = client.TriggerWeigh(ctx, pound)
+	refused("trigger", err)
+	_, err = client.ScheduleWeigh(ctx, time.Now(), pound)
+	refused("schedule", err)
+	refused("nested", client.Record(ctx, []values.Quantity[UnitM]{{{{Mantissa: 1, Unit: "km"}}, {{Mantissa: 1, Unit: "mi"}}}}))
+	// A stream before the refused argument stays with the caller.
+	readings := bridge.StreamOf[uint32](1, 2)
+	refused("streaming call", client.Calibrate(ctx, readings, pound))
+	if got, err := readings.Collect(ctx); err != nil || len(got) != 2 {{
+		t.Fatalf("the stream of a refused call read %v, %v", got, err)
 	}}
 }}
 "#
@@ -2236,6 +2296,317 @@ func TestUnitShapesConvertThroughTheWire(t *testing.T) {{
 			t.Fatalf("the callee refuses %s: %v", data, err)
 		}}
 		out, err := decodeUnitsHolder(sv)
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		if !reflect.DeepEqual(in, out) {{
+			t.Fatalf("%#v round-tripped to %#v", in, out)
+		}}
+	}}
+}}
+"#
+        ),
+    );
+}
+
+/// Every kind a value can take at the agent boundary that the other shape
+/// agents leave out: bare rich scalars, nested and composed containers, maps
+/// over each kind of key, the widest tuple, and a union told apart by fields.
+fn kinds_holder() -> SchemaType {
+    let wide = SchemaType::tuple(vec![
+        SchemaType::bool(),
+        SchemaType::s8(),
+        SchemaType::s16(),
+        SchemaType::u16(),
+        SchemaType::f32(),
+        SchemaType::char(),
+        SchemaType::string(),
+        SchemaType::uuid(),
+    ]);
+    SchemaType::record(vec![
+        named_field("bin", SchemaType::binary(Default::default())),
+        named_field("text", SchemaType::text(Default::default())),
+        named_field(
+            "file",
+            SchemaType::path(PathSpec {
+                direction: PathDirection::Input,
+                kind: PathKind::File,
+                allowed_mime_types: None,
+                allowed_extensions: None,
+            }),
+        ),
+        named_field("link", SchemaType::url(Default::default())),
+        named_field("id", SchemaType::uuid()),
+        named_field(
+            "maybe-maybe",
+            SchemaType::option(SchemaType::option(SchemaType::string())),
+        ),
+        named_field(
+            "maybe-list",
+            SchemaType::option(SchemaType::list(SchemaType::u8())),
+        ),
+        named_field(
+            "list-maybe",
+            SchemaType::list(SchemaType::option(SchemaType::s32())),
+        ),
+        named_field(
+            "maybe-result",
+            SchemaType::option(SchemaType::result(ResultSpec {
+                ok: Some(Box::new(SchemaType::u8())),
+                err: Some(Box::new(SchemaType::string())),
+            })),
+        ),
+        named_field(
+            "grid",
+            SchemaType::fixed_list(SchemaType::fixed_list(SchemaType::u8(), 2), 2),
+        ),
+        named_field(
+            "slots",
+            SchemaType::fixed_list(SchemaType::option(ref_to("kinds.Shape")), 2),
+        ),
+        named_field(
+            "by-flag",
+            SchemaType::map(SchemaType::bool(), SchemaType::string()),
+        ),
+        named_field(
+            "by-char",
+            SchemaType::map(SchemaType::char(), SchemaType::u8()),
+        ),
+        named_field(
+            "by-float",
+            SchemaType::map(SchemaType::f64(), SchemaType::string()),
+        ),
+        named_field(
+            "by-signed",
+            SchemaType::map(SchemaType::s64(), SchemaType::list(SchemaType::string())),
+        ),
+        named_field("wide", wide),
+        named_field("shapes", SchemaType::list(ref_to("kinds.Shape"))),
+    ])
+}
+
+fn kinds_shape() -> SchemaType {
+    use golem_common::schema::schema_type::FieldDiscriminator;
+    SchemaType::union(UnionSpec {
+        branches: vec![
+            UnionBranch {
+                tag: "square".into(),
+                body: ref_to("kinds.Square"),
+                discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                    field_name: "kind".into(),
+                    literal: Some("square".into()),
+                }),
+                metadata: Default::default(),
+            },
+            UnionBranch {
+                tag: "circle".into(),
+                body: ref_to("kinds.Circle"),
+                discriminator: DiscriminatorRule::FieldAbsent {
+                    field_name: "kind".into(),
+                },
+                metadata: Default::default(),
+            },
+        ],
+    })
+}
+
+fn kinds_defs() -> Vec<golem_common::schema::SchemaTypeDef> {
+    vec![
+        def("kinds.Holder", kinds_holder()),
+        def("kinds.Shape", kinds_shape()),
+        def(
+            "kinds.Square",
+            SchemaType::record(vec![
+                named_field("kind", SchemaType::string()),
+                named_field("side", SchemaType::u32()),
+            ]),
+        ),
+        def(
+            "kinds.Circle",
+            SchemaType::record(vec![named_field("radius", SchemaType::f64())]),
+        ),
+    ]
+}
+
+fn kinds_agent() -> AgentTypeSchema {
+    agent(
+        "Kinds",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "echo",
+                vec![field("holder", ref_to("kinds.Holder"))],
+                Some(ref_to("kinds.Holder")),
+            ),
+            method(
+                "leaves",
+                vec![
+                    field("bin", SchemaType::binary(Default::default())),
+                    field("text", SchemaType::text(Default::default())),
+                ],
+                Some(SchemaType::fixed_list(SchemaType::string(), 3)),
+            ),
+        ],
+        kinds_defs(),
+        AgentMode::Durable,
+    )
+}
+
+/// The callee's own schema for `kinds.Holder`, in the wire form a Go test reads.
+fn kinds_graph() -> String {
+    let graph = golem_common::schema::graph::SchemaGraph {
+        defs: kinds_defs(),
+        root: ref_to("kinds.Holder"),
+    };
+    serde_json::to_string(&serde_json::to_string(&graph).unwrap()).unwrap()
+}
+
+/// Go values for `kinds.Holder`, shared by the guest and the external check.
+const KINDS_VALUES: &str = r#"func kindsValues() []KindsHolder {
+	id := values.UUID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	square := KindsShape(KindsShapeSquare{Value: KindsSquare{Kind: "square", Side: 3}})
+	circle := KindsShape(KindsShapeCircle{Value: KindsCircle{Radius: 1.5}})
+	return []KindsHolder{
+		{
+			Bin: values.Binary{0, 255}, Text: "hi", File: "/in/a.txt", Link: "https://golem.cloud", ID: id,
+			MaybeMaybe:  values.Some(values.Some("x")),
+			MaybeList:   values.Some([]uint8{1, 2}),
+			ListMaybe:   []values.Option[int32]{values.Some[int32](-1), values.None[int32]()},
+			MaybeResult: values.Some(values.Err[uint8]("bad")),
+			Grid:        [2][2]uint8{{1, 2}, {3, 4}},
+			Slots:       [2]values.Option[KindsShape]{values.Some(square), values.None[KindsShape]()},
+			ByFlag:      map[bool]string{true: "yes", false: "no"},
+			ByChar:      map[values.Char]uint8{'a': 1, 'é': 2},
+			ByFloat:     map[float64]string{-0.5: "neg", 2.25: "pos"},
+			BySigned:    map[int64][]string{-7: {"a"}, 7: {}},
+			Wide:        values.Tuple8[bool, int8, int16, uint16, float32, values.Char, string, values.UUID]{A: true, B: -8, C: -16, D: 16, E: 0.25, F: 'z', G: "g", H: id},
+			Shapes:      []KindsShape{square, circle},
+		},
+		{
+			Bin: values.Binary{}, File: "out", Link: "urn:x", MaybeMaybe: values.Some(values.None[string]()),
+			MaybeList: values.None[[]uint8](), ListMaybe: []values.Option[int32]{},
+			MaybeResult: values.None[values.Result[uint8, string]](),
+			ByFlag: map[bool]string{}, ByChar: map[values.Char]uint8{}, ByFloat: map[float64]string{},
+			BySigned: map[int64][]string{}, Shapes: []KindsShape{},
+		},
+	}
+}
+"#;
+
+/// A guest client's values for every remaining kind have the shape the
+/// callee's schema states, and decode back unchanged.
+#[test]
+fn go_guest_client_carries_every_boundary_kind(env: &GoEnv) {
+    let generated = GeneratedGo::guest(env, kinds_agent());
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_for_wasip1(env);
+    let client = generated.read("client.go");
+    assert!(
+        client.contains(
+            "func (c KindsClient) Leaves(bin values.Binary, text values.Text) ([3]string, error) {"
+        ),
+        "{client}"
+    );
+    let package = generated.package();
+    let graph = kinds_graph();
+    generated.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+{KINDS_VALUES}
+func TestEveryKindFollowsTheCalleeSchema(t *testing.T) {{
+	if errs := golem.DefinitionErrors(); len(errs) > 0 {{
+		t.Fatalf("definition errors: %v", errs)
+	}}
+	graph, err := schema.UnmarshalWireGraph([]byte({graph}))
+	if err != nil {{
+		t.Fatal(err)
+	}}
+	callee := schema.NewRef(graph)
+	for _, in := range kindsValues() {{
+		// An RPC argument travels as a positional value tree, so the callee
+		// checks the shape the SDK encodes, not the caller's field names.
+		tv := golem.EncodeTypedValue(in)
+		canonical, err := tv.JSON()
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		sv, err := tv.Schema().PackJSON(canonical)
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		if err := callee.Validate(sv); err != nil {{
+			data, _ := json.Marshal(canonical)
+			t.Fatalf("the callee refuses %s: %v", data, err)
+		}}
+		out, err := golem.DecodeTypedValue[KindsHolder](tv)
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		if !reflect.DeepEqual(in, out) {{
+			t.Fatalf("%#v round-tripped to %#v", in, out)
+		}}
+	}}
+}}
+"#
+        ),
+    );
+}
+
+/// An external client converts every remaining kind to values the callee's
+/// schema accepts, through the REST wire form, and back.
+#[test]
+fn go_external_client_converts_every_boundary_kind(env: &GoEnv) {
+    let generated = GeneratedGo::external(env, kinds_agent());
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_natively(env);
+    let package = generated.package();
+    let graph = kinds_graph();
+    generated.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
+)
+
+{KINDS_VALUES}
+func TestEveryKindConvertsThroughTheWire(t *testing.T) {{
+	graph, err := schema.UnmarshalWireGraph([]byte({graph}))
+	if err != nil {{
+		t.Fatal(err)
+	}}
+	callee := schema.NewRef(graph)
+	for _, in := range kindsValues() {{
+		data, err := schema.MarshalWireValue(encodeKindsHolder(in))
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		sv, err := schema.UnmarshalWireValue(data)
+		if err != nil {{
+			t.Fatal(err)
+		}}
+		if err := callee.Validate(sv); err != nil {{
+			t.Fatalf("the callee refuses %s: %v", data, err)
+		}}
+		out, err := decodeKindsHolder(sv)
 		if err != nil {{
 			t.Fatal(err)
 		}}

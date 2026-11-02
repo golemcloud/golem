@@ -275,6 +275,22 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
             SchemaRpcCodec.decodeArgs[Args2](SchemaRpcCodec.encodeArgs(paired)) == Right(paired)
           )
         },
+        test("asDatetime rejects nanoseconds outside 0..999999999") {
+          def decodeFailure(nanoseconds: Int) =
+            scala.util
+              .Try(SchemaRpcCodec.asDatetime(SchemaValue.DatetimeValue(Datetime(1L, nanoseconds))))
+              .failed
+              .toOption
+              .exists(_.isInstanceOf[SchemaDecodeError])
+          assertTrue(
+            SchemaRpcCodec.asDatetime(SchemaValue.DatetimeValue(Datetime(1L, 999999999))) ==
+              java.time.Instant.ofEpochSecond(1L, 999999999L),
+            SchemaRpcCodec.asDatetime(SchemaValue.DatetimeValue(Datetime(1L, 0))) == java.time.Instant
+              .ofEpochSecond(1L),
+            decodeFailure(-1),
+            decodeFailure(1000000000)
+          )
+        },
         test("encodeArgs/decodeArgs round-trip for an empty param list") {
           val in   = NoArgs()
           val tree = SchemaRpcCodec.encodeArgs(in)

@@ -140,7 +140,19 @@ void output;
 "#,
     )
     .unwrap();
+    include_in_tsconfig(&package_dir, "bigint-fixture.ts");
     install_and_build(&package_dir);
+}
+
+fn include_in_tsconfig(package_dir: &Utf8Path, file: &str) {
+    let path = package_dir.join("tsconfig.json");
+    let mut tsconfig: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    tsconfig["include"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::Value::String(file.to_string()));
+    std::fs::write(&path, serde_json::to_string_pretty(&tsconfig).unwrap()).unwrap();
 }
 
 #[test]
@@ -2256,5 +2268,340 @@ fn guest_tool_trailing_optional_fields_and_sdk_results_compile() {
     assert!(
         source.contains("max_count: number | undefined, stdin: ToolInputStream)"),
         "{source}"
+    );
+}
+
+fn kg_quantity() -> SchemaType {
+    SchemaType::quantity(QuantitySpec {
+        base_unit: "kg".to_string(),
+        allowed_suffixes: vec!["kg".to_string(), "g".to_string()],
+        min: None,
+        max: None,
+    })
+}
+
+fn rich_scalar_record() -> SchemaType {
+    SchemaType::record(vec![
+        named_field("bytes", SchemaType::list(SchemaType::u8())),
+        named_field("fixed", SchemaType::fixed_list(SchemaType::u8(), 3)),
+        named_field(
+            "maybe-bytes",
+            SchemaType::option(SchemaType::list(SchemaType::u8())),
+        ),
+        named_field("amount", kg_quantity()),
+        named_field("note", SchemaType::text(TextRestrictions::default())),
+        named_field("blob", SchemaType::binary(BinaryRestrictions::default())),
+    ])
+}
+
+fn rich_scalar_methods() -> Vec<(&'static str, SchemaType)> {
+    vec![
+        ("echo-quantity", kg_quantity()),
+        (
+            "echo-text",
+            SchemaType::text(TextRestrictions {
+                languages: Some(vec!["en".into(), "de".into()]),
+                ..Default::default()
+            }),
+        ),
+        (
+            "echo-binary",
+            SchemaType::binary(BinaryRestrictions::default()),
+        ),
+        ("echo-bytes", SchemaType::list(SchemaType::u8())),
+        ("echo-record", ref_to("RichRecord")),
+    ]
+}
+
+fn rich_scalar_agent(name: &str) -> AgentTypeSchema {
+    agent(
+        name,
+        "typescript",
+        vec![],
+        rich_scalar_methods()
+            .into_iter()
+            .map(|(name, typ)| method(name, vec![field("value", typ.clone())], Some(typ)))
+            .collect(),
+        vec![def("RichRecord", rich_scalar_record())],
+        AgentMode::Durable,
+    )
+}
+
+fn wire_graph(root: SchemaType) -> serde_json::Value {
+    let root = match root {
+        SchemaType::Ref { .. } => rich_scalar_record(),
+        other => other,
+    };
+    serde_json::to_value(golem_common::schema::graph::SchemaGraph { defs: vec![], root }).unwrap()
+}
+
+fn run_node_script(package: &Utf8Path, file: &str, script: &str) {
+    std::fs::write(package.join(file), script).unwrap();
+    let output = std::process::Command::new("node")
+        .arg(file)
+        .current_dir(package)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated runtime test {file} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_quantity_text_binary_and_bytes_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = rich_scalar_agent("RichGuestAgent");
+    let package_dir = target.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::Guest,
+    ));
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("rich-guest-agent-guest-client.ts")).unwrap();
+    for expected in [
+        "amount: base.QuantityValue;",
+        "note: { text: string; language?: string };",
+        "blob: { bytes: Uint8Array; mimeType?: string };",
+        "bytes: Uint8Array;",
+        "fixed: Uint8Array;",
+        "maybe_bytes?: Uint8Array;",
+        "{ tag: 'quantity', value: ",
+        "const __allowed: string[] = [\"kg\",\"g\"];",
+        "{ tag: 'text', text: v.text, language: v.language }",
+        "{ tag: 'binary', bytes: v.bytes, mimeType: v.mimeType }",
+        "new Uint8Array(n.elements.map",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    std::fs::write(
+        package_dir.join("test.ts"),
+        r#"import { RichGuestAgent } from './rich-guest-agent-guest-client';
+import type { bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
+export async function usage(): Promise<void> {
+  const client = RichGuestAgent.get();
+  const amount: sdkBridge.QuantityValue = await client.echo_quantity({ mantissa: 15n, scale: 1, unit: 'g' });
+  const text: { text: string; language?: string } = await client.echo_text({ text: 'hallo', language: 'de' });
+  const binary: { bytes: Uint8Array; mimeType?: string } = await client.echo_binary({ bytes: new Uint8Array([1]) });
+  const bytes: Uint8Array = await client.echo_bytes(new Uint8Array([1, 2]));
+  const record = await client.echo_record({
+    bytes: new Uint8Array([1]), fixed: new Uint8Array([1, 2, 3]), amount, note: text, blob: binary,
+  });
+  const fixed: Uint8Array = record.fixed;
+  // @ts-expect-error bare text is not a string
+  await client.echo_text('hallo');
+  // @ts-expect-error quantity mantissa is a bigint
+  await client.echo_quantity({ mantissa: 15, scale: 1, unit: 'g' });
+  void [bytes, fixed];
+}
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn external_quantity_text_binary_and_bytes_round_trip() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    generate_and_compile(rich_scalar_agent("RichExternalAgent"), target);
+    let package = generated_package_dir(target, "rich-external-agent");
+    let source = std::fs::read_to_string(package.join("rich-external-agent-client.ts")).unwrap();
+    for expected in [
+        "amount: base.QuantityValue;",
+        "note: base.AgentText;",
+        "blob: base.AgentBinary;",
+        "maybe_bytes?: Uint8Array;",
+        "const __allowed: string[] = [\"kg\",\"g\"];",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    let graphs = serde_json::Value::Object(
+        rich_scalar_methods()
+            .into_iter()
+            .map(|(name, typ)| (name.to_string(), wire_graph(typ)))
+            .collect(),
+    );
+    run_node_script(
+        &package,
+        "round-trip.mjs",
+        &format!(
+            r#"import assert from 'node:assert/strict';
+import http from 'node:http';
+import {{ RichExternalAgent, configure }} from './rich-external-agent-client.js';
+
+const graphs = {graphs};
+let override = undefined;
+const server = http.createServer((req, res) => {{
+  let body = '';
+  req.on('data', (chunk) => (body += chunk));
+  req.on('end', () => {{
+    const request = JSON.parse(body);
+    const value = override ?? request.methodParameters.value.fields[0];
+    override = undefined;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({{
+      agentId: {{ componentId: 'component', agentId: 'agent' }}, idempotencyKey: 'key',
+      result: {{ graph: graphs[request.methodName], value }},
+    }}));
+  }});
+}});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+configure({{
+  server: {{ type: 'custom', url: `http://127.0.0.1:${{server.address().port}}`, token: 'test' }},
+  application: 'app', environment: 'env',
+}});
+const remote = new RichExternalAgent(
+  {{ kind: 'record', value: {{ fields: [] }} }}, undefined, {{ componentId: 'component', agentId: 'agent' }},
+);
+
+const amount = {{ mantissa: 15n, scale: 1, unit: 'g' }};
+assert.deepEqual(await remote.echo_quantity(amount), amount);
+await assert.rejects(remote.echo_quantity({{ mantissa: 1n, scale: 0, unit: 'lb' }}), /unit/);
+override = {{ kind: 'quantity', value: {{ mantissa: '1', scale: 0, unit: 'lb' }} }};
+await assert.rejects(remote.echo_quantity(amount), /unit/);
+
+assert.deepEqual(await remote.echo_text({{ text: 'hallo', language: 'de' }}), {{ text: 'hallo', language: 'de' }});
+assert.deepEqual(await remote.echo_text({{ text: 'plain' }}), {{ text: 'plain' }});
+
+const binary = await remote.echo_binary({{ bytes: new Uint8Array([1, 2, 255]), mimeType: 'image/png' }});
+assert.ok(binary.bytes instanceof Uint8Array);
+assert.deepEqual([...binary.bytes], [1, 2, 255]);
+assert.equal(binary.mimeType, 'image/png');
+
+const bytes = await remote.echo_bytes(new Uint8Array([3, 4]));
+assert.ok(bytes instanceof Uint8Array);
+assert.deepEqual([...bytes], [3, 4]);
+
+const record = await remote.echo_record({{
+  bytes: new Uint8Array([5]), fixed: new Uint8Array([6, 7, 8]), maybe_bytes: new Uint8Array([9]),
+  amount, note: {{ text: 'note' }}, blob: {{ bytes: new Uint8Array([10]) }},
+}});
+for (const key of ['bytes', 'fixed', 'maybe_bytes']) assert.ok(record[key] instanceof Uint8Array, key);
+assert.deepEqual([...record.fixed], [6, 7, 8]);
+assert.deepEqual([...record.maybe_bytes], [9]);
+assert.deepEqual(record.amount, amount);
+assert.deepEqual(record.note, {{ text: 'note' }});
+assert.deepEqual([...record.blob.bytes], [10]);
+server.close();
+"#
+        ),
+    );
+}
+
+#[test]
+fn external_streaming_methods_decode_bytes_quantities_text_and_binary() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    generate_and_compile(
+        agent(
+            "RichStreamAgent",
+            "typescript",
+            vec![],
+            vec![method(
+                "exchange",
+                vec![
+                    field("input", SchemaType::stream(Some(SchemaType::u8()))),
+                    field("value", ref_to("RichRecord")),
+                ],
+                Some(ref_to("RichRecord")),
+            )],
+            vec![def("RichRecord", rich_scalar_record())],
+            AgentMode::Durable,
+        ),
+        target,
+    );
+    let package = generated_package_dir(target, "rich-stream-agent");
+    assert!(
+        std::process::Command::new("npm")
+            .args(["install", "--no-save", "ws"])
+            .current_dir(&package)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let graph = wire_graph(rich_scalar_record());
+    run_node_script(
+        &package,
+        "stream-round-trip.mjs",
+        &format!(
+            r#"import assert from 'node:assert/strict';
+import {{ WebSocketServer }} from 'ws';
+import {{ agentStream }} from '@golemcloud/golem-ts-bridge';
+import {{ RichStreamAgent, configure }} from './rich-stream-agent-client.js';
+
+const graph = {graph};
+let override = undefined;
+const wss = new WebSocketServer({{ port: 0 }});
+await new Promise((resolve) => wss.once('listening', resolve));
+const provisionalRef = (value) => {{
+  if (value && typeof value === 'object') {{
+    if (typeof value.provisionalRef === 'string') return value.provisionalRef;
+    for (const nested of Object.values(value)) {{
+      const found = provisionalRef(nested);
+      if (found) return found;
+    }}
+  }}
+}};
+wss.on('connection', (socket) => socket.once('message', (raw) => {{
+  const start = JSON.parse(raw);
+  socket.send(JSON.stringify({{
+    version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
+    idempotencyKey: start.idempotencyKey, sessionToken: 'session',
+    mappings: [{{
+      channel: 1, direction: 'input', streamToken: 'input', provisionalRef: provisionalRef(start.methodParameters),
+      inputHighWater: {{ sequence: '0', terminal: false }},
+    }}],
+  }}));
+  const value = override ?? start.methodParameters.value.fields[1];
+  override = undefined;
+  socket.send(JSON.stringify({{
+    version: 1, type: 'invocationResult', mappings: [], result: {{ kind: 'value', graph, value }},
+  }}));
+  socket.send(JSON.stringify({{ version: 1, type: 'invocationFinished', outcome: {{ kind: 'success' }} }}));
+}}));
+configure({{
+  server: {{ type: 'custom', url: `http://127.0.0.1:${{wss.address().port}}`, token: 'test' }},
+  application: 'app', environment: 'env',
+}});
+const constructorValue = {{ kind: 'record', value: {{ fields: [] }} }};
+const remote = new RichStreamAgent(
+  constructorValue, undefined, {{ componentId: 'component', agentId: 'agent' }}, constructorValue, [],
+);
+const amount = {{ mantissa: -25n, scale: 2, unit: 'kg' }};
+const input = {{
+  bytes: new Uint8Array([1, 2]), fixed: new Uint8Array([3, 4, 5]), maybe_bytes: new Uint8Array([6]),
+  amount, note: {{ text: 'hallo', language: 'de' }}, blob: {{ bytes: new Uint8Array([7]), mimeType: 'text/plain' }},
+}};
+const output = await remote.exchange(agentStream((async function* () {{}})()), input);
+for (const key of ['bytes', 'fixed', 'maybe_bytes']) assert.ok(output[key] instanceof Uint8Array, key);
+assert.deepEqual([...output.bytes], [1, 2]);
+assert.deepEqual([...output.fixed], [3, 4, 5]);
+assert.deepEqual([...output.maybe_bytes], [6]);
+assert.deepEqual(output.amount, amount);
+assert.equal(output.note.text, 'hallo');
+assert.equal(output.note.language, 'de');
+assert.ok(output.blob.bytes instanceof Uint8Array);
+assert.deepEqual([...output.blob.bytes], [7]);
+assert.equal(output.blob.mimeType, 'text/plain');
+await assert.rejects(
+  remote.exchange(agentStream((async function* () {{}})()), {{ ...input, amount: {{ mantissa: 1n, scale: 0, unit: 'lb' }} }}),
+  /unit/,
+);
+for (const client of wss.clients) client.terminate();
+await new Promise((resolve) => wss.close(resolve));
+"#
+        ),
     );
 }

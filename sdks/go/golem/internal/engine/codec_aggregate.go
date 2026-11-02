@@ -501,7 +501,7 @@ var namedTypeCodecs = map[reflect.Type]func(*Codec){
 				}))
 			},
 			func(dst reflect.Value, n types.SchemaValueNode) {
-				dst.SetBytes(append([]byte(nil), n.BinaryValue().Bytes...))
+				dst.SetBytes(append([]byte{}, n.BinaryValue().Bytes...))
 			})
 	},
 	reflect.TypeFor[values.Path](): func(c *Codec) {

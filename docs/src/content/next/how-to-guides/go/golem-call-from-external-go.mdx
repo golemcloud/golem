@@ -88,7 +88,7 @@ func run(ctx context.Context) error {
 }
 ```
 
-Every method has three forms — `M(ctx, …)`, `TriggerM(ctx, …)` and `ScheduleM(ctx, when, …)` — and every call returns an `error`: a transport failure, an error status (`*bridge.Error`, carrying the status and body) and a result that does not decode are all reported, never panicked.
+Every method has three forms — `M(ctx, …)`, `TriggerM(ctx, …)` and `ScheduleM(ctx, when, …)` — and every call returns an `error`: an argument the callee's schema does not accept (checked before anything is sent), a transport failure, an error status (`*bridge.Error`, carrying the status and body) and a result that does not decode are all reported, never panicked.
 
 `GetCounterAgent` (and `NewPhantom<Agent>`) takes options:
 
