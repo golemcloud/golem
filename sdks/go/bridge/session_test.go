@@ -653,6 +653,70 @@ func TestGivingUpCancelsTheCall(t *testing.T) {
 	}
 }
 
+// Passing the parameters of a running call to a second call fails the second
+// call and leaves the first one reading its stream.
+func TestARefusedSecondClaimLeavesTheRunningCallAlone(t *testing.T) {
+	cancelled := make(chan map[string]any, 1)
+	streaming := make(chan struct{})
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		first := true
+		for {
+			r := c.read()
+			switch r.kind {
+			case "inputStreamItem":
+				if first {
+					first = false
+					close(streaming)
+				}
+			case "streamCancel":
+				cancelled <- r.m
+				return
+			case "":
+				return
+			}
+		}
+	})
+	w, s := NewAgentStream[uint32]()
+	defer func() { _ = w.Close() }()
+	if err := w.Write(1); err != nil {
+		t.Fatal(err)
+	}
+	params := streamParams(EncodeStream(EncodeU32)(s))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- InvokeStreaming(ctx, server.agent(t), "consume", params) }()
+	select {
+	case <-streaming:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first call never streamed")
+	}
+	if err := InvokeStreaming(ctxT(t), server.agent(t), "consume", params); !errors.Is(err, ErrStreamConsumed) {
+		t.Fatalf("the second call got %v", err)
+	}
+	if err := w.Write(2); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the first call got %v", err)
+	}
+	select {
+	case m := <-cancelled:
+		if m["reason"] != "cancelled" {
+			t.Fatalf("cancelled with %v", m)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server never heard the cancellation")
+	}
+	if n := server.connections(); n != 1 {
+		t.Fatalf("the refused call connected: %d connections", n)
+	}
+}
+
 func TestStreamOfLeavesTheCallersSliceAlone(t *testing.T) {
 	items := []uint32{1, 2}
 	if _, err := StreamOf(items...).Collect(context.Background()); err != nil {
