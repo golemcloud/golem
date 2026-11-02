@@ -139,6 +139,23 @@ if mode == "start-unanswered":
             pass
     terminal()
 
+# A peer that upgrades and then stops reading, so a large start stays unsent.
+# The reconnect window also bounds the send: once it ends the client abandons
+# the connection, so reading afterwards finds only part of the start.
+if mode == "start-unread":
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    with connect() as conn:
+        time.sleep(3)
+        received = 0
+        try:
+            while chunk := conn.recv(65536):
+                received += len(chunk)
+        except (ConnectionResetError, TimeoutError):
+            pass
+        assert received < 8 * 1024 * 1024, f"the client sent the whole start ({received} bytes)"
+    terminal()
+
+
 def accept_operation(conn, operation, key, mappings):
     send(
         conn,

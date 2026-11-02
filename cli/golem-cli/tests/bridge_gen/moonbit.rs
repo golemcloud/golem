@@ -3319,6 +3319,7 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         ("start-closed", "unreachable", "Within(500)", STABLE),
         ("start-blackhole", "unreachable", "Within(1500)", STABLE),
         ("start-unanswered", "unreachable", "Within(500)", STABLE),
+        ("start-unread", "unreachable", "Within(1000)", STABLE),
         ("start-503", "", window, STABLE),
         ("start-no-limit", "", "Unlimited", STABLE),
         ("start-retryable", "", window, STABLE),
@@ -3349,7 +3350,16 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
                 .replace("__PORT__", port.trim())
                 .replace("__ERROR__", expected_error)
                 .replace("__RECONNECT__", reconnect)
-                .replace("__STABLE__", stable),
+                .replace("__STABLE__", stable)
+                // Large enough to fill the socket buffers of a peer that stops reading.
+                .replace(
+                    "__START_TEXT_BYTES__",
+                    if mode == "start-unread" {
+                        "8388608"
+                    } else {
+                        "0"
+                    },
+                ),
         )
         .unwrap();
         let result = std::panic::catch_unwind(|| pkg.test_native());

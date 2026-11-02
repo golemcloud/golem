@@ -252,9 +252,10 @@ async fn ReconnectClock::next_attempt(self : ReconnectClock) -> Int {
 }
 
 ///|
-/// One attempt to attach with `descriptor`: connect within `timeout_ms`, send
-/// the descriptor and read the server's answer until the reconnect window of
-/// `clock` ends. `Err` is a failure worth another attempt with the same
+/// One attempt to attach with `descriptor`: connect within `timeout_ms`, then
+/// send the descriptor and read the server's answer until the reconnect window
+/// of `clock` ends. The window also bounds the send, as a server that stops
+/// reading leaves it pending. `Err` is a failure worth another attempt with the same
 /// descriptor: a lost connection, an upgrade refused with HTTP 429 or 5xx, or
 /// an answer that did not come within the window. Any other failure is raised.
 async fn attach_attempt(
@@ -269,11 +270,14 @@ async fn attach_attempt(
       is Some(socket) else {
       return Err("no WebSocket connection within \{timeout_ms} ms")
     }
-    socket.send_text(descriptor)
     let answer = match clock.remaining() {
-      None => Some(read_text(socket))
+      None => {
+        socket.send_text(descriptor)
+        Some(read_text(socket))
+      }
       Some(left) =>
         @async.with_timeout_opt(if left > 0 { left } else { 1 }, () => {
+          socket.send_text(descriptor)
           read_text(socket)
         })
     }

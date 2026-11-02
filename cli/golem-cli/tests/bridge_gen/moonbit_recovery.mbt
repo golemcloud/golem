@@ -6,6 +6,9 @@ async fn run_recovery() -> Unit {
   let codec = public_value_codec(
     "{\"root\":{\"kind\":\"tuple\",\"value\":{\"elements\":[]}}}",
   )
+  let parameters_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"tuple\",\"value\":{\"elements\":[{\"kind\":\"string\",\"value\":{}}]}}}",
+  )
   let output_codec = public_value_codec(
     "{\"root\":{\"kind\":\"stream\",\"value\":{\"inner\":{\"kind\":\"u8\",\"value\":{}}}}}",
   )
@@ -25,11 +28,11 @@ async fn run_recovery() -> Unit {
   let result = invoke_streaming_agent(
     StreamEncodeContext::new(),
     codec,
-    codec,
+    parameters_codec,
     output_codec,
     resolved,
     "run",
-    TupleValue([]),
+    TupleValue([StringValue("x".repeat(__START_TEXT_BYTES__))]),
   )
   let stream = open_output_stream(
     result.result.unwrap(),
