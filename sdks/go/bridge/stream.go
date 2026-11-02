@@ -392,9 +392,12 @@ func EncodeStream[T any](item Encoder[T]) Encoder[AgentStream[T]] {
 		return schema.StreamValue{Handle: &inputHandle{
 			lane: laneOf[T](),
 			claim: func() error {
-				var err error
-				src, err = s.claim(streamGiven)
-				return err
+				claimed, err := s.claim(streamGiven)
+				if err != nil {
+					return err
+				}
+				src = claimed
+				return nil
 			},
 			next: func(ctx context.Context) (schema.SchemaValue, bool, error) {
 				v, ok, err := src.next(ctx)
