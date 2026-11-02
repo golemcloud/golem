@@ -11,17 +11,17 @@ import {
 } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { rollup } from "../../../../sdks/ts/packages/golem-ts-sdk/node_modules/rollup/dist/es/rollup.js";
-import { nodeResolve } from "../../../../sdks/ts/packages/golem-ts-sdk/node_modules/@rollup/plugin-node-resolve/dist/es/index.js";
-import commonjs from "../../../../sdks/ts/packages/golem-ts-sdk/node_modules/@rollup/plugin-commonjs/dist/es/index.js";
+import { rollup } from "../../sdks/ts/packages/golem-ts-sdk/node_modules/rollup/dist/es/rollup.js";
+import { nodeResolve } from "../../sdks/ts/packages/golem-ts-sdk/node_modules/@rollup/plugin-node-resolve/dist/es/index.js";
+import commonjs from "../../sdks/ts/packages/golem-ts-sdk/node_modules/@rollup/plugin-commonjs/dist/es/index.js";
 import {
   installToolProcessBridge,
   toolProcessModules,
-} from "../../../../sdks/javascript/tool-process-template.mjs";
-import { componentEntry } from "../../../../sdks/ts/packages/golem-ts-sdk/scripts/component.mjs";
+} from "../../sdks/javascript/tool-process-template.mjs";
+import { componentEntry } from "../../sdks/ts/packages/golem-ts-sdk/scripts/component.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const root = resolve(here, "../../../..");
+const root = resolve(here, "../..");
 const destination = process.argv[2];
 if (!destination) throw new Error("Pass an empty output directory");
 const sdkMinimal = process.argv[3] === "--sdk-minimal";

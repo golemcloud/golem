@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
-import { getReflectedToolType } from "../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/index.mjs";
+import { getReflectedToolType } from "../../sdks/ts/packages/golem-ts-sdk/dist/runtime/index.mjs";
 import { PassThrough } from "node:stream";
 import { finished } from "node:stream/promises";
 
@@ -11,14 +11,14 @@ export {
   ok,
   processExitStatusSchema,
   toolDefinition,
-} from "../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/index.mjs";
+} from "../../sdks/ts/packages/golem-ts-sdk/dist/runtime/index.mjs";
 export {
   guest as golemAgent200Guest,
   toolMiddlewareGuest,
   saveSnapshot,
   loadSnapshot,
-} from "../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/emptyGuest.mjs";
-export { z } from "../../../../sdks/ts/packages/golem-ts-sdk/node_modules/zod/v4/index.js";
+} from "../../sdks/ts/packages/golem-ts-sdk/dist/runtime/emptyGuest.mjs";
+export { z } from "../../sdks/ts/packages/golem-ts-sdk/node_modules/zod/v4/index.js";
 
 // One ordinary SDK call and one Node stream, with no process adapter. Three
 // chunks keep the producer blocked behind the harness's one-chunk buffer after

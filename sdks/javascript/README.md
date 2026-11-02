@@ -22,7 +22,7 @@ Owned pipes buffer at most the configured per-channel limit while collection
 reaches the terminal result. A caller can start reading at `exit`; `close` still
 waits for the output and its write callbacks.
 
-The [guest bridge fixture](../../golem-common/tests/fixtures/node-tool-processes/README.md)
+The [guest bridge fixture](../../test-components/node-tool-processes/README.md)
 tests this adapter over the existing tool API, without WIT or executor changes.
 The SDK template embeds `tool-process-runtime-init.js` as the optional
 `wasm-rquickjs-runtime-init` module. It registers the adapter separately in the

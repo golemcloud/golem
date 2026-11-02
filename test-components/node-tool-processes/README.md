@@ -34,7 +34,7 @@ From the repository root, with `wasm-rquickjs` 0.4.14 or later on `PATH` (it add
 the generic `wasm-rquickjs:child-process` and runtime-init hooks):
 
 ```sh
-CARGO_BUILD_JOBS=1 node golem-common/tests/fixtures/node-tool-processes/build.mjs /absolute/path/to/new-output-directory
+CARGO_BUILD_JOBS=1 node test-components/node-tool-processes/build.mjs /absolute/path/to/new-output-directory
 ```
 
 To verify the normal SDK packaging instead of generating a fixture-specific
@@ -42,7 +42,7 @@ wrapper, first rebuild the SDK bundle and agent template with the same WRQJS
 toolchain, then run:
 
 ```sh
-node golem-common/tests/fixtures/node-tool-processes/build.mjs /absolute/path/to/new-output-directory --sdk-template
+node test-components/node-tool-processes/build.mjs /absolute/path/to/new-output-directory --sdk-template
 ```
 
 This bundles the fixture with the SDK component entry, injects it into
@@ -138,7 +138,7 @@ joins ordinary Node output streams. To exclude the new bridge from the entire
 component, build the independent entry point:
 
 ```sh
-CARGO_BUILD_JOBS=1 node golem-common/tests/fixtures/node-tool-processes/build.mjs /absolute/path/to/new-output-directory --sdk-only
+CARGO_BUILD_JOBS=1 node test-components/node-tool-processes/build.mjs /absolute/path/to/new-output-directory --sdk-only
 ```
 
 Run that component with `GOLEM_NODE_TOOL_STREAM_PROBE_CASES=streams-collect`,
@@ -166,7 +166,7 @@ chunk, the remaining output exceeds the harness's 64-KiB attachment buffer. This
 keeps cancellation causal without a large producer or a sleep.
 
 ```sh
-CARGO_BUILD_JOBS=1 RAYON_NUM_THREADS=2 node golem-common/tests/fixtures/node-tool-processes/build.mjs /absolute/path/to/new-output-directory --sdk-minimal
+CARGO_BUILD_JOBS=1 RAYON_NUM_THREADS=2 node test-components/node-tool-processes/build.mjs /absolute/path/to/new-output-directory --sdk-minimal
 ```
 
 Use the same executor test and `streams-collect` case. `fresh-sdk-overflow` runs
