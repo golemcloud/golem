@@ -73,10 +73,19 @@ class StreamRuntimeTest extends munit.FunSuite {
     "code" -> Json.string("routing-miss"), "message" -> Json.string("moving"), "retryable" -> Json.bool(true))
 
   private val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
-  private def call(port: Int, window: Duration): (Future[AgentInvocationResult], CancellationToken) = {
+  private def call(port: Int, window: Duration): (Future[AgentInvocationResult], CancellationToken) =
+    callWith(port, window, SchemaValue.TupleValue(Nil), empty)
+  private def callWith(port: Int, window: Duration, parameters: SchemaValue, codec: PublicValueCodec.Codec): (Future[AgentInvocationResult], CancellationToken) = {
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:$port", "token"), "app", "env", global, window),
       "StreamerAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
-    Bridge.invokeStreamingAgentCancelable(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, None, Nil)
+    Bridge.invokeStreamingAgentCancelable(resolved, "run", () => parameters, empty, codec, None, Nil)
+  }
+  private def eventually(what: String)(condition: => Boolean): Unit = {
+    val deadline = System.nanoTime() + 5.seconds.toNanos
+    while (!condition) {
+      if (System.nanoTime() > deadline) fail(what)
+      Thread.sleep(20)
+    }
   }
   // Runs body with a shorter time an accepted connection must stay up to count as progress.
   private def stableAfter[A](millis: Long)(body: => A): A = {
@@ -232,6 +241,59 @@ class StreamRuntimeTest extends munit.FunSuite {
       assert(error.lastCause.getMessage.contains("answered neither the start nor the resume"), String.valueOf(error.lastCause))
       assert(elapsed >= 600.millis && elapsed < 5.seconds, elapsed.toString)
       assertEquals(connections.get(), 1)
+    } finally server.close()
+  }
+
+  test("a start the server stops reading is unreachable after the window") {
+    val server = new ServerSocket(0)
+    val acceptor = new Thread(() => try {
+      // Completes the upgrade and never reads the start.
+      new Peer(server.accept())
+      Thread.sleep(Long.MaxValue)
+    } catch { case _: Throwable => () })
+    acceptor.setDaemon(true)
+    acceptor.start()
+    try {
+      val codec = PublicValueCodec.fromSchemaGraphJson(
+        """{"root":{"kind":"tuple","value":{"elements":[{"kind":"string","value":{}}]}}}""")
+      val large = SchemaValue.TupleValue(List(SchemaValue.StringValue("x" * (8 * 1024 * 1024))))
+      val started = System.nanoTime()
+      val error = intercept[BridgeUnreachableException](
+        Await.result(callWith(server.getLocalPort, 1.second, large, codec)._1, 10.seconds))
+      val elapsed = (System.nanoTime() - started).nanos
+      assert(error.lastCause.getMessage.contains("answered neither the start nor the resume"), String.valueOf(error.lastCause))
+      assert(elapsed >= 1.second && elapsed < 6.seconds, elapsed.toString)
+    } finally server.close()
+  }
+
+  test("a call that no longer waits for an answer leaves no deadline behind") {
+    val server = new ServerSocket(0)
+    val starts = new java.util.concurrent.LinkedBlockingQueue[Json]()
+    val connections = new AtomicInteger(0)
+    // Leaves the first start unanswered and accepts the second.
+    val acceptor = new Thread(() => try while (true) {
+      val socket = server.accept()
+      val connection = new Thread(() => try {
+        val p = new Peer(socket)
+        val start = p.receive()
+        starts.put(start)
+        if (connections.incrementAndGet() == 2) { accepted(p, start, field(start, "idempotencyKey")); finish(p) }
+        while (true) p.receive()
+      } catch { case _: Throwable => () })
+      connection.setDaemon(true)
+      connection.start()
+    } catch { case _: Throwable => () })
+    acceptor.setDaemon(true)
+    acceptor.start()
+    try {
+      val (cancelledCall, token) = call(server.getLocalPort, 5.minutes)
+      assert(starts.poll(10, java.util.concurrent.TimeUnit.SECONDS) != null)
+      token.cancel()
+      intercept[BridgeCancelledException](Await.result(cancelledCall, 10.seconds))
+      eventually("a cancelled call kept its answer deadline")(StreamSession.answerTimers.getQueue.isEmpty)
+
+      Await.result(call(server.getLocalPort, 5.minutes)._1, 10.seconds)
+      eventually("an accepted call kept its answer deadline")(StreamSession.answerTimers.getQueue.isEmpty)
     } finally server.close()
   }
 
