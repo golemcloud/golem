@@ -1769,6 +1769,13 @@ lookup routes concurrent completions to the right awaiter. It does not license t
 to make different calls; when no matching `Start` exists, replay fails with a divergence error
 (after any active entity body that owns the cursor head has consumed it; see below).
 
+When no identity matches but an unclaimed `Start` has the same invocation id, its position
+bounds the delivery wait. A delivery before that conflicting `Start` must still happen first;
+a later delivery cannot postpone the mismatch, since the changed guest may never reach it.
+If a sibling already drained that Start into retained history, reject the mismatch before
+waiting at the cursor's next delivery boundary: retained calls precede that boundary.
+This lets incompatible automatic updates fail instead of parking behind their own old history.
+
 **Invocation ids.** Scan-ahead alone cannot tell apart concurrent calls with the same function:
 their host tasks reach the claim in an order that depends on host scheduling (a replayed 600 s
 watchdog `wait-for` could take the record of a completed 300 ms `wait-for` and fire at once). So
@@ -1779,6 +1786,17 @@ calls. The id (`DurableInvocationId`) is an anchor and an ordinal: the anchor is
 the current agent invocation (`AgentInvocationStarted`), entity invocation (`Start`) or parent
 custom durable invocation (`Start`), and the ordinal counts the calls numbered under that anchor.
 Root custom durable invocations share the counter with ordinary calls.
+
+An import can emit several differently shaped `Start`s with the same id. The mismatch
+inference relies on producer ordering, not id uniqueness: a later stage must not attempt its
+claim while an earlier differently shaped stage with that id is still unclaimed. Clock
+`wait-for` claims before its internal `now`; HTTP send claims before spawning transmission
+observation; body consumption claims its parent before its sequential chunks; transaction
+admission precedes its scope; tool result observation precedes sequential secret-hold admissions.
+`InvocationIdSource::Reserved` does not enforce this ordering: copying an id into independent
+concurrent tasks requires revisiting the mismatch inference, especially for a crash prefix
+containing only one sibling. A matching Start ahead still takes precedence over a differently
+shaped same-id sibling, and remains gated by earlier guest deliveries.
 
 **Custom execution scopes.** Attribution follows the context installed on the current guest
 task, not the lifetime of a live custom resource. `begin_custom_durable_invocation` installs a

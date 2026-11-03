@@ -80,6 +80,10 @@ inherit_test_dep!(
     #[tagged_as("agent_counters")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("http_update_effect")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 pub struct F1Blocker {
@@ -516,6 +520,173 @@ async fn auto_update_on_idle(
     assert_eq!(result.into_typed::<u64>()?, 0);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_update_effect")] baseline: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let requests = Arc::new(AtomicUsize::new(0));
+    let observed = requests.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/message", listener.local_addr()?);
+    let router = Router::new().route(
+        "/message",
+        post(move || {
+            let observed = observed.clone();
+            async move {
+                let count = observed.fetch_add(1, Ordering::SeqCst) + 1;
+                format!("response-{count}")
+            }
+        }),
+    );
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    }));
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(Outage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(FlakyComponentService {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, baseline)
+        .store()
+        .await?;
+    let id = agent_id!("HttpUpdateProbe", "http-history");
+    let worker = executor.start_agent(&component.id, id.clone()).await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &id, "run", data_value!(url.clone()))
+        .await?;
+    assert_eq!(result.into_typed::<String>()?, "response-1");
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    let control_id = agent_id!("HttpUpdateProbe", "no-http-history");
+    let control = executor
+        .start_agent(&component.id, control_id.clone())
+        .await?;
+    let updated = executor
+        .update_component(&component.id, "golem_it_http_update_effect_timeout")
+        .await?;
+    executor
+        .auto_update_worker(&control, updated.revision, false)
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &control_id, "ping", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<String>()?, "timeout");
+    assert_eq!(
+        update_counts(&executor.get_worker_metadata(&control).await?),
+        (0, 1, 0)
+    );
+
+    let (fetch_entered, release_fetch) = outage.gate_component(updated.revision);
+    executor
+        .auto_update_worker(&worker, updated.revision, false)
+        .await?;
+    fetch_entered.await?;
+    let ping_key = golem_common::model::IdempotencyKey::fresh();
+    let mut result_wait = crate::invocation_waits::result_wait(&worker, &ping_key);
+    let ping = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let id = id.clone();
+        let key = ping_key.clone();
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent_with_key(&component, &id, &key, "ping", data_value!())
+                .await
+        }))
+    };
+    result_wait.entered().await?;
+    let queued = executor.get_worker_metadata(&worker).await?;
+    assert_eq!(queued.pending_invocation_count, 1);
+    assert_eq!(update_counts(&queued), (1, 0, 0));
+    release_fetch.send(()).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(20), ping).await???;
+    assert_eq!(result.into_typed::<String>()?, "baseline");
+    let metadata = executor.get_worker_metadata(&worker).await?;
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(metadata.pending_invocation_count, 0);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
+    assert!(metadata.updates.iter().any(|update| matches!(update,
+        UpdateRecord::FailedUpdate(update) if update.details.as_deref().is_some_and(|details|
+            details.contains("no matching Start")))));
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &id, "ping", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<String>()?, "baseline");
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "completed replay must not repeat HTTP"
+    );
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let queued_ping = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::PendingAgentInvocation(params)
+                if matches!(&params.invocation,
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.idempotency_key == ping_key) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the ping must be durably queued");
+    let pending_update = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+        .expect("the update must be enqueued")
+        .oplog_index;
+    let failed_update = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::FailedUpdate(_)))
+        .expect("the update must be rejected")
+        .oplog_index;
+    assert!(pending_update < queued_ping && queued_ping < failed_update);
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::FailedUpdate(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        4
+    );
+    let fresh = executor
+        .invoke_and_await_agent(&component, &id, "run", data_value!(url))
+        .await?;
+    assert_eq!(fresh.into_typed::<String>()?, "response-2");
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    executor.check_oplog_is_queryable(&worker).await?;
     Ok(())
 }
 
@@ -4849,7 +5020,7 @@ pub(crate) struct FlakyComponentService {
     pub(crate) outage: Arc<Outage>,
 }
 
-struct MetadataFetchGate {
+struct ComponentFetchGate {
     revision: ComponentRevision,
     entered: tokio::sync::oneshot::Sender<()>,
     release: tokio::sync::oneshot::Receiver<()>,
@@ -4876,11 +5047,35 @@ pub(crate) struct Outage {
     metadata_lost: std::sync::Mutex<Option<ComponentRevision>>,
     metadata_unavailable: std::sync::Mutex<Option<ComponentRevision>>,
     fetched: std::sync::atomic::AtomicBool,
-    metadata_gate: std::sync::Mutex<Option<MetadataFetchGate>>,
+    metadata_gate: std::sync::Mutex<Option<ComponentFetchGate>>,
+    component_gate: std::sync::Mutex<Option<ComponentFetchGate>>,
     metadata_fetches: std::sync::Mutex<Vec<ComponentRevision>>,
 }
 
 impl Outage {
+    fn gate_component(
+        &self,
+        revision: ComponentRevision,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, receipt) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        assert!(
+            self.component_gate
+                .lock()
+                .unwrap()
+                .replace(ComponentFetchGate {
+                    revision,
+                    entered,
+                    release: released,
+                })
+                .is_none()
+        );
+        (receipt, release)
+    }
+
     pub(crate) fn gate_metadata(
         &self,
         revision: ComponentRevision,
@@ -4894,7 +5089,7 @@ impl Outage {
             self.metadata_gate
                 .lock()
                 .unwrap()
-                .replace(MetadataFetchGate {
+                .replace(ComponentFetchGate {
                     revision,
                     entered,
                     release: released,
@@ -5004,6 +5199,23 @@ impl ComponentService for FlakyComponentService {
         ),
         WorkerExecutorError,
     > {
+        let gate = {
+            let mut gate = self.outage.component_gate.lock().unwrap();
+            if gate
+                .as_ref()
+                .is_some_and(|gate| gate.revision == component_revision)
+            {
+                gate.take()
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            gate.release
+                .await
+                .map_err(|_| WorkerExecutorError::runtime("component gate dropped"))?;
+        }
         *self
             .outage
             .gets

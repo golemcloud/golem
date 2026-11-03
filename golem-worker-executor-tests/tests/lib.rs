@@ -405,6 +405,12 @@ test_component!(
     "golem-it:snapshot-sqlite-effect"
 );
 test_component!(
+    http_update_effect,
+    "http_update_effect",
+    "golem_it_http_update_effect_baseline",
+    "golem-it:http-update-effect-baseline"
+);
+test_component!(
     agent_counters,
     "agent_counters",
     "it_agent_counters_release",

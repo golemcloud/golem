@@ -703,6 +703,21 @@ impl CursorTx<'_> {
             return Ok(StartClaimAttempt::Claimed(handle, entry));
         }
 
+        // Retained calls precede the cursor and all remaining delivery boundaries. A sibling
+        // may have drained a conflicting Start while this claim waited for an earlier delivery.
+        if let Some(invocation_id) = claim.expected_invocation_id()
+            && self
+                .st
+                .retained_starts
+                .values()
+                .any(|retained| start_invocation_id(&retained.entry) == Some(invocation_id))
+            && self
+                .unclaimed_start_ahead(invocation_id, |recorded| claim.matches_recorded(recorded))
+                .is_none()
+        {
+            return Ok(StartClaimAttempt::Missing);
+        }
+
         // Head fast path: auto-drains awaited terminals and already-claimed `Start`s, then
         // consumes the head iff it matches this claim's identity. Another operation's unclaimed
         // `Start` at the head is left there: this claim's `Start` is either recorded further
@@ -734,7 +749,11 @@ impl CursorTx<'_> {
                 let start = self.unclaimed_start_ahead(invocation_id, |recorded| {
                     claim.matches_recorded(recorded)
                 });
-                let bound = start.unwrap_or_else(|| self.cursor.replay_target().next());
+                // A conflicting identity can be rejected at its Start. Waiting for a later
+                // delivery would deadlock if the changed guest can no longer produce it.
+                let bound = start
+                    .or_else(|| self.unclaimed_start_ahead(invocation_id, |_| true))
+                    .unwrap_or_else(|| self.cursor.replay_target().next());
                 if self.delivery_boundary_before(bound) {
                     StartAhead::Blocked
                 } else if let Some(index) = start {
