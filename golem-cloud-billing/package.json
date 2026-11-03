@@ -1,0 +1,32 @@
+{
+  "name": "golem-cloud-billing",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hosted billing app of Golem Cloud: GitHub sign-in, plan management, and Polar.sh billing on top of the registry service APIs.",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "build": "rolldown -c rolldown.config.ts && node --eval \"require('node:fs').cpSync('src/assets', 'dist/assets', { recursive: true })\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.1.2",
+    "better-auth": "1.7.16",
+    "effect": "4.1.2",
+    "kysely": "0.29.8",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "rolldown": "1.2.16",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  }
+}
