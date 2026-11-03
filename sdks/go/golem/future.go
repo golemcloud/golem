@@ -43,6 +43,11 @@ type Future[Out any] struct {
 	err    error
 }
 
+// futureish recognises a Future of any result type, which the codec refuses.
+type futureish interface{ future() }
+
+func (Future[Out]) future() {}
+
 // ErrCallCancelled is what getting the result of a cancelled call reports.
 // Cancelling only stops waiting: the call may already have run.
 var ErrCallCancelled = errors.New("golem: the call was cancelled before its result was awaited")

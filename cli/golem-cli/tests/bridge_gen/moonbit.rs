@@ -35,7 +35,8 @@ use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, NumericBound, NumericRestrictions, PathDirection,
-    PathKind, PathSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    PathKind, PathSpec, QuantitySpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    VariantCaseType,
 };
 use golem_common::schema::tool::{
     CommandBody, CommandIndex, CommandNode, CommandTree, Doc, ErrorCase, ErrorKind, Formatter,
@@ -325,7 +326,7 @@ test "generated batch release traverses failing fields and unconverted items" {
       { first: endpoint(), narrow: 2, last: [endpoint()] },
     ]
     try writer.write_all(items) catch {
-      CodecError(message) => assert_eq(message, "s8 value out of range")
+      CodecError(message) => assert_eq(message, "s8 value out of range: 128")
       error => fail(repr(error))
     } noraise { _ => fail("expected encoding failure") }
     assert_eq(drops.val, 5)
@@ -1746,6 +1747,64 @@ fn guest_mode_moon_checks_result_nested_in_list() {
     );
 }
 
+fn uuid_agent() -> AgentTypeSchema {
+    let ids = def(
+        "ids",
+        SchemaType::record(vec![
+            named_field("primary", SchemaType::uuid()),
+            named_field("secondary", SchemaType::option(SchemaType::uuid())),
+            named_field("all", SchemaType::list(SchemaType::uuid())),
+        ]),
+    );
+    agent(
+        "UuidAgent",
+        "moonbit",
+        vec![field("owner", SchemaType::uuid())],
+        vec![
+            method(
+                "lookup",
+                vec![field("id", SchemaType::uuid()), field("ids", ref_to("ids"))],
+                Some(SchemaType::option(SchemaType::uuid())),
+            ),
+            method("current", vec![], Some(SchemaType::uuid())),
+            method("everything", vec![], Some(ref_to("ids"))),
+        ],
+        vec![ids],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn external_uuid_agent_compiles_and_uses_the_runtime_uuid_type() {
+    let pkg = GeneratedPackage::new(uuid_agent());
+    let client = pkg.client_source();
+    assert!(client.contains("owner : @runtime.Uuid"));
+    assert!(client.contains("id : @runtime.Uuid"));
+    assert!(client.contains("-> @runtime.Uuid? raise {"));
+    assert!(client.contains("-> @runtime.Uuid raise {"));
+    assert!(client.contains("primary : @runtime.Uuid"));
+    assert!(client.contains("secondary : @runtime.Uuid?"));
+    assert!(client.contains("all : Array[@runtime.Uuid]"));
+    assert!(client.contains("phantom : @runtime.Uuid"));
+    assert!(client.contains("@runtime.Uuid::random()"));
+    pkg.test_native();
+}
+
+#[test]
+fn guest_uuid_agent_compiles_and_uses_the_sdk_uuid_type() {
+    let guest = generate_without_check(uuid_agent(), MoonBitBridgeMode::GuestWasmRpc);
+    let client = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    assert!(client.contains("owner : @schema.Uuid"));
+    assert!(client.contains("id : @schema.Uuid"));
+    assert!(client.contains("primary : @schema.Uuid"));
+    assert!(client.contains("phantom_id : @schema.Uuid"));
+    assert!(client.contains("-> @schema.Uuid? {"));
+    assert!(client.contains(".to_wit())"));
+    assert!(client.contains("@schema.Uuid::from_wit(match "));
+    assert!(!client.contains("@types.Uuid"));
+    moon_check_wasm(guest.path());
+}
+
 #[test]
 fn guest_mode_moon_checks_unstructured_text_codec() {
     let media = def(
@@ -2340,9 +2399,9 @@ fn generates_client_surface(#[tagged_as("multi_agent_1")] pkg: &GeneratedPackage
 
     // Configuration + identity accessors delegating to the runtime.
     assert!(client.contains(
-        "pub fn Agent1::configure(server : @runtime.GolemServer, app_name : String, env_name : String) -> Unit {"
+        "pub fn Agent1::configure(server : @runtime.GolemServer, app_name : String, env_name : String, reconnect? : @runtime.ReconnectPolicy = @runtime.default_reconnect_policy) -> Unit {"
     ));
-    assert!(client.contains("@runtime.configure(server, app_name, env_name)"));
+    assert!(client.contains("@runtime.configure(server, app_name, env_name, reconnect~)"));
     assert!(client.contains("pub fn Agent1::agent_id(self : Agent1) -> @runtime.AgentId {"));
 
     // Durable constructors.
@@ -2350,7 +2409,7 @@ fn generates_client_surface(#[tagged_as("multi_agent_1")] pkg: &GeneratedPackage
     assert!(client.contains("pub async fn Agent1::get_phantom("));
     assert!(client.contains("pub async fn Agent1::new_phantom("));
     assert!(client.contains("@runtime.create_agent(configuration, \"agent1\", parameters,"));
-    assert!(client.contains("@runtime.random_uuid()"));
+    assert!(client.contains("@runtime.Uuid::random()"));
 
     // Per-method await / trigger / schedule wrappers, with the await result
     // decoded through the named-type codec.
@@ -2595,7 +2654,7 @@ fn config_constructors_are_generated() {
     assert!(!client.contains("config_secret"));
     // phantom precedes the config overrides in get_phantom_with_config.
     assert!(client.contains(
-        "pub async fn ConfigAgent::get_phantom_with_config(name : String, phantom : String, config_api_key : String?, config_max_retries : UInt?)"
+        "pub async fn ConfigAgent::get_phantom_with_config(name : String, phantom : @runtime.Uuid, config_api_key : String?, config_max_retries : UInt?)"
     ));
     // Config entries are built from Some values, preserving the original path.
     assert!(client.contains("let agent_config : Array[@runtime.AgentConfigEntry] = []"));
@@ -2608,7 +2667,7 @@ fn config_constructors_are_generated() {
     assert!(client.contains("parameters, Some(phantom), agent_config)"));
     // new_phantom_with_config delegates to get_phantom_with_config with a fresh id.
     assert!(client.contains(
-        "ConfigAgent::get_phantom_with_config(name, @runtime.random_uuid(), config_api_key, config_max_retries)"
+        "ConfigAgent::get_phantom_with_config(name, @runtime.Uuid::random(), config_api_key, config_max_retries)"
     ));
 }
 
@@ -3221,7 +3280,7 @@ test "text codec directly consumes frozen canonical and malformed fixtures" {
 }
 
 #[test]
-#[test_r::timeout("120s")]
+#[test_r::timeout("300s")]
 async fn accepted_streaming_invocation_recovers_with_takeover() {
     use std::io::BufRead;
     let pkg = GeneratedPackage::new(agent(
@@ -3236,21 +3295,39 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         vec![],
         AgentMode::Durable,
     ));
-    for (mode, expected_error) in [
-        ("success", ""),
-        ("resume-retryable", ""),
-        ("initial", "terminal rejection"),
-        ("other", "terminal rejection"),
+    let window = "Within(10000)";
+    const STABLE: &str = "5000";
+    for (mode, expected_error, reconnect, stable) in [
+        ("success", "", window, STABLE),
+        ("resume-retryable", "", window, STABLE),
+        ("initial", "terminal rejection", window, STABLE),
+        ("other", "terminal rejection", window, STABLE),
         (
             "mismatch",
             "attempt-conflict: rejection attempt does not match",
+            window,
+            STABLE,
         ),
-        ("second", "terminal rejection"),
-        ("second-retryable", "terminal rejection"),
+        ("second", "terminal rejection", window, STABLE),
+        ("second-retryable", "terminal rejection", window, STABLE),
         (
             "takeover-mismatch",
             "attempt-conflict: rejection attempt does not match",
+            window,
+            STABLE,
         ),
+        ("start-closed", "unreachable", "Within(500)", STABLE),
+        ("start-blackhole", "unreachable", "Within(1500)", STABLE),
+        ("start-unanswered", "unreachable", "Within(500)", STABLE),
+        ("start-unread", "unreachable", "Within(1000)", STABLE),
+        ("start-503", "", window, STABLE),
+        ("start-no-limit", "", "Unlimited", STABLE),
+        ("start-retryable", "", window, STABLE),
+        ("window-reset", "", "Within(1000)", "1000"),
+        ("resume-unreachable", "unreachable", "Within(500)", STABLE),
+        ("resume-routing-miss", "", window, STABLE),
+        ("accept-drop", "unreachable", "Within(800)", "400"),
+        ("stable-reset", "", "Within(1000)", "300"),
     ] {
         let mut server = std::process::Command::new("python3")
             .arg("-u")
@@ -3271,7 +3348,18 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
             pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
             include_str!("moonbit_recovery.mbt")
                 .replace("__PORT__", port.trim())
-                .replace("__ERROR__", expected_error),
+                .replace("__ERROR__", expected_error)
+                .replace("__RECONNECT__", reconnect)
+                .replace("__STABLE__", stable)
+                // Large enough to fill the socket buffers of a peer that stops reading.
+                .replace(
+                    "__START_TEXT_BYTES__",
+                    if mode == "start-unread" {
+                        "8388608"
+                    } else {
+                        "0"
+                    },
+                ),
         )
         .unwrap();
         let result = std::panic::catch_unwind(|| pkg.test_native());
@@ -3378,4 +3466,639 @@ async test "invocation-owned stream rejects application cancellation" {
     )
     .unwrap();
     pkg.test_native();
+}
+
+fn kilograms() -> SchemaType {
+    SchemaType::quantity(QuantitySpec {
+        base_unit: "kg".into(),
+        allowed_suffixes: vec!["g".into(), "kg".into()],
+        min: None,
+        max: None,
+    })
+}
+
+fn meters() -> SchemaType {
+    SchemaType::quantity(QuantitySpec {
+        base_unit: "m".into(),
+        allowed_suffixes: vec![],
+        min: None,
+        max: None,
+    })
+}
+
+fn captions() -> SchemaType {
+    SchemaType::text(TextRestrictions {
+        languages: Some(vec!["en".into(), "de".into()]),
+        ..Default::default()
+    })
+}
+
+fn rich_def() -> SchemaTypeDef {
+    def(
+        "rich",
+        SchemaType::record(vec![
+            named_field("weight", kilograms()),
+            named_field("distance", meters()),
+            named_field("caption", captions()),
+            named_field("note", SchemaType::text(TextRestrictions::default())),
+            named_field("payload", SchemaType::binary(BinaryRestrictions::default())),
+            named_field("weights", SchemaType::list(SchemaType::option(kilograms()))),
+            named_field(
+                "image",
+                SchemaType::binary(BinaryRestrictions {
+                    mime_types: Some(vec!["image/png".into()]),
+                    ..Default::default()
+                }),
+            ),
+        ]),
+    )
+}
+
+/// An agent using the rich `quantity`, bare `text` and bare `binary` kinds.
+fn rich_agent() -> AgentTypeSchema {
+    agent(
+        "RichAgent",
+        "moonbit",
+        vec![field("unit", kilograms())],
+        vec![
+            method(
+                "measure",
+                vec![field("input", ref_to("rich"))],
+                Some(ref_to("rich")),
+            ),
+            method(
+                "label",
+                vec![field("text", SchemaType::text(TextRestrictions::default()))],
+                Some(captions()),
+            ),
+            method("weigh", vec![], Some(kilograms())),
+            method(
+                "blob",
+                vec![field(
+                    "data",
+                    SchemaType::binary(BinaryRestrictions::default()),
+                )],
+                Some(SchemaType::binary(BinaryRestrictions::default())),
+            ),
+        ],
+        vec![rich_def()],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn external_rich_kinds_round_trip_and_check_units_and_languages() {
+    let pkg = GeneratedPackage::new(rich_agent());
+    let client = pkg.client_source();
+    for expected in [
+        "pub(all) struct UnitKg {} derive(Debug, Eq)",
+        "pub impl @runtime.QuantityUnit for UnitKg with fn allowed_suffixes() {",
+        "pub(all) struct UnitM {} derive(Debug, Eq)",
+        "pub impl @runtime.TextSpec for TextSpec1 with fn languages() {",
+        "weight : @runtime.Quantity[UnitKg]",
+        "distance : @runtime.Quantity[UnitM]",
+        "caption : @runtime.Text[TextSpec1]",
+        "note : @runtime.Text[TextSpec0]",
+        "payload : @runtime.AgentBinary",
+        "weights : Array[@runtime.Quantity[UnitKg]?]",
+        "-> @runtime.Quantity[UnitKg] raise {",
+        "-> @runtime.Text[TextSpec1] raise {",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
+    let graph = SchemaGraph {
+        defs: vec![rich_def()],
+        root: ref_to("rich"),
+    };
+    let graph_json = serde_json::to_string(&serde_json::to_string(&graph).unwrap()).unwrap();
+    std::fs::write(
+        pkg.module_dir().join("client/rich_wbtest.mbt"),
+        r#"///|
+fn client_rejects(f : () -> Unit raise) -> Bool {
+  try f() catch {
+    _ => true
+  } noraise {
+    _ => false
+  }
+}
+
+///|
+fn rich_codec() -> @runtime.PublicValueCodec raise {
+  @runtime.public_value_codec(__GRAPH__)
+}
+
+///|
+fn sample() -> Rich raise {
+  {
+    weight: @runtime.Quantity::new(1500L, 3, "kg"),
+    distance: @runtime.Quantity::new(42L, 0, "m"),
+    caption: @runtime.Text::new("hello", language="en"),
+    note: @runtime.Text::new("plain"),
+    payload: { bytes: b"\x00\xff", mime_type: None },
+    weights: [Some(@runtime.Quantity::new(5L, 0, "g")), None],
+    image: { bytes: b"\x89", mime_type: Some("image/png") },
+  }
+}
+
+///|
+fn sample_value(weight_unit : String, language : String) -> @runtime.SchemaValue {
+  @runtime.RecordValue([
+    @runtime.QuantityValue(1L, 0, weight_unit),
+    @runtime.QuantityValue(1L, 0, "m"),
+    @runtime.TextValue("hello", Some(language)),
+    @runtime.TextValue("plain", None),
+    @runtime.BinaryValue(b"", None),
+    @runtime.ListValue([]),
+    @runtime.BinaryValue(b"", None),
+  ])
+}
+
+///|
+test "rich kinds round trip through the public codec" {
+  let codec = rich_codec()
+  let value = sample()
+  let json = codec.encode(encode_Rich(value))
+  assert_eq(decode_Rich(codec.decode(json)), value)
+}
+
+///|
+test "quantity constructor rejects a unit outside the schema" {
+  assert_true(
+    client_rejects(() => {
+      let _ : @runtime.Quantity[UnitKg] = @runtime.Quantity::new(1L, 0, "lb")
+    }),
+  )
+  assert_true(
+    client_rejects(() => {
+      let _ : @runtime.Quantity[UnitM] = @runtime.Quantity::new(1L, 0, "km")
+    }),
+  )
+}
+
+///|
+test "quantity unit outside the schema is rejected on encode and decode" {
+  let codec = rich_codec()
+  ignore(codec.encode(sample_value("g", "en")))
+  assert_true(client_rejects(() => ignore(codec.encode(sample_value("lb", "en")))))
+  let foreign = @runtime.schema_value_to_json(sample_value("lb", "en"))
+  assert_true(client_rejects(() => ignore(codec.decode(foreign))))
+  assert_true(client_rejects(() => ignore(decode_Rich(sample_value("lb", "en")))))
+}
+
+///|
+test "text language outside the schema is rejected on encode and decode" {
+  let codec = rich_codec()
+  assert_true(client_rejects(() => ignore(codec.encode(sample_value("kg", "fr")))))
+  let foreign = @runtime.schema_value_to_json(sample_value("kg", "fr"))
+  assert_true(client_rejects(() => ignore(codec.decode(foreign))))
+}
+"#
+        .replace("__GRAPH__", &graph_json),
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+#[test]
+fn guest_rich_kinds_use_sdk_types_and_check_units_and_languages() {
+    let guest = generate_without_check(rich_agent(), MoonBitBridgeMode::GuestWasmRpc);
+    let client = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    for expected in [
+        "pub impl @schema.QuantityUnit for UnitKg with fn base_unit() {",
+        "pub impl @schema.TextSpec for TextSpec1 with fn languages() {",
+        "weight : @schema.Quantity[UnitKg]",
+        "caption : @schema.Text[TextSpec1]",
+        "note : @schema.Text[TextSpec0]",
+        "payload : @schema.AgentBinary",
+        "image : @schema.AgentBinary",
+        "-> @schema.Quantity[UnitKg] {",
+        "-> @schema.AgentBinary {",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
+    std::fs::write(
+        guest.path().join("client/rich_wbtest.mbt"),
+        r#"///|
+fn sample(language : String, image_mime? : String = "image/png") -> Rich raise {
+  {
+    weight: @schema.Quantity::new(1500L, 3, "kg"),
+    distance: @schema.Quantity::new(42L, 0, "m"),
+    caption: @schema.Text::new("hello", language~),
+    note: @schema.Text::new("plain"),
+    payload: { bytes: b"\x00\xff", mime_type: Some("application/octet-stream") },
+    weights: [Some(@schema.Quantity::new(5L, 0, "g")), None],
+    image: { bytes: b"\x89", mime_type: Some(image_mime) },
+  }
+}
+
+///|
+fn sample_value(
+  weight_unit : String,
+  language : String,
+  image_mime? : String? = None,
+) -> @model.SchemaValue {
+  Record([
+    Quantity({ mantissa: 1L, scale: 0, unit: weight_unit }),
+    Quantity({ mantissa: 1L, scale: 0, unit: "m" }),
+    Text("hello", Some(language)),
+    Text("plain", None),
+    Binary([], None),
+    List([]),
+    Binary([], image_mime),
+  ])
+}
+
+///|
+fn assert_decode_rejected(value : @model.SchemaValue) -> Unit raise {
+  try decode_Rich(value) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError")
+  } noraise {
+    _ => fail("expected CodecError")
+  }
+}
+
+///|
+test "rich kinds round trip through the guest codec" {
+  let value = sample("en")
+  assert_true(decode_Rich(encode_Rich(value)) == value)
+  ignore(decode_Rich(sample_value("g", "de")))
+  ignore(decode_Rich(sample_value("g", "de", image_mime=Some("image/png"))))
+  match encode_Rich(value) {
+    Record(fields) =>
+      assert_true(fields[4] is Binary(_, Some("application/octet-stream")))
+    _ => fail("expected a record")
+  }
+}
+
+///|
+test "binary MIME type outside the schema is rejected on encode and decode" {
+  try encode_Rich(sample("en", image_mime="image/gif")) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for a disallowed MIME type")
+  } noraise {
+    _ => fail("expected CodecError for a disallowed MIME type")
+  }
+  assert_decode_rejected(
+    sample_value("kg", "en", image_mime=Some("image/gif")),
+  )
+}
+
+///|
+test "quantity unit outside the schema is rejected on decode" {
+  assert_decode_rejected(sample_value("lb", "en"))
+}
+
+///|
+test "text language outside the schema is rejected on encode and decode" {
+  let value = sample("fr")
+  try encode_Rich(value) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for a disallowed language")
+  } noraise {
+    _ => fail("expected CodecError for a disallowed language")
+  }
+  assert_decode_rejected(sample_value("kg", "fr"))
+}
+"#,
+    )
+    .unwrap();
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("test")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    moon_check_wasm(guest.path());
+}
+
+#[test]
+fn guest_tool_mode_moon_checks_rich_kinds() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut tool = phase_eight_tool();
+    let body = tool.commands.nodes[0].body.as_mut().unwrap();
+    body.positionals
+        .fixed
+        .push(tool_positional("weight", kilograms()));
+    body.positionals
+        .fixed
+        .push(tool_positional("caption", captions()));
+    body.positionals.fixed.push(tool_positional(
+        "payload",
+        SchemaType::binary(BinaryRestrictions::default()),
+    ));
+    let mut generator = MoonBitToolBridgeGenerator::new(tool, target, true).unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+    assert!(source.contains("@schema.Quantity[UnitKg]"), "{source}");
+    assert!(source.contains("@schema.Text[TextSpec0]"), "{source}");
+    moon_check_wasm(dir.path());
+}
+
+fn times_def() -> SchemaTypeDef {
+    def(
+        "times",
+        SchemaType::record(vec![
+            named_field("at", SchemaType::datetime()),
+            named_field("later", SchemaType::option(SchemaType::datetime())),
+            named_field("wait", SchemaType::duration()),
+            named_field(
+                "home",
+                SchemaType::path(PathSpec {
+                    direction: PathDirection::InOut,
+                    kind: PathKind::Any,
+                    allowed_mime_types: None,
+                    allowed_extensions: None,
+                }),
+            ),
+            named_field("site", SchemaType::url(UrlRestrictions::default())),
+            named_field("tiny", SchemaType::s8()),
+            named_field("small", SchemaType::s16()),
+            named_field("port", SchemaType::u16()),
+            named_field("pair", SchemaType::fixed_list(SchemaType::u32(), 2)),
+        ]),
+    )
+}
+
+/// An agent using the datetime, duration, path, url, small integer and
+/// fixed-list kinds.
+fn times_agent() -> AgentTypeSchema {
+    agent(
+        "TimesAgent",
+        "moonbit",
+        vec![field("start", SchemaType::datetime())],
+        vec![
+            method(
+                "echo",
+                vec![field("input", ref_to("times"))],
+                Some(ref_to("times")),
+            ),
+            method("now", vec![], Some(SchemaType::datetime())),
+            method(
+                "sleep",
+                vec![field("wait", SchemaType::duration())],
+                Some(SchemaType::fixed_list(SchemaType::u16(), 3)),
+            ),
+        ],
+        vec![times_def()],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn external_time_path_url_and_small_kinds_use_runtime_types() {
+    let pkg = GeneratedPackage::new(times_agent());
+    let client = pkg.client_source();
+    for expected in [
+        "at : @runtime.Datetime",
+        "later : @runtime.Datetime?",
+        "wait : @runtime.Duration",
+        "home : @runtime.Path",
+        "site : @runtime.Url",
+        "tiny : Int",
+        "small : Int16",
+        "port : UInt16",
+        "pair : FixedArray[UInt]",
+        "-> @runtime.Datetime raise {",
+        "-> FixedArray[UInt16] raise {",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
+    let graph = SchemaGraph {
+        defs: vec![times_def()],
+        root: ref_to("times"),
+    };
+    let graph_json = serde_json::to_string(&serde_json::to_string(&graph).unwrap()).unwrap();
+    std::fs::write(
+        pkg.module_dir().join("client/times_wbtest.mbt"),
+        r#"///|
+fn client_rejects(f : () -> Unit raise) -> Bool {
+  try f() catch {
+    _ => true
+  } noraise {
+    _ => false
+  }
+}
+
+///|
+fn times_codec() -> @runtime.PublicValueCodec raise {
+  @runtime.public_value_codec(__GRAPH__)
+}
+
+///|
+fn sample(tiny? : Int = -128, pair? : FixedArray[UInt] = [1U, 2U]) -> Times raise {
+  {
+    at: @runtime.Datetime::parse("2024-01-01T12:30:00.25+02:00"),
+    later: Some(@runtime.Datetime::new(-1L, 5U)),
+    wait: @runtime.Duration::new(-1_500_000_000L),
+    home: @runtime.Path::new("/data/in.txt"),
+    site: @runtime.Url::new("https://example.com/a"),
+    tiny,
+    small: Int16::from_int(-32768),
+    port: (65535).to_uint16(),
+    pair,
+  }
+}
+
+///|
+fn sample_value(
+  at~ : String,
+  port? : Int = 1,
+  pair? : Array[@runtime.SchemaValue] = [@runtime.U32Value(1U), @runtime.U32Value(2U)],
+) -> @runtime.SchemaValue {
+  @runtime.RecordValue([
+    @runtime.DatetimeValue(at),
+    @runtime.OptionValue(None),
+    @runtime.DurationValue(0L),
+    @runtime.PathValue("/x"),
+    @runtime.UrlValue("https://example.com"),
+    @runtime.S8Value(0),
+    @runtime.S16Value(0),
+    @runtime.U16Value(port),
+    @runtime.FixedListValue(pair),
+  ])
+}
+
+///|
+test "time, path, url and small kinds round trip through the public codec" {
+  let codec = times_codec()
+  let value = sample()
+  let json = codec.encode(encode_Times(value))
+  assert_eq(decode_Times(codec.decode(json)), value)
+  let text = json.stringify()
+  assert_true(text.contains("\"2024-01-01T10:30:00.25Z\""), msg=text)
+  assert_true(text.contains("\"1969-12-31T23:59:59.000000005Z\""), msg=text)
+}
+
+///|
+test "runtime datetime prints canonical UTC and parses any offset" {
+  inspect(@runtime.Datetime::new(0L, 0U), content="1970-01-01T00:00:00Z")
+  inspect(
+    @runtime.Datetime::parse("2023-12-31T23:30:00.123456789-01:30"),
+    content="2024-01-01T01:00:00.123456789Z",
+  )
+  assert_true(
+    @runtime.Datetime::parse("2024-01-01T00:00:00Z") >
+    @runtime.Datetime::parse("2023-12-31T23:59:59.999999999Z"),
+  )
+}
+
+///|
+test "runtime datetime rejects years outside 0000..9999 and bad text" {
+  for
+    text in [
+      "0000-01-01T00:00:00+00:01", "9999-12-31T23:59:59-00:01", "2024-02-30T00:00:00Z",
+      "2024-01-01T00:00:00", "2024-01-01T00:00:00.1234567890Z",
+    ] {
+    assert_true(client_rejects(() => ignore(@runtime.Datetime::parse(text))), msg=text)
+  }
+  assert_true(client_rejects(() => ignore(@runtime.Datetime::new(253402300800L, 0U))))
+  assert_true(client_rejects(() => ignore(decode_Times(sample_value(at="2024-01-01")))))
+}
+
+///|
+test "s8 range and fixed-list length are checked" {
+  let codec = times_codec()
+  ignore(codec.encode(encode_Times(sample(tiny=127))))
+  assert_true(client_rejects(() => ignore(codec.encode(encode_Times(sample(tiny=128))))))
+  assert_true(client_rejects(() => ignore(codec.encode(encode_Times(sample(tiny=-129))))))
+  assert_true(client_rejects(() => ignore(codec.encode(encode_Times(sample(pair=[1U]))))))
+  ignore(decode_Times(sample_value(at="2024-01-01T00:00:00Z")))
+  assert_true(
+    client_rejects(() => ignore(decode_Times(sample_value(at="2024-01-01T00:00:00Z", pair=[])))),
+  )
+  assert_true(
+    client_rejects(() => ignore(decode_Times(sample_value(at="2024-01-01T00:00:00Z", port=65536)))),
+  )
+}
+"#
+        .replace("__GRAPH__", &graph_json),
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+#[test]
+fn guest_time_path_url_and_small_kinds_use_sdk_types() {
+    let guest = generate_without_check(times_agent(), MoonBitBridgeMode::GuestWasmRpc);
+    let client = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    for expected in [
+        "at : @schema.Datetime",
+        "later : @schema.Datetime?",
+        "wait : @schema.Duration",
+        "home : @schema.Path",
+        "site : @schema.Url",
+        "tiny : Int",
+        "small : Int16",
+        "port : UInt16",
+        "pair : FixedArray[UInt]",
+        "-> @schema.Datetime {",
+        "-> FixedArray[UInt16] {",
+    ] {
+        assert!(client.contains(expected), "missing {expected}:\n{client}");
+    }
+    assert!(!client.contains("@types.Datetime"), "{client}");
+    std::fs::write(
+        guest.path().join("client/times_wbtest.mbt"),
+        r#"///|
+fn sample(tiny? : Int = 127, pair? : FixedArray[UInt] = [1U, 2U]) -> Times raise {
+  {
+    at: @schema.Datetime::parse("2024-01-01T12:30:00.25+02:00"),
+    later: None,
+    wait: @schema.Duration::new(42L),
+    home: @schema.Path::new("/data/in.txt"),
+    site: @schema.Url::new("https://example.com/a"),
+    tiny,
+    small: Int16::from_int(32767),
+    port: (0).to_uint16(),
+    pair,
+  }
+}
+
+///|
+fn sample_value(
+  at? : @types.Datetime = { seconds: 0L, nanoseconds: 0U },
+  port? : UInt = 1U,
+  pair? : Array[@model.SchemaValue] = [U32(1U), U32(2U)],
+) -> @model.SchemaValue {
+  Record([
+    Datetime(at),
+    Option(None),
+    Duration(0L),
+    Path("/x"),
+    Url("https://example.com"),
+    S8(0),
+    S16(0),
+    U16(port),
+    FixedList(pair),
+  ])
+}
+
+///|
+fn assert_rejected(f : () -> Unit raise) -> Unit raise {
+  try f() catch {
+    CodecError(_) => ()
+    error => fail("expected CodecError, got \{repr(error)}")
+  } noraise {
+    _ => fail("expected CodecError")
+  }
+}
+
+///|
+test "time, path, url and small kinds round trip through the guest codec" {
+  let value = sample()
+  let encoded = encode_Times(value)
+  assert_true(decode_Times(encoded) == value)
+  match encoded {
+    Record(fields) => {
+      assert_true(fields[0] is Datetime({ seconds: 1704105000L, nanoseconds: 250000000U }))
+      assert_true(fields[2] is Duration(42L))
+      assert_true(fields[3] is Path("/data/in.txt"))
+      assert_true(fields[6] is S16(32767))
+      assert_true(fields[8] is FixedList([U32(1U), U32(2U)]))
+    }
+    _ => fail("expected a record")
+  }
+  inspect(value.at, content="2024-01-01T10:30:00.25Z")
+}
+
+///|
+test "s8 range, fixed-list length and datetime range are checked" {
+  assert_rejected(() => ignore(encode_Times(sample(tiny=128))))
+  assert_rejected(() => ignore(encode_Times(sample(pair=[1U, 2U, 3U]))))
+  ignore(decode_Times(sample_value()))
+  assert_rejected(() => ignore(decode_Times(sample_value(pair=[U32(1U)]))))
+  assert_rejected(() => ignore(decode_Times(sample_value(port=65536U))))
+  assert_rejected(() => {
+    ignore(decode_Times(sample_value(at={ seconds: 253402300800L, nanoseconds: 0U })))
+  })
+}
+"#,
+    )
+    .unwrap();
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("test")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    moon_check_wasm(guest.path());
 }

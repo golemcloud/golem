@@ -393,7 +393,7 @@ test "panic using a revoked template card aborts" {
 test "panic revoking an installed card aborts" {
   fresh_host()
   let card = wallet_cards().0
-  card.install(App({ high_bits: 0, low_bits: 0, })) catch {
+  card.install(App(@schema.Uuid::from_bits(0, 0))) catch {
     _ => ()
   }
   ignore(card.revoke()) catch {
@@ -405,7 +405,7 @@ test "panic revoking an installed card aborts" {
 test "panic revoking an installed template card aborts" {
   fresh_host()
   let card = wallet_cards().1
-  card.install(App({ high_bits: 0, low_bits: 0, })) catch {
+  card.install(App(@schema.Uuid::from_bits(0, 0))) catch {
     _ => ()
   }
   ignore(card.revoke()) catch {

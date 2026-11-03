@@ -29,6 +29,66 @@ fn datetime_valid(dt : @types.Datetime) -> Bool {
 }
 
 ///|
+/// Reports whether every surrogate code unit in `s` is part of a pair, so the
+/// UTF-16 string is valid Unicode text.
+pub fn is_unicode_text(s : String) -> Bool {
+  let len = s.length()
+  let mut i = 0
+  while i < len {
+    let unit = s[i]
+    if unit.is_leading_surrogate() {
+      guard i + 1 < len && s[i + 1].is_trailing_surrogate() else {
+        return false
+      }
+      i += 2
+    } else if unit.is_trailing_surrogate() {
+      return false
+    } else {
+      i += 1
+    }
+  }
+  true
+}
+
+///|
+/// Reports whether `c` is a Unicode scalar value.
+pub fn is_unicode_scalar(c : Char) -> Bool {
+  c.to_int() is (0..=0xD7FF) || c.to_int() is (0xE000..=0x10FFFF)
+}
+
+///|
+fn check_unicode_text(s : String, what : String) -> Unit raise SchemaModelError {
+  guard is_unicode_text(s) else {
+    raise EncodeError("\{what} contains an unpaired surrogate")
+  }
+}
+
+///|
+fn check_unicode_leaf(value : SchemaValue) -> Unit raise SchemaModelError {
+  match value {
+    Char(c) =>
+      if !is_unicode_scalar(c) {
+        raise EncodeError(
+          "char value is not a Unicode scalar value: \{c.to_int()}",
+        )
+      }
+    String(s) => check_unicode_text(s, "string value")
+    Text(text, language) => {
+      check_unicode_text(text, "text value")
+      if language is Some(language) {
+        check_unicode_text(language, "text language")
+      }
+    }
+    Binary(_, Some(mime_type)) => check_unicode_text(mime_type, "mime type")
+    Path(s) => check_unicode_text(s, "path value")
+    Url(s) => check_unicode_text(s, "url value")
+    Quantity(q) => check_unicode_text(q.unit, "quantity unit")
+    Union(tag, _) => check_unicode_text(tag, "union tag")
+    _ => ()
+  }
+}
+
+///|
 fn s8_in_range(i : Int) -> Bool {
   i >= -128 && i <= 127
 }
@@ -840,6 +900,7 @@ fn preflight_walk(
   seen_quota_tokens : Map[Int, Bool],
   seen_permission_cards : Map[Int, Bool],
 ) -> Unit raise SchemaModelError {
+  check_unicode_leaf(value)
   match value {
     S8(i) =>
       if !s8_in_range(i) {

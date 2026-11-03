@@ -34,7 +34,7 @@ import {
   HttpEndpointDetails,
   HttpMethod,
   HttpMountDetails,
-  PathSegment,
+  PathSegment as WitPathSegment,
 } from 'golem:agent/common@2.0.0';
 import { parsePath } from './internal/http/path';
 import { parseQuery } from './internal/http/query';
@@ -82,7 +82,7 @@ export type {
  * hatch) or one of the {@link literal} / {@link pathVar} / {@link restVar} /
  * {@link agentType} / {@link agentVersion} helpers below.
  */
-export type { PathSegment } from 'golem:agent/common@2.0.0';
+export type PathSegment = WitPathSegment;
 
 /** Build a literal path segment, e.g. `http.literal('counters')`. */
 export const literal = (value: string): PathSegment => ({ tag: 'literal', val: value });

@@ -287,37 +287,97 @@ test "unstructured values round-trip through the wire and schema model" {
 }
 
 ///|
-test "unstructured decoders accept bare text and binary values" {
-  let text : LocalizedText = @schema.from_wire({
-    value_nodes: [@types.TextValue({ text: "bare", language: Some("en"), })],
-    root: 0,
-  })
-  assert_eq(text, Inline(text="bare", language=Some("en")))
-  let binary : AnyBinary = @schema.from_wire({
-    value_nodes: [@types.BinaryValue({ bytes: [1, 2], mime_type: None, })],
-    root: 0,
-  })
-  assert_eq(binary, Inline(bytes=b"\x01\x02", mime_type=None))
-  let nested : Result[AnyBinary?, String] = @schema.from_wire({
-    value_nodes: [
-      @types.BinaryValue({ bytes: [7], mime_type: Some("application/x"), }),
-      @types.OptionValue(Some(0)),
-      @types.ResultValue(@types.OkValue(Some(1))),
-    ],
-    root: 2,
-  })
-  assert_eq(
-    nested,
-    Ok(Some(Inline(bytes=b"\x07", mime_type=Some("application/x")))),
-  )
-  let model_text : LocalizedText = @schema.from_value_as(
-    @model.SchemaValue::Text("bare", None),
-  )
-  assert_eq(model_text, Inline(text="bare", language=None))
-  let model_binary : Image = @schema.from_value_as(
-    @model.SchemaValue::Binary([1], Some("image/png")),
-  )
-  assert_eq(model_binary, Inline(bytes=b"\x01", mime_type=Some("image/png")))
+test "unstructured decoders reject bare text and binary values" {
+  try {
+    let _ : LocalizedText = @schema.from_wire({
+      value_nodes: [@types.TextValue({ text: "bare", language: Some("en"), })],
+      root: 0,
+    })
+  } catch {
+    err =>
+      debug_inspect(
+        err,
+        content=(
+          #|Invalid("UnstructuredText: expected variant value")
+        ),
+      )
+  } noraise {
+    _ => fail("accepted a bare text wire value")
+  }
+  try {
+    let _ : AnyBinary = @schema.from_wire({
+      value_nodes: [@types.BinaryValue({ bytes: [1, 2], mime_type: None, })],
+      root: 0,
+    })
+  } catch {
+    err =>
+      debug_inspect(
+        err,
+        content=(
+          #|Invalid("UnstructuredBinary: expected variant value")
+        ),
+      )
+  } noraise {
+    _ => fail("accepted a bare binary wire value")
+  }
+  try {
+    let _ : Result[AnyBinary?, String] = @schema.from_wire({
+      value_nodes: [
+        @types.BinaryValue({ bytes: [7], mime_type: Some("application/x"), }),
+        @types.OptionValue(Some(0)),
+        @types.ResultValue(@types.OkValue(Some(1))),
+      ],
+      root: 2,
+    })
+  } catch {
+    err =>
+      debug_inspect(
+        err,
+        content=(
+          #|Invalid("UnstructuredBinary: expected variant value")
+        ),
+      )
+  } noraise {
+    _ => fail("accepted a nested bare binary wire value")
+  }
+  try {
+    let _ : LocalizedText = @schema.from_value_as(
+      @model.SchemaValue::Text("bare", None),
+    )
+  } catch {
+    err =>
+      debug_inspect(
+        err,
+        content=(
+          #|ShapeMismatch(
+          #|  expected="variant",
+          #|  actual="text",
+          #|  context="UnstructuredText",
+          #|)
+        ),
+      )
+  } noraise {
+    _ => fail("accepted a bare text schema value")
+  }
+  try {
+    let _ : Image = @schema.from_value_as(
+      @model.SchemaValue::Binary([1], Some("image/png")),
+    )
+  } catch {
+    err =>
+      debug_inspect(
+        err,
+        content=(
+          #|ShapeMismatch(
+          #|  expected="variant",
+          #|  actual="binary",
+          #|  context="UnstructuredBinary",
+          #|)
+        ),
+      )
+  } noraise {
+    _ => fail("accepted a bare binary schema value")
+  }
 }
 
 ///|
@@ -345,8 +405,9 @@ test "unstructured decoders reject values outside the restrictions" {
     let _ : Image = @schema.from_wire({
       value_nodes: [
         @types.BinaryValue({ bytes: [], mime_type: Some("text/plain"), }),
+        @types.VariantValue({ case: 0, payload: Some(0), }),
       ],
-      root: 0,
+      root: 1,
     })
   } catch {
     err =>

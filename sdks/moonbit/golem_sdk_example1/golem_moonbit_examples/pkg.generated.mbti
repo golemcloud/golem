@@ -159,7 +159,7 @@ pub impl @schema.WireSchema for CanonicalCommitResult
 
 type CanonicalGit
 pub fn CanonicalGit::commit(UInt, @schema.Path, Bool, Map[String, String], String, String?, Bool, Bool, Bool, CanonicalGitOutputMode) -> Result[CanonicalCommitResult, CanonicalCommitError]
-pub fn CanonicalGit::log(Int64?, @types.Datetime?, @types.Datetime?, Array[String], Array[String], Bool, Bool, Bool, Bool, Array[@schema.Path]) -> Result[Array[CanonicalLogEntry], CanonicalLogError]
+pub fn CanonicalGit::log(Int64?, @schema.Datetime?, @schema.Datetime?, Array[String], Array[String], Bool, Bool, Bool, Bool, Array[@schema.Path]) -> Result[Array[CanonicalLogEntry], CanonicalLogError]
 pub fn CanonicalGit::remote(UInt, @schema.Path, Bool, Map[String, String]) -> Unit
 pub fn CanonicalGit::stash(UInt, @schema.Path) -> Unit
 
@@ -168,7 +168,7 @@ pub(all) struct CanonicalGitClient {
 }
 pub async fn CanonicalGitClient::commit(Self, UInt, @schema.Path, Bool, Map[String, String], String, String?, Bool, Bool, Bool, CanonicalGitOutputMode) -> Result[CanonicalCommitResult, @tool.ToolError[CanonicalCommitError]]
 pub fn CanonicalGitClient::drop(Self) -> Unit
-pub async fn CanonicalGitClient::log(Self, Int64?, @types.Datetime?, @types.Datetime?, Array[String], Array[String], Bool, Bool, Bool, Bool, Array[@schema.Path]) -> Result[Array[CanonicalLogEntry], @tool.ToolError[CanonicalLogError]]
+pub async fn CanonicalGitClient::log(Self, Int64?, @schema.Datetime?, @schema.Datetime?, Array[String], Array[String], Bool, Bool, Bool, Bool, Array[@schema.Path]) -> Result[Array[CanonicalLogEntry], @tool.ToolError[CanonicalLogError]]
 pub fn CanonicalGitClient::new() -> Self
 pub fn CanonicalGitClient::new_for(String) -> Self
 pub fn CanonicalGitClient::remote(Self, UInt, @schema.Path, Bool, Map[String, String]) -> CanonicalGitRemoteClient
@@ -244,7 +244,7 @@ pub impl @schema.WireSchema for CanonicalGrepHit
 pub(all) struct CanonicalLogEntry {
   hash : String
   author : String
-  date : @types.Datetime
+  date : @schema.Datetime
   message : String
 }
 pub impl @schema.FromSchema for CanonicalLogEntry

@@ -63,6 +63,36 @@ object SchemaRefSpec extends ZIOSpecDefault {
         ref.validateValue(RecordValue(List(StringValue("too-short")))).isLeft
       )
     },
+    test("packing rejects surrogate chars and strings with a lone surrogate") {
+      val char   = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(CharType)))
+      val string = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(StringType)))
+      assertTrue(
+        char.packJson(Json.String("\ud800")).isLeft,
+        char.packJson(Json.String("\ud83d\ude00")) == Right(CharValue(0x1f600)),
+        string.packJson(Json.String("a\udfff")).isLeft,
+        string.packJson(Json.String("a\ud83d\ude00")) == Right(StringValue("a\ud83d\ude00"))
+      )
+    },
+    test("packing rejects every textual leaf with a lone surrogate") {
+      def ref(body: SchemaTypeBody) = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(body)))
+      val bad                       = Json.String("a\udfff")
+      val quantity                  = ref(QuantityType(QuantitySpec("m\udfff", Nil, None, None)))
+      assertTrue(
+        ref(TextType(TextRestrictions.empty)).packJson(Json.Object("text" -> bad)).isLeft,
+        ref(TextType(TextRestrictions.empty))
+          .packJson(Json.Object("text" -> Json.String("ok"), "language" -> bad))
+          .isLeft,
+        ref(PathType(PathSpec(PathDirection.InOut, PathKind.Any))).packJson(bad).isLeft,
+        ref(UrlType(UrlRestrictions.empty)).packJson(Json.String("https://example.com/\udfff")).isLeft,
+        quantity
+          .packJson(Json.Object("mantissa" -> Json.String("1"), "scale" -> Json.Number(BigDecimal(0)), "unit" -> bad))
+          .isLeft,
+        ref(UrlType(UrlRestrictions.empty)).packJson(Json.String("https://example.com/\ud83d\ude00")) ==
+          Right(UrlValue("https://example.com/\ud83d\ude00")),
+        ref(PathType(PathSpec(PathDirection.InOut, PathKind.Any))).packJson(Json.String("a\ud83d\ude00")) ==
+          Right(PathValue("a\ud83d\ude00"))
+      )
+    },
     test("JSON packing issues carry the JSON path of the failing value") {
       val nested = SchemaRef(
         SchemaGraph(
@@ -174,6 +204,19 @@ object SchemaRefSpec extends ZIOSpecDefault {
         )
       )
       assertTrue(rich.unpackJson(value).flatMap(rich.packJson) == Right(value))
+    },
+    test("packs and unpacks UUIDs as lowercase hyphenated JSON strings") {
+      val ref = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(UuidType)))
+      val max = java.util.UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
+      val nil = new java.util.UUID(0L, 0L)
+      assertTrue(
+        ref.unpackJson(UuidValue(max)) == Right(Json.String("ffffffff-ffff-ffff-ffff-ffffffffffff")),
+        ref.unpackJson(UuidValue(nil)) == Right(Json.String("00000000-0000-0000-0000-000000000000")),
+        ref.packJson(Json.String("ffffffff-ffff-ffff-ffff-ffffffffffff")) == Right(UuidValue(max)),
+        ref.packJson(Json.String("00000000-0000-0000-0000-000000000000")) == Right(UuidValue(nil)),
+        ref.packJson(Json.String("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")).isLeft,
+        ref.packJson(Json.String("1-2-3-4-5")).isLeft
+      )
     },
     test("does not expose capabilities as JSON") {
       val ref = SchemaRef(
@@ -516,7 +559,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
         "",
         "scala",
         AgentMode.Durable,
-        ComponentId(golem.Uuid(BigInt(0), BigInt(1))),
+        ComponentId(new java.util.UUID(0L, 1L)),
         SchemaRef(graph),
         Nil,
         List(
@@ -603,7 +646,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
       )
       val client   = definition.client
       val expected = Left(GolemReflectError.SchemaEncode("bad config"))
-      val phantom  = golem.Uuid(BigInt(0), BigInt(1))
+      val phantom  = new java.util.UUID(0L, 1L)
       assertTrue(
         client.get("worker", "bad") == expected,
         client.getPhantom("worker", phantom, "bad") == expected,

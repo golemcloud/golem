@@ -169,7 +169,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
   // --- value nodes: one (or more) per WitSchemaValueNode case ---------------
 
   private val datetime = Datetime(1_700_000_000L, 123_456_789)
-  private val uuid     = golem.Uuid(BigInt("1311768465173141112"), BigInt("1311768465173141112"))
+  private val uuid     = new java.util.UUID(1311768465173141112L, 1311768465173141112L)
 
   // Quota-token handle nodes are intentionally excluded from this structural
   // round-trip vector: an owned `quota-token` handle is affine, so encoding
@@ -211,6 +211,8 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     PathValue("/tmp/x"),
     UrlValue("https://example.com"),
     UuidValue(uuid),
+    UuidValue(new java.util.UUID(0L, 0L)),
+    UuidValue(java.util.UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")),
     DatetimeValue(datetime),
     DurationValue(WitDurationValuePayload(987654321L)),
     QuantityValueNode(qvalue),
@@ -261,6 +263,50 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
             .isFailure
         }
         assertTrue(rejected.forall(identity))
+      },
+      test("lowering rejects a string with a lone surrogate with the encode error") {
+        def tree(value: String)  = WitSchemaValueTree(Vector(StringValue(value)), 0)
+        def lower(value: String) = scala.util.Try(SchemaWireInterop.valueTreeToJs(tree(value)))
+        val paired               = "a\ud83d\ude00b"
+        assertTrue(
+          List("a\ud800", "\udfff", "\ude00\ud83d").forall(value =>
+            lower(value).failed.toOption.exists(_.isInstanceOf[SchemaEncodeError])
+          ),
+          lower(paired).map(SchemaWireInterop.valueTreeFromJs).toOption.contains(tree(paired))
+        )
+      },
+      test("lowering rejects every textual leaf with a lone surrogate with the encode error") {
+        val bad    = "a\ud800"
+        val leaves = Vector(
+          TextValue(WitTextValuePayload(bad, None)),
+          TextValue(WitTextValuePayload("ok", Some(bad))),
+          BinaryValue(WitBinaryValuePayload(Vector.empty, Some(bad))),
+          PathValue(bad),
+          UrlValue(bad),
+          QuantityValueNode(QuantityValue(1L, 0, bad)),
+          UnionValue(WitUnionValuePayload(bad, 1))
+        )
+        val paired = "a\ud83d\ude00"
+        val good   = WitSchemaValueTree(
+          Vector(
+            TupleValue(Vector(1, 2, 3, 4)),
+            TextValue(WitTextValuePayload(paired, Some(paired))),
+            PathValue(paired),
+            UrlValue(paired),
+            UnionValue(WitUnionValuePayload(paired, 1))
+          ),
+          0
+        )
+        assertTrue(
+          leaves.forall(node =>
+            scala.util
+              .Try(SchemaWireInterop.valueTreeToJs(WitSchemaValueTree(Vector(node, BoolValue(true)), 0)))
+              .failed
+              .toOption
+              .exists(_.isInstanceOf[SchemaEncodeError])
+          ),
+          SchemaWireInterop.valueTreeFromJs(SchemaWireInterop.valueTreeToJs(good)) == good
+        )
       },
       test("typed schema value round-trips Wit -> Js -> Wit (all cases)") {
         assertTrue(SchemaWireInterop.typedFromJs(SchemaWireInterop.typedToJs(typed)) == typed)
@@ -1051,8 +1097,20 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
         assertTrue(
           singleTypeBodyJs(UuidType).tag == "uuid-type",
           node.tag == "uuid-value",
-          BigInt(raw.highBits.toString) == uuid.highBits,
-          BigInt(raw.lowBits.toString) == uuid.lowBits
+          BigInt(raw.highBits.toString) == BigInt(uuid.getMostSignificantBits),
+          BigInt(raw.lowBits.toString) == BigInt(uuid.getLeastSignificantBits)
+        )
+      },
+      test("raw JS shape: UUID halves are unsigned u64 values") {
+        val max  = java.util.UUID.fromString("ffffffff-ffff-ffff-8000-000000000000")
+        val node = singleValueNodeJs(UuidValue(max))
+        val raw  = rawVal(node).asInstanceOf[golem.host.js.schema.JsUuid]
+        assertTrue(
+          raw.highBits.toString == "18446744073709551615",
+          raw.lowBits.toString == "9223372036854775808",
+          SchemaWireInterop.valueTreeFromJs(
+            SchemaWireInterop.valueTreeToJs(WitSchemaValueTree(Vector(UuidValue(max)), 0))
+          ) == WitSchemaValueTree(Vector(UuidValue(max)), 0)
         )
       },
       test("raw JS shape: result value tags are `ok-value` / `err-value`") {

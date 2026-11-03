@@ -1,6 +1,7 @@
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/wasi/random/random",
   "golemcloud/golem_sdk/internal/permission_card" @card,
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/schema_model_host" @model_host,
@@ -10,6 +11,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/internal/permission_card" @card,
   "golemcloud/golem_sdk/schema_model" @model,
+  "moonbitlang/core/hashset",
 } for "test"
 
 supported_targets = "+wasm"

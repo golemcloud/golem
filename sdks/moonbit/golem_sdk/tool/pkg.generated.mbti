@@ -164,6 +164,15 @@ pub(all) struct CollectedToolInvocation[T, E] {
   stderr : Result[Bytes?, @tool-core.ToolStreamError]
 }
 
+pub(all) struct ProcessExitStatus {
+  exit_code : Byte
+} derive(Eq, @debug.Debug)
+pub impl @schema.FromSchema for ProcessExitStatus
+pub impl @schema.FromWire for ProcessExitStatus
+pub impl @schema.IntoSchema for ProcessExitStatus
+pub impl @schema.IntoWire for ProcessExitStatus
+pub impl @schema.WireSchema for ProcessExitStatus
+
 pub struct ProviderOutput {
   // private fields
 }

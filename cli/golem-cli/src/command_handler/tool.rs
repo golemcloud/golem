@@ -45,7 +45,8 @@ use golem_client::api::{
     EnvironmentToolMiddlewareGrantsClient, ToolMiddlewareReleasesClient, ToolReleasesClient,
 };
 use golem_client::invocation_session::{
-    InvocationSession, InvocationSessionStateSnapshot, drive_native_tool_session_until,
+    InvocationSession, InvocationSessionStateSnapshot, ReconnectPolicy,
+    drive_native_tool_session_until,
 };
 use golem_client::model::{
     NativeToolDefinition, NativeToolDescribeRequest, NativeToolInvocationMode,
@@ -461,6 +462,7 @@ impl ToolCommandHandler {
             let session = InvocationSession::open(
                 Arc::new(CliSessionRequestProvider::new(self.ctx.clone())),
                 connector,
+                ReconnectPolicy::Unlimited,
                 initial,
                 false,
                 Arc::new(()),

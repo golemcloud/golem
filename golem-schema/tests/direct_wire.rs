@@ -355,10 +355,7 @@ fn rich_values_and_nominal_ids_use_direct_wire_shapes() {
         decode::<std::time::Duration>(encode(&duration).unwrap()).unwrap(),
         duration
     );
-    assert_eq!(
-        decode::<std::time::Duration>(encode(&std::time::Duration::MAX).unwrap()).unwrap(),
-        std::time::Duration::from_nanos(i64::MAX as u64)
-    );
+    assert!(encode(&std::time::Duration::MAX).is_err());
     assert!(
         decode::<std::time::Duration>(wire::SchemaValueTree {
             root: 0,
@@ -1419,4 +1416,83 @@ mod preparation {
             Err(WireError::ForbiddenResource("probe"))
         ));
     }
+}
+
+#[derive(golem_schema_derive::Schema)]
+#[schema(named = "example.Holder")]
+struct Holder<T> {
+    value: T,
+}
+
+fn assert_generic_named_type_ids_agree<T>()
+where
+    T: golem_schema::schema::IntoSchema + direct::WireSchema,
+{
+    assert_eq!(T::wire_type_id(), T::type_id().0);
+    assert_eq!(
+        Holder::<T>::wire_type_id(),
+        <Holder<T> as golem_schema::schema::IntoSchema>::type_id().0
+    );
+    let mut actual = golem_schema::schema::wit::decode_graph(&schema::<Holder<T>>()).unwrap();
+    let mut expected = golem_schema::schema::try_into_schema_graph::<Holder<T>>().unwrap();
+    actual.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    expected.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn generic_named_types_get_the_same_id_on_the_schema_and_wire_paths() {
+    assert_generic_named_type_ids_agree::<String>();
+    assert_generic_named_type_ids_agree::<std::path::PathBuf>();
+    #[cfg(feature = "url")]
+    assert_generic_named_type_ids_agree::<url::Url>();
+    assert_generic_named_type_ids_agree::<GuestSecretHandle>();
+    assert_generic_named_type_ids_agree::<GuestQuotaTokenHandle>();
+    assert_generic_named_type_ids_agree::<GuestPermissionCardHandle>();
+    assert_generic_named_type_ids_agree::<golem_schema::schema::SchemaValueStream>();
+}
+
+#[test]
+fn strings_decode_text_values_on_the_schema_and_wire_paths() {
+    use golem_schema::schema::{FromSchema, SchemaValue, TextValuePayload};
+    let value = SchemaValue::Text(TextValuePayload {
+        text: "refined".to_string(),
+        language: None,
+    });
+    let tree = golem_schema::schema::wit::encode_value(&value).unwrap();
+    assert_eq!(decode::<String>(tree).unwrap(), "refined");
+    assert_eq!(String::from_value(&value).unwrap(), "refined");
+}
+
+#[test]
+fn std_durations_beyond_the_i64_nanosecond_range_fail_to_encode() {
+    let too_long =
+        std::time::Duration::from_nanos(i64::MAX as u64) + std::time::Duration::from_nanos(1);
+    assert!(matches!(encode(&too_long), Err(WireError::Shape(_))));
+    let quota = GuestQuotaTokenHandle::new(unsafe { wire::QuotaToken::from_handle(97) });
+    assert!(matches!(
+        encode(&(quota.clone(), vec![too_long])),
+        Err(WireError::Shape(_))
+    ));
+    assert_eq!(quota.take().unwrap().take_handle(), 97);
+    let longest = std::time::Duration::from_nanos(i64::MAX as u64);
+    assert_direct_parity(longest);
+}
+
+#[cfg(feature = "chrono")]
+#[test]
+fn chrono_durations_beyond_the_i64_nanosecond_range_fail_to_encode() {
+    use golem_schema::schema::{IntoSchema, SchemaValue};
+    for too_long in [chrono::Duration::MAX, chrono::Duration::MIN] {
+        assert!(matches!(encode(&too_long), Err(WireError::Shape(_))));
+    }
+    assert!(matches!(
+        chrono::Duration::MAX.to_value(),
+        SchemaValue::Duration(p) if p.nanoseconds == i64::MAX
+    ));
+    assert!(matches!(
+        chrono::Duration::MIN.to_value(),
+        SchemaValue::Duration(p) if p.nanoseconds == i64::MIN
+    ));
+    assert_direct_parity(chrono::Duration::nanoseconds(i64::MIN));
 }

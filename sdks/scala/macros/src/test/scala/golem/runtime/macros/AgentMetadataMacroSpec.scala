@@ -48,6 +48,7 @@ import golem.schema.{
 import zio.blocks.schema.Schema
 import zio.test._
 
+import java.util.UUID
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.*
 
@@ -80,6 +81,11 @@ private[macros] object AgentMetadataMacroTypes {
   )
   object Bilingual {
     implicit val schema: Schema[Bilingual] = Schema.derived
+  }
+
+  final case class UuidRecord(id: UUID, parent: Option[UUID], children: List[UUID])
+  object UuidRecord {
+    implicit val schema: Schema[UuidRecord] = Schema.derived
   }
 }
 
@@ -233,6 +239,22 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     def defaults(value: String): Future[String]
   }
 
+  @agentDefinition()
+  trait UuidAgent {
+    class Id()
+    def echo(value: UUID): Future[UUID]
+    def maybe(value: Option[UUID]): Future[Option[UUID]]
+    def many(values: List[UUID]): Future[List[UUID]]
+    def record(value: UuidRecord): Future[UuidRecord]
+  }
+
+  final class UuidAgentImpl() extends UuidAgent {
+    override def echo(value: UUID): Future[UUID]                  = Future.successful(value)
+    override def maybe(value: Option[UUID]): Future[Option[UUID]] = Future.successful(value)
+    override def many(values: List[UUID]): Future[List[UUID]]     = Future.successful(values)
+    override def record(value: UuidRecord): Future[UuidRecord]    = Future.successful(value)
+  }
+
   private final class EphemeralAgentImpl extends EphemeralAgent {
     override def ping(): Future[String] = Future.successful("pong")
   }
@@ -261,6 +283,17 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
   private val rawBodyMetadata       = AgentMacros.agentMetadata[RawBodyAgent]
   private val mimeAllowListMetadata = AgentMacros.agentMetadata[MimeAllowListAgent]
   private val languageMetadata      = AgentMacros.agentMetadata[LanguageAllowListAgent]
+  private val uuidMetadata          = AgentMacros.agentMetadata[UuidAgent]
+
+  private def invokeUuid[A](method: String, name: String, codec: ConcreteCodec[A], value: A): A = {
+    val implType = AgentImplementationMacro.wireImplementationTypeFromClass[UuidAgent, UuidAgentImpl]
+    val input    = ConcreteCodec.record(Vector(name -> codec.asInstanceOf[ConcreteCodec[Any]]))
+    val invoked  = implType.methods
+      .find(_.name == method)
+      .get
+      .invoke(new UuidAgentImpl, input.encodeValue(Vector(value)), golem.Principal.Anonymous)
+    codec.decode(Await.result(invoked, 5.seconds).get)
+  }
 
   private def rawBodyOutput(name: String): SchemaType =
     rawBodyMetadata.methods.find(_.name == name).get.output.asInstanceOf[OutputMetadata.Single].graph.root
@@ -292,6 +325,42 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
           compiled == dynamic,
           AgentDefinitionMacro
             .generateWire[EphemeralAgent] == golem.runtime.WireAgentMetadata.fromModel(ephemeralMetadata)
+        )
+      },
+      test("UUID parameters, outputs and fields use the native uuid schema") {
+        def method(name: String) = uuidMetadata.methods.find(_.name == name).get
+        def input(name: String)  = rootBody(method(name).input.userSupplied.head.graph)
+        def output(name: String) = rootBody(method(name).output.asInstanceOf[OutputMetadata.Single].graph)
+        val uuid                 = golem.schema.t.uuid
+        val fields               = input("record") match {
+          case SchemaTypeBody.RecordType(fields) => fields.map(field => field.name -> field.body)
+          case other                             => throw new AssertionError(other.toString)
+        }
+        assertTrue(
+          AgentDefinitionMacro.generateWire[UuidAgent] == golem.runtime.WireAgentMetadata.fromModel(uuidMetadata),
+          input("echo") == SchemaTypeBody.UuidType,
+          output("echo") == SchemaTypeBody.UuidType,
+          input("maybe") == SchemaTypeBody.OptionType(uuid),
+          output("maybe") == SchemaTypeBody.OptionType(uuid),
+          input("many") == SchemaTypeBody.ListType(uuid),
+          output("many") == SchemaTypeBody.ListType(uuid),
+          fields == List(
+            "id"       -> uuid,
+            "parent"   -> golem.schema.t.option(uuid),
+            "children" -> golem.schema.t.list(uuid)
+          )
+        )
+      },
+      test("UUID invocations round-trip nil and max values") {
+        val nil    = new UUID(0L, 0L)
+        val max    = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
+        val record = UuidRecord(max, Some(nil), List(nil, max))
+        assertTrue(
+          invokeUuid("echo", "value", ConcreteCodec.uuid, nil) == nil,
+          invokeUuid("echo", "value", ConcreteCodec.uuid, max) == max,
+          invokeUuid("maybe", "value", ConcreteCodec.option(ConcreteCodec.uuid), Some(max)) == Some(max),
+          invokeUuid("many", "values", ConcreteCodec.list(ConcreteCodec.uuid), List(nil, max)) == List(nil, max),
+          invokeUuid("record", "value", ConcreteCodec.derived[UuidRecord], record) == record
         )
       },
       test("EchoAgent metadata exposes all method names") {

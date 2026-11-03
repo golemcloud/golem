@@ -18,6 +18,7 @@
     {"canonical":"{\"kind\":\"binary\",\"value\":{\"bytes\":[251,255],\"mimeType\":\"application/octet-stream\"}}","name":"binary-byte-array","schema":{"kind":"binary","maxBytes":16,"mimeTypes":["application/octet-stream"]}},
     {"canonical":"{\"kind\":\"path\",\"value\":{\"path\":\"/tmp/input.wav\"}}","name":"path","schema":{"kind":"path"}},
     {"canonical":"{\"kind\":\"url\",\"value\":{\"url\":\"https://example.com/a\"}}","name":"url","schema":{"kind":"url"}},
+    {"canonical":"{\"kind\":\"uuid\",\"value\":\"dd00721b-3329-4621-a01d-c71f02cd78c6\"}","name":"uuid","schema":{"kind":"uuid"}},
     {"canonical":"{\"kind\":\"datetime\",\"value\":{\"value\":\"2026-08-28T12:34:56.123456789Z\"}}","name":"datetime","schema":{"kind":"datetime"}},
     {"canonical":"{\"kind\":\"duration\",\"value\":{\"nanoseconds\":\"-9223372036854775808\"}}","name":"duration","schema":{"kind":"duration"}},
     {"canonical":"{\"kind\":\"quantity\",\"value\":{\"mantissa\":\"9007199254740993\",\"scale\":3,\"unit\":\"kg\"}}","name":"quantity","schema":{"kind":"quantity"}},

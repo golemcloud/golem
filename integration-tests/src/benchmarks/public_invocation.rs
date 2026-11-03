@@ -364,7 +364,14 @@ impl PublicInvocationSession {
         let deadline = tokio::time::Instant::now() + timeout;
         let inner = tokio::time::timeout_at(
             deadline,
-            InvocationSession::open(provider, None, state, false, Arc::new(())),
+            InvocationSession::open(
+                provider,
+                None,
+                golem_client::invocation_session::ReconnectPolicy::Unlimited,
+                state,
+                false,
+                Arc::new(()),
+            ),
         )
         .await
         .context("opening public invocation session timed out")??;

@@ -172,7 +172,6 @@ impl ScalaToolBridgeGenerator {
         self.client_items(&mut writer)?;
         self.error_items(&mut writer)?;
         self.inner.write_type_definitions(&mut writer)?;
-        self.inner.write_guest_unstructured_definitions(&mut writer);
         self.inner.write_multimodal_definitions(&mut writer)?;
         self.inner.write_codecs(&mut writer)?;
         if let Some(definition) = self.schema_graphs.borrow().definition() {

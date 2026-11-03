@@ -17,6 +17,10 @@ pub fn encode_merged_agent_graph(MergedAgentGraph) -> EncodedAgentGraph raise Sc
 
 pub fn field(String, SchemaType, metadata? : @types.MetadataEnvelope) -> NamedFieldType
 
+pub fn is_unicode_scalar(Char) -> Bool
+
+pub fn is_unicode_text(String) -> Bool
+
 pub fn merge_agent_graphs(Array[SchemaGraph]) -> MergedAgentGraph raise SchemaModelError
 
 pub fn merge_graph_defs(Array[SchemaGraph]) -> Array[SchemaTypeDef] raise SchemaModelError

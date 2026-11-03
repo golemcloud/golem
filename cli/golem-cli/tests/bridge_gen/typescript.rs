@@ -134,13 +134,25 @@ fn compile_guest_durable_agent() {
     std::fs::write(
         package_dir.join("bigint-fixture.ts"),
         r#"import { GuestAgent } from './guest-agent-guest-client';
-const client = GuestAgent.newPhantom('example', ['label'], undefined, new Map(), '2026-01-01T00:00:00Z', 18446744073709551615n);
+const client = GuestAgent.newPhantom('example', ['label'], undefined, new Map(), { seconds: 1767225600n, nanoseconds: 0 }, 18446744073709551615n);
 const output: Promise<bigint> = client.read();
 void output;
 "#,
     )
     .unwrap();
+    include_in_tsconfig(&package_dir, "bigint-fixture.ts");
     install_and_build(&package_dir);
+}
+
+fn include_in_tsconfig(package_dir: &Utf8Path, file: &str) {
+    let path = package_dir.join("tsconfig.json");
+    let mut tsconfig: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    tsconfig["include"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::Value::String(file.to_string()));
+    std::fs::write(&path, serde_json::to_string_pretty(&tsconfig).unwrap()).unwrap();
 }
 
 #[test]
@@ -402,6 +414,93 @@ void exercise;
     )
     .unwrap();
     install_and_build(&package_dir);
+}
+
+fn uuid_agent() -> AgentTypeSchema {
+    agent(
+        "UuidAgent",
+        "typescript",
+        vec![field("id", SchemaType::uuid())],
+        vec![
+            method(
+                "echo",
+                vec![field("value", SchemaType::uuid())],
+                Some(SchemaType::uuid()),
+            ),
+            method(
+                "nested",
+                vec![field("value", ref_to("uuid-holder"))],
+                Some(ref_to("uuid-holder")),
+            ),
+        ],
+        vec![def(
+            "uuid-holder",
+            SchemaType::record(vec![
+                named_field("id", SchemaType::uuid()),
+                named_field("maybe", SchemaType::option(SchemaType::uuid())),
+                named_field("ids", SchemaType::list(SchemaType::uuid())),
+            ]),
+        )],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn guest_uuid_values_use_sdk_uuid_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("uuid-agent-guest-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        uuid_agent(),
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source = std::fs::read_to_string(package_dir.join("uuid-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("base.Uuid.from(n.value)"), "{source}");
+    assert!(!source.contains("base.Uuid.parse("), "{source}");
+    std::fs::write(
+        package_dir.join("usage.ts"),
+        r#"
+import { bridge as base } from '@golemcloud/golem-ts-sdk';
+import { UuidAgent } from './uuid-agent-guest-client';
+async function exercise() {
+  const id: base.Uuid = base.Uuid.parse('dd00721b-3329-4621-a01d-c71f02cd78c6');
+  const client = UuidAgent.get(id);
+  const echoed: base.Uuid = await client.echo(id);
+  const nested = await client.nested({ id, maybe: undefined, ids: [id] });
+  const nestedId: base.Uuid = nested.id;
+  const maybe: base.Uuid | undefined = nested.maybe;
+  const ids: base.Uuid[] = nested.ids;
+  void echoed; void nestedId; void maybe; void ids;
+}
+void exercise;
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn external_uuid_values_use_bridge_uuid_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    generate_and_compile(uuid_agent(), target_dir);
+    let source = std::fs::read_to_string(
+        generated_package_dir(target_dir, "uuid-agent").join("uuid-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(
+        source.contains("base.Uuid.parse(n.value as string)"),
+        "{source}"
+    );
+    assert!(!source.contains("base.Uuid.from("), "{source}");
+    assert!(source.contains("kind: 'uuid', value: ("), "{source}");
+    assert!(source.contains("value: base.Uuid"), "{source}");
 }
 
 #[test]
@@ -898,8 +997,8 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(source.contains("{ tag: 'list', elements:"));
     assert!(source.contains("{ tag: 'map', entries:"));
     assert!(source.contains("{ tag: 'option', value:"));
-    assert!(source.contains("base.datetimeFromISOString("));
-    assert!(source.contains("base.datetimeToISOString("));
+    assert!(source.contains("{ tag: 'datetime', value: "));
+    assert!(source.contains("n.value as base.Datetime"));
     assert!(source.contains(": bigint"));
     assert!(source.contains("{ tag: 'u64', value:"));
     assert!(!source.contains("{ tag: 'u64', value: BigInt("));
@@ -1061,8 +1160,8 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(source.contains("n.unionTag"));
     assert!(source.contains("{ tag: 'path', value:"));
     assert!(source.contains("{ tag: 'url', value:"));
-    assert!(source.contains("base.datetimeFromISOString("));
-    assert!(source.contains("base.datetimeToISOString("));
+    assert!(source.contains("{ tag: 'datetime', value: "));
+    assert!(source.contains("n.value as base.Datetime"));
     assert!(source.contains("{ tag: 'duration', nanoseconds:"));
     assert!(source.contains("base.UnstructuredTextType<['en', 'de']>"));
     assert!(source.contains("base.UnstructuredBinaryType<['image/png']>"));
@@ -2169,5 +2268,577 @@ fn guest_tool_trailing_optional_fields_and_sdk_results_compile() {
     assert!(
         source.contains("max_count: number | undefined, stdin: ToolInputStream)"),
         "{source}"
+    );
+}
+
+fn kg_quantity() -> SchemaType {
+    SchemaType::quantity(QuantitySpec {
+        base_unit: "kg".to_string(),
+        allowed_suffixes: vec!["kg".to_string(), "g".to_string()],
+        min: None,
+        max: None,
+    })
+}
+
+fn rich_scalar_record() -> SchemaType {
+    SchemaType::record(vec![
+        named_field("bytes", SchemaType::list(SchemaType::u8())),
+        named_field("fixed", SchemaType::fixed_list(SchemaType::u8(), 3)),
+        named_field(
+            "maybe-bytes",
+            SchemaType::option(SchemaType::list(SchemaType::u8())),
+        ),
+        named_field("amount", kg_quantity()),
+        named_field("note", SchemaType::text(TextRestrictions::default())),
+        named_field("blob", SchemaType::binary(BinaryRestrictions::default())),
+    ])
+}
+
+fn rich_scalar_methods() -> Vec<(&'static str, SchemaType)> {
+    vec![
+        ("echo-quantity", kg_quantity()),
+        (
+            "echo-text",
+            SchemaType::text(TextRestrictions {
+                languages: Some(vec!["en".into(), "de".into()]),
+                ..Default::default()
+            }),
+        ),
+        (
+            "echo-binary",
+            SchemaType::binary(BinaryRestrictions::default()),
+        ),
+        ("echo-bytes", SchemaType::list(SchemaType::u8())),
+        ("echo-record", ref_to("RichRecord")),
+    ]
+}
+
+fn rich_scalar_agent(name: &str) -> AgentTypeSchema {
+    agent(
+        name,
+        "typescript",
+        vec![],
+        rich_scalar_methods()
+            .into_iter()
+            .map(|(name, typ)| method(name, vec![field("value", typ.clone())], Some(typ)))
+            .collect(),
+        vec![def("RichRecord", rich_scalar_record())],
+        AgentMode::Durable,
+    )
+}
+
+fn wire_graph(root: SchemaType) -> serde_json::Value {
+    let root = match root {
+        SchemaType::Ref { .. } => rich_scalar_record(),
+        other => other,
+    };
+    serde_json::to_value(golem_common::schema::graph::SchemaGraph { defs: vec![], root }).unwrap()
+}
+
+fn run_node_script(package: &Utf8Path, file: &str, script: &str) {
+    std::fs::write(package.join(file), script).unwrap();
+    let output = std::process::Command::new("node")
+        .arg(file)
+        .current_dir(package)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated runtime test {file} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_quantity_text_binary_and_bytes_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = rich_scalar_agent("RichGuestAgent");
+    let package_dir = target.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::Guest,
+    ));
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("rich-guest-agent-guest-client.ts")).unwrap();
+    for expected in [
+        "amount: base.QuantityValue;",
+        "note: { text: string; language?: string };",
+        "blob: { bytes: Uint8Array; mimeType?: string };",
+        "bytes: Uint8Array;",
+        "fixed: Uint8Array;",
+        "maybe_bytes?: Uint8Array;",
+        "{ tag: 'quantity', value: ",
+        "const __allowed: string[] = [\"kg\",\"g\"];",
+        "{ tag: 'text', text: v.text, language: v.language }",
+        "{ tag: 'binary', bytes: v.bytes, mimeType: v.mimeType }",
+        "new Uint8Array(n.elements.map",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    std::fs::write(
+        package_dir.join("test.ts"),
+        r#"import { RichGuestAgent } from './rich-guest-agent-guest-client';
+import type { bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
+export async function usage(): Promise<void> {
+  const client = RichGuestAgent.get();
+  const amount: sdkBridge.QuantityValue = await client.echo_quantity({ mantissa: 15n, scale: 1, unit: 'g' });
+  const text: { text: string; language?: string } = await client.echo_text({ text: 'hallo', language: 'de' });
+  const binary: { bytes: Uint8Array; mimeType?: string } = await client.echo_binary({ bytes: new Uint8Array([1]) });
+  const bytes: Uint8Array = await client.echo_bytes(new Uint8Array([1, 2]));
+  const record = await client.echo_record({
+    bytes: new Uint8Array([1]), fixed: new Uint8Array([1, 2, 3]), amount, note: text, blob: binary,
+  });
+  const fixed: Uint8Array = record.fixed;
+  // @ts-expect-error bare text is not a string
+  await client.echo_text('hallo');
+  // @ts-expect-error quantity mantissa is a bigint
+  await client.echo_quantity({ mantissa: 15, scale: 1, unit: 'g' });
+  void [bytes, fixed];
+}
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn external_quantity_text_binary_and_bytes_round_trip() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    generate_and_compile(rich_scalar_agent("RichExternalAgent"), target);
+    let package = generated_package_dir(target, "rich-external-agent");
+    let source = std::fs::read_to_string(package.join("rich-external-agent-client.ts")).unwrap();
+    for expected in [
+        "amount: base.QuantityValue;",
+        "note: base.AgentText;",
+        "blob: base.AgentBinary;",
+        "maybe_bytes?: Uint8Array;",
+        "const __allowed: string[] = [\"kg\",\"g\"];",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    let graphs = serde_json::Value::Object(
+        rich_scalar_methods()
+            .into_iter()
+            .map(|(name, typ)| (name.to_string(), wire_graph(typ)))
+            .collect(),
+    );
+    run_node_script(
+        &package,
+        "round-trip.mjs",
+        &format!(
+            r#"import assert from 'node:assert/strict';
+import http from 'node:http';
+import {{ RichExternalAgent, configure }} from './rich-external-agent-client.js';
+
+const graphs = {graphs};
+let override = undefined;
+const server = http.createServer((req, res) => {{
+  let body = '';
+  req.on('data', (chunk) => (body += chunk));
+  req.on('end', () => {{
+    const request = JSON.parse(body);
+    const value = override ?? request.methodParameters.value.fields[0];
+    override = undefined;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({{
+      agentId: {{ componentId: 'component', agentId: 'agent' }}, idempotencyKey: 'key',
+      result: {{ graph: graphs[request.methodName], value }},
+    }}));
+  }});
+}});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+configure({{
+  server: {{ type: 'custom', url: `http://127.0.0.1:${{server.address().port}}`, token: 'test' }},
+  application: 'app', environment: 'env',
+}});
+const remote = new RichExternalAgent(
+  {{ kind: 'record', value: {{ fields: [] }} }}, undefined, {{ componentId: 'component', agentId: 'agent' }},
+);
+
+const amount = {{ mantissa: 15n, scale: 1, unit: 'g' }};
+assert.deepEqual(await remote.echo_quantity(amount), amount);
+await assert.rejects(remote.echo_quantity({{ mantissa: 1n, scale: 0, unit: 'lb' }}), /unit/);
+override = {{ kind: 'quantity', value: {{ mantissa: '1', scale: 0, unit: 'lb' }} }};
+await assert.rejects(remote.echo_quantity(amount), /unit/);
+
+assert.deepEqual(await remote.echo_text({{ text: 'hallo', language: 'de' }}), {{ text: 'hallo', language: 'de' }});
+assert.deepEqual(await remote.echo_text({{ text: 'plain' }}), {{ text: 'plain' }});
+
+const binary = await remote.echo_binary({{ bytes: new Uint8Array([1, 2, 255]), mimeType: 'image/png' }});
+assert.ok(binary.bytes instanceof Uint8Array);
+assert.deepEqual([...binary.bytes], [1, 2, 255]);
+assert.equal(binary.mimeType, 'image/png');
+
+const bytes = await remote.echo_bytes(new Uint8Array([3, 4]));
+assert.ok(bytes instanceof Uint8Array);
+assert.deepEqual([...bytes], [3, 4]);
+
+const record = await remote.echo_record({{
+  bytes: new Uint8Array([5]), fixed: new Uint8Array([6, 7, 8]), maybe_bytes: new Uint8Array([9]),
+  amount, note: {{ text: 'note' }}, blob: {{ bytes: new Uint8Array([10]) }},
+}});
+for (const key of ['bytes', 'fixed', 'maybe_bytes']) assert.ok(record[key] instanceof Uint8Array, key);
+assert.deepEqual([...record.fixed], [6, 7, 8]);
+assert.deepEqual([...record.maybe_bytes], [9]);
+assert.deepEqual(record.amount, amount);
+assert.deepEqual(record.note, {{ text: 'note' }});
+assert.deepEqual([...record.blob.bytes], [10]);
+server.close();
+"#
+        ),
+    );
+}
+
+#[test]
+fn external_streaming_methods_decode_bytes_quantities_text_and_binary() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    generate_and_compile(
+        agent(
+            "RichStreamAgent",
+            "typescript",
+            vec![],
+            vec![method(
+                "exchange",
+                vec![
+                    field("input", SchemaType::stream(Some(SchemaType::u8()))),
+                    field("value", ref_to("RichRecord")),
+                ],
+                Some(ref_to("RichRecord")),
+            )],
+            vec![def("RichRecord", rich_scalar_record())],
+            AgentMode::Durable,
+        ),
+        target,
+    );
+    let package = generated_package_dir(target, "rich-stream-agent");
+    assert!(
+        std::process::Command::new("npm")
+            .args(["install", "--no-save", "ws"])
+            .current_dir(&package)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let graph = wire_graph(rich_scalar_record());
+    run_node_script(
+        &package,
+        "stream-round-trip.mjs",
+        &format!(
+            r#"import assert from 'node:assert/strict';
+import {{ WebSocketServer }} from 'ws';
+import {{ agentStream }} from '@golemcloud/golem-ts-bridge';
+import {{ RichStreamAgent, configure }} from './rich-stream-agent-client.js';
+
+const graph = {graph};
+let override = undefined;
+const wss = new WebSocketServer({{ port: 0 }});
+await new Promise((resolve) => wss.once('listening', resolve));
+const provisionalRef = (value) => {{
+  if (value && typeof value === 'object') {{
+    if (typeof value.provisionalRef === 'string') return value.provisionalRef;
+    for (const nested of Object.values(value)) {{
+      const found = provisionalRef(nested);
+      if (found) return found;
+    }}
+  }}
+}};
+wss.on('connection', (socket) => socket.once('message', (raw) => {{
+  const start = JSON.parse(raw);
+  socket.send(JSON.stringify({{
+    version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
+    idempotencyKey: start.idempotencyKey, sessionToken: 'session',
+    mappings: [{{
+      channel: 1, direction: 'input', streamToken: 'input', provisionalRef: provisionalRef(start.methodParameters),
+      inputHighWater: {{ sequence: '0', terminal: false }},
+    }}],
+  }}));
+  const value = override ?? start.methodParameters.value.fields[1];
+  override = undefined;
+  socket.send(JSON.stringify({{
+    version: 1, type: 'invocationResult', mappings: [], result: {{ kind: 'value', graph, value }},
+  }}));
+  socket.send(JSON.stringify({{ version: 1, type: 'invocationFinished', outcome: {{ kind: 'success' }} }}));
+}}));
+configure({{
+  server: {{ type: 'custom', url: `http://127.0.0.1:${{wss.address().port}}`, token: 'test' }},
+  application: 'app', environment: 'env',
+}});
+const constructorValue = {{ kind: 'record', value: {{ fields: [] }} }};
+const remote = new RichStreamAgent(
+  constructorValue, undefined, {{ componentId: 'component', agentId: 'agent' }}, constructorValue, [],
+);
+const amount = {{ mantissa: -25n, scale: 2, unit: 'kg' }};
+const input = {{
+  bytes: new Uint8Array([1, 2]), fixed: new Uint8Array([3, 4, 5]), maybe_bytes: new Uint8Array([6]),
+  amount, note: {{ text: 'hallo', language: 'de' }}, blob: {{ bytes: new Uint8Array([7]), mimeType: 'text/plain' }},
+}};
+const output = await remote.exchange(agentStream((async function* () {{}})()), input);
+for (const key of ['bytes', 'fixed', 'maybe_bytes']) assert.ok(output[key] instanceof Uint8Array, key);
+assert.deepEqual([...output.bytes], [1, 2]);
+assert.deepEqual([...output.fixed], [3, 4, 5]);
+assert.deepEqual([...output.maybe_bytes], [6]);
+assert.deepEqual(output.amount, amount);
+assert.equal(output.note.text, 'hallo');
+assert.equal(output.note.language, 'de');
+assert.ok(output.blob.bytes instanceof Uint8Array);
+assert.deepEqual([...output.blob.bytes], [7]);
+assert.equal(output.blob.mimeType, 'text/plain');
+await assert.rejects(
+  remote.exchange(agentStream((async function* () {{}})()), {{ ...input, amount: {{ mantissa: 1n, scale: 0, unit: 'lb' }} }}),
+  /unit/,
+);
+for (const client of wss.clients) client.terminate();
+await new Promise((resolve) => wss.close(resolve));
+"#
+        ),
+    );
+}
+
+fn time_record() -> SchemaType {
+    SchemaType::record(vec![
+        named_field("at", SchemaType::datetime()),
+        named_field("maybe-at", SchemaType::option(SchemaType::datetime())),
+        named_field("history", SchemaType::list(SchemaType::datetime())),
+        named_field("timeout", SchemaType::duration()),
+        named_field(
+            "file",
+            SchemaType::path(PathSpec {
+                direction: PathDirection::InOut,
+                kind: PathKind::Any,
+                allowed_mime_types: None,
+                allowed_extensions: None,
+            }),
+        ),
+        named_field("link", SchemaType::url(UrlRestrictions::default())),
+    ])
+}
+
+fn time_methods() -> Vec<(&'static str, SchemaType)> {
+    vec![
+        ("echo-datetime", SchemaType::datetime()),
+        ("echo-duration", SchemaType::duration()),
+        (
+            "echo-path",
+            SchemaType::path(PathSpec {
+                direction: PathDirection::InOut,
+                kind: PathKind::Any,
+                allowed_mime_types: None,
+                allowed_extensions: None,
+            }),
+        ),
+        ("echo-url", SchemaType::url(UrlRestrictions::default())),
+        ("echo-record", ref_to("TimeRecord")),
+    ]
+}
+
+fn time_agent(name: &str) -> AgentTypeSchema {
+    agent(
+        name,
+        "typescript",
+        vec![field("since", SchemaType::datetime())],
+        time_methods()
+            .into_iter()
+            .map(|(name, typ)| method(name, vec![field("value", typ.clone())], Some(typ)))
+            .collect(),
+        vec![def("TimeRecord", time_record())],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn guest_datetime_duration_path_and_url_use_sdk_types_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = time_agent("TimeGuestAgent");
+    let package_dir = target.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::Guest,
+    ));
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("time-guest-agent-guest-client.ts")).unwrap();
+    for expected in [
+        "at: base.Datetime;",
+        "maybe_at?: base.Datetime;",
+        "history: base.Datetime[];",
+        "timeout: bigint;",
+        "file: string;",
+        "link: string;",
+        "{ tag: 'datetime', value: ",
+        "n.value as base.Datetime",
+        "{ tag: 'duration', nanoseconds: ",
+        "{ tag: 'path', value: ",
+        "{ tag: 'url', value: ",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    std::fs::write(
+        package_dir.join("test.ts"),
+        r#"import { TimeGuestAgent } from './time-guest-agent-guest-client';
+import { Datetime, bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
+export async function usage(): Promise<void> {
+  const since: Datetime = Datetime.parse('2024-02-29T12:34:56.12+02:00');
+  const client = TimeGuestAgent.get(since);
+  const at: sdkBridge.Datetime = await client.echo_datetime(Datetime.fromDate(new Date()));
+  const date: Date = Datetime.toDate(at);
+  const text: string = Datetime.toISOString(at);
+  const timeout: bigint = await client.echo_duration(1_500_000_000n);
+  const file: string = await client.echo_path('/data/file.txt');
+  const link: string = await client.echo_url('https://example.com/file');
+  const record = await client.echo_record({ at, history: [at], timeout, file, link });
+  const maybe: Datetime | undefined = record.maybe_at;
+  await client.echo_datetime({ seconds: 0n, nanoseconds: 0 });
+  // @ts-expect-error datetime is not a string
+  await client.echo_datetime('2024-02-29T12:34:56Z');
+  // @ts-expect-error datetime is not a Date
+  await client.echo_datetime(new Date());
+  // @ts-expect-error duration is bigint nanoseconds
+  await client.echo_duration(1.5);
+  void [date, text, maybe];
+}
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
+fn external_datetime_duration_path_and_url_round_trip_in_canonical_form() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    generate_and_compile(time_agent("TimeExternalAgent"), target);
+    let package = generated_package_dir(target, "time-external-agent");
+    let source = std::fs::read_to_string(package.join("time-external-agent-client.ts")).unwrap();
+    for expected in [
+        "at: base.Datetime;",
+        "maybe_at?: base.Datetime;",
+        "history: base.Datetime[];",
+        "timeout: bigint;",
+        "file: string;",
+        "link: string;",
+        "base.Datetime.toISOString(",
+        "base.Datetime.parse(",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    let graphs = serde_json::Value::Object(
+        time_methods()
+            .into_iter()
+            .map(|(name, typ)| {
+                let root = match typ {
+                    SchemaType::Ref { .. } => time_record(),
+                    other => other,
+                };
+                (
+                    name.to_string(),
+                    serde_json::to_value(golem_common::schema::graph::SchemaGraph {
+                        defs: vec![],
+                        root,
+                    })
+                    .unwrap(),
+                )
+            })
+            .collect(),
+    );
+    run_node_script(
+        &package,
+        "round-trip.mjs",
+        &format!(
+            r#"import assert from 'node:assert/strict';
+import http from 'node:http';
+import {{ Datetime }} from '@golemcloud/golem-ts-bridge';
+import {{ TimeExternalAgent, configure }} from './time-external-agent-client.js';
+
+const graphs = {graphs};
+let override = undefined;
+let sent = undefined;
+const server = http.createServer((req, res) => {{
+  let body = '';
+  req.on('data', (chunk) => (body += chunk));
+  req.on('end', () => {{
+    const request = JSON.parse(body);
+    sent = request.methodParameters.value.fields[0];
+    const value = override ?? sent;
+    override = undefined;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({{
+      agentId: {{ componentId: 'component', agentId: 'agent' }}, idempotencyKey: 'key',
+      result: {{ graph: graphs[request.methodName], value }},
+    }}));
+  }});
+}});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+configure({{
+  server: {{ type: 'custom', url: `http://127.0.0.1:${{server.address().port}}`, token: 'test' }},
+  application: 'app', environment: 'env',
+}});
+const remote = new TimeExternalAgent(
+  {{ kind: 'record', value: {{ fields: [] }} }}, undefined, {{ componentId: 'component', agentId: 'agent' }},
+);
+
+const at = Datetime.parse('2024-03-01T01:04:56.120+02:30');
+assert.deepEqual(await remote.echo_datetime(at), at);
+assert.deepEqual(sent, {{ kind: 'datetime', value: {{ value: '2024-02-29T22:34:56.12Z' }} }});
+const whole = {{ seconds: 0n, nanoseconds: 0 }};
+assert.deepEqual(await remote.echo_datetime(whole), whole);
+assert.deepEqual(sent, {{ kind: 'datetime', value: {{ value: '1970-01-01T00:00:00Z' }} }});
+override = {{ kind: 'datetime', value: {{ value: '9999-12-31T23:59:59.999999999Z' }} }};
+assert.deepEqual(await remote.echo_datetime(at), {{ seconds: 253402300799n, nanoseconds: 999999999 }});
+override = {{ kind: 'datetime', value: {{ value: '0000-01-01T00:00:00.000000000Z' }} }};
+assert.deepEqual(await remote.echo_datetime(at), {{ seconds: -62167219200n, nanoseconds: 0 }});
+await assert.rejects(
+  remote.echo_datetime({{ seconds: 253402300800n, nanoseconds: 0 }}),
+  /outside the years 0000\.\.9999/,
+);
+await assert.rejects(
+  remote.echo_datetime({{ seconds: -62167219201n, nanoseconds: 0 }}),
+  /outside the years 0000\.\.9999/,
+);
+await assert.rejects(remote.echo_datetime({{ seconds: 0n, nanoseconds: 1e9 }}), /nanoseconds/);
+override = {{ kind: 'datetime', value: {{ value: '2023-02-29T00:00:00Z' }} }};
+await assert.rejects(remote.echo_datetime(at));
+
+assert.equal(await remote.echo_duration(-1_500_000_000n), -1_500_000_000n);
+assert.deepEqual(sent, {{ kind: 'duration', value: {{ nanoseconds: '-1500000000' }} }});
+const maxDuration = (1n << 63n) - 1n;
+assert.equal(await remote.echo_duration(maxDuration), maxDuration);
+assert.deepEqual(sent, {{ kind: 'duration', value: {{ nanoseconds: maxDuration.toString() }} }});
+
+assert.equal(await remote.echo_path('/data/file.txt'), '/data/file.txt');
+assert.deepEqual(sent, {{ kind: 'path', value: {{ path: '/data/file.txt' }} }});
+assert.equal(await remote.echo_url('https://example.com/a?b=c'), 'https://example.com/a?b=c');
+assert.deepEqual(sent, {{ kind: 'url', value: {{ url: 'https://example.com/a?b=c' }} }});
+
+const record = {{
+  at, maybe_at: whole, history: [whole, at], timeout: 5n, file: 'notes.txt', link: 'https://example.com',
+}};
+assert.deepEqual(await remote.echo_record(record), record);
+assert.deepEqual(sent.value.fields[0], {{ kind: 'datetime', value: {{ value: '2024-02-29T22:34:56.12Z' }} }});
+assert.deepEqual(sent.value.fields[2].value.elements[0], {{ kind: 'datetime', value: {{ value: '1970-01-01T00:00:00Z' }} }});
+const {{ maybe_at, ...withoutMaybe }} = record;
+assert.deepEqual(await remote.echo_record(withoutMaybe), {{ ...withoutMaybe, maybe_at: undefined }});
+server.close();
+"#
+        ),
     );
 }

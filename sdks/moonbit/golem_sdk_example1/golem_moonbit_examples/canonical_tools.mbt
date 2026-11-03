@@ -103,7 +103,7 @@ pub(all) struct CanonicalCommitResult {
 pub(all) struct CanonicalLogEntry {
   hash : String
   author : String
-  date : @types.Datetime
+  date : @schema.Datetime
   message : String
 }
 
@@ -236,8 +236,8 @@ pub fn CanonicalGit::stash(verbose : UInt, git_dir : @schema.Path) -> Unit {
 #derive.result("oneline", formatter="short", formatter="medium", formatter="full", default="medium")
 pub fn CanonicalGit::log(
   max_count : Int64?,
-  since : @types.Datetime?,
-  until : @types.Datetime?,
+  since : @schema.Datetime?,
+  until : @schema.Datetime?,
   author : Array[String],
   grep : Array[String],
   all_match : Bool,

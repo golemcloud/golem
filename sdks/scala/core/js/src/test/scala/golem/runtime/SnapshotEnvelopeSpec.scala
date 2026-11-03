@@ -16,7 +16,7 @@
 
 package golem.runtime
 
-import golem.{Principal, Uuid}
+import golem.Principal
 import golem.host.js.PrincipalConverter
 import golem.runtime.guest.Guest
 import zio.blocks.schema.json.Json
@@ -32,7 +32,7 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
   )
 
   private val testAgentPrincipal = Principal.Agent(
-    componentId = Uuid(BigInt("123456789012345678"), BigInt("987654321098765432")),
+    componentId = new java.util.UUID(123456789012345678L, 987654321098765432L),
     agentId = "agent-1"
   )
 
@@ -139,7 +139,7 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
         assertTrue(invalidPrincipal.isLeft, wrongVersion.left.exists(_.contains("version")))
       },
       test("Agent principal JSON matches Rust format") {
-        val componentId = Uuid.fromStandardString("550e8400-e29b-41d4-a716-446655440000").toOption.get
+        val componentId = java.util.UUID.fromString("550e8400-e29b-41d4-a716-446655440000")
         val principal   = Principal.Agent(componentId, "MyAgent(\"x\")")
         val jsonStr     = new String(PrincipalConverter.toJson(principal), "UTF-8")
         assertTrue(
@@ -151,7 +151,7 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
         assertTrue(jsonStr == """{"tag":"anonymous"}""")
       },
       test("GolemUser principal JSON matches Rust format") {
-        val accountId = Uuid.fromStandardString("550e8400-e29b-41d4-a716-446655440000").toOption.get
+        val accountId = java.util.UUID.fromString("550e8400-e29b-41d4-a716-446655440000")
         val principal = Principal.GolemUser(accountId)
         val jsonStr   = new String(PrincipalConverter.toJson(principal), "UTF-8")
         assertTrue(
@@ -209,7 +209,7 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
       },
       test("roundtrip with GolemUser principal") {
         val p = Principal.GolemUser(
-          accountId = Uuid(BigInt("111222333444555666"), BigInt("777888999000111222"))
+          accountId = new java.util.UUID(111222333444555666L, 777888999000111222L)
         )
         val stateBytes         = Array[Byte](42)
         val envelope           = buildBinaryEnvelopeV2(p, stateBytes)
