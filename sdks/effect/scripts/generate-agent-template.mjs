@@ -4,7 +4,6 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { templateMatrix } from "./template-matrix.mjs"
 import {
-  removeSkeletonLock,
   templateGeneratorArgs,
   toolProcessModules,
 } from "../../javascript/tool-process-template.mjs"
@@ -45,6 +44,4 @@ for (const template of templateMatrix) {
   const result = spawnSync("wasm-rquickjs", args, { cwd: packageDir, stdio: "inherit" })
   if (result.error) throw result.error
   if (result.status !== 0) process.exit(result.status ?? 1)
-
-  removeSkeletonLock(output)
 }

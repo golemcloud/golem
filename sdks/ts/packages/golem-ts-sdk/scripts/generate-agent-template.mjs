@@ -3,7 +3,6 @@ import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { templateMatrix } from './template-matrix.mjs';
 import {
-  removeSkeletonLock,
   templateGeneratorArgs,
   toolProcessModules,
 } from '../../../../javascript/tool-process-template.mjs';
@@ -71,6 +70,4 @@ for (const template of templateMatrix) {
 
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
-
-  removeSkeletonLock(resolve(process.cwd(), template.wrapperDirectory));
 }

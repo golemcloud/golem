@@ -1,7 +1,6 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
-import { rmSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,10 +35,3 @@ export const templateGeneratorArgs = [
   "--dependency",
   `wit-bindgen-p3=${witBindgenP3}`,
 ];
-
-// The generated Cargo.lock pins the skeleton's upstream wit-bindgen dependencies, which
-// conflict with the fork (its wit-parser needs a newer indexmap). Cargo resolves a fresh lock
-// during the template build instead.
-export function removeSkeletonLock(wrapper) {
-  rmSync(resolve(wrapper, "Cargo.lock"), { force: true });
-}

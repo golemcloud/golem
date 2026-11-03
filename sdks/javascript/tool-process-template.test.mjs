@@ -60,6 +60,8 @@ test("every JavaScript SDK template generator embeds the modules and passes the 
     assert.match(source, /\btoolProcessModules\b/, generator);
     assert.match(source, /\btemplateGeneratorArgs\b/, generator);
     assert.doesNotMatch(source, /wit-bindgen-p3 = /, generator);
+    // wasm-rquickjs omits the skeleton lock when dependencies are overridden.
+    assert.doesNotMatch(source, /Cargo\.lock/, generator);
   }
 });
 

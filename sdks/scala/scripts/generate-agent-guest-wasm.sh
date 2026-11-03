@@ -139,9 +139,6 @@ for role_spec in "${roles[@]}"; do
     "${template_args[@]}" \
     --output "$wrapper_dir"
 
-  # The generated lock pins the skeleton's upstream wit-bindgen dependency graph.
-  rm -f "$wrapper_dir/Cargo.lock"
-
   out_wasm="$target_dir/wasm32-wasip2/release/$artifact"
   rm -f "$out_wasm"
 
