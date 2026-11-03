@@ -62,3 +62,17 @@ test("every JavaScript SDK template generator embeds the modules and passes the 
     assert.doesNotMatch(source, /wit-bindgen-p3 = /, generator);
   }
 });
+
+test("the Scala guest keeps the user bundle as the first JavaScript module", () => {
+  // wasm-rquickjs takes the guest exports from the first --js-modules entry. The TypeScript and
+  // Effect templates export through their SDK module; the Scala user bundle exports directly.
+  const sdks = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const source = readFileSync(
+    join(sdks, "scala/scripts/generate-agent-guest-wasm.sh"),
+    "utf8",
+  );
+  const user = source.indexOf("user=@slot");
+  const toolModules = source.indexOf("of toolProcessModules) console.log");
+  assert.ok(user >= 0 && toolModules >= 0);
+  assert.ok(user < toolModules, "user=@slot must precede the tool-process modules");
+});

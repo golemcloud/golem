@@ -43,16 +43,17 @@ if ! command -v node &>/dev/null; then
 fi
 
 tool_process_template="$sdk_root/../javascript/tool-process-template.mjs"
-# The tool-process JavaScript modules, the user slot, and the shared generator arguments
-# (the native bridge module and the forked wit-bindgen), one argument per line.
+# The user slot, the tool-process JavaScript modules, and the shared generator arguments
+# (the native bridge module and the forked wit-bindgen), one argument per line. The user
+# slot comes first: wasm-rquickjs takes the guest exports from the first module.
 template_args=()
 while IFS= read -r argument; do
   template_args+=("$argument")
 done < <(
   node --input-type=module -e '
     const { templateGeneratorArgs, toolProcessModules } = await import(process.argv[1]);
-    for (const [name, source] of toolProcessModules) console.log(`--js-modules\n${name}=${source}`);
     console.log("--js-modules\nuser=@slot");
+    for (const [name, source] of toolProcessModules) console.log(`--js-modules\n${name}=${source}`);
     for (const argument of templateGeneratorArgs) console.log(argument);
   ' "$tool_process_template"
 )
