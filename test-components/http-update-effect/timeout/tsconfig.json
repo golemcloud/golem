@@ -1,5 +1,5 @@
 {
   "extends": "../baseline/tsconfig.json",
   "include": ["src/**/*.ts", "../probe.ts"],
-  "compilerOptions": {"moduleResolution":"bundler"}
+  "compilerOptions": { "moduleResolution": "bundler" }
 }

@@ -628,7 +628,7 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
     assert_eq!(update_counts(&metadata), (0, 0, 1));
     assert!(metadata.updates.iter().any(|update| matches!(update,
         UpdateRecord::FailedUpdate(update) if update.details.as_deref().is_some_and(|details|
-            details.contains("no matching Start")))));
+            details.starts_with("UPDATE_REPLAY_FAILED:")))));
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     drop(executor);
 
@@ -674,13 +674,18 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
             .count(),
         1
     );
-    assert_eq!(
-        oplog
-            .iter()
-            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
-            .count(),
-        4
-    );
+    for (method_name, expected_completions) in [("run", 1), ("ping", 2)] {
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::AgentInvocationFinished(finished)
+                        if finished.method_name.as_deref() == Some(method_name)))
+                .count(),
+            expected_completions,
+            "unexpected completion count for {method_name}"
+        );
+    }
     let fresh = executor
         .invoke_and_await_agent(&component, &id, "run", data_value!(url))
         .await?;

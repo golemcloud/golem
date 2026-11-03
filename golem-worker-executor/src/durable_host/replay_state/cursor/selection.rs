@@ -539,13 +539,17 @@ impl CursorTx<'_> {
         &self,
         invocation_id: DurableInvocationId,
     ) -> bool {
+        self.retained_start_with_invocation_id(invocation_id)
+            || self
+                .unclaimed_start_ahead(invocation_id, |_| true)
+                .is_some()
+    }
+
+    fn retained_start_with_invocation_id(&self, invocation_id: DurableInvocationId) -> bool {
         self.st
             .retained_starts
             .values()
             .any(|retained| start_invocation_id(&retained.entry) == Some(invocation_id))
-            || self
-                .unclaimed_start_ahead(invocation_id, |_| true)
-                .is_some()
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
@@ -706,11 +710,7 @@ impl CursorTx<'_> {
         // Retained calls precede the cursor and all remaining delivery boundaries. A sibling
         // may have drained a conflicting Start while this claim waited for an earlier delivery.
         if let Some(invocation_id) = claim.expected_invocation_id()
-            && self
-                .st
-                .retained_starts
-                .values()
-                .any(|retained| start_invocation_id(&retained.entry) == Some(invocation_id))
+            && self.retained_start_with_invocation_id(invocation_id)
             && self
                 .unclaimed_start_ahead(invocation_id, |recorded| claim.matches_recorded(recorded))
                 .is_none()
