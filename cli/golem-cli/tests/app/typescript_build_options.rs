@@ -349,7 +349,9 @@ async fn typescript_and_effect_builds_prepare_dependencies_before_freshness_chec
                       dir: .
                       rmdirs: [node_modules]
         "#};
-        merge_into_manifest(&ctx.cwd_path_join("golem.yaml"), &cleanup).unwrap();
+        let manifest_path = ctx.cwd_path_join("golem.yaml");
+        let manifest = std::fs::read(&manifest_path).unwrap();
+        merge_into_manifest(&manifest_path, &cleanup).unwrap();
         let count = dependency_install_count(&ctx);
         assert!(
             ctx.cli([
@@ -369,6 +371,19 @@ async fn typescript_and_effect_builds_prepare_dependencies_before_freshness_chec
             "{template}: rmdirs must invalidate the earlier ensure"
         );
         assert!(ctx.cwd_path_join("node_modules").is_dir());
+        // The sole custom preset becomes the component default, even when the
+        // template selects quick. Restore the manifest before checking reuse.
+        std::fs::write(manifest_path, manifest).unwrap();
+        assert!(
+            ctx.cli([flag::YES, "-P", "quick", cmd::BUILD])
+                .await
+                .success_or_dump()
+        );
+        assert_eq!(
+            dependency_install_count(&ctx),
+            count + 1,
+            "{template}: normal build must reuse the repaired dependencies"
+        );
         assert_dependency_build_unchanged(&ctx, &outputs).await;
         assert_eq!(std::fs::read(package_path).unwrap(), package);
         assert_eq!(std::fs::read(source_path).unwrap(), source);
