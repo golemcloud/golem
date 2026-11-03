@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto"
 import { Layer, Redacted } from "effect"
 import { FetchHttpClient, HttpRouter } from "effect/http"
-import pg from "pg"
+import type pg from "pg"
 import * as App from "../src/App.ts"
 import { BillingConfig, type BillingConfigShape } from "../src/BillingConfig.ts"
+import { makePool } from "../src/Database.ts"
 import * as Http from "../src/Http.ts"
 
 export const baseUrl = "http://localhost:3000"
 export const registryUrl = "http://registry.test"
 export const authSecret = "test-secret-that-is-at-least-32-characters-long"
-export const githubAccessToken = "gho_test_access_token"
 
 const requireEnv = (name: string): string => {
   const value = process.env[name]
@@ -48,15 +48,8 @@ export const testConfig = (): BillingConfigShape => {
   }
 }
 
-export const queryPool = (config: BillingConfigShape) =>
-  new pg.Pool({
-    host: config.db.host,
-    port: config.db.port,
-    database: config.db.database,
-    user: config.db.username,
-    password: Redacted.value(config.db.password),
-    max: 2
-  })
+/** A pool with the settings of the app, for the queries of the tests. */
+export const queryPool = (config: BillingConfigShape) => makePool({ ...config.db, maxConnections: 2 })
 
 export const dropSchema = async (pool: pg.Pool, schema: string) => {
   await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
@@ -84,72 +77,113 @@ export interface RegistryAccount {
   readonly secret: string
 }
 
+export interface GitHubIdentity {
+  readonly id: number
+  readonly login: string
+  readonly email: string
+  /** The access token that the fake GitHub issues for this identity. */
+  readonly accessToken: string
+}
+
+export const newGitHubIdentity = (id: number, email = "octocat@example.com"): GitHubIdentity => ({
+  id,
+  login: `octocat-${id}`,
+  email,
+  accessToken: `gho_${randomUUID().replaceAll("-", "")}`
+})
+
+const newRegistryAccount = (): RegistryAccount => ({
+  accountId: randomUUID(),
+  secret: `golem_${randomUUID()}`
+})
+
 /**
- * Replaces `fetch` for the GitHub OAuth endpoints and the registry service. The GitHub identity
- * always resolves to `registryAccount`, as the registry resolves one GitHub identity to one
- * Golem account.
+ * Replaces `fetch` for the GitHub OAuth endpoints and the registry service. `github` is the
+ * identity that the next GitHub authorization signs in. Like the registry, the fake resolves each
+ * GitHub access token to one Golem account (`registryAccounts`).
  */
 export class FakeUpstreams {
   readonly requests: Array<RecordedRequest> = []
-  registryAccount: RegistryAccount = { accountId: randomUUID(), secret: `golem_${randomUUID()}` }
+  github: GitHubIdentity = newGitHubIdentity(4242)
+  readonly registryAccounts = new Map<string, RegistryAccount>()
   registryLoginStatus = 200
+
+  /** The Golem account of the access token of `identity`, created on first use. */
+  accountOf(identity: GitHubIdentity = this.github): RegistryAccount {
+    let account = this.registryAccounts.get(identity.accessToken)
+    if (account === undefined) {
+      account = newRegistryAccount()
+      this.registryAccounts.set(identity.accessToken, account)
+    }
+    return account
+  }
+
+  get registryAccount(): RegistryAccount {
+    return this.accountOf()
+  }
 
   readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
     const url = new URL(request.url)
     this.requests.push({ method: request.method, url, headers: request.headers })
     const route = `${request.method} ${url.origin}${url.pathname}`
+    const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "")
     switch (route) {
       case "POST https://github.com/login/oauth/access_token":
+        this.accountOf(this.github)
         return Response.json({
-          access_token: githubAccessToken,
+          access_token: this.github.accessToken,
           token_type: "bearer",
           scope: "read:user,user:email"
         })
       case "GET https://api.github.com/user":
-        return request.headers.get("authorization") === `Bearer ${githubAccessToken}`
+        return bearer === this.github.accessToken
           ? Response.json({
-              id: 4242,
-              login: "octocat",
+              id: this.github.id,
+              login: this.github.login,
               name: "Octo Cat",
               email: null,
               avatar_url: "https://avatars.example/octocat"
             })
           : new Response(null, { status: 401 })
       case "GET https://api.github.com/user/emails":
-        return Response.json([{ email: "octocat@example.com", primary: true, verified: true }])
+        return Response.json([{ email: this.github.email, primary: true, verified: true }])
       case `POST ${registryUrl}/v1/login/oauth2`: {
         if (this.registryLoginStatus !== 200) {
           return Response.json({ error: "unavailable" }, { status: this.registryLoginStatus })
         }
-        if (
-          url.searchParams.get("provider") !== "github" ||
-          url.searchParams.get("access-token") !== githubAccessToken
-        ) {
+        const token = url.searchParams.get("access-token")
+        const account = token === null ? undefined : this.registryAccounts.get(token)
+        if (url.searchParams.get("provider") !== "github" || account === undefined) {
           return Response.json({ error: "invalid token" }, { status: 401 })
         }
         return Response.json({
           id: randomUUID(),
-          secret: this.registryAccount.secret,
-          accountId: this.registryAccount.accountId,
+          secret: account.secret,
+          accountId: account.accountId,
           createdAt: "2026-11-03T10:00:00Z",
           expiresAt: "2036-11-03T10:00:00Z"
         })
       }
-      case `GET ${registryUrl}/v1/accounts/${this.registryAccount.accountId}`:
-        return request.headers.get("authorization") === `Bearer ${this.registryAccount.secret}`
+      default: {
+        const account = [...this.registryAccounts.values()].find(
+          (candidate) => route === `GET ${registryUrl}/v1/accounts/${candidate.accountId}`
+        )
+        if (account === undefined) {
+          return new Response(`No fake for ${route}`, { status: 599 })
+        }
+        return bearer === account.secret
           ? Response.json({
-              id: this.registryAccount.accountId,
+              id: account.accountId,
               revision: 0,
               name: "Octo Cat",
-              email: "octocat@example.com",
+              email: this.github.email,
               planId: "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10",
               roles: [],
               accountRootCardId: "0b7a4b6e-8c2b-4f63-bb0e-6a4cf7c1b9d2"
             })
           : new Response(null, { status: 401 })
-      default:
-        return new Response(`No fake for ${route}`, { status: 599 })
+      }
     }
   }
 
@@ -187,13 +221,15 @@ export const request = async (
   jar: CookieJar,
   method: string,
   path: string,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  body?: unknown
 ): Promise<Response> => {
   const response = await handler(
     new Request(new URL(path, baseUrl), {
       method,
       headers: { cookie: jar.header(), ...headers },
-      redirect: "manual"
+      redirect: "manual",
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
     })
   )
   jar.update(response)

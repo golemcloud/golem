@@ -1,9 +1,10 @@
 import { Effect, Layer, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
-import pg from "pg"
+import type pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import * as App from "../src/App.ts"
 import { BillingConfig, type BillingConfigShape } from "../src/BillingConfig.ts"
+import { makePool } from "../src/Database.ts"
 import { dropSchema, queryPool, testConfig } from "./support.ts"
 
 /** Builds the services once, which applies the migrations, then releases them. */
@@ -78,6 +79,15 @@ describe("migrations", () => {
     await expect(startServices(config)).resolves.toBeDefined()
   })
 
+  it("starts with a pool of one connection", async () => {
+    const single = testConfig()
+    try {
+      await expect(startServices({ ...single, db: { ...single.db, maxConnections: 1 } })).resolves.toBeDefined()
+    } finally {
+      await dropSchema(pool, single.db.schema)
+    }
+  })
+
   it("lets replicas that start together migrate one after the other", async () => {
     const concurrent = testConfig()
     try {
@@ -101,13 +111,11 @@ describe("migrations", () => {
     await pool.query(`CREATE ROLE "${role}" LOGIN PASSWORD 'restricted'`)
     await pool.query(`CREATE SCHEMA "${restricted.db.schema}" AUTHORIZATION "${role}"`)
     await pool.query(`CREATE TABLE ${registryTable} (secret text NOT NULL)`)
-    const rolePool = new pg.Pool({
-      host: restricted.db.host,
-      port: restricted.db.port,
-      database: restricted.db.database,
-      user: role,
-      password: "restricted",
-      max: 1
+    const rolePool = makePool({
+      ...restricted.db,
+      username: role,
+      password: Redacted.make("restricted"),
+      maxConnections: 1
     })
     try {
       await startServices({

@@ -13,7 +13,7 @@ export class Database extends Context.Service<Database, DatabaseShape>()(
   "golem-cloud-billing/Database"
 ) {}
 
-const sslOptions = (tls: DbTls): pg.PoolConfig["ssl"] => {
+const sslOptions = (tls: DbTls): pg.ClientConfig["ssl"] => {
   switch (tls) {
     case "disable":
       return false
@@ -24,21 +24,23 @@ const sslOptions = (tls: DbTls): pg.PoolConfig["ssl"] => {
   }
 }
 
+/** The connection settings of every PostgreSQL connection of the billing app. */
+export const connectionOptions = (config: PostgresConfig): pg.ClientConfig => ({
+  host: config.host,
+  port: config.port,
+  database: config.database,
+  user: config.username,
+  password: Redacted.value(config.password),
+  ssl: sslOptions(config.tls),
+  application_name: "golem-cloud-billing",
+  connectionTimeoutMillis: 10_000,
+  // Every unqualified table name resolves in the schema of the billing app. The schema name
+  // matches the pattern that BillingConfig checks, so it needs no quoting.
+  options: `-c search_path=${config.schema}`
+})
+
 export const makePool = (config: PostgresConfig): pg.Pool =>
-  new pg.Pool({
-    host: config.host,
-    port: config.port,
-    database: config.database,
-    user: config.username,
-    password: Redacted.value(config.password),
-    max: config.maxConnections,
-    ssl: sslOptions(config.tls),
-    application_name: "golem-cloud-billing",
-    connectionTimeoutMillis: 10_000,
-    // Every unqualified table name resolves in the schema of the billing app. The schema name
-    // matches the pattern that BillingConfig checks, so it needs no quoting.
-    options: `-c search_path=${config.schema}`
-  })
+  new pg.Pool({ ...connectionOptions(config), max: config.maxConnections })
 
 export const layer: Layer.Layer<Database, never, BillingConfig> = Layer.effect(
   Database,
@@ -65,21 +67,25 @@ export const layer: Layer.Layer<Database, never, BillingConfig> = Layer.effect(
 /**
  * Runs `body` while holding a session-level advisory lock, so that replicas that start at the
  * same time apply migrations one after the other.
+ *
+ * The lock has its own connection, outside the pool: `body` uses the pool, which may have a
+ * single connection.
  */
-export const withAdvisoryLock = <A>(
-  pool: pg.Pool,
+export const withAdvisoryLock = async <A>(
+  config: PostgresConfig,
   key: string,
   body: () => Promise<A>
-): Promise<A> =>
-  pool.connect().then(async (client) => {
+): Promise<A> => {
+  const client = new pg.Client(connectionOptions(config))
+  await client.connect()
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [key])
     try {
-      await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [key])
-      try {
-        return await body()
-      } finally {
-        await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [key])
-      }
+      return await body()
     } finally {
-      client.release()
+      await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [key])
     }
-  })
+  } finally {
+    await client.end()
+  }
+}

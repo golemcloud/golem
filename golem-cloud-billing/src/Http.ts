@@ -62,7 +62,11 @@ export const routes = HttpRouter.use((router) =>
       return origin === undefined || origin === config.baseUrl.origin
     }
 
-    yield* router.add("*", "/api/auth/*", HttpEffect.fromWebHandler(auth.handler))
+    // The browser reaches Better Auth only for the OAuth callback. The pages call the other
+    // endpoints on the server through `auth.api`. The rest of /api/auth stays unrouted: it
+    // includes get-access-token, which returns the decrypted GitHub access token, and
+    // link-social and update-user, which change the user.
+    yield* router.add("GET", "/api/auth/callback/github", HttpEffect.fromWebHandler(auth.handler))
 
     yield* router.add("GET", "/", (request) =>
       Effect.gen(function* () {

@@ -30,6 +30,10 @@ The registry keeps one Golem account per GitHub identity, so the CLI and the bil
 same account, whichever signs in first. When a step fails, Better Auth creates no session and the
 landing page shows the error.
 
+Account linking is off: a GitHub identity signs in only to the user that it created, also when
+another identity has its verified email. The hook refuses a user with more than one GitHub account,
+and a Golem account other than the one in `user.golem_account_id`.
+
 ## Database
 
 The connections of the app set `search_path` to its schema (`billing` by default), and Better Auth
@@ -75,7 +79,7 @@ database. A local database where the app connects as its owner works without any
 | --- | --- |
 | `GET /` | Landing page: the sign-in form, or the plan, the account and the CLI command. |
 | `POST /sign-in/github`, `POST /sign-out` | Form targets of the landing page. |
-| `/api/auth/*` | Better Auth. |
+| `GET /api/auth/callback/github` | The GitHub OAuth callback of Better Auth. The other Better Auth endpoints are not routed; the pages call them on the server. |
 | `GET /healthz` | Liveness. |
 | `GET /readyz` | Readiness: returns 503 when the database is unreachable. |
 

@@ -92,6 +92,8 @@ const signInErrorMessage = (code: string): string => {
   switch (code) {
     case "access_denied":
       return "GitHub sign-in was cancelled."
+    case "account_not_linked":
+      return "Another GitHub account signed in with this email address before. Sign in with that GitHub account."
     case "unable_to_create_session":
       return "Signed in with GitHub, but Golem could not link the sign-in to your Golem account. Try again in a minute."
     default:

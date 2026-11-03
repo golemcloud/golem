@@ -5,7 +5,7 @@ import { getMigrations } from "better-auth/db/migration"
 import { decryptOAuthToken } from "better-auth/oauth2"
 import { Context, Data, Effect, Layer, Option, Redacted } from "effect"
 import type pg from "pg"
-import { BillingConfig } from "./BillingConfig.ts"
+import { BillingConfig, type PostgresConfig } from "./BillingConfig.ts"
 import { Database, withAdvisoryLock } from "./Database.ts"
 import { Registry, type RegistryShape } from "./Registry.ts"
 
@@ -42,7 +42,11 @@ export const authOptions = (options: AuthOptions) =>
       }
     },
     account: {
-      encryptOAuthTokens: true
+      encryptOAuthTokens: true,
+      // A GitHub identity signs in only to the user that it created. With linking, a GitHub
+      // identity with the verified email of an existing user would join that user, and the
+      // identity bridge would exchange the GitHub token of the other identity.
+      accountLinking: { enabled: false }
     },
     user: {
       additionalFields: {
@@ -79,6 +83,9 @@ export const authOptions = (options: AuthOptions) =>
       level: "info",
       log: (level, message, ...args) => options.log(level, message, args)
     },
+    // Errors that end the OAuth flow redirect to the landing page with `?error=<code>`. The
+    // default error page of Better Auth is not routed.
+    onAPIError: { errorURL: "/" },
     telemetry: { enabled: false }
   }) satisfies BetterAuthOptions
 
@@ -138,6 +145,11 @@ const trySession = <A>(reason: string, f: () => Promise<A>) =>
  * The identity bridge. Before Better Auth stores a new session, it exchanges the GitHub access
  * token of the user for a Golem API token, writes the Golem account ID onto the user and puts
  * the encrypted Golem API token on the session. When any step fails, no session is created.
+ *
+ * Without account linking, only the GitHub identity of the user signs in to it, and Better Auth
+ * stores the access token of the sign-in on that account before it creates the session. The
+ * bridge therefore requires exactly one GitHub account, and it refuses a Golem account other than
+ * the one that the user has already.
  */
 export const linkSessionToGolemAccount =
   (registry: RegistryShape) =>
@@ -150,17 +162,34 @@ export const linkSessionToGolemAccount =
       const accounts = yield* tryAuth("cannot read the accounts of the user", () =>
         auth.internalAdapter.findAccounts(session.userId)
       )
-      const storedAccessToken = accounts.find((account) => account.providerId === "github")?.accessToken
+      const githubAccounts = accounts.filter((account) => account.providerId === "github")
+      if (githubAccounts.length !== 1) {
+        return yield* new IdentityBridgeError({
+          reason: `the user has ${githubAccounts.length} GitHub accounts, not one`
+        })
+      }
+      const storedAccessToken = githubAccounts[0]!.accessToken
       if (!storedAccessToken) {
         return yield* new IdentityBridgeError({ reason: "the user has no GitHub access token" })
       }
+      const user = yield* tryAuth("cannot read the user", () =>
+        auth.internalAdapter.findUserById(session.userId)
+      )
+      const linkedAccountId = (user as { golemAccountId?: string | null } | null)?.golemAccountId
       const accessToken = yield* tryAuth("cannot decrypt the GitHub access token", async () =>
         Redacted.make(await decryptOAuthToken(storedAccessToken, auth))
       )
       const golemToken = yield* registry.exchangeGitHubAccessToken(accessToken)
-      yield* tryAuth("cannot store the Golem account ID", () =>
-        auth.internalAdapter.updateUser(session.userId, { golemAccountId: golemToken.accountId })
-      )
+      if (linkedAccountId && linkedAccountId !== golemToken.accountId) {
+        return yield* new IdentityBridgeError({
+          reason: `the registry returned the Golem account ${golemToken.accountId}, but the user is linked to ${linkedAccountId}`
+        })
+      }
+      if (!linkedAccountId) {
+        yield* tryAuth("cannot store the Golem account ID", () =>
+          auth.internalAdapter.updateUser(session.userId, { golemAccountId: golemToken.accountId })
+        )
+      }
       const encryptedSecret = yield* tryAuth("cannot encrypt the Golem API token", () =>
         symmetricEncrypt({ key: auth.secretConfig, data: golemToken.secret })
       )
@@ -211,8 +240,9 @@ export class Auth extends Context.Service<Auth, AuthShape>()("golem-cloud-billin
  * Call it before `betterAuth`: a new Better Auth instance checks the schema at once and logs
  * an error for every missing table.
  */
-export const migrate = (options: BetterAuthOptions, pool: pg.Pool, schema: string): Promise<void> =>
-  withAdvisoryLock(pool, "golem-cloud-billing/migrations", async () => {
+export const migrate = (options: BetterAuthOptions, pool: pg.Pool, db: PostgresConfig): Promise<void> =>
+  withAdvisoryLock(db, "golem-cloud-billing/migrations", async () => {
+    const schema = db.schema
     const existing = await pool.query("SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1", [schema])
     if (existing.rowCount === 0) {
       await pool.query(`CREATE SCHEMA "${schema}"`)
@@ -258,7 +288,7 @@ export const layer: Layer.Layer<Auth, MigrationError, BillingConfig | Database |
       })
 
       yield* Effect.tryPromise({
-        try: () => migrate(options, pool, schema),
+        try: () => migrate(options, pool, config.db),
         catch: (cause) => new MigrationError({ cause })
       })
       yield* Effect.logInfo("Applied the database migrations").pipe(Effect.annotateLogs({ schema }))
