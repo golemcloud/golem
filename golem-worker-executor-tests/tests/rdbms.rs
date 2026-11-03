@@ -1012,12 +1012,19 @@ async fn rdbms_postgres_incomplete_statement_and_stream_report_typed_loss(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::model::card::parse_polymorphic_permission;
     use golem_common::model::oplog::host_functions::HostFunctionName;
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("RelationalDatabases", |config| {
+            config.initial_permissions.lower_bound.positive.push(
+                parse_polymorphic_permission("rdbms(?env) @ * : unanalyzed : database(postgres)")
+                    .unwrap(),
+            );
+        })
         .store()
         .await?;
     let address = postgres.public_connection_string();

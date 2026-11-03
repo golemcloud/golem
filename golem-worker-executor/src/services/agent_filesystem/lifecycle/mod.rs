@@ -12,21 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
-use crate::metrics::agent_filesystem::{self, StorageRefusal};
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::host_directories::HostDirectory;
+use crate::filesystem::host_directories::HostDirectoryError;
 #[cfg(test)]
-use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
-use crate::sandbox_filesystem::{
-    AgentAccounting, FilesystemLimits, FilesystemStorageError, HostDirectory, InstalledLimits,
-    LinkGroup, SandboxAccessMode, SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile,
-    SandboxFileDisposition, SandboxFilesystem, SandboxFilesystemAdapter, SandboxFilesystemName,
-    SandboxFilesystemProvisioning, SandboxFlushLevel, SandboxFollow,
-    SandboxNamespaceCoordinationKey, SandboxNode, SandboxObjectId, SandboxObjectKind,
-    SandboxOpenOptions, SandboxOpened, SandboxPath, SandboxReadRange,
-    SandboxResolvedNamespaceTarget, SandboxSymlinkTarget, SandboxTimeChange, SandboxTimeChanges,
+use crate::filesystem::sandbox::ScriptedSandboxFilesystem;
+use crate::filesystem::sandbox::{
+    FilesystemStorageError, InstalledLimits, LinkGroup, SandboxAccessMode, SandboxAttributes,
+    SandboxDirectoryId, SandboxFile, SandboxFileDisposition, SandboxFilesystem,
+    SandboxFilesystemAdapter, SandboxFilesystemName, SandboxFilesystemProvisioning,
+    SandboxFlushLevel, SandboxFollow, SandboxHandle, SandboxNameComparisonKey, SandboxObjectId,
+    SandboxObjectKind, SandboxOpenOptions, SandboxPath, SandboxReadRange,
+    SandboxResolvedPathTarget, SandboxSymlinkTarget, SandboxTimeChange, SandboxTimeChanges,
     SandboxWriteAttempt, SandboxWritePlacement, SeedAccess, SeedEntry, SeedPlacement,
     TreeExclusions,
 };
+use crate::filesystem::volume::AgentAccounting;
+use crate::filesystem::volume::FilesystemLimits;
+use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
+use crate::metrics::agent_filesystem::{self, StorageRefusal};
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::file_loader::{
     FileLoader, InitialFileLoadError, InitialFileLoadFailure, InitialFileSource,
@@ -99,7 +103,7 @@ use namespace::refuse_read_only_change;
 #[cfg(test)]
 use namespace::remove_postcondition_evidence;
 #[cfg(test)]
-use namespace::resolve_namespace_target;
+use namespace::resolve_path_target;
 use operations::agent_object_kind;
 pub(crate) use operations::attributes;
 use operations::execute_open;
@@ -463,9 +467,8 @@ impl Debug for DeleteFailure {
 impl DeleteFailure {
     fn unverified(operation: &'static str) -> Self {
         Self {
-            source: Arc::new(FilesystemStorageError::verification(
-                operation,
-                std::path::Path::new("<agent-filesystem>"),
+            source: Arc::new(FilesystemStorageError::from(
+                OperationContext::verification(operation, None),
             )),
             retry: None,
         }
@@ -529,6 +532,12 @@ impl From<FilesystemStorageError> for Error {
     }
 }
 
+impl From<HostDirectoryError> for Error {
+    fn from(source: HostDirectoryError) -> Self {
+        Self::Sandbox(source.into())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AccessError {
     Revoked,
@@ -577,10 +586,10 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
         let _lease = self.registry.lease_internal_call();
         let sandbox = self.sandbox.read().await;
         let sandbox = sandbox.as_ref().ok_or_else(|| {
-            FilesystemStorageError::verification(
+            FilesystemStorageError::from(OperationContext::verification(
                 "observe deleted agent filesystem",
-                std::path::Path::new("<agent-filesystem>"),
-            )
+                None,
+            ))
         })?;
         match sandbox.observe_allocation().await {
             Ok(allocation) => Ok(FilesystemUsage::Authoritative {
@@ -758,8 +767,8 @@ struct ActiveNamespaceEdit {
 
 #[derive(Clone, Default)]
 struct NamespaceCoordinationKeys {
-    namespace: Vec<SandboxNamespaceCoordinationKey>,
-    directories: Vec<SandboxDirectoryCoordinationKey>,
+    namespace: Vec<SandboxNameComparisonKey>,
+    directories: Vec<SandboxDirectoryId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -818,16 +827,16 @@ pub(crate) struct Directory {
 }
 
 struct NodeOwnership {
-    sandbox: Option<SandboxNode>,
+    sandbox: Option<SandboxHandle>,
     generation_id: usize,
     access: AccessMode,
     node_lease: Option<NodeLease>,
     invocation: Option<InvocationLease>,
-    close: Option<Box<dyn FnOnce(SandboxNode, NodeLease) -> FilesystemClose + Send>>,
+    close: Option<Box<dyn FnOnce(SandboxHandle, NodeLease) -> FilesystemClose + Send>>,
 }
 
 impl NodeOwnership {
-    fn sandbox(&self) -> &SandboxNode {
+    fn sandbox(&self) -> &SandboxHandle {
         self.sandbox
             .as_ref()
             .expect("filesystem node already closed")
@@ -886,7 +895,7 @@ impl PathTarget {
         let generation_id = directory.ownership.generation_id;
         let access = directory.ownership.access;
         let path = path.into();
-        let SandboxNode::Directory(directory) = directory.ownership.sandbox() else {
+        let SandboxHandle::Directory(directory) = directory.ownership.sandbox() else {
             unreachable!("directory wrapper must contain a sandbox directory")
         };
         Self {
@@ -904,7 +913,7 @@ pub(crate) enum Target<'a> {
 
 #[derive(Clone)]
 enum AttributeTarget {
-    Open(SandboxNode),
+    Open(SandboxHandle),
     Path {
         target: SandboxPath,
         follow: SandboxFollow,
@@ -1071,24 +1080,24 @@ pub(crate) struct WriteResult {
 /// A namespace entry under coordination, with a resolution of the entry.
 struct CoordinatedTarget {
     coordination: NamespaceCoordination,
-    resolved: SandboxResolvedNamespaceTarget,
+    resolved: SandboxResolvedPathTarget,
 }
 
 enum ResolvedNamespaceEdit {
     Insert {
-        destination: SandboxResolvedNamespaceTarget,
+        destination: SandboxResolvedPathTarget,
         object: NewObject,
     },
     Link {
-        source: SandboxResolvedNamespaceTarget,
-        destination: SandboxResolvedNamespaceTarget,
+        source: SandboxResolvedPathTarget,
+        destination: SandboxResolvedPathTarget,
     },
     Move {
-        source: SandboxResolvedNamespaceTarget,
-        destination: SandboxResolvedNamespaceTarget,
+        source: SandboxResolvedPathTarget,
+        destination: SandboxResolvedPathTarget,
     },
     Remove {
-        target: SandboxResolvedNamespaceTarget,
+        target: SandboxResolvedPathTarget,
         expected: ObjectKind,
     },
 }

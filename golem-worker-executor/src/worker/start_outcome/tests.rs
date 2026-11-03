@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::filesystem::errors::OperationContext;
 use crate::services::agent_filesystem::{
     AccessError, FilesystemStorageError, InitialFileConflict, RestoreError,
 };
@@ -330,7 +331,7 @@ fn ordinary_instantiation_errors_are_not_target_refusals() {
 }
 
 fn storage() -> FilesystemStorageError {
-    FilesystemStorageError::verification("seed initial file", Path::new("<scripted>"))
+    FilesystemStorageError::from(OperationContext::verification("seed initial file", None))
 }
 
 fn restore(class: RestoreClass) -> FilesystemError {

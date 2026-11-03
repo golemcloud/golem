@@ -74,14 +74,18 @@ object UnstructuredText {
     new ConcreteCodec[UnstructuredText[L]] {
       def write(value: UnstructuredText[L], out: WireValues): Int = value match {
         case Url(url) =>
-          Unstructured.writeCase(out, Unstructured.UrlCase, WitSchemaValueNode.UrlValue(url))
+          Unstructured.writeCase(
+            out,
+            Unstructured.UrlCase,
+            WitSchemaValueNode.UrlValue(UnicodeText.encodeText("url", url))
+          )
         case Inline(text, languageCode) =>
           val language = languageCode.map(_.toString)
           Unstructured.checkEncode(language, allowed.values, "language code")
           Unstructured.writeCase(
             out,
             Unstructured.InlineCase,
-            WitSchemaValueNode.TextValue(WitTextValuePayload(text, language))
+            WitSchemaValueNode.TextValue(WitTextValuePayload(UnicodeText.encodeText("text", text), language))
           )
       }
 
@@ -97,7 +101,6 @@ object UnstructuredText {
             in.at(payload) { case WitSchemaValueNode.TextValue(text) => inlineValue(text) }
           case WitSchemaValueNode.VariantValue(WitVariantValuePayload(Unstructured.UrlCase, Some(payload))) =>
             in.at(payload) { case WitSchemaValueNode.UrlValue(url) => Url[L](url) }
-          case WitSchemaValueNode.TextValue(text) => inlineValue(text)
         }
       }
 
@@ -171,7 +174,11 @@ object UnstructuredBinary {
     new ConcreteCodec[UnstructuredBinary[M]] {
       def write(value: UnstructuredBinary[M], out: WireValues): Int = value match {
         case Url(url) =>
-          Unstructured.writeCase(out, Unstructured.UrlCase, WitSchemaValueNode.UrlValue(url))
+          Unstructured.writeCase(
+            out,
+            Unstructured.UrlCase,
+            WitSchemaValueNode.UrlValue(UnicodeText.encodeText("url", url))
+          )
         case Inline(data, mimeType) =>
           val mime = mimeType.map(_.toString)
           Unstructured.checkEncode(mime, allowed.values, "MIME type")
@@ -194,7 +201,6 @@ object UnstructuredBinary {
             in.at(payload) { case WitSchemaValueNode.BinaryValue(binary) => inlineValue(binary) }
           case WitSchemaValueNode.VariantValue(WitVariantValuePayload(Unstructured.UrlCase, Some(payload))) =>
             in.at(payload) { case WitSchemaValueNode.UrlValue(url) => Url[M](url) }
-          case WitSchemaValueNode.BinaryValue(binary) => inlineValue(binary)
         }
       }
 
@@ -291,12 +297,14 @@ private[golem] object Unstructured {
   def restrictionFromModifiers(modifiers: Seq[Modifier.Reflect]): Option[List[String]] =
     modifiers.collectFirst { case Modifier.config(RestrictionKey, value) => value.split(Separator, -1).toList }
 
-  def checkEncode(value: Option[String], allowed: Option[List[String]], what: String): Unit =
+  def checkEncode(value: Option[String], allowed: Option[List[String]], what: String): Unit = {
+    value.foreach(UnicodeText.encodeText(what, _))
     disallowed(value, allowed, what).foreach(message => throw SchemaEncodeError(message))
+  }
 
   def disallowed(value: Option[String], allowed: Option[List[String]], what: String): Option[String] =
     (value, allowed) match {
-      case (Some(v), Some(vs)) if !vs.contains(v) =>
+      case (Some(v), Some(vs)) if vs.nonEmpty && !vs.contains(v) =>
         Some(s"$what '$v' is not allowed; allowed: ${vs.mkString(", ")}")
       case _ => None
     }
@@ -332,14 +340,17 @@ private[golem] object Unstructured {
   def textToSchemaValue(value: UnstructuredText[?], allowed: Option[List[String]]): SchemaValue =
     value match {
       case UnstructuredText.Url(url) =>
-        SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(url)))
+        SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(UnicodeText.encodeText("url", url))))
       case UnstructuredText.Inline(text, languageCode) =>
         val language = languageCode.map(_.toString)
         checkEncode(language, allowed, "language code")
-        SchemaValue.VariantValue(InlineCase, Some(SchemaValue.TextValue(text, language)))
+        SchemaValue.VariantValue(
+          InlineCase,
+          Some(SchemaValue.TextValue(UnicodeText.encodeText("text", text), language))
+        )
     }
 
-  /** Accepts the `variant { inline, url }` value or a bare `text` value. */
+  /** Accepts only the `variant { inline, url }` value the schema states. */
   def textFromSchemaValue(
     value: SchemaValue,
     allowed: Option[List[String]]
@@ -354,23 +365,22 @@ private[golem] object Unstructured {
         inlineValue(text, language)
       case SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(url))) =>
         Right(UnstructuredText.Url[String](url))
-      case SchemaValue.TextValue(text, language) => inlineValue(text, language)
-      case other                                 =>
-        Left(FromSchemaError(s"expected unstructured-text variant or text value, got $other"))
+      case other =>
+        Left(FromSchemaError(s"expected unstructured-text variant, got $other"))
     }
   }
 
   def binaryToSchemaValue(value: UnstructuredBinary[?], allowed: Option[List[String]]): SchemaValue =
     value match {
       case UnstructuredBinary.Url(url) =>
-        SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(url)))
+        SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(UnicodeText.encodeText("url", url))))
       case UnstructuredBinary.Inline(data, mimeType) =>
         val mime = mimeType.map(_.toString)
         checkEncode(mime, allowed, "MIME type")
         SchemaValue.VariantValue(InlineCase, Some(SchemaValue.BinaryValue(data.toVector, mime)))
     }
 
-  /** Accepts the `variant { inline, url }` value or a bare `binary` value. */
+  /** Accepts only the `variant { inline, url }` value the schema states. */
   def binaryFromSchemaValue(
     value: SchemaValue,
     allowed: Option[List[String]]
@@ -385,9 +395,8 @@ private[golem] object Unstructured {
         inlineValue(bytes, mimeType)
       case SchemaValue.VariantValue(UrlCase, Some(SchemaValue.UrlValue(url))) =>
         Right(UnstructuredBinary.Url[String](url))
-      case SchemaValue.BinaryValue(bytes, mimeType) => inlineValue(bytes, mimeType)
-      case other                                    =>
-        Left(FromSchemaError(s"expected unstructured-binary variant or binary value, got $other"))
+      case other =>
+        Left(FromSchemaError(s"expected unstructured-binary variant, got $other"))
     }
   }
 

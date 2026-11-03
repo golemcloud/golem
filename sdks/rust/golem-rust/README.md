@@ -90,7 +90,9 @@ enables both. The regex dialect and WHATWG URL/IDNA behavior are unchanged;
 validation that needs a disabled feature returns an explicit error, including
 when registering a tool with regex constraints or validating URL defaults.
 Schema representation, fixed MIME/unit/identifier grammars, and non-regex union
-discriminators remain available without these features.
+discriminators remain available without these features. A tool client decodes
+its tool descriptor, including regex restrictions, without validating it: the
+Golem host validates registered tools and checks each call against them.
 
 ## Retrying user code with semantic policies
 

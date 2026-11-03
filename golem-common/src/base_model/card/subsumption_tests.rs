@@ -1897,6 +1897,60 @@ fn wallet_derivation_parent_selection_applies_upper_intersection_after_lower_uni
 }
 
 #[test]
+fn rdbms_unanalyzed_requires_explicit_scoped_authority() {
+    let grant = |verb: &str, resource: &str| {
+        parse_permission(&format!("rdbms(acme/shop/prod) @ * : {verb} : {resource}")).unwrap()
+    };
+    let requested = grant("unanalyzed", "database(orders)");
+    let target = requested.to_target();
+    let table = grant("mutate", "orders.public.jobs");
+    let explicit = grant("unanalyzed", "database(orders)");
+    let all_databases = grant("unanalyzed", "database(*)");
+    assert!(explicit.subsumes_target(&target));
+    assert!(all_databases.subsumes(&requested));
+    assert!(!explicit.subsumes(&grant("unanalyzed", "database(other)")));
+    assert!(!explicit.subsumes_target(&table.to_target()));
+    for wildcard in [grant("*", "*.*.*"), grant("*", "orders.*.*")] {
+        assert!(!wildcard.subsumes(&requested));
+        assert!(!wildcard.subsumes_target(&target));
+        assert!(!wildcard.to_target().subsumes(&target));
+        assert!(wildcard.subsumes(&table));
+    }
+
+    // Even an internally constructed wildcard verb cannot confer the opt-in capability.
+    let PermissionPattern::Rdbms(mut wildcard) = explicit.clone() else {
+        unreachable!()
+    };
+    wildcard.verb = None;
+    let wildcard = PermissionPattern::Rdbms(wildcard);
+    assert!(!wildcard.subsumes(&requested));
+    assert!(!wildcard.subsumes_target(&target));
+    assert!(!wildcard.to_target().subsumes(&target));
+
+    let holder = RecipientPattern::parse("acme/shop/prod/migrations/Migrator").unwrap();
+    let surface = EffectiveSurface::from_grants(&[explicit], &[], &[], &[], &holder).unwrap();
+    assert!(surface.authorize(&target).unwrap());
+    assert!(!surface.authorize(&table.to_target()).unwrap());
+    assert!(
+        !surface
+            .authorize(&grant("unanalyzed", "database(other)").to_target())
+            .unwrap()
+    );
+
+    for (verb, resource) in [
+        ("*", "database(orders)"),
+        ("mutate", "database(orders)"),
+        ("unanalyzed", "*.*.*"),
+        ("unanalyzed", "database()"),
+        ("unanalyzed", "database(ord*)"),
+    ] {
+        assert!(
+            parse_permission(&format!("rdbms(acme/shop/prod) @ * : {verb} : {resource}")).is_err()
+        );
+    }
+}
+
+#[test]
 fn negative_grants_override_positive_grants() {
     let public = fs_target(
         "acme/shop/prod/cart/agent",

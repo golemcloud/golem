@@ -136,6 +136,7 @@ impl MoonBitToolBridgeGenerator {
                 "\"golemcloud/golem_sdk/interface/golem/core/types\" @types",
             ),
             ("@model.", "\"golemcloud/golem_sdk/schema_model\" @model"),
+            ("@schema.", "\"golemcloud/golem_sdk/schema\""),
             (
                 "@model_host.",
                 "\"golemcloud/golem_sdk/schema_model_host\" @model_host",

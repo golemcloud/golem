@@ -75,24 +75,24 @@ pub struct AgentType {
   methods : Array[AgentMethod]
   config : Array[ReflectedConfigDeclaration]
 } derive(Eq, @debug.Debug)
-pub fn AgentType::agent_id_json(Self, Json, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
-pub fn AgentType::agent_id_value(Self, @schema_model.SchemaValue, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
+pub fn AgentType::agent_id_json(Self, Json, phantom_id? : @schema.Uuid?) -> ParsedAgentId raise ReflectError
+pub fn AgentType::agent_id_value(Self, @schema_model.SchemaValue, phantom_id? : @schema.Uuid?) -> ParsedAgentId raise ReflectError
 pub fn AgentType::config(Self) -> Array[ReflectedConfigDeclaration]
 pub fn AgentType::constructor_input(Self) -> SchemaRef
 pub fn AgentType::description(Self) -> String
 pub fn AgentType::ephemeral_json(Self, Json) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::ephemeral_json_with_config(Self, Json, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
-pub fn AgentType::ephemeral_phantom_json(Self, Json, @types.Uuid) -> ReflectedAgentClient raise ReflectError
-pub fn AgentType::ephemeral_phantom_json_with_config(Self, Json, @types.Uuid, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
-pub fn AgentType::ephemeral_phantom_value(Self, @schema_model.SchemaValue, @types.Uuid) -> ReflectedAgentClient raise ReflectError
-pub fn AgentType::ephemeral_phantom_value_with_config(Self, @schema_model.SchemaValue, @types.Uuid, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_phantom_json(Self, Json, @schema.Uuid) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_phantom_json_with_config(Self, Json, @schema.Uuid, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_phantom_value(Self, @schema_model.SchemaValue, @schema.Uuid) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::ephemeral_phantom_value_with_config(Self, @schema_model.SchemaValue, @schema.Uuid, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::ephemeral_value(Self, @schema_model.SchemaValue) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::ephemeral_value_with_config(Self, @schema_model.SchemaValue, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::find_method(Self, String) -> AgentMethod?
 pub fn AgentType::get_json(Self, Json) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::get_json_with_config(Self, Json, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
-pub fn AgentType::get_phantom_json_with_config(Self, Json, @types.Uuid, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
-pub fn AgentType::get_phantom_value_with_config(Self, @schema_model.SchemaValue, @types.Uuid, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::get_phantom_json_with_config(Self, Json, @schema.Uuid, Array[ReflectedConfigJsonValue]) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::get_phantom_value_with_config(Self, @schema_model.SchemaValue, @schema.Uuid, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::get_value(Self, @schema_model.SchemaValue) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::get_value_with_config(Self, @schema_model.SchemaValue, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::implemented_by(Self) -> @types.ComponentId
@@ -104,14 +104,14 @@ pub fn AgentType::new_phantom_json_with_config(Self, Json, Array[ReflectedConfig
 pub fn AgentType::new_phantom_value(Self, @schema_model.SchemaValue) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::new_phantom_value_with_config(Self, @schema_model.SchemaValue, Array[ReflectedConfigValue]) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::pack_config_json(Self, Array[ReflectedConfigJsonValue]) -> Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue] raise ReflectError
-pub fn AgentType::resume_phantom_json(Self, Json, @types.Uuid) -> ReflectedAgentClient raise ReflectError
-pub fn AgentType::resume_phantom_value(Self, @schema_model.SchemaValue, @types.Uuid) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::resume_phantom_json(Self, Json, @schema.Uuid) -> ReflectedAgentClient raise ReflectError
+pub fn AgentType::resume_phantom_value(Self, @schema_model.SchemaValue, @schema.Uuid) -> ReflectedAgentClient raise ReflectError
 pub fn AgentType::source_language(Self) -> String
 pub fn AgentType::validate_config_values(Self, Array[ReflectedConfigValue]) -> Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue] raise ReflectError
 
 pub(all) struct CreatedPhantomClient {
   agent_id : ParsedAgentId
-  phantom_id : @types.Uuid
+  phantom_id : @schema.Uuid
   client : DynamicAgentClient
 }
 
@@ -125,7 +125,7 @@ pub fn DynamicAgentClient::from_agent_id(ParsedAgentId) -> Self raise ReflectErr
 pub async fn DynamicAgentClient::invoke_value(Self, String, @schema_model.SchemaValue, scope_card? : @permissions.ScopeCard) -> Invocation[@schema_model.SchemaValue?]
 pub fn DynamicAgentClient::lookup(String, @schema_model.SchemaValue) -> Self raise ReflectError
 pub fn DynamicAgentClient::new_phantom(String, @schema_model.SchemaValue) -> CreatedPhantomClient raise ReflectError
-pub fn DynamicAgentClient::resume_phantom(String, @schema_model.SchemaValue, @types.Uuid) -> Self raise ReflectError
+pub fn DynamicAgentClient::resume_phantom(String, @schema_model.SchemaValue, @schema.Uuid) -> Self raise ReflectError
 pub fn DynamicAgentClient::schedule_value(Self, @system-clock.Instant, String, @schema_model.SchemaValue) -> ScheduledInvocation raise ReflectError
 pub fn DynamicAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn DynamicAgentClient::trigger_value(Self, String, @schema_model.SchemaValue) -> InvocationMetadata raise ReflectError
@@ -142,17 +142,17 @@ pub(all) struct FullAgentClient {
   reusable_identity : ParsedAgentId?
   // private fields
 }
-pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(String, C, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
+pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(String, C, phantom_id? : @schema.Uuid?) -> ParsedAgentId raise ReflectError
 pub fn[C : @schema.FromSchema] FullAgentClient::bind(String, ParsedAgentId, @schema.TypeTag[C]) -> Self raise ReflectError
 pub fn[C : @schema.FromSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::bind_with_config(String, ParsedAgentId, @schema.TypeTag[C], Config) -> Self raise ReflectError
 pub fn FullAgentClient::drop(Self) -> Unit
 pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral(String, C) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral_phantom(String, C, @types.Uuid) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_phantom_with_config(String, C, @types.Uuid, Config) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral_phantom(String, C, @schema.Uuid) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_phantom_with_config(String, C, @schema.Uuid, Config) -> Self raise ReflectError
 pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_with_config(String, C, Config) -> Self raise ReflectError
 pub fn[C : @schema.IntoSchema] FullAgentClient::get(String, C) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema] FullAgentClient::get_phantom(String, C, @types.Uuid) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_phantom_with_config(String, C, @types.Uuid, Config) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema] FullAgentClient::get_phantom(String, C, @schema.Uuid) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_phantom_with_config(String, C, @schema.Uuid, Config) -> Self raise ReflectError
 pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_with_config(String, C, Config) -> Self raise ReflectError
 pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::invoke(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[O]
 pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[Unit]
@@ -187,18 +187,18 @@ pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::tr
 pub(all) struct ParsedAgentId {
   value : String
 } derive(Eq, @debug.Debug)
-pub fn ParsedAgentId::create(String, @schema_model.SchemaValue, phantom_id? : @types.Uuid?) -> Self raise ReflectError
+pub fn ParsedAgentId::create(String, @schema_model.SchemaValue, phantom_id? : @schema.Uuid?) -> Self raise ReflectError
 pub fn ParsedAgentId::parts(Self) -> ParsedAgentIdParts raise ReflectError
 
 pub(all) struct ParsedAgentIdParts {
   type_name : String
   constructor_value : @schema_model.SchemaValue
-  phantom_id : @types.Uuid?
+  phantom_id : @schema.Uuid?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ReflectedAgentClient {
   reusable_identity : ParsedAgentId?
-  phantom_id : @types.Uuid?
+  phantom_id : @schema.Uuid?
   // private fields
 }
 pub fn ReflectedAgentClient::drop(Self) -> Unit

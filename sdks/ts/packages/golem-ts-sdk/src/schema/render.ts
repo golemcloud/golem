@@ -22,7 +22,7 @@ import {
   type SchemaValue,
 } from '../internal/schema-model';
 import { Uuid } from '../uuid';
-import { datetimeFromISOString, datetimeToISOString } from '../bridge/schema';
+import { Datetime } from '../datetime';
 import { SchemaRenderError, type JsonValue } from './ref';
 
 type Path = readonly (string | number)[];
@@ -102,7 +102,7 @@ export function fromCanonicalJson(
     case 'url':
       return { tag: 'url', value: expectNonEmptyString(json, path) };
     case 'datetime':
-      return { tag: 'datetime', value: datetimeFromISOString(expectString(json, path)) };
+      return { tag: 'datetime', value: Datetime.parse(expectString(json, path)) };
     case 'duration':
       return { tag: 'duration', nanoseconds: decodeDuration(json, path) };
     case 'quantity':
@@ -290,7 +290,7 @@ export function toCanonicalJson(
       };
     }
     case 'datetime':
-      return datetimeToISOString(value.value);
+      return Datetime.toISOString(value.value);
     case 'duration':
       return {
         nanoseconds: checkedIntegerString(

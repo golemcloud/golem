@@ -16,9 +16,10 @@
 
 package golem.runtime
 
-import golem.{Principal, Uuid}
+import golem.Principal
 import golem.config.Config
 
+import java.util.UUID
 import scala.concurrent.Future
 
 /**
@@ -27,7 +28,7 @@ import scala.concurrent.Future
 final case class SnapshotRestoreContext(
   identityFields: Vector[Any],
   agentId: String,
-  phantomId: Option[Uuid],
+  phantomId: Option[UUID],
   restoredPrincipal: Principal,
   private val freshConfig: Option[Config[_]]
 ) {

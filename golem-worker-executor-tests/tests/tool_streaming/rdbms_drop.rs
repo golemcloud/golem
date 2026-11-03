@@ -1,5 +1,6 @@
 use super::snapshot_attachments::DisposalScheduleComponentService;
 use super::*;
+use golem_common::model::card::parse_polymorphic_permission;
 use golem_common::model::oplog::{OplogEntry, OplogPayload};
 use golem_service_base::storage::blob::{
     BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
@@ -92,6 +93,13 @@ async fn transaction_drop_disposal(
         .await?;
     let component = executor
         .component_dep(&context.default_environment_id, caller)
+        .update_agent_provision_config("ToolStreamingCaller", |config| {
+            // The tool uses its caller's wallet for the trusted nextval sequence probe.
+            config.initial_permissions.lower_bound.positive.push(
+                parse_polymorphic_permission("rdbms(?env) @ * : unanalyzed : database(postgres)")
+                    .unwrap(),
+            );
+        })
         .store()
         .await?;
     let metadata = extract_component_metadata(

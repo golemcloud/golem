@@ -22,6 +22,16 @@ import (
 // Tuple conversions, one pair per arity the value vocabulary provides. They
 // are identical but for the arity, and Go cannot abstract over it.
 
+// EncodeUnit and DecodeUnit convert the empty tuple.
+func EncodeUnit(values.Unit) schema.SchemaValue {
+	return schema.TupleValue{Elements: []schema.SchemaValue{}}
+}
+
+func DecodeUnit(sv schema.SchemaValue) (values.Unit, error) {
+	_, err := tupleElements(sv, 0)
+	return values.Unit{}, err
+}
+
 func EncodeTuple1[A any](t values.Tuple1[A], fa Encoder[A]) schema.SchemaValue {
 	return schema.TupleValue{Elements: []schema.SchemaValue{fa(t.A)}}
 }

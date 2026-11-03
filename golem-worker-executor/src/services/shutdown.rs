@@ -19,14 +19,14 @@ use std::time::Duration;
 use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::debug;
+use tracing::{debug, warn};
 
 const SHUTDOWN_GRACE_MILLIS: u64 = 10_000;
 const DEREGISTER_DEADLINE_MILLIS: u64 = 8_000;
 
 /// How long a termination signal waits for the tasks spawned through [`Shutdown::spawn`] to
-/// finish - in practice, for the shard lease deregistration to land. It is a bound, not a wait:
-/// a healthy shutdown drains in milliseconds, and this only binds when the shard manager is slow.
+/// finish, including shard deregistration and executor directory cleanup after invocation and
+/// snapshot work drains. This is a shared bound, not an additional grace for each task.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_millis(SHUTDOWN_GRACE_MILLIS);
 
 /// How long the deregister RPC itself may take. Lives here, beside the grace that contains it,
@@ -91,6 +91,20 @@ impl Shutdown {
         self.inner.token.cancel();
     }
 
+    /// Signals this executor, waits within `grace`, and warns if tracked work remains.
+    /// This does not abort tasks or prove release when it returns `false`.
+    pub async fn cancel_and_wait_for_tracked(&self, grace: Duration) -> bool {
+        self.cancel();
+        let completed = self.wait_for_tracked(grace).await;
+        if !completed {
+            warn!(
+                ?grace,
+                "Background tasks did not finish within the shutdown grace period; executor resources may still be held"
+            );
+        }
+        completed
+    }
+
     /// Spawns a task whose completion [`Self::wait_for_tracked`] waits for.
     pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
     where
@@ -103,10 +117,15 @@ impl Shutdown {
     /// Waits up to `grace` for every task spawned through [`Self::spawn`] to
     /// finish. Meant to follow [`Self::cancel`]. `true` if they all did.
     pub async fn wait_for_tracked(&self, grace: Duration) -> bool {
-        self.inner.tracker.close();
-        tokio::time::timeout(grace, self.inner.tracker.wait())
+        tokio::time::timeout(grace, self.join_tracked())
             .await
             .is_ok()
+    }
+
+    /// Joins tracked tasks when the caller already owns the shutdown deadline.
+    pub async fn join_tracked(&self) {
+        self.inner.tracker.close();
+        self.inner.tracker.wait().await;
     }
 }
 
@@ -167,9 +186,10 @@ mod tests {
             flag.store(true, Ordering::Release);
         });
 
-        shutdown.cancel();
         assert!(
-            shutdown.wait_for_tracked(Duration::from_secs(2)).await,
+            shutdown
+                .cancel_and_wait_for_tracked(Duration::from_secs(2))
+                .await,
             "tracked work should finish inside the grace"
         );
         assert!(

@@ -15,7 +15,7 @@
 use super::{
     FileInspection, FilesystemGenerationHandle, ReadRange, open_file_for_inspection, read_file,
 };
-use crate::sandbox_filesystem::SandboxFilesystemAdapter;
+use crate::filesystem::sandbox::SandboxFilesystemAdapter;
 use bytes::Bytes;
 use futures::Stream;
 use futures::task::AtomicWaker;

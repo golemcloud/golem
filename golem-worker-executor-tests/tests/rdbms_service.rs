@@ -212,6 +212,288 @@ impl<T: RdbmsType> RdbmsTest<T> {
 }
 
 #[test]
+async fn postgres_regclass_results_use_oid_values(
+    postgres: &DockerPostgresRdb,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    use postgres_types::{DbColumn, DbColumnType, DbValue};
+
+    let columns = [
+        ("relation", DbColumnType::Oid, "REGCLASS"),
+        ("relations", DbColumnType::Oid.into_array(), "REGCLASS[]"),
+        ("oid", DbColumnType::Oid, "OID"),
+        ("oids", DbColumnType::Oid.into_array(), "OID[]"),
+        ("absent", DbColumnType::Oid, "REGCLASS"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(ordinal, (name, db_type, db_type_name))| DbColumn {
+        ordinal: ordinal as u64,
+        name: name.to_string(),
+        db_type,
+        db_type_name: db_type_name.to_string(),
+    })
+    .collect::<Vec<_>>();
+    let rows = vec![DbRow {
+        values: vec![
+            DbValue::Oid(4_000_000_001),
+            DbValue::Array(vec![DbValue::Oid(17), DbValue::Oid(71_029)]),
+            DbValue::Oid(90_001),
+            DbValue::Array(vec![DbValue::Oid(53), DbValue::Oid(107)]),
+            DbValue::Null,
+        ],
+    }];
+    let query = StatementTest::query_test(
+        "SELECT 4000000001::oid::pg_catalog.regclass AS relation,
+                ARRAY[17::oid::pg_catalog.regclass, 71029::oid::pg_catalog.regclass] AS relations,
+                90001::oid AS oid, ARRAY[53::oid, 107::oid] AS oids, NULL::pg_catalog.regclass AS absent",
+        vec![],
+        Some(columns.clone()),
+        Some(rows.clone()),
+    );
+    let service = rdbms_service.postgres();
+    let agent_id = new_agent_id();
+    let address = postgres.public_connection_string();
+    let key = service.create(&address, &agent_id).await.unwrap();
+    let schema = format!("regclass_shadow_{}", Uuid::new_v4().simple());
+    for statement in [
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE DOMAIN {schema}.regclass AS text"),
+    ] {
+        service
+            .execute(&key, &agent_id, &statement, vec![])
+            .await
+            .unwrap();
+    }
+    let mut shadow_address = key.address.clone();
+    shadow_address.query_pairs_mut().append_pair(
+        "options",
+        &format!("-csearch_path={schema},pg_catalog,public"),
+    );
+    for address in [address.as_str(), shadow_address.as_str()] {
+        rdbms_test(
+            service.clone(),
+            address,
+            RdbmsTest::new(
+                vec![
+                    query.clone(),
+                    query
+                        .clone()
+                        .with_query_stream_expected(Some(columns.clone()), Some(rows.clone())),
+                ],
+                None,
+            ),
+        )
+        .await;
+    }
+    service
+        .execute(
+            &key,
+            &agent_id,
+            &format!("DROP SCHEMA {schema} CASCADE"),
+            vec![],
+        )
+        .await
+        .unwrap();
+    service.remove(&key, &agent_id).await;
+}
+
+#[test]
+async fn postgres_catalog_qualified_migrator_dispatch_ignores_session_shadows(
+    postgres: &DockerPostgresRdb,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    use postgres_types::DbValue;
+
+    let service = rdbms_service.postgres();
+    let agent_id = new_agent_id();
+    let key = service
+        .create(&postgres.public_connection_string(), &agent_id)
+        .await
+        .unwrap();
+    let transaction = service.begin_transaction(&key, &agent_id).await.unwrap();
+    let schema = format!("migrator_{}", Uuid::new_v4().simple());
+    for statement in [
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE TABLE {schema}.effects (value integer)"),
+        format!("INSERT INTO {schema}.effects VALUES (0)"),
+        format!(
+            "CREATE FUNCTION {schema}.now() RETURNS timestamptz LANGUAGE plpgsql AS 'BEGIN UPDATE {schema}.effects SET value = value + 1; RETURN pg_catalog.now(); END'"
+        ),
+        format!(
+            "CREATE FUNCTION {schema}.bump() RETURNS boolean LANGUAGE plpgsql AS 'BEGIN UPDATE {schema}.effects SET value = value + 1; RETURN true; END'"
+        ),
+        format!("CREATE DOMAIN {schema}.regclass AS text CHECK ({schema}.bump())"),
+        format!("CREATE DOMAIN {schema}.text AS pg_catalog.text CHECK ({schema}.bump())"),
+        format!("CREATE DOMAIN {schema}.uuid AS pg_catalog.text CHECK ({schema}.bump())"),
+        format!("SET LOCAL search_path = {schema}, pg_catalog, public"),
+        format!(
+            "CREATE TABLE {schema}.migrations (migration_id integer PRIMARY KEY, name pg_catalog.text, user_id pg_catalog.uuid, tags pg_catalog.text[], created_at timestamp NOT NULL DEFAULT pg_catalog.now())"
+        ),
+        format!("INSERT INTO {schema}.migrations (migration_id, name) VALUES (1, 'initial')"),
+    ] {
+        transaction.execute(&statement, vec![]).await.unwrap();
+    }
+    transaction.execute(
+        &format!("INSERT INTO {schema}.migrations (migration_id, user_id, tags) VALUES (2, $1::pg_catalog.uuid, $2)"),
+        vec![DbValue::Text(Uuid::new_v4().to_string()), DbValue::Array(vec![DbValue::Text("tag".to_string())])],
+    ).await.unwrap();
+    let statement = "SELECT pg_catalog.now() IS NOT NULL, $1::pg_catalog.regclass";
+    let params = vec![DbValue::Text(format!("{schema}.migrations"))];
+    let result = transaction.query(statement, params.clone()).await.unwrap();
+    assert!(matches!(
+        result.rows[0].values.as_slice(),
+        [DbValue::Boolean(true), DbValue::Oid(_)]
+    ));
+    let stream = transaction.query_stream(statement, params).await.unwrap();
+    let streamed = DbResult::from(stream).await.unwrap();
+    assert_eq!(streamed, result);
+    let effects = transaction
+        .query(&format!("SELECT value FROM {schema}.effects"), vec![])
+        .await
+        .unwrap();
+    assert_eq!(effects.rows[0].values, vec![DbValue::Int4(0)]);
+
+    // Establish that the session really resolves the unqualified spellings to
+    // the hostile objects, rather than merely using an ineffective search path.
+    transaction
+        .query("SELECT now(), 'relation'::regclass", vec![])
+        .await
+        .unwrap();
+    let effects = transaction
+        .query(&format!("SELECT value FROM {schema}.effects"), vec![])
+        .await
+        .unwrap();
+    assert_eq!(effects.rows[0].values, vec![DbValue::Int4(2)]);
+    transaction.rollback().await.unwrap();
+    service.remove(&key, &agent_id).await;
+}
+
+#[test]
+async fn postgres_custom_bound_cast_source_is_not_builtin_text(
+    postgres: &DockerPostgresRdb,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    use postgres_types::{Composite, DbValue};
+
+    let service = rdbms_service.postgres();
+    let agent_id = new_agent_id();
+    let key = service
+        .create(&postgres.public_connection_string(), &agent_id)
+        .await
+        .unwrap();
+    let transaction = service.begin_transaction(&key, &agent_id).await.unwrap();
+    let schema = format!("cast_source_{}", Uuid::new_v4().simple());
+    for statement in [
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE TABLE {schema}.effects (value integer)"),
+        format!("INSERT INTO {schema}.effects VALUES (0)"),
+        format!("CREATE TYPE {schema}.payload AS (value integer)"),
+        format!(
+            "CREATE FUNCTION {schema}.payload_regclass({schema}.payload) RETURNS pg_catalog.regclass LANGUAGE plpgsql AS 'BEGIN UPDATE {schema}.effects SET value = value + 1; RETURN ''{schema}.effects''::pg_catalog.regclass; END'"
+        ),
+        format!(
+            "CREATE CAST ({schema}.payload AS pg_catalog.regclass) WITH FUNCTION {schema}.payload_regclass({schema}.payload)"
+        ),
+    ] {
+        transaction.execute(&statement, vec![]).await.unwrap();
+    }
+    let text = DbValue::Text(format!("{schema}.effects"));
+    let payload = DbValue::Composite(Composite::new(
+        format!("{schema}.payload"),
+        vec![DbValue::Int4(1)],
+    ));
+    assert!(PostgresType::is_builtin_text_parameter(&text));
+    assert!(!PostgresType::is_builtin_text_parameter(&payload));
+    let statement = "SELECT $1::pg_catalog.regclass";
+    transaction.query(statement, vec![text]).await.unwrap();
+    let effects = transaction
+        .query(&format!("SELECT value FROM {schema}.effects"), vec![])
+        .await
+        .unwrap();
+    assert_eq!(effects.rows[0].values, vec![DbValue::Int4(0)]);
+
+    // Direct service calls have no card gate. This control demonstrates why host
+    // admission must check the encoder's source type as well as the SQL type name.
+    transaction
+        .query(statement, vec![payload.clone()])
+        .await
+        .unwrap();
+    let stream = transaction
+        .query_stream(statement, vec![payload])
+        .await
+        .unwrap();
+    let _ = DbResult::from(stream).await.unwrap();
+    let effects = transaction
+        .query(&format!("SELECT value FROM {schema}.effects"), vec![])
+        .await
+        .unwrap();
+    assert_eq!(effects.rows[0].values, vec![DbValue::Int4(2)]);
+
+    // Enum labels and text share their wire representation. Reusing a statement
+    // prepared for the enum would execute its cast even when the next value is Text.
+    for statement in [
+        format!("CREATE TYPE {schema}.label AS ENUM ('{schema}.effects')"),
+        format!(
+            "CREATE FUNCTION {schema}.label_regclass({schema}.label) RETURNS pg_catalog.regclass LANGUAGE plpgsql AS 'BEGIN UPDATE {schema}.effects SET value = value + 1; RETURN ''{schema}.effects''::pg_catalog.regclass; END'"
+        ),
+        format!(
+            "CREATE CAST ({schema}.label AS pg_catalog.regclass) WITH FUNCTION {schema}.label_regclass({schema}.label)"
+        ),
+    ] {
+        transaction.execute(&statement, vec![]).await.unwrap();
+    }
+    for (index, operation) in ["execute", "query", "stream"].into_iter().enumerate() {
+        let statement = format!("SELECT $1::pg_catalog.regclass /* {operation} source type */");
+        let custom = DbValue::Enumeration(Enumeration::new(
+            format!("{schema}.label"),
+            format!("{schema}.effects"),
+        ));
+        match operation {
+            "execute" => {
+                transaction.execute(&statement, vec![custom]).await.unwrap();
+            }
+            "query" => {
+                transaction.query(&statement, vec![custom]).await.unwrap();
+            }
+            "stream" => {
+                let stream = transaction
+                    .query_stream(&statement, vec![custom])
+                    .await
+                    .unwrap();
+                let _ = DbResult::from(stream).await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let expected_effects = vec![DbValue::Int4(3 + index as i32)];
+        let effects = transaction
+            .query(&format!("SELECT value FROM {schema}.effects"), vec![])
+            .await
+            .unwrap();
+        assert_eq!(effects.rows[0].values, expected_effects, "{operation}");
+
+        let result = transaction
+            .query(&statement, vec![DbValue::Text(format!("{schema}.effects"))])
+            .await
+            .unwrap();
+        assert!(matches!(
+            result.rows[0].values.as_slice(),
+            [DbValue::Oid(_)]
+        ));
+        let effects = transaction
+            .query(&format!("SELECT value FROM {schema}.effects"), vec![])
+            .await
+            .unwrap();
+        assert_eq!(
+            effects.rows[0].values, expected_effects,
+            "{operation}: a later text binding must not execute the earlier enum cast"
+        );
+    }
+    transaction.rollback().await.unwrap();
+    service.remove(&key, &agent_id).await;
+}
+
+#[test]
 async fn postgres_transaction_tests(
     postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,

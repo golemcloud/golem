@@ -16,10 +16,10 @@
 
 package golem.runtime.rpc.host
 
-import golem.Uuid
 import golem.host.js._
 import golem.host.js.schema.{JsSchemaGraph, JsSchemaValueTree, JsTypedSchemaValue}
 
+import java.util.UUID
 import scala.annotation.unused
 
 import scala.scalajs.js
@@ -69,7 +69,7 @@ object AgentHostApi {
     def get(): js.Promise[Uint8Array] = js.native
   }
 
-  final case class AgentIdParts(agentTypeName: String, payload: JsTypedSchemaValue, phantom: Option[Uuid])
+  final case class AgentIdParts(agentTypeName: String, payload: JsTypedSchemaValue, phantom: Option[UUID])
 
   def registeredAgentType(typeName: String): Option[RegisteredAgentType] = {
     val v = AgentRegistryModule.getAgentType(typeName)
@@ -84,8 +84,8 @@ object AgentHostApi {
   def getAllAgentTypes(): List[RegisteredAgentType] =
     AgentRegistryModule.getAllAgentTypes().toList
 
-  def makeAgentId(agentTypeName: String, payload: JsSchemaValueTree, phantom: Option[Uuid]): Either[String, String] = {
-    val phantomArg = phantom.fold[js.Any](js.undefined)(uuid => toUuidLiteral(uuid))
+  def makeAgentId(agentTypeName: String, payload: JsSchemaValueTree, phantom: Option[UUID]): Either[String, String] = {
+    val phantomArg = phantom.fold[js.Any](js.undefined)(uuid => JsUuid.fromUuid(uuid))
     try Right(AgentRegistryModule.makeAgentId(agentTypeName, payload, phantomArg))
     catch {
       case js.JavaScriptException(err) => Left(err.toString)
@@ -98,9 +98,9 @@ object AgentHostApi {
       val agentType             = tuple(0).asInstanceOf[String]
       val dataValue             = tuple(1).asInstanceOf[JsTypedSchemaValue]
       val phantomValue          = tuple(2)
-      val phantom: Option[Uuid] =
+      val phantom: Option[UUID] =
         if (phantomValue == null || js.isUndefined(phantomValue)) None
-        else Some(fromUuidLiteral(phantomValue.asInstanceOf[UuidLiteral]))
+        else Some(JsUuid.toUuid(phantomValue.asInstanceOf[UuidLiteral]))
       Right(AgentIdParts(agentType, dataValue, phantom))
     } catch {
       case js.JavaScriptException(err) => Left(err.toString)
@@ -170,18 +170,6 @@ object AgentHostApi {
     val phantomId = details.forkedPhantomId
     (tag, phantomId)
   }
-
-  private def toUuidLiteral(uuid: Uuid): UuidLiteral =
-    JsUuid(
-      highBits = js.BigInt(uuid.highBits.toString),
-      lowBits = js.BigInt(uuid.lowBits.toString)
-    )
-
-  private def fromUuidLiteral(uuid: UuidLiteral): Uuid =
-    Uuid(
-      highBits = _root_.scala.BigInt(uuid.highBits.toString),
-      lowBits = _root_.scala.BigInt(uuid.lowBits.toString)
-    )
 
   object AgentStatus {
     def Running: AgentStatus = "running"
@@ -318,6 +306,9 @@ object AgentHostApi {
   object UuidLiteral {
     def apply(highBits: BigInt, lowBits: BigInt): UuidLiteral =
       JsUuid(highBits, lowBits)
+
+    def apply(uuid: UUID): UuidLiteral =
+      JsUuid.fromUuid(uuid)
   }
 
   @js.native

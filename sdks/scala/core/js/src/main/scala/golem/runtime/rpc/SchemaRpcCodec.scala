@@ -21,8 +21,9 @@ import golem.host.js.schema.{JsSchemaValueTree, JsTypedAgentConfigValue, JsTyped
 import golem.runtime.autowire.SchemaPayload
 import golem.schema._
 import golem.schema.wire.SchemaWire
-import golem.{UByte, UInt, ULong, UShort, Uuid}
+import golem.{UByte, UInt, ULong, UShort}
 
+import java.util.UUID
 import scala.collection.immutable.ListMap
 import scala.concurrent.Future
 import scala.scalajs.js
@@ -94,11 +95,7 @@ private[golem] object SchemaRpcCodec {
     SchemaValue.U64Value((x & MaxU64).toLong)
   }
 
-  def encodeChar(v: Char): SchemaValue = {
-    if (java.lang.Character.isSurrogate(v))
-      throw new RuntimeException(f"scala.Char U+${v.toInt}%04X is a surrogate, not a valid Unicode scalar value")
-    SchemaValue.CharValue(v.toInt)
-  }
+  def encodeChar(v: Char): SchemaValue = SchemaValue.CharValue(UnicodeText.encodeChar(v))
 
   private def mismatch(expected: String, got: SchemaValue): Nothing =
     throw new RuntimeException(s"Expected a $expected value, got $got")
@@ -151,29 +148,41 @@ private[golem] object SchemaRpcCodec {
     case SchemaValue.CharValue(x) if x >= 0 && x <= 0xffff && !java.lang.Character.isSurrogate(x.toChar) =>
       x.toChar
     case SchemaValue.CharValue(x) =>
-      throw new RuntimeException(f"Schema char U+$x%04X cannot be represented as a scala.Char")
+      throw SchemaDecodeError(f"Schema char U+$x%04X cannot be represented as a scala.Char")
     case o => mismatch("char", o)
   }
   def asString(v: SchemaValue): String = v match {
     case SchemaValue.StringValue(x) => x
     case o                          => mismatch("string", o)
   }
-  def asPath(v: SchemaValue): String = v match {
-    case SchemaValue.PathValue(x) => x
+  def asPath(v: SchemaValue): GolemPath = v match {
+    case SchemaValue.PathValue(x) => GolemPath(x)
     case o                        => mismatch("path", o)
   }
-  def asUrl(v: SchemaValue): String = v match {
-    case SchemaValue.UrlValue(x) => x
+  def asUrl(v: SchemaValue): java.net.URI = v match {
+    case SchemaValue.UrlValue(x) => UrlText.parse(x).fold(error => throw SchemaDecodeError(error), identity)
     case o                       => mismatch("url", o)
   }
   def asDatetime(v: SchemaValue): java.time.Instant = v match {
-    case SchemaValue.DatetimeValue(x) => java.time.Instant.ofEpochSecond(x.seconds, x.nanoseconds.toLong)
-    case o                            => mismatch("datetime", o)
+    case SchemaValue.DatetimeValue(x) if x.nanoseconds >= 0 && x.nanoseconds < 1000000000 =>
+      try java.time.Instant.ofEpochSecond(x.seconds, x.nanoseconds.toLong)
+      catch {
+        case _: java.time.DateTimeException => throw SchemaDecodeError(s"datetime out of Instant range: $x")
+      }
+    case SchemaValue.DatetimeValue(x) =>
+      throw SchemaDecodeError(s"datetime nanoseconds out of range: ${x.nanoseconds} (expected 0..999999999)")
+    case o => mismatch("datetime", o)
   }
-  def asDuration(v: SchemaValue): Long = v match {
-    case SchemaValue.DurationValue(x) => x
+  def asDuration(v: SchemaValue): java.time.Duration = v match {
+    case SchemaValue.DurationValue(x) => java.time.Duration.ofNanos(x)
     case o                            => mismatch("duration", o)
   }
+
+  def encodePath(v: GolemPath): SchemaValue             = SchemaValue.PathValue(UnicodeText.encodeText("path", v.value))
+  def encodeUrl(v: java.net.URI): SchemaValue           = SchemaValue.UrlValue(UrlText.encode(v))
+  def encodeDatetime(v: java.time.Instant): SchemaValue =
+    SchemaValue.DatetimeValue(Datetime(v.getEpochSecond, v.getNano))
+  def encodeDuration(v: java.time.Duration): SchemaValue = SchemaValue.DurationValue(DurationNanos.of(v))
 
   def recordFields(v: SchemaValue): List[SchemaValue] = v match {
     case SchemaValue.RecordValue(fields) => fields
@@ -223,15 +232,9 @@ private[golem] object SchemaRpcCodec {
   def requiredPayload(payload: Option[SchemaValue], context: String): SchemaValue =
     payload.getOrElse(throw new RuntimeException(s"Missing payload for $context"))
 
-  def encodeUuid(uuid: Uuid): SchemaValue = {
-    if (uuid.highBits < 0 || uuid.highBits > MaxU64)
-      throw new RuntimeException(s"UUID high half ${uuid.highBits} out of range [0, $MaxU64]")
-    if (uuid.lowBits < 0 || uuid.lowBits > MaxU64)
-      throw new RuntimeException(s"UUID low half ${uuid.lowBits} out of range [0, $MaxU64]")
-    SchemaValue.UuidValue(uuid)
-  }
+  def encodeUuid(uuid: UUID): SchemaValue = SchemaValue.UuidValue(uuid)
 
-  def decodeUuidOrThrow(value: SchemaValue): Uuid = value match {
+  def decodeUuidOrThrow(value: SchemaValue): UUID = value match {
     case SchemaValue.UuidValue(uuid) => uuid
     case other                       => throw new RuntimeException(s"Expected a uuid value, got $other")
   }

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
 )
 
 // A scripted session server: each connection runs the next script.
@@ -40,6 +42,8 @@ type fakeServer struct {
 	srv     *httptest.Server
 	// conns counts the connections the server accepted.
 	conns int
+	// refusals are the HTTP statuses the next upgrade requests get.
+	refusals []int
 }
 
 func (f *fakeServer) connections() int {
@@ -55,6 +59,15 @@ func newFakeServer(t *testing.T, scripts ...func(*fakeConn)) *fakeServer {
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}
+		f.mu.Lock()
+		if len(f.refusals) > 0 {
+			status := f.refusals[0]
+			f.refusals = f.refusals[1:]
+			f.mu.Unlock()
+			http.Error(w, "refused", status)
+			return
+		}
+		f.mu.Unlock()
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{sessionSubprotocol}})
 		if err != nil {
 			return
@@ -79,6 +92,20 @@ func newFakeServer(t *testing.T, scripts ...func(*fakeConn)) *fakeServer {
 
 func (f *fakeServer) agent(t *testing.T) *Agent {
 	return f.agentWith(t, nil)
+}
+
+// agentWithin is an agent of the server with the given reconnect window.
+func (f *fakeServer) agentWithin(t *testing.T, window time.Duration) *Agent {
+	return agentAt(t, f.srv.URL, window)
+}
+
+func agentAt(t *testing.T, url string, window time.Duration) *Agent {
+	a, err := NewAgent("Target", schema.RecordValue{Fields: []schema.SchemaValue{schema.StringValue{Value: "t1"}}},
+		WithConfiguration(Configuration{Server: Custom(url, "token"), AppName: "app", EnvName: "env", ReconnectWindow: window}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }
 
 // agentWith is an agent of the server that sends its requests with client.
@@ -626,6 +653,70 @@ func TestGivingUpCancelsTheCall(t *testing.T) {
 	}
 }
 
+// Passing the parameters of a running call to a second call fails the second
+// call and leaves the first one reading its stream.
+func TestARefusedSecondClaimLeavesTheRunningCallAlone(t *testing.T) {
+	cancelled := make(chan map[string]any, 1)
+	streaming := make(chan struct{})
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		first := true
+		for {
+			r := c.read()
+			switch r.kind {
+			case "inputStreamItem":
+				if first {
+					first = false
+					close(streaming)
+				}
+			case "streamCancel":
+				cancelled <- r.m
+				return
+			case "":
+				return
+			}
+		}
+	})
+	w, s := NewAgentStream[uint32]()
+	defer func() { _ = w.Close() }()
+	if err := w.Write(1); err != nil {
+		t.Fatal(err)
+	}
+	params := streamParams(EncodeStream(EncodeU32)(s))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- InvokeStreaming(ctx, server.agent(t), "consume", params) }()
+	select {
+	case <-streaming:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first call never streamed")
+	}
+	if err := InvokeStreaming(ctxT(t), server.agent(t), "consume", params); !errors.Is(err, ErrStreamConsumed) {
+		t.Fatalf("the second call got %v", err)
+	}
+	if err := w.Write(2); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the first call got %v", err)
+	}
+	select {
+	case m := <-cancelled:
+		if m["reason"] != "cancelled" {
+			t.Fatalf("cancelled with %v", m)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server never heard the cancellation")
+	}
+	if n := server.connections(); n != 1 {
+		t.Fatalf("the refused call connected: %d connections", n)
+	}
+}
+
 func TestStreamOfLeavesTheCallersSliceAlone(t *testing.T) {
 	items := []uint32{1, 2}
 	if _, err := StreamOf(items...).Collect(context.Background()); err != nil {
@@ -637,18 +728,126 @@ func TestStreamOfLeavesTheCallersSliceAlone(t *testing.T) {
 }
 
 func TestAStreamIsReadOnce(t *testing.T) {
+	server := newFakeServer(t)
 	s := StreamOf[uint32](1)
 	if _, _, err := s.Next(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	encoded := EncodeStream(EncodeU32)(s)
-	if h := encoded.(schema.StreamValue).Handle.(*inputHandle); !errors.Is(h.err, ErrStreamConsumed) {
-		t.Fatalf("a read stream was given away: %v", h.err)
+	err := InvokeStreaming(ctxT(t), server.agent(t), "consume", streamParams(EncodeStream(EncodeU32)(s)))
+	if !errors.Is(err, ErrStreamConsumed) {
+		t.Fatalf("a read stream was given away: %v", err)
 	}
-	fresh := StreamOf[uint32](1)
-	EncodeStream(EncodeU32)(fresh)
-	if _, _, err := fresh.Next(context.Background()); !errors.Is(err, ErrStreamConsumed) {
-		t.Fatalf("a given stream was read: %v", err)
+	if n := server.connections(); n != 0 {
+		t.Fatalf("a call with a read stream connected %d times", n)
+	}
+}
+
+// Encoding a stream argument does not give it away: a call that fails to
+// encode a later argument leaves the stream with its caller, who can pass it
+// again.
+func TestAStreamOfACallThatFailedToEncodeStaysWithTheCaller(t *testing.T) {
+	items := make(chan []any, 1)
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		items <- consumeInput(c, 1)
+		noResult(c)
+		finished(c)
+		c.waitClose()
+	})
+	produced := make(chan error, 1)
+	s := ProduceStream(func(w *AgentStreamWriter[uint32]) error {
+		err := w.WriteAll(1, 2, 3)
+		produced <- err
+		return err
+	})
+	params := func(q values.Quantity[meters]) (schema.SchemaValue, error) {
+		return Encode(func() schema.SchemaValue {
+			return schema.RecordValue{Fields: []schema.SchemaValue{EncodeStream(EncodeU32)(s), EncodeQuantity(q)}}
+		})
+	}
+	ctx := ctxT(t)
+	if _, err := params(values.Quantity[meters]{Mantissa: 1, Unit: "mi"}); err == nil {
+		t.Fatal("a unit the quantity does not accept was encoded")
+	} else if ee := (*EncodeError)(nil); !errors.As(err, &ee) || !strings.Contains(err.Error(), `unit "mi"`) {
+		t.Fatalf("got %v, want an *EncodeError naming the unit", err)
+	}
+	good, err := params(values.Quantity[meters]{Mantissa: 1, Unit: "km"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := InvokeStreaming(ctx, server.agent(t), "calibrate", good); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-items; !reflect.DeepEqual(got, []any{float64(1), float64(2), float64(3)}) {
+		t.Fatalf("the server read %v", got)
+	}
+	select {
+	case err := <-produced:
+		if err != nil {
+			t.Fatalf("the producer failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the producer never finished")
+	}
+	if n := server.connections(); n != 1 {
+		t.Fatalf("connected %d times", n)
+	}
+}
+
+// An item its schema does not accept fails the call with the encode error;
+// the items before it were sent, and the input is cancelled.
+func TestAnItemItsSchemaRefusesFailsTheCall(t *testing.T) {
+	seen := make(chan []string, 1)
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		var kinds []string
+		for {
+			_, data, err := c.ws.Read(context.Background())
+			if err != nil {
+				break
+			}
+			var r received
+			if err := json.Unmarshal(data, &r.m); err != nil {
+				t.Errorf("client sent bad JSON: %v", err)
+				break
+			}
+			r.kind, _ = r.m["type"].(string)
+			kinds = append(kinds, r.kind)
+			switch r.kind {
+			case "inputStreamItem":
+				if v := r.m["value"].(map[string]any)["value"].(map[string]any); v["unit"] != "m" {
+					t.Errorf("the server got %v", v)
+				}
+				ack(c, 1, 1, false)
+			case "streamCancel":
+				if r.m["reason"] != "source-unavailable" {
+					t.Errorf("cancelled with %v", r.m)
+				}
+			}
+		}
+		seen <- kinds
+	})
+	s := StreamOf(
+		values.Quantity[meters]{Mantissa: 1, Unit: "m"},
+		values.Quantity[meters]{Mantissa: 2, Unit: "mi"},
+		values.Quantity[meters]{Mantissa: 3, Unit: "m"},
+	)
+	err := InvokeStreaming(ctxT(t), server.agent(t), "measure", streamParams(EncodeStream(EncodeQuantity[meters])(s)))
+	var ee *EncodeError
+	if !errors.As(err, &ee) || !strings.Contains(err.Error(), `unit "mi"`) {
+		t.Fatalf("got %v, want an *EncodeError naming the unit", err)
+	}
+	select {
+	case kinds := <-seen:
+		if !reflect.DeepEqual(kinds, []string{"inputStreamItem", "streamCancel"}) {
+			t.Fatalf("the server got %v", kinds)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the failed call kept its connection")
 	}
 }
 
@@ -688,6 +887,12 @@ func TestAStreamArgumentOfAFailedCallIsStopped(t *testing.T) {
 	params := schema.RecordValue{Fields: []schema.SchemaValue{given, again}}
 	if err := InvokeStreaming(ctxT(t), server.agent(t), "consumeTwo", params); !errors.Is(err, ErrStreamConsumed) {
 		t.Fatalf("got %v", err)
+	}
+	if n := server.connections(); n != 0 {
+		t.Fatalf("a call with a stream passed twice connected %d times", n)
+	}
+	if _, _, err := s.Next(context.Background()); !errors.Is(err, ErrStreamConsumed) {
+		t.Fatalf("a given stream was read: %v", err)
 	}
 	if err := w.Write(1); !errors.Is(err, ErrStreamClosed) {
 		t.Fatalf("the writer of a stopped argument wrote: %v", err)
@@ -1113,7 +1318,7 @@ func TestAReplayedItemBindsWhileTheOldReaderIsPaused(t *testing.T) {
 	}
 
 	s.mu.Lock()
-	if err := s.detach(); err != nil {
+	if err := s.detach(old); err != nil {
 		t.Fatal(err)
 	}
 	s.conn, s.accepted = current, true
@@ -1719,5 +1924,555 @@ func TestReconnectsAfterAnImmediateCloseBackOff(t *testing.T) {
 	// The four reconnects wait 50, 100, 200 and 400 ms.
 	if elapsed := time.Since(started); elapsed < 700*time.Millisecond {
 		t.Fatalf("five connections took only %v", elapsed)
+	}
+}
+
+// faultyItemCall runs a call whose one stream argument yields an item the
+// call cannot send, and returns what the server got after accepting it and
+// the call's error.
+func faultyItemCall(t *testing.T, arg schema.SchemaValue) ([]string, error) {
+	t.Helper()
+	seen := make(chan []string, 1)
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		var got []string
+		for {
+			r := c.readUntilClose()
+			if r.kind == "" {
+				break
+			}
+			got = append(got, r.kind)
+			if r.kind == "streamCancel" && r.m["reason"] != "source-unavailable" {
+				t.Errorf("cancelled with %v", r.m)
+			}
+		}
+		seen <- got
+	})
+	err := InvokeStreaming(ctxT(t), server.agent(t), "consume", streamParams(arg))
+	select {
+	case got := <-seen:
+		return got, err
+	case <-time.After(30 * time.Second):
+		t.Fatal("the failed call kept its connection")
+		return nil, nil
+	}
+}
+
+// readUntilClose reads the next message, or nothing once the client closed
+// the connection.
+func (c *fakeConn) readUntilClose() received {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	kind, data, err := c.ws.Read(ctx)
+	if err != nil {
+		return received{}
+	}
+	if kind == websocket.MessageBinary {
+		f, err := decodeBinary(data)
+		if err != nil {
+			c.t.Errorf("client sent a bad frame: %v", err)
+		}
+		return received{kind: f.kind, binary: &f}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		c.t.Errorf("client sent bad JSON: %v", err)
+	}
+	return received{kind: m["type"].(string), m: m}
+}
+
+// An item the call cannot send fails the call with a StreamItemError; the
+// input is cancelled as unavailable and nothing of the item is sent.
+func TestAnItemTheCallCannotSendFailsTheCall(t *testing.T) {
+	consumed := StreamOf[uint32](1)
+	if _, _, err := consumed.Next(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	notAMediaType := "png"
+	for _, tc := range []struct {
+		name    string
+		arg     schema.SchemaValue
+		message string
+		is      error
+	}{
+		{
+			name: "a u8 lane item that is not a u8",
+			arg: EncodeStream(func(uint8) schema.SchemaValue { return schema.StringValue{Value: "x"} })(
+				StreamOf[uint8](1)),
+			message: "expected a u8 value",
+		},
+		{
+			name: "a binary lane item that is not binary",
+			arg: EncodeStream(func(values.Binary) schema.SchemaValue { return schema.U8Value{Value: 1} })(
+				StreamOf(values.Binary{1})),
+			message: "expected a binary value",
+		},
+		{
+			name:    "a binary item over the size limit",
+			arg:     EncodeStream(EncodeBinary)(StreamOf(make(values.Binary, maxBinaryBytes+1))),
+			message: "exceeds 16 MiB",
+		},
+		{
+			name: "a binary item whose media type is not one",
+			arg: EncodeStream(func(v values.Binary) schema.SchemaValue {
+				return schema.BinaryValue{Bytes: v, MimeType: &notAMediaType}
+			})(StreamOf(values.Binary{1})),
+			message: `"png" is not a MIME type`,
+		},
+		{
+			name:    "a JSON item over the size limit",
+			arg:     EncodeStream(EncodeString)(StreamOf(strings.Repeat("\x01", maxBinaryBytes/6+1))),
+			message: "exceeds 16 MiB",
+		},
+		{
+			name:    "an item holding a stream that was already read",
+			arg:     EncodeStream(EncodeStream(EncodeU32))(StreamOf(consumed)),
+			message: "",
+			is:      ErrStreamConsumed,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := faultyItemCall(t, tc.arg)
+			var unsendable *StreamItemError
+			if !errors.As(err, &unsendable) || !strings.Contains(err.Error(), tc.message) {
+				t.Fatalf("got %v, want a *StreamItemError saying %q", err, tc.message)
+			}
+			if tc.is != nil && !errors.Is(err, tc.is) {
+				t.Fatalf("got %v, want one that is %v", err, tc.is)
+			}
+			if !reflect.DeepEqual(got, []string{"streamCancel"}) {
+				t.Fatalf("the server got %v", got)
+			}
+		})
+	}
+}
+
+// A source that fails only makes its input unavailable: the server decides
+// what that means for the call, and here it still completes it.
+func TestAFailingSourceDoesNotFailTheCall(t *testing.T) {
+	cancelled := make(chan map[string]any, 1)
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		c.expect("inputStreamItem")
+		ack(c, 1, 1, false)
+		cancelled <- c.expect("streamCancel").m
+		noResult(c)
+		finished(c)
+		c.waitClose()
+	})
+	source := ProduceStream(func(w *AgentStreamWriter[uint32]) error {
+		if err := w.Write(1); err != nil {
+			return err
+		}
+		return errors.New("disk gone")
+	})
+	if err := InvokeStreaming(ctxT(t), server.agent(t), "consume", streamParams(EncodeStream(EncodeU32)(source))); err != nil {
+		t.Fatalf("a failing source failed the call: %v", err)
+	}
+	if m := <-cancelled; m["reason"] != "source-unavailable" {
+		t.Fatalf("cancelled with %v", m)
+	}
+}
+
+// A server that answers nothing makes the start fail once the window passes.
+func TestAStartAgainstAClosedPortIsUnreachable(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := "http://" + listener.Addr().String()
+	_ = listener.Close()
+	started := time.Now()
+	_, err = CallStreaming(ctxT(t), agentAt(t, url, 300*time.Millisecond), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	elapsed := time.Since(started)
+	var unreachable *UnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("got %v", err)
+	}
+	if unreachable.Window != 300*time.Millisecond || !strings.HasPrefix(unreachable.Endpoint, "ws://"+listener.Addr().String()) {
+		t.Fatalf("unreachable %+v", unreachable)
+	}
+	var cause *Error
+	if !errors.As(err, &cause) || cause.Status != 0 {
+		t.Fatalf("cause %v", unreachable.Cause)
+	}
+	if elapsed < 300*time.Millisecond || elapsed > 3*time.Second {
+		t.Fatalf("gave up after %v", elapsed)
+	}
+}
+
+// A peer that accepts the TCP connection but never answers the upgrade is
+// abandoned after the connect timeout, and the next attempt dials again.
+func TestAnUpgradeThatNeverCompletesIsAbandoned(t *testing.T) {
+	timeout := connectTimeout
+	connectTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { connectTimeout = timeout })
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	var accepted atomic.Int32
+	go func() {
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			t.Cleanup(func() { _ = c.Close() })
+		}
+	}()
+	_, err = CallStreaming(ctxT(t), agentAt(t, "http://"+listener.Addr().String(), time.Second), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	var unreachable *UnreachableError
+	if !errors.As(err, &unreachable) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v", err)
+	}
+	if n := accepted.Load(); n < 3 {
+		t.Fatalf("dialed %d times", n)
+	}
+}
+
+// 429 and 5xx on the upgrade are retried; the call goes on once the server
+// upgrades.
+func TestARetryableUpgradeStatusIsRetried(t *testing.T) {
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		accept(c, start, "sess")
+		streamResult(c, 2, "out", u32StreamGraph)
+		outputEnd(c, 2, 0, "end", map[string]any{"kind": "ok"})
+		finished(c)
+		c.waitClose()
+	})
+	server.refusals = []int{http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusServiceUnavailable}
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agentWithin(t, 5*time.Second), "numbers", schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := out.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Another HTTP status on the upgrade fails the call at once.
+func TestARefusedUpgradeFailsAtOnce(t *testing.T) {
+	server := newFakeServer(t)
+	server.refusals = []int{http.StatusForbidden}
+	_, err := CallStreaming(ctxT(t), server.agent(t), "numbers", schema.RecordValue{}, DecodeStream(DecodeU32))
+	var failure *Error
+	var unreachable *UnreachableError
+	if !errors.As(err, &failure) || failure.Status != http.StatusForbidden || errors.As(err, &unreachable) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// Retryable upgrade statuses past the window end the call with the last one.
+func TestRetryableStatusesPastTheWindowAreUnreachable(t *testing.T) {
+	server := newFakeServer(t)
+	server.refusals = slices.Repeat([]int{http.StatusBadGateway}, 100)
+	_, err := CallStreaming(ctxT(t), server.agentWithin(t, 300*time.Millisecond), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	var unreachable *UnreachableError
+	var failure *Error
+	if !errors.As(err, &unreachable) || !errors.As(err, &failure) || failure.Status != http.StatusBadGateway {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// Retryable rejections are retried within the window and do not reset it.
+func TestRetryableRejectionsPastTheWindowAreUnreachable(t *testing.T) {
+	reject := func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		c.send("invocationRejected", map[string]any{
+			"attemptId": start.m["attemptId"], "code": "routing-miss", "message": "moving", "retryable": true,
+		})
+		c.waitClose()
+	}
+	server := newFakeServer(t, slices.Repeat([]func(*fakeConn){reject}, 100)...)
+	_, err := CallStreaming(ctxT(t), server.agentWithin(t, 400*time.Millisecond), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	var unreachable *UnreachableError
+	var rejected *SessionError
+	if !errors.As(err, &unreachable) || !errors.As(err, &rejected) || rejected.Code != "routing-miss" {
+		t.Fatalf("got %v", err)
+	}
+	if n := server.connections(); n < 2 {
+		t.Fatalf("connected %d times", n)
+	}
+}
+
+// A server that keeps the connection up and answers pings, but never answers
+// the start, ends the call once the window passes.
+func TestAStartTheServerNeverAnswersIsUnreachable(t *testing.T) {
+	interval, timeout := pingInterval, pingTimeout
+	pingInterval, pingTimeout = 20*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { pingInterval, pingTimeout = interval, timeout })
+	server := newFakeServer(t, func(c *fakeConn) {
+		c.expect("invocationStart")
+		c.waitClose()
+	})
+	started := time.Now()
+	_, err := CallStreaming(ctxT(t), server.agentWithin(t, 400*time.Millisecond), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	elapsed := time.Since(started)
+	var unreachable *UnreachableError
+	if !errors.As(err, &unreachable) || !errors.Is(err, ErrNotAnswered) || unreachable.Window != 400*time.Millisecond {
+		t.Fatalf("got %v", err)
+	}
+	if elapsed < 400*time.Millisecond || elapsed > 3*time.Second {
+		t.Fatalf("gave up after %v", elapsed)
+	}
+	if n := server.connections(); n != 1 {
+		t.Fatalf("connected %d times", n)
+	}
+}
+
+// stableAfter sets how long an accepted connection must stay up to count as
+// progress for the rest of the test.
+func stableAfter(t *testing.T, d time.Duration) {
+	before := stableConnection
+	stableConnection = d
+	t.Cleanup(func() { stableConnection = before })
+}
+
+// The window runs from the loss of a stable connection, not from the start:
+// a call accepted for longer than the window still resumes.
+func TestTheWindowStartsAgainAfterAcceptance(t *testing.T) {
+	stableAfter(t, 200*time.Millisecond)
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", u32StreamGraph)
+			outputItem(c, 2, 0, "c0", 10)
+			time.Sleep(500 * time.Millisecond)
+			c.drop()
+		},
+		func(c *fakeConn) {
+			c.expect("resumeAttach")
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, key, "sess2", outputMapping(6, "out"))
+			outputItem(c, 6, 1, "c1", 20)
+			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "ok"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agentWithin(t, 300*time.Millisecond), "produce",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := out.Collect(ctx)
+	if err != nil || !reflect.DeepEqual(values, []uint32{10, 20}) {
+		t.Fatalf("collected %v, %v", values, err)
+	}
+}
+
+// Without a limit the call keeps reconnecting.
+func TestNoReconnectLimitKeepsRetrying(t *testing.T) {
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		accept(c, start, "sess")
+		streamResult(c, 2, "out", u32StreamGraph)
+		outputEnd(c, 2, 0, "end", map[string]any{"kind": "ok"})
+		finished(c)
+		c.waitClose()
+	})
+	server.refusals = slices.Repeat([]int{http.StatusServiceUnavailable}, 5)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agentWithin(t, NoReconnectLimit), "numbers", schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := out.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestANegativeReconnectWindowIsInvalid(t *testing.T) {
+	err := Configure(Configuration{Server: Custom("http://localhost", "token"), AppName: "app", EnvName: "env", ReconnectWindow: -time.Second})
+	if err == nil {
+		t.Fatal("accepted a negative window")
+	}
+}
+
+// A retryable rejection of the accepted attempt resumes the call, with a
+// window that starts when the call leaves the stable connection.
+func TestARetryableRejectionAfterAcceptanceResumes(t *testing.T) {
+	stableAfter(t, 200*time.Millisecond)
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", u32StreamGraph)
+			outputItem(c, 2, 0, "c0", 10)
+			time.Sleep(500 * time.Millisecond)
+			c.send("invocationRejected", map[string]any{
+				"attemptId": start.m["attemptId"], "code": "resource-exhausted", "message": "busy", "retryable": true,
+			})
+			c.waitClose()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			if resume.m["operation"] != "resume" {
+				t.Errorf("reattached with %v", resume.m)
+			}
+			acceptAs(c, resume, key, "sess2", outputMapping(6, "out"))
+			outputItem(c, 6, 1, "c1", 20)
+			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "ok"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agentWithin(t, 300*time.Millisecond), "produce",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := out.Collect(ctx)
+	if err != nil || !reflect.DeepEqual(values, []uint32{10, 20}) {
+		t.Fatalf("collected %v, %v", values, err)
+	}
+}
+
+// An accepted connection that drops at once is no progress: the reconnects
+// back off and the window keeps running from the open, so the call ends as
+// unreachable.
+func TestAnAcceptedConnectionDroppedAtOnceIsNoProgress(t *testing.T) {
+	stableAfter(t, 200*time.Millisecond)
+	var mu sync.Mutex
+	var key any
+	var opened []time.Time
+	acceptAndDrop := func(c *fakeConn) {
+		mu.Lock()
+		opened = append(opened, time.Now())
+		mu.Unlock()
+		op := c.read()
+		switch op.kind {
+		case "invocationStart":
+			mu.Lock()
+			key = op.m["idempotencyKey"]
+			mu.Unlock()
+			accept(c, op, "sess")
+		case "resumeAttach":
+			mu.Lock()
+			k := key
+			mu.Unlock()
+			acceptAs(c, op, k, "sess")
+		default:
+			t.Errorf("server got %s", op.kind)
+		}
+		c.drop()
+	}
+	server := newFakeServer(t, slices.Repeat([]func(*fakeConn){acceptAndDrop}, 100)...)
+	started := time.Now()
+	_, err := CallStreaming(ctxT(t), server.agentWithin(t, 600*time.Millisecond), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	elapsed := time.Since(started)
+	var unreachable *UnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("got %v", err)
+	}
+	if elapsed < 600*time.Millisecond || elapsed > 3*time.Second {
+		t.Fatalf("gave up after %v", elapsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// The reconnects wait 50, 100, 200 and 400 ms.
+	if n := len(opened); n < 3 || n > 6 {
+		t.Fatalf("connected %d times", n)
+	}
+	if gap := opened[len(opened)-1].Sub(opened[len(opened)-2]); gap < 150*time.Millisecond {
+		t.Fatalf("the last reconnect waited only %v", gap)
+	}
+}
+
+// Accepted connections that stay up keep a call alive past the window, and
+// each loss reconnects at once.
+func TestStableConnectionsKeepTheCallAlivePastTheWindow(t *testing.T) {
+	stableAfter(t, 100*time.Millisecond)
+	var mu sync.Mutex
+	var key any
+	var lost time.Time
+	var waits []time.Duration
+	reconnected := func() any {
+		mu.Lock()
+		defer mu.Unlock()
+		waits = append(waits, time.Since(lost))
+		return key
+	}
+	dropNow := func(c *fakeConn) {
+		mu.Lock()
+		lost = time.Now()
+		mu.Unlock()
+		c.drop()
+	}
+	holdAndDrop := func(c *fakeConn) {
+		k := reconnected()
+		resume := c.expect("resumeAttach")
+		acceptAs(c, resume, k, "sess", outputMapping(2, "out"))
+		time.Sleep(250 * time.Millisecond)
+		dropNow(c)
+	}
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			mu.Lock()
+			key = start.m["idempotencyKey"]
+			mu.Unlock()
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", u32StreamGraph)
+			outputItem(c, 2, 0, "c0", 10)
+			time.Sleep(250 * time.Millisecond)
+			dropNow(c)
+		},
+		holdAndDrop, holdAndDrop, holdAndDrop,
+		func(c *fakeConn) {
+			k := reconnected()
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, k, "sess", outputMapping(2, "out"))
+			outputItem(c, 2, 1, "c1", 20)
+			outputEnd(c, 2, 2, "c2", map[string]any{"kind": "ok"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	started := time.Now()
+	out, err := CallStreaming(ctx, server.agentWithin(t, 400*time.Millisecond), "produce",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := out.Collect(ctx)
+	if err != nil || !reflect.DeepEqual(values, []uint32{10, 20}) {
+		t.Fatalf("collected %v, %v", values, err)
+	}
+	if elapsed := time.Since(started); elapsed < time.Second {
+		t.Fatalf("the call ended after %v, within the window", elapsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, wait := range waits {
+		if wait > 40*time.Millisecond {
+			t.Fatalf("a reconnect after a stable connection waited %v", wait)
+		}
 	}
 }

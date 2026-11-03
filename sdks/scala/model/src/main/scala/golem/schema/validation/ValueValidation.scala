@@ -155,7 +155,6 @@ object ValueError {
 
 object ValueValidation {
   import ValueError._
-  private val MaxUuidHalf = (BigInt(1) << 64) - 1
 
   def validateValue(graph: SchemaGraph, tpe: SchemaType, value: SchemaValue): Either[List[ValueError], Unit] = {
     val e = mutable.ListBuffer.empty[ValueError]; check(graph, tpe, value, Nil, e);
@@ -170,11 +169,8 @@ object ValueValidation {
   ): Unit = resolve(g, t, p, e).foreach { rt =>
     (rt.body, v) match {
       case (BoolType, BoolValue(_)) | (CharType, CharValue(_)) | (StringType, StringValue(_)) |
-          (DatetimeType, DatetimeValue(_)) | (DurationType, DurationValue(_)) =>
+          (DatetimeType, DatetimeValue(_)) | (DurationType, DurationValue(_)) | (UuidType, UuidValue(_)) =>
         ()
-      case (UuidType, UuidValue(uuid)) =>
-        if (uuid.highBits < 0 || uuid.highBits > MaxUuidHalf || uuid.lowBits < 0 || uuid.lowBits > MaxUuidHalf)
-          e += NumericOutOfRange(path(p), "uuid halves must be unsigned 64-bit integers")
       case (S8Type(r), S8Value(x))   => checkNum(r, NumericBound.Signed(x), p, e);
       case (S16Type(r), S16Value(x)) => checkNum(r, NumericBound.Signed(x), p, e);
       case (S32Type(r), S32Value(x)) => checkNum(r, NumericBound.Signed(x), p, e);

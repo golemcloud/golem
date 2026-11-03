@@ -19,6 +19,7 @@
     {"expectedCode":"validation-error","input":"{\"attemptId\":\"not-a-uuid\",\"operation\":\"resume\",\"outputCursors\":[],\"sessionToken\":\"token\",\"type\":\"resumeAttach\",\"version\":1}","lane":"text","name":"invalid-attempt-uuid"},
     {"expectedCode":"validation-error","input":"{\"kind\":\"u32\",\"value\":\"9007199254740993\"}","lane":"schema-value","name":"u32-string","schema":{"kind":"u32"}},
     {"expectedCode":"malformed-message","input":"{\"kind\":\"u64\",\"value\":9007199254740993}","lane":"schema-value","name":"u64-json-number","schema":{"kind":"u64"}},
+    {"expectedCode":"validation-error","input":"{\"kind\":\"uuid\",\"value\":\"not-a-uuid\"}","lane":"schema-value","name":"uuid-not-a-uuid","schema":{"kind":"uuid"}},
     {"expectedCode":"validation-error","input":"{\"kind\":\"binary\",\"value\":{\"bytes\":\"-_8=\",\"mimeType\":\"application/octet-stream\"}}","lane":"schema-value","name":"binary-bytes-not-array","schema":{"kind":"binary"}},
     {"expectedCode":"validation-error","input":"{\"kind\":\"binary\",\"value\":{\"bytes\":[-1],\"mimeType\":\"application/octet-stream\"}}","lane":"schema-value","name":"binary-negative-byte","schema":{"kind":"binary"}},
     {"expectedCode":"validation-error","input":"{\"kind\":\"binary\",\"value\":{\"bytes\":[256],\"mimeType\":\"application/octet-stream\"}}","lane":"schema-value","name":"binary-byte-overflow","schema":{"kind":"binary"}},

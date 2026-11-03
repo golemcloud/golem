@@ -1,4 +1,5 @@
 use super::*;
+use crate::filesystem::errors::OperationContext;
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use chrono::TimeZone;
 use golem_common::model::AgentId;
@@ -117,9 +118,8 @@ fn window_open_failures_keep_bounded_typed_reasons() {
         (MeteringOpenError::MemoryMeterStopped, Failure::MeterFault),
         (MeteringOpenError::OpeningCancelled, Failure::Other),
         (
-            MeteringOpenError::FilesystemObservation(FilesystemStorageError::verification(
-                "opening observation",
-                Path::new("unused"),
+            MeteringOpenError::FilesystemObservation(FilesystemStorageError::from(
+                OperationContext::verification("opening observation", Some(Path::new("unused"))),
             )),
             Failure::FilesystemObservation,
         ),
@@ -295,7 +295,10 @@ fn authoritative(bytes: u64) -> Result<FilesystemUsage, FilesystemStorageError> 
 }
 
 fn observation_error() -> FilesystemStorageError {
-    FilesystemStorageError::verification("observe scripted filesystem usage", Path::new("<test>"))
+    FilesystemStorageError::from(OperationContext::verification(
+        "observe scripted filesystem usage",
+        None,
+    ))
 }
 
 fn configured_account(

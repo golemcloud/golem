@@ -45,6 +45,7 @@ import './schema/arktype';
 import './schema/effect';
 
 export { Uuid } from './uuid';
+export { Datetime } from './datetime';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { ParsedAgentId } from './agentId';
 export type {

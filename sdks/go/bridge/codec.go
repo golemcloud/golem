@@ -42,6 +42,29 @@ type Encoder[T any] func(T) schema.SchemaValue
 // Decoder converts a schema value into a Go value.
 type Decoder[T any] func(schema.SchemaValue) (T, error)
 
+// EncodeError is a value its schema does not accept, found while encoding it.
+// The encoders cannot return an error, so the one that finds it panics with
+// it, and [Encode] returns it.
+type EncodeError struct{ Message string }
+
+func (e *EncodeError) Error() string { return "golem: " + e.Message }
+
+// Encode runs encode and returns the [EncodeError] raised in it as an error. A
+// generated client encodes a value that can fail its schema through it, so the
+// failure is reported before anything is sent.
+func Encode(encode func() schema.SchemaValue) (sv schema.SchemaValue, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			ee, ok := r.(*EncodeError)
+			if !ok {
+				panic(r)
+			}
+			err = ee
+		}
+	}()
+	return encode(), nil
+}
+
 // Mismatch reports a schema value of the wrong kind.
 func Mismatch(want string, got schema.SchemaValue) error {
 	return fmt.Errorf("golem: expected a %s value, got %T", want, got)
@@ -132,7 +155,7 @@ func EncodeBinary(v values.Binary) schema.SchemaValue {
 	return schema.BinaryValue{Bytes: []byte(v)}
 }
 func DecodeBinary(sv schema.SchemaValue) (values.Binary, error) {
-	return decodeAs("binary", sv, func(v schema.BinaryValue) values.Binary { return values.Binary(v.Bytes) })
+	return decodeAs("binary", sv, func(v schema.BinaryValue) values.Binary { return append(values.Binary{}, v.Bytes...) })
 }
 
 func EncodePath(v values.Path) schema.SchemaValue { return schema.PathValue{Value: string(v)} }
@@ -170,12 +193,15 @@ func DecodeUUID(sv schema.SchemaValue) (values.UUID, error) {
 }
 
 // EncodeQuantity sends a quantity in its own unit, or the base unit when it
-// names none.
+// names none. A unit U does not accept is an [EncodeError].
 func EncodeQuantity[U values.QuantityUnit](v values.Quantity[U]) schema.SchemaValue {
 	unit := v.Unit
 	if unit == "" {
 		var u U
 		unit = u.BaseUnit()
+	}
+	if !acceptsUnit[U](unit) {
+		panic(&EncodeError{Message: fmt.Sprintf("unit %q is not one this quantity accepts", unit)})
 	}
 	return schema.QuantityValueNode{Value: schema.QuantityValue{Mantissa: v.Mantissa, Scale: v.Scale, Unit: unit}}
 }
@@ -186,12 +212,20 @@ func DecodeQuantity[U values.QuantityUnit](sv schema.SchemaValue) (values.Quanti
 	if !ok {
 		return values.Quantity[U]{}, Mismatch("quantity", sv)
 	}
-	var u U
-	allowed := u.AllowedSuffixes()
-	if (len(allowed) == 0 && v.Value.Unit != u.BaseUnit()) || (len(allowed) > 0 && !slices.Contains(allowed, v.Value.Unit)) {
+	if !acceptsUnit[U](v.Value.Unit) {
 		return values.Quantity[U]{}, fmt.Errorf("golem: unit %q is not one this quantity accepts", v.Value.Unit)
 	}
 	return values.Quantity[U]{Mantissa: v.Value.Mantissa, Scale: v.Value.Scale, Unit: v.Value.Unit}, nil
+}
+
+// acceptsUnit is the server's rule: a quantity without suffixes is in its base
+// unit, and one with suffixes is in one of them.
+func acceptsUnit[U values.QuantityUnit](unit string) bool {
+	var u U
+	if allowed := u.AllowedSuffixes(); len(allowed) > 0 {
+		return slices.Contains(allowed, unit)
+	}
+	return unit == u.BaseUnit()
 }
 
 // --- unstructured and multimodal content -------------------------------------
@@ -275,7 +309,7 @@ func DecodeUnstructuredBinary[M values.MimeTypes](sv schema.SchemaValue) (values
 		if which != 0 {
 			break
 		}
-		out.Data = p.Bytes
+		out.Data = append([]byte{}, p.Bytes...)
 		if p.MimeType != nil {
 			var m M
 			if allowed := m.MimeTypes(); len(allowed) > 0 && !slices.Contains(allowed, *p.MimeType) {
@@ -382,6 +416,8 @@ func EncodeMap[K comparable, V any](m map[K]V, fk Encoder[K], fv Encoder[V]) sch
 	return schema.MapValue{Entries: entries}
 }
 
+// DecodeMap reads a map. A key named twice keeps its later entry, as the
+// host's validation and the Rust conversion do.
 func DecodeMap[K comparable, V any](sv schema.SchemaValue, fk Decoder[K], fv Decoder[V]) (map[K]V, error) {
 	v, ok := sv.(schema.MapValue)
 	if !ok {
@@ -392,9 +428,6 @@ func DecodeMap[K comparable, V any](sv schema.SchemaValue, fk Decoder[K], fv Dec
 		key, err := fk(entry.Key)
 		if err != nil {
 			return nil, fmt.Errorf("map key %d: %w", i, err)
-		}
-		if _, seen := out[key]; seen {
-			return nil, fmt.Errorf("map key %d: the key %v appears twice", i, key)
 		}
 		value, err := fv(entry.Value)
 		if err != nil {
@@ -478,7 +511,7 @@ func DecodePointer[T any](sv schema.SchemaValue, f Decoder[T]) (*T, error) {
 }
 
 // EncodeResult takes a nil encoder for an arm that carries no value, which the
-// generated type spells struct{}.
+// generated type spells values.Unit.
 func EncodeResult[O, E any](r values.Result[O, E], fo Encoder[O], fe Encoder[E]) schema.SchemaValue {
 	if r.IsErr() {
 		return schema.ResultValue{IsErr: true, Value: encodeArm(r.Err(), fe)}

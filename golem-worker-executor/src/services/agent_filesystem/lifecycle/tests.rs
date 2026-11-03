@@ -1,11 +1,15 @@
 use super::*;
-use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
-use crate::sandbox_filesystem::{
-    FilesystemAllocation, HostDirectories, HostDirectory, ScriptedSandboxFilesystemControl,
-    ScriptedSandboxFilesystemProvisioning, ScriptedSandboxPath, ScriptedSandboxPathBase,
-    ScriptedSandboxPathCall,
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::host_directories::HostDirectory;
+use crate::filesystem::sandbox::{
+    ScriptedSandboxFilesystemControl, ScriptedSandboxFilesystemProvisioning, ScriptedSandboxPath,
+    ScriptedSandboxPathBase, ScriptedSandboxPathCall,
 };
+use crate::filesystem::volume::FilesystemAllocation;
+use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
+
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
+use crate::services::agent_filesystem::ExecutorDirectories;
 use crate::services::golem_config::{
     FilesystemStorageConfig, FilesystemStorageMode, GolemConfig, ResourceUsageMeteringConfig,
 };
@@ -163,18 +167,14 @@ fn allocation(bytes: u64, objects: u64) -> FilesystemAllocation {
 }
 
 pub(super) fn unsupported_allocation() -> FilesystemStorageError {
-    FilesystemStorageError::allocation_unsupported(Path::new("<scripted>"))
+    FilesystemStorageError::allocation_unsupported(None)
 }
 
 pub(super) fn sandbox_error(
     operation: &'static str,
     kind: std::io::ErrorKind,
 ) -> FilesystemStorageError {
-    FilesystemStorageError::io(
-        operation,
-        Path::new("<scripted>"),
-        std::io::Error::new(kind, operation),
-    )
+    FilesystemStorageError::io(operation, None, std::io::Error::new(kind, operation))
 }
 
 fn sandbox_provisioning(
@@ -184,8 +184,8 @@ fn sandbox_provisioning(
 }
 
 /// Makes the host directories on unmanaged storage with a temporary root.
-async fn host_directories() -> HostDirectories {
-    SandboxFilesystemProvisioning::provision(
+async fn host_directories() -> ExecutorDirectories {
+    crate::services::agent_filesystem::provision_executor_directories(
         &FilesystemStorageMode::Temporary,
         golem_common::model::RetryConfig::default(),
     )
@@ -345,12 +345,11 @@ async fn bound_reconstructing_with_accounting(
 ) {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
-        provisioning,
+        provisioning.with_accounting(accounting),
         scratch_directory().await,
         agent_id(),
         limits,
         pressure_recovery,
-        accounting,
     )
     .await
     .unwrap();
@@ -383,7 +382,6 @@ async fn unmetered_reconstructing_with_recovery(
         agent_id(),
         limits,
         pressure_recovery,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -406,7 +404,6 @@ async fn created_product_supports_observed_verified_cleanup() {
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -501,7 +498,6 @@ pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test(
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -598,7 +594,7 @@ async fn open_file_with_access(
     id: u64,
     mode: AccessMode,
 ) -> File {
-    control.push_open(Ok(SandboxOpened::scripted_file(id)));
+    control.push_open(Ok(SandboxHandle::scripted_file(id)));
     open_programmed_file(generation_handle, mode, "file").await
 }
 
@@ -666,7 +662,7 @@ async fn open_directory_with_identity(
     identity: u64,
     path: &str,
 ) -> Directory {
-    control.push_open(Ok(SandboxOpened::scripted_directory_with_identity(
+    control.push_open(Ok(SandboxHandle::scripted_directory_with_identity(
         handle, identity,
     )));
     let opened = open(
@@ -694,7 +690,7 @@ async fn open_directory_target(
     mode: AccessMode,
     target: PathTarget,
 ) -> Directory {
-    control.push_open(Ok(SandboxOpened::scripted_directory(id)));
+    control.push_open(Ok(SandboxHandle::scripted_directory(id)));
     let opened = open(
         generation_handle,
         target,
@@ -1029,7 +1025,7 @@ async fn a_file_that_the_agent_writes_at_the_path_of_a_deleted_read_only_initial
     control.push_get_attributes(Err(missing("stat of the deleted initial file")));
     let after_delete = stat_reads_golems_file(&generation_handle, "read-only").await;
 
-    control.push_open(Ok(SandboxOpened::scripted_file(2)));
+    control.push_open(Ok(SandboxHandle::scripted_file(2)));
     let opened = open(
         &generation_handle,
         at_path(),
@@ -1522,7 +1518,7 @@ async fn reconstruction_opened_unlinked_node_close_does_not_observe_allocation()
     .unwrap();
     let reconstruction_generation_handle = reconstruction_generation_handle(&filesystem).unwrap();
     let target = PathTarget::at_root(&reconstruction_generation_handle, "open-unlinked").unwrap();
-    control.push_open(Ok(SandboxOpened::scripted_file(90)));
+    control.push_open(Ok(SandboxHandle::scripted_file(90)));
     let node = open(
         &reconstruction_generation_handle,
         target.clone(),
@@ -1695,7 +1691,7 @@ async fn dropping_reconstruction_observer_never_publishes_resident_and_deletes()
 async fn dropping_an_unstarted_call_cancels_it_without_sandbox_work() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
-    control.push_open(Ok(SandboxOpened::scripted_file(1)));
+    control.push_open(Ok(SandboxHandle::scripted_file(1)));
     let call = open(
         &generation_handle,
         PathTarget::at_root(&generation_handle, "never-started").unwrap(),
@@ -1839,7 +1835,7 @@ async fn invocation_drain_joins_abandoned_open_and_its_unobserved_close() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation = resident_generation_handle(&filesystem);
     let (body, invocation) = generation.for_invocation();
-    control.push_open(Ok(SandboxOpened::scripted_file(704)));
+    control.push_open(Ok(SandboxHandle::scripted_file(704)));
     let open_gate = control.block("open");
     let observer = tokio::spawn(
         open(
@@ -1940,7 +1936,7 @@ async fn delete_waits_for_started_query_and_close_after_observers_drop() {
 async fn open_finishing_after_seal_registers_then_closes_before_deletion() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
-    control.push_open(Ok(SandboxOpened::scripted_file(9)));
+    control.push_open(Ok(SandboxHandle::scripted_file(9)));
     control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
     let open_gate = control.block("open");
@@ -2009,7 +2005,7 @@ async fn delete_barrier_covers_directory_attribute_and_symlink_queries() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 21).await;
-    control.push_open(Ok(SandboxOpened::scripted_directory(22)));
+    control.push_open(Ok(SandboxHandle::scripted_directory(22)));
     let directory = match open(
         &generation_handle,
         PathTarget::at_root(&generation_handle, "directory").unwrap(),
@@ -2039,7 +2035,7 @@ async fn delete_barrier_covers_directory_attribute_and_symlink_queries() {
     }));
     control.push_read_link(Ok(SandboxSymlinkTarget(PathBuf::from("target"))));
     let directory_gate = control.block("read_directory");
-    let attributes_gate = control.block("get_node_attributes");
+    let attributes_gate = control.block("get_handle_attributes");
     let symlink_gate = control.block("read_link");
     let listing = tokio::spawn(list_directory(&generation_handle, &directory).unwrap());
     let attributes = tokio::spawn(
@@ -2286,7 +2282,7 @@ async fn dropping_limit_observer_never_reopens_admission_and_deletes() {
 async fn open_admitted_before_limit_change_returns_its_node_while_transitioning() {
     let (filesystem, control, _) = resident(Ok(allocation(10, 1))).await;
     let generation_handle = resident_generation_handle(&filesystem);
-    control.push_open(Ok(SandboxOpened::scripted_file(24)));
+    control.push_open(Ok(SandboxHandle::scripted_file(24)));
     let open_gate = control.block("open");
     let opening = tokio::spawn(
         open(
@@ -2390,7 +2386,7 @@ async fn directory_insert_preserves_decisive_already_exists_error() {
         .await
         .unwrap();
     let generation_handle = resident_generation_handle(&filesystem);
-    control.push_open(Ok(SandboxOpened::scripted_directory(23)));
+    control.push_open(Ok(SandboxHandle::scripted_directory(23)));
     let directory = match open(
         &generation_handle,
         PathTarget::at_root(&generation_handle, "parent").unwrap(),
@@ -2911,7 +2907,7 @@ async fn a_cleanup_permission_failure_of_a_writable_open_invalidates_a_read_only
     control.push_read_only_resolution(1, "alias", false, false);
     control.push_open(Err(FilesystemStorageError::cleanup_io(
         "open cleanup",
-        Path::new("alias"),
+        Some(Path::new("alias")),
         std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cleanup denied"),
     )));
     control.push_get_attributes(Ok(SandboxAttributes {
@@ -3017,9 +3013,8 @@ async fn hard_link_collision_preserves_non_directory_and_nonterminal_proof_resul
         (None, Err(missing("source proof"))),
         (
             None,
-            Err(FilesystemStorageError::verification(
-                "source proof",
-                Path::new("source"),
+            Err(FilesystemStorageError::from(
+                OperationContext::verification("source proof", Some(Path::new("source"))),
             )),
         ),
         (
@@ -3034,8 +3029,8 @@ async fn hard_link_collision_preserves_non_directory_and_nonterminal_proof_resul
         .for_each(|(hint, proof)| async move {
             let (filesystem, control, window) = metered_resident().await;
             let generation_handle = resident_generation_handle(&filesystem);
-            control.push_namespace_resolution(1, "source", hint);
-            control.push_namespace_resolution(1, "existing", None);
+            control.push_path_resolution(1, "source", hint);
+            control.push_path_resolution(1, "existing", None);
             control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
             control.push_hard_link(Err(sandbox_error(
                 "hard link",
@@ -3091,7 +3086,7 @@ async fn a_terminal_source_probe_after_hard_link_collision_invalidates_the_gener
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         FilesystemStorageError::io(
             "source proof",
-            Path::new("source"),
+            Some(Path::new("source")),
             std::io::Error::from_raw_os_error(libc::EIO),
         ),
     ]);
@@ -3148,7 +3143,7 @@ async fn hard_link_policy_proof_does_not_replace_escape_or_cleanup_errors() {
     let errors: Box<[_]> = Box::new([
         FilesystemStorageError::io(
             "hard link",
-            Path::new("source"),
+            Some(Path::new("source")),
             std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "a path led outside of the filesystem",
@@ -3156,7 +3151,7 @@ async fn hard_link_policy_proof_does_not_replace_escape_or_cleanup_errors() {
         ),
         FilesystemStorageError::cleanup_io(
             "hard link",
-            Path::new("source"),
+            Some(Path::new("source")),
             std::io::Error::new(std::io::ErrorKind::AlreadyExists, "cleanup"),
         ),
     ]);
@@ -3167,8 +3162,8 @@ async fn hard_link_policy_proof_does_not_replace_escape_or_cleanup_errors() {
             let expected_kind = link_error.io_kind();
             let expected_escape = link_error.is_sandbox_escape();
             let expected_cleanup = link_error.cleanup_failed();
-            control.push_namespace_resolution(1, "source", Some(900));
-            control.push_namespace_resolution(1, "existing", None);
+            control.push_path_resolution(1, "source", Some(900));
+            control.push_path_resolution(1, "existing", None);
             control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
             control.push_hard_link(Err(link_error));
             let linked = edit_namespace(
@@ -3262,7 +3257,7 @@ async fn a_cleanup_permission_failure_of_a_directory_hard_link_invalidates_the_g
     control.push_get_attributes(Err(missing("destination before the link")));
     control.push_hard_link(Err(FilesystemStorageError::cleanup_io(
         "hard link cleanup",
-        Path::new("directory"),
+        Some(Path::new("directory")),
         std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cleanup denied"),
     )));
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
@@ -3406,7 +3401,7 @@ async fn terminal_raw_namespace_error_invalidates_despite_no_effect_postconditio
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     control.push_hard_link(Err(FilesystemStorageError::io(
         "terminal hard link",
-        Path::new("<scripted>"),
+        None,
         std::io::Error::from_raw_os_error(libc::EIO),
     )));
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
@@ -3746,7 +3741,7 @@ async fn a_native_permission_refusal_of_a_size_change_invalidates_the_generation
 
     let later_target =
         PathTarget::at_root(&generation_handle, "after-refused-size-change").unwrap();
-    let reads_before = call_count(&control, "get_node_attributes(");
+    let reads_before = call_count(&control, "get_handle_attributes(");
     let refused = set_attributes(
         &generation_handle,
         Target::Open(&node),
@@ -3775,7 +3770,7 @@ async fn a_native_permission_refusal_of_a_size_change_invalidates_the_generation
         "a proven refusal must not retry"
     );
     assert_eq!(
-        call_count(&control, "get_node_attributes("),
+        call_count(&control, "get_handle_attributes("),
         reads_before + 1
     );
     assert!(filesystem_activity(&filesystem).has_terminal_failure());
@@ -3825,7 +3820,7 @@ async fn a_native_permission_refusal_of_a_time_change_invalidates_the_generation
 
     let later_target =
         PathTarget::at_root(&generation_handle, "after-refused-time-change").unwrap();
-    let reads_before = call_count(&control, "get_node_attributes(");
+    let reads_before = call_count(&control, "get_handle_attributes(");
     let refused = set_attributes(
         &generation_handle,
         Target::Open(&node),
@@ -3845,13 +3840,13 @@ async fn a_native_permission_refusal_of_a_time_change_invalidates_the_generation
         control
             .calls()
             .iter()
-            .filter(|call| call.starts_with("set_node_times("))
+            .filter(|call| call.starts_with("set_handle_times("))
             .count(),
         1,
         "a proven refusal must not retry"
     );
     assert_eq!(
-        call_count(&control, "get_node_attributes("),
+        call_count(&control, "get_handle_attributes("),
         reads_before + 1
     );
     assert!(filesystem_activity(&filesystem).has_terminal_failure());
@@ -4241,7 +4236,7 @@ async fn a_time_change_authorizes_from_a_resolution_made_under_its_namespace_coo
         modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
     };
     control.push_read_only_resolution(1, "f", false, false);
-    let resolution = control.block("resolve_namespace_target");
+    let resolution = control.block("resolve_path_target");
     let changing = tokio::spawn(
         set_attributes(
             &generation_handle,
@@ -4297,7 +4292,7 @@ async fn a_time_change_through_a_symlink_changes_the_object_that_its_permission_
     control.push_read_only_resolution(1, "alias", false, false);
     control.push_read_only_resolution(1, "alias", false, false);
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
-    control.push_open(Ok(SandboxOpened::scripted_read_only_file(710)));
+    control.push_open(Ok(SandboxHandle::scripted_read_only_file(710)));
     let opening = control.block("open");
     let changing = tokio::spawn(
         set_attributes(
@@ -4326,7 +4321,7 @@ async fn a_time_change_through_a_symlink_changes_the_object_that_its_permission_
         matches!(changed, Err(Error::Access(AccessError::NotPermitted))),
         "{changed:?}"
     );
-    assert!(!has_call(&control, "set_node_times("));
+    assert!(!has_call(&control, "set_handle_times("));
     assert!(!has_call(&control, "set_path_times("));
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
@@ -4344,7 +4339,7 @@ async fn a_followed_time_change_opens_with_the_right_that_the_change_needs() {
     control.push_read_only_resolution(1, "alias", false, false);
     control.push_read_only_resolution(1, "alias", false, false);
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
-    control.push_open(Ok(SandboxOpened::scripted_read_only_file(711)));
+    control.push_open(Ok(SandboxHandle::scripted_read_only_file(711)));
 
     let changed = set_attributes(
         &generation_handle,
@@ -4402,7 +4397,7 @@ async fn a_time_change_through_a_symlink_starts_again_when_the_open_finds_anothe
     control.push_read_only_resolution(1, "alias", false, false);
     control.push_read_only_resolution(1, "alias", false, false);
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
-    control.push_open(Ok(SandboxOpened::scripted_file(730)));
+    control.push_open(Ok(SandboxHandle::scripted_file(730)));
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     control.push_set_times(Ok(()));
 
@@ -4416,7 +4411,7 @@ async fn a_time_change_through_a_symlink_starts_again_when_the_open_finds_anothe
     .unwrap();
 
     assert_eq!(call_count(&control, "open("), 2);
-    assert!(has_call(&control, "set_node_times("));
+    assert!(has_call(&control, "set_handle_times("));
     assert!(!filesystem_activity(&filesystem).has_terminal_failure());
 
     close_window(window, Instant::now() + Duration::from_secs(1))
@@ -4459,7 +4454,7 @@ async fn a_time_change_through_a_symlink_stops_after_two_restarts() {
         "{changed:?}"
     );
     assert_eq!(call_count(&control, "open("), 3);
-    assert!(!has_call(&control, "set_node_times("));
+    assert!(!has_call(&control, "set_handle_times("));
     assert!(!filesystem_activity(&filesystem).has_terminal_failure());
 
     close_window(window, Instant::now() + Duration::from_secs(1))
@@ -4514,7 +4509,7 @@ async fn a_writable_open_authorizes_from_a_resolution_made_under_its_namespace_c
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     control.push_read_only_resolution(1, "f", false, false);
-    let resolution = control.block("resolve_namespace_target");
+    let resolution = control.block("resolve_path_target");
     let opening = tokio::spawn(
         open(
             &generation_handle,
@@ -4540,7 +4535,7 @@ async fn a_writable_open_authorizes_from_a_resolution_made_under_its_namespace_c
     // The resolution under the coordination finds the read-only file. An open that runs from
     // the first resolution would succeed with this outcome.
     control.push_read_only_resolution(1, "f", true, true);
-    control.push_open(Ok(SandboxOpened::scripted_file(700)));
+    control.push_open(Ok(SandboxHandle::scripted_file(700)));
     resolution.release();
 
     let opened = opening.await.unwrap();
@@ -4565,7 +4560,7 @@ async fn a_writable_open_through_a_symlink_refuses_the_read_only_file_that_it_op
     // Both resolutions of alias find a symlink to a writable file.
     control.push_read_only_resolution(1, "alias", false, false);
     control.push_read_only_resolution(1, "alias", false, false);
-    control.push_open(Ok(SandboxOpened::scripted_read_only_file(720)));
+    control.push_open(Ok(SandboxHandle::scripted_read_only_file(720)));
     control.push_close(Ok(()));
     let opening_gate = control.block("open");
     let opening = tokio::spawn(
@@ -4882,7 +4877,7 @@ async fn wrong_generation_namespace_paths_reject_without_sandbox_work_or_invalid
 async fn namespace_resolution_errors_precede_mutation_and_preserve_terminal_classification() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
-    control.push_namespace_resolution_error(missing("resolve missing parent"));
+    control.push_path_resolution_error(missing("resolve missing parent"));
     assert!(matches!(
         edit_namespace(
             &generation_handle,
@@ -4904,7 +4899,7 @@ async fn namespace_resolution_errors_precede_mutation_and_preserve_terminal_clas
 
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
-    control.push_namespace_resolution_error(sandbox_error(
+    control.push_path_resolution_error(sandbox_error(
         "resolve corrupt parent",
         std::io::ErrorKind::InvalidData,
     ));
@@ -5117,7 +5112,7 @@ async fn ambiguous_remove_retry_excludes_a_conflicting_file_recreation() {
         .iter()
         .filter(|call| call.starts_with("open("))
         .count();
-    control.push_open(Ok(SandboxOpened::scripted_file(101)));
+    control.push_open(Ok(SandboxHandle::scripted_file(101)));
     let recreating = tokio::spawn(
         open(
             &generation_handle,
@@ -5210,7 +5205,7 @@ async fn rename_evidence_excludes_a_conflicting_file_recreation() {
         .iter()
         .filter(|call| call.starts_with("open("))
         .count();
-    control.push_open(Ok(SandboxOpened::scripted_file(103)));
+    control.push_open(Ok(SandboxHandle::scripted_file(103)));
     let recreating = tokio::spawn(
         open(
             &generation_handle,
@@ -5265,7 +5260,7 @@ async fn file_creation_open_blocks_only_conflicting_namespace_edits() {
     )
     .await;
 
-    control.push_open(Ok(SandboxOpened::scripted_file(105)));
+    control.push_open(Ok(SandboxHandle::scripted_file(105)));
     let open_gate = control.block("open");
     let opening = tokio::spawn(
         open(
@@ -5355,7 +5350,7 @@ async fn existing_file_open_does_not_block_a_namespace_edit() {
     )
     .await;
 
-    control.push_open(Ok(SandboxOpened::scripted_file(114)));
+    control.push_open(Ok(SandboxHandle::scripted_file(114)));
     let open_gate = control.block("open");
     let opening = tokio::spawn(
         open(
@@ -5478,10 +5473,10 @@ async fn target_move_and_remove_conflict_with_descendant_edits_through_aliases()
         open_directory_with_identity(&generation_handle, &control, 93, 710, "direct").await;
     let alias = open_directory_with_identity(&generation_handle, &control, 94, 710, "alias").await;
 
-    control.push_namespace_resolution(1, "source", None);
-    control.push_namespace_resolution(1, "destination", None);
-    control.push_namespace_resolution(1, "source", Some(710));
-    control.push_namespace_resolution(1, "destination", None);
+    control.push_path_resolution(1, "source", None);
+    control.push_path_resolution(1, "destination", None);
+    control.push_path_resolution(1, "source", Some(710));
+    control.push_path_resolution(1, "destination", None);
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
     control.push_rename(Ok(()));
     let rename_gate = control.block("rename");
@@ -5515,8 +5510,8 @@ async fn target_move_and_remove_conflict_with_descendant_edits_through_aliases()
     moving.await.unwrap().unwrap();
     descendant.await.unwrap().unwrap();
 
-    control.push_namespace_resolution(1, "target", None);
-    control.push_namespace_resolution(1, "target", Some(710));
+    control.push_path_resolution(1, "target", None);
+    control.push_path_resolution(1, "target", Some(710));
     control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
     control.push_remove_directory(Ok(()));
     let remove_gate = control.block("remove_directory");
@@ -5567,30 +5562,30 @@ async fn directory_key_extension_prevents_write_skew_without_deadlock() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let generation = generation_handle.generation.upgrade().unwrap();
-    control.push_namespace_resolution(1, "entry", Some(900));
-    control.push_namespace_resolution(900, "child", None);
-    let entry = resolve_namespace_target(&generation, SandboxPath::at_root("entry"))
+    control.push_path_resolution(1, "entry", Some(900));
+    control.push_path_resolution(900, "child", None);
+    let entry = resolve_path_target(&generation, SandboxPath::at_root("entry"))
         .await
         .unwrap();
-    let child = resolve_namespace_target(&generation, SandboxPath::at_root("child"))
+    let child = resolve_path_target(&generation, SandboxPath::at_root("child"))
         .await
         .unwrap();
     let mut entry_lease = generation
         .namespace
         .coordinate(
             NamespaceCoordinationKind::Edit,
-            vec![entry.coordination_key()],
+            vec![entry.name_comparison_key()],
         )
         .await;
     let mut child_lease = generation
         .namespace
         .coordinate(
             NamespaceCoordinationKind::Edit,
-            vec![child.coordination_key()],
+            vec![child.name_comparison_key()],
         )
         .await;
 
-    assert!(entry_lease.extend(vec![entry.final_directory_key().unwrap()]));
+    assert!(entry_lease.extend(vec![entry.target_directory_id().unwrap()]));
     assert!(!child_lease.extend(Vec::new()));
     drop(child_lease);
     drop(entry_lease);
@@ -5612,8 +5607,8 @@ async fn sandbox_equivalent_names_share_one_coordination_key() {
         "root",
     )
     .await;
-    control.push_namespace_resolution(800, "sandbox-equivalent", None);
-    control.push_namespace_resolution(800, "sandbox-equivalent", None);
+    control.push_path_resolution(800, "sandbox-equivalent", None);
+    control.push_path_resolution(800, "sandbox-equivalent", None);
     assert_insert_coordination(
         &generation_handle,
         &control,
@@ -5639,9 +5634,7 @@ async fn conservative_sandbox_names_serialize_only_within_their_parent() {
     let held = coordinator
         .coordinate(
             NamespaceCoordinationKind::Edit,
-            vec![SandboxNamespaceCoordinationKey::scripted_conservative(
-                1, "first",
-            )],
+            vec![SandboxNameComparisonKey::scripted_conservative(1, "first")],
         )
         .await;
 
@@ -5650,9 +5643,7 @@ async fn conservative_sandbox_names_serialize_only_within_their_parent() {
             Duration::from_millis(20),
             coordinator.coordinate(
                 NamespaceCoordinationKind::Edit,
-                vec![SandboxNamespaceCoordinationKey::scripted_conservative(
-                    1, "second",
-                )],
+                vec![SandboxNameComparisonKey::scripted_conservative(1, "second",)],
             ),
         )
         .await
@@ -5662,9 +5653,7 @@ async fn conservative_sandbox_names_serialize_only_within_their_parent() {
         Duration::from_millis(20),
         coordinator.coordinate(
             NamespaceCoordinationKind::Edit,
-            vec![SandboxNamespaceCoordinationKey::scripted_conservative(
-                2, "second",
-            )],
+            vec![SandboxNameComparisonKey::scripted_conservative(2, "second")],
         ),
     )
     .await
@@ -5676,9 +5665,7 @@ async fn conservative_sandbox_names_serialize_only_within_their_parent() {
         Duration::from_millis(20),
         coordinator.coordinate(
             NamespaceCoordinationKind::Edit,
-            vec![SandboxNamespaceCoordinationKey::scripted_conservative(
-                1, "second",
-            )],
+            vec![SandboxNameComparisonKey::scripted_conservative(1, "second")],
         ),
     )
     .await
@@ -5689,8 +5676,8 @@ async fn conservative_sandbox_names_serialize_only_within_their_parent() {
 #[timeout("10s")]
 async fn apfs_conservative_coordination_covers_both_edit_observation_orders() {
     let coordinator = Arc::new(NamespaceCoordinator::new());
-    let composed = SandboxNamespaceCoordinationKey::scripted_conservative(1, "caf\u{00e9}.txt");
-    let decomposed = SandboxNamespaceCoordinationKey::scripted_conservative(1, "cafe\u{0301}.txt");
+    let composed = SandboxNameComparisonKey::scripted_conservative(1, "caf\u{00e9}.txt");
+    let decomposed = SandboxNameComparisonKey::scripted_conservative(1, "cafe\u{0301}.txt");
     let first_observe = coordinator
         .coordinate(NamespaceCoordinationKind::Observe, vec![composed.clone()])
         .await;
@@ -5714,7 +5701,7 @@ async fn apfs_conservative_coordination_covers_both_edit_observation_orders() {
     assert!(futures::poll!(blocked_observe.as_mut()).is_pending());
     let mut other_parent_edit = Box::pin(coordinator.coordinate(
         NamespaceCoordinationKind::Edit,
-        vec![SandboxNamespaceCoordinationKey::scripted_conservative(
+        vec![SandboxNameComparisonKey::scripted_conservative(
             2,
             "cafe\u{0301}.txt",
         )],
@@ -5866,7 +5853,7 @@ async fn symlink_alias_descriptors_preserve_object_identity_across_entry_move() 
 async fn directory_open_registers_before_a_conflicting_move_can_publish() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
-    control.push_open(Ok(SandboxOpened::scripted_directory(98)));
+    control.push_open(Ok(SandboxHandle::scripted_directory(98)));
     let open_gate = control.block("open");
     let opening = tokio::spawn(
         open(
@@ -6950,7 +6937,7 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
         mode: FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
             root: root.into(),
         },
         ..FilesystemStorageConfig::default()
@@ -7000,7 +6987,7 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
         mode: FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
+            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
             root: root.into(),
         },
         ..FilesystemStorageConfig::default()
@@ -7108,7 +7095,6 @@ async fn allocation_timeout_retains_the_read_and_permit_until_close_and_stops_sa
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -7176,7 +7162,6 @@ async fn timed_out_billing_observer_does_not_block_sandbox_deletion() {
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
-        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -7649,7 +7634,7 @@ async fn call_lease_blocks_deletion_before_sandbox_work_starts() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 44).await;
-    let SandboxNode::File(sandbox_file) = file.ownership.sandbox() else {
+    let SandboxHandle::File(sandbox_file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
     let append_guard = sandbox_file.coordinate_append().await;
@@ -7725,12 +7710,12 @@ async fn append_guard_covers_prefix_classification_suffix_retry_and_completion()
     )
     .await;
     let generation_handle = resident_generation_handle(&filesystem);
-    let (opened_file, opened_alias) = SandboxOpened::scripted_file_aliases(45, 46, 47);
+    let (opened_file, opened_alias) = SandboxHandle::scripted_file_aliases(45, 46, 47);
     control.push_open(Ok(opened_file));
     control.push_open(Ok(opened_alias));
     let file = open_programmed_file(&generation_handle, AccessMode::ReadWrite, "file").await;
     let alias = open_programmed_file(&generation_handle, AccessMode::ReadWrite, "hard-link").await;
-    let SandboxNode::File(sandbox_file) = file.ownership.sandbox() else {
+    let SandboxHandle::File(sandbox_file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
     let sandbox_file = sandbox_file.clone();
@@ -7842,7 +7827,7 @@ async fn append_coordination_does_not_block_positioned_writes() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 39).await;
-    let SandboxNode::File(sandbox_file) = file.ownership.sandbox() else {
+    let SandboxHandle::File(sandbox_file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
     let sandbox_file = sandbox_file.clone();
@@ -8871,7 +8856,7 @@ async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
         .await
         .as_ref()
         .unwrap()
-        .root()
+        .root_for_test()
         .to_path_buf();
     let component = root.parent().unwrap();
     let moved = component.with_extension("moved");
@@ -9325,7 +9310,7 @@ async fn timestamp_postconditions_preserve_keep_and_retry_only_proven_no_effect(
         control
             .calls()
             .iter()
-            .filter(|call| call.starts_with("set_node_times("))
+            .filter(|call| call.starts_with("set_handle_times("))
             .count(),
         2
     );
@@ -9746,7 +9731,7 @@ fn a_capability_escape_refusal_is_a_guest_error_without_effect() {
         cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
     let refusal = directory.open("../outside").unwrap_err();
     assert_eq!(refusal.kind(), std::io::ErrorKind::PermissionDenied);
-    let error = FilesystemStorageError::io("open sandbox path", root.path(), refusal);
+    let error = FilesystemStorageError::io("open sandbox path", Some(root.path()), refusal);
     assert!(!error.is_terminal_failure());
     let cause = classify_failure(&error, FailureFacts::default());
     assert_eq!(cause, FailureCause::Guest);
@@ -9835,7 +9820,7 @@ fn native_permission_errors_and_broken_storage_are_terminal() {
             let refused = || {
                 FilesystemStorageError::io(
                     "refused",
-                    Path::new("<scripted>"),
+                    None,
                     std::io::Error::from_raw_os_error(errno),
                 )
             };
@@ -9878,8 +9863,8 @@ fn native_permission_errors_and_broken_storage_are_terminal() {
                 assert!(
                     invalidates_generation(&FilesystemStorageError::io(
                         "broken",
-                        Path::new("<scripted>"),
-                        std::io::Error::from_raw_os_error(errno),
+                        None,
+                        std::io::Error::from_raw_os_error(errno)
                     )),
                     "errno {errno}"
                 );

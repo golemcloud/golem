@@ -43,10 +43,13 @@ mod moonbit_reflection;
 mod moonbit_tool_middleware;
 mod multipart_snapshot;
 mod plugins;
+mod quantity_interop;
 mod remote_releases;
 mod rust_http_router;
 mod rust_minimal_exports;
+mod rust_refined_tool_args;
 mod rust_streams;
+mod rust_tool_middleware_refined_args;
 mod scala_gol40_reflection_acceptance;
 mod scala_guest_streams;
 mod scala_http_router;
@@ -65,6 +68,7 @@ mod tool_middleware_conformance;
 mod typescript_guest_streams;
 mod typescript_http_router;
 mod typescript_native_source;
+mod uuid_interop;
 
 inherit_test_dep!(Tracing);
 
@@ -90,6 +94,8 @@ tag_suite!(
 );
 tag_suite!(scala_http_router, agents_guest_bridge_sources);
 tag_suite!(scala_tool_sources, agents_guest_bridge_sources);
+tag_suite!(quantity_interop, agents_guest_bridge_sources);
+tag_suite!(uuid_interop, agents_guest_bridge_sources);
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(builtin_bash, deploy);
@@ -125,6 +131,7 @@ tag_suite!(multipart_snapshot, deploy);
 tag_suite!(plugins, deploy);
 tag_suite!(rust_http_router, agents_guest_bridge);
 tag_suite!(rust_minimal_exports, deploy);
+tag_suite!(rust_refined_tool_args, deploy);
 tag_suite!(rust_streams, agents_guest_bridge);
 tag_suite!(scala_guest_streams, agents_guest_bridge);
 tag_suite!(scala_gol40_reflection_acceptance, agents_guest_bridge);
@@ -139,6 +146,8 @@ tag_suite!(tool_metadata_conformance, deploy);
 tag_suite!(tool_middleware, deploy);
 tag_suite!(tool_middleware_conformance, deploy);
 tag_suite!(typescript_guest_streams, agents_guest_bridge);
+tag_suite!(quantity_interop, agents_guest_bridge);
+tag_suite!(uuid_interop, agents_guest_bridge);
 tag_suite!(typescript_http_router, deploy);
 tag_suite!(typescript_native_source, agents_guest_bridge);
 

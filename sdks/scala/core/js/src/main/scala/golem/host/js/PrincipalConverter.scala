@@ -16,7 +16,7 @@
 
 package golem.host.js
 
-import golem.{Principal, Uuid}
+import golem.{CanonicalUuid, Principal}
 import zio.blocks.schema.json.Json
 
 import scala.scalajs.js
@@ -43,24 +43,14 @@ object PrincipalConverter {
             preferredUsername = p.preferredUsername.toOption
           )
         case "agent" =>
-          val p           = dynamic.asInstanceOf[JsPrincipalAgent].value
-          val jsUuid      = p.agentId.componentId.uuid
-          val componentId = Uuid(
-            highBits = BigInt(jsUuid.highBits.toString),
-            lowBits = BigInt(jsUuid.lowBits.toString)
-          )
+          val p = dynamic.asInstanceOf[JsPrincipalAgent].value
           Principal.Agent(
-            componentId = componentId,
+            componentId = JsUuid.toUuid(p.agentId.componentId.uuid),
             agentId = p.agentId.agentId
           )
         case "golem-user" =>
-          val p         = dynamic.asInstanceOf[JsPrincipalGolemUser].value
-          val jsUuid    = p.accountId.uuid
-          val accountId = Uuid(
-            highBits = BigInt(jsUuid.highBits.toString),
-            lowBits = BigInt(jsUuid.lowBits.toString)
-          )
-          Principal.GolemUser(accountId = accountId)
+          val p = dynamic.asInstanceOf[JsPrincipalGolemUser].value
+          Principal.GolemUser(accountId = JsUuid.toUuid(p.accountId.uuid))
         case "anonymous" =>
           Principal.Anonymous
         case _ =>
@@ -82,7 +72,7 @@ object PrincipalConverter {
       Json.Object(
         "tag" -> Json.String("agent"),
         "val" -> Json.Object(
-          "componentId" -> Json.String(Uuid.toStandardString(componentId)),
+          "componentId" -> Json.String(componentId.toString),
           "agentId"     -> Json.String(agentId)
         )
       )
@@ -91,7 +81,7 @@ object PrincipalConverter {
       Json.Object(
         "tag" -> Json.String("golem-user"),
         "val" -> Json.Object(
-          "accountId" -> Json.String(Uuid.toStandardString(accountId))
+          "accountId" -> Json.String(accountId.toString)
         )
       )
 
@@ -133,14 +123,14 @@ object PrincipalConverter {
                     for {
                       valObj      <- getObj(json, "val")
                       cidStr      <- getStr(valObj, "componentId")
-                      componentId <- Uuid.fromStandardString(cidStr)
+                      componentId <- CanonicalUuid.parse(cidStr)
                       agentId     <- getStr(valObj, "agentId")
                     } yield Principal.Agent(componentId, agentId)
                   case "golem-user" =>
                     for {
                       valObj    <- getObj(json, "val")
                       aidStr    <- getStr(valObj, "accountId")
-                      accountId <- Uuid.fromStandardString(aidStr)
+                      accountId <- CanonicalUuid.parse(aidStr)
                     } yield Principal.GolemUser(accountId)
                   case "oidc" =>
                     for {

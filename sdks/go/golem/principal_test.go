@@ -111,7 +111,7 @@ func TestPrincipalsReachTheAgent(t *testing.T) {
 // part of the call.
 func TestCallersNeverSendThePrincipal(t *testing.T) {
 	m := MethodDef[pID, pChargeIn, string]{name: "charge"}
-	tree, err := m.encodeInput(pChargeIn{Amount: 5, Principal: AnonymousPrincipal{}})
+	tree, err := m.encodeInput("target", pChargeIn{Amount: 5, Principal: AnonymousPrincipal{}})
 	if err != nil {
 		t.Fatal(err)
 	}

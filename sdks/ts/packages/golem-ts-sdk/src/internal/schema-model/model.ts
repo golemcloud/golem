@@ -25,22 +25,7 @@
 // field names and shapes match the wire format exactly and the codecs can pass
 // them through unchanged.
 
-import type {
-  TypeId,
-  MetadataEnvelope,
-  NumericRestrictions,
-  TextRestrictions,
-  BinaryRestrictions,
-  PathSpec,
-  UrlRestrictions,
-  QuantitySpec,
-  QuantityValue,
-  SecretSpec,
-  QuotaTokenSpec,
-  PermissionCardSpec,
-  DiscriminatorRule,
-  Datetime,
-} from 'golem:core/types@2.0.0';
+import type * as WitTypes from 'golem:core/types@2.0.0';
 import { GuestSecretHandle } from './secretHandle';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
 import {
@@ -50,35 +35,29 @@ import {
 import { GuestPermissionCardHandle, isPermissionCardObject } from './permissionCardHandle';
 import { Uuid } from '../../uuid';
 
-export type {
-  TypeId,
-  MetadataEnvelope,
-  NumericRestrictions,
-  TextRestrictions,
-  BinaryRestrictions,
-  PathSpec,
-  UrlRestrictions,
-  QuantitySpec,
-  QuantityValue,
-  SecretSpec,
-  QuotaTokenSpec,
-  PermissionCardSpec,
-  DiscriminatorRule,
-  Datetime,
-};
+// The leaf types are declared as local aliases rather than re-exported, so the
+// bundled declarations keep them as types inside the `bridge` namespace.
+export type TypeId = WitTypes.TypeId;
+export type MetadataEnvelope = WitTypes.MetadataEnvelope;
+export type NumericRestrictions = WitTypes.NumericRestrictions;
+export type TextRestrictions = WitTypes.TextRestrictions;
+export type BinaryRestrictions = WitTypes.BinaryRestrictions;
+export type PathSpec = WitTypes.PathSpec;
+export type UrlRestrictions = WitTypes.UrlRestrictions;
+export type QuantitySpec = WitTypes.QuantitySpec;
+export type QuantityValue = WitTypes.QuantityValue;
+export type SecretSpec = WitTypes.SecretSpec;
+export type QuotaTokenSpec = WitTypes.QuotaTokenSpec;
+export type PermissionCardSpec = WitTypes.PermissionCardSpec;
+export type DiscriminatorRule = WitTypes.DiscriminatorRule;
+export type Datetime = WitTypes.Datetime;
+export type NumericBound = WitTypes.NumericBound;
+export type Role = WitTypes.Role;
+export type PathDirection = WitTypes.PathDirection;
+export type PathKind = WitTypes.PathKind;
+export type FieldDiscriminator = WitTypes.FieldDiscriminator;
 
-// These are part of the schema-model public surface but are only ever re-exported
-// (never referenced in a local declaration), so re-export them directly to avoid
-// an "unused external import" bundling warning.
-export type {
-  NumericBound,
-  Role,
-  PathDirection,
-  PathKind,
-  FieldDiscriminator,
-  Uuid,
-  EnvironmentId,
-} from 'golem:core/types@2.0.0';
+export type { Uuid, EnvironmentId } from 'golem:core/types@2.0.0';
 
 // ============================================================
 // Schema type (recursive)
