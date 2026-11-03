@@ -407,6 +407,10 @@ impl AttachmentObserver {
         self.attachment.wait_terminal().await
     }
 
+    pub(crate) fn owner_fenced(&self) -> bool {
+        self.attachment.state.lock().unwrap().owner_fenced
+    }
+
     #[cfg(test)]
     pub(crate) fn terminal(&self) -> Option<ByteStreamCloseCause> {
         let state = self.attachment.state.lock().unwrap();
