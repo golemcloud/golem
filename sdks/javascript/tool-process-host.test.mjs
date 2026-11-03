@@ -506,3 +506,58 @@ test("a binding that disappeared before invoke completes with its exit code", as
   assert.deepEqual(await once(child, "close"), [127, null]);
   assert.deepEqual(events, ["spawn", ["exit", 127]]);
 });
+
+test(
+  "a throwing live data listener does not strand later output or close",
+  { timeout: 5000 },
+  async () => {
+    const uncaught = [];
+    const listener = (error) => uncaught.push(error.message);
+    const originals = process.listeners("uncaughtException");
+    for (const l of originals) process.removeListener("uncaughtException", l);
+    process.on("uncaughtException", listener);
+    try {
+      const f = fixture();
+      f.terminal.result = {
+        tag: "ok",
+        rendered: { exitCode: 0, stdout: [], stderr: [] },
+      };
+      f.native.prepareCommand = () => ({
+        tag: "invoke",
+        val: {
+          commandPath: ["run"],
+          input: {},
+          stdin: false,
+          stdout: true,
+          stderr: false,
+        },
+      });
+      let reads = 0;
+      f.native.readOutput = async () =>
+        reads++ < 2 ? Buffer.from(`chunk${reads}\n`) : undefined;
+      // Completes once both chunks were read, or after a bounded wait, so a
+      // stranded write fails the assertions instead of hanging the test.
+      f.native.collectAsync = async () => {
+        for (let turn = 0; reads <= 2 && turn < 1000; turn++) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        return f.terminal;
+      };
+      const child = f.backend.spawn("streaming", ["run"]);
+      const chunks = [];
+      child.stdout.on("data", (chunk) => {
+        chunks.push(chunk.toString());
+        if (chunks.length === 1) throw new Error("data listener");
+      });
+      const exited = once(child, "exit");
+      assert.deepEqual(await once(child, "close"), [0, null]);
+      assert.deepEqual(await exited, [0, null]);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(chunks, ["chunk1\n", "chunk2\n"]);
+      assert.deepEqual(uncaught, ["data listener"]);
+    } finally {
+      process.removeListener("uncaughtException", listener);
+      for (const l of originals) process.on("uncaughtException", l);
+    }
+  },
+);

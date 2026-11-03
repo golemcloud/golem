@@ -159,6 +159,21 @@ function rethrowLater(error) {
   });
 }
 
+// The child's own stdout/stderr pipe. A throwing 'data' listener is caught
+// inside emit, so the stream still completes the write that delivered the chunk
+// and later chunks are not stranded behind it.
+class ChildOutput extends PassThrough {
+  emit(event, ...args) {
+    if (event !== "data") return super.emit(event, ...args);
+    try {
+      return super.emit(event, ...args);
+    } catch (error) {
+      rethrowLater(error);
+      return true;
+    }
+  }
+}
+
 // Emits an event, or ends a stream when the event is "end"; returns false when a
 // listener threw.
 function emit(target, event, ...args) {
@@ -616,8 +631,8 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   child.signalCode = null;
   child.spawnfile = command;
   child.spawnargs = [command, ...args.map(String)];
-  child.stdout = modes[1] === "pipe" ? new PassThrough() : null;
-  child.stderr = modes[2] === "pipe" ? new PassThrough() : null;
+  child.stdout = modes[1] === "pipe" ? new ChildOutput() : null;
+  child.stderr = modes[2] === "pipe" ? new ChildOutput() : null;
   child.stdin = null;
   const resources = new Set();
   const transfer = (resource) => {
@@ -789,7 +804,7 @@ function spawnTool(host, runtimeProcess, command, args, options) {
                   error ? reject(error) : resolve(),
                 );
               } catch (error) {
-                // A throwing 'data' listener is the caller's exception.
+                // A caller-owned destination threw; the exception is the caller's.
                 rethrowLater(error);
                 resolve();
               }
