@@ -12,8 +12,8 @@ use golem_schema::TypedSchemaValue;
 use golem_schema::tool::{
     Tool,
     process::{
-        ParsedProcessCommand, parse_command, process_status_type, render_custom_error,
-        render_result,
+        ParsedProcessCommand, command_line_error, parse_command, process_status_type,
+        render_custom_error, render_result,
     },
 };
 use std::collections::{BTreeMap, HashMap};
@@ -54,15 +54,8 @@ impl Catalog {
             .tools
             .get(name)
             .ok_or_else(|| failure(127, "tool is not bound"))?;
-        let parsed = parse_command(tool, args, variables).map_err(|message| {
-            // The shared parser forbids constructing opaque capabilities from text.
-            let message = if message.contains("capabilit") || message.contains("secret") {
-                format!("secret and other capability arguments are unsupported: {message}")
-            } else {
-                message
-            };
-            failure(2, message)
-        })?;
+        let parsed = parse_command(tool, args, variables)
+            .map_err(|message| failure(2, command_line_error(message)))?;
         match parsed {
             ParsedProcessCommand::Help(text) => Err(CommandOutput {
                 stdout: text.into_bytes(),

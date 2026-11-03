@@ -73,6 +73,16 @@ pub fn parse_command(
     }
 }
 
+/// Describe a [`parse_command`] failure for a command line. The parser forbids
+/// constructing opaque capabilities, such as secrets, from text.
+pub fn command_line_error(message: String) -> String {
+    if message.contains("capabilit") || message.contains("secret") {
+        format!("secret and other capability arguments are unsupported: {message}")
+    } else {
+        message
+    }
+}
+
 /// Validate the cross-language named process-status contract.
 pub fn process_status_type(graph: &SchemaGraph, root: &SchemaType) -> Result<bool, String> {
     if !matches!(root, SchemaType::Ref { id, .. } if *id == ProcessExitStatus::type_id()) {
@@ -276,6 +286,18 @@ mod tests {
                 1,
                 "tool error: failure: {\"credential\":\"<redacted: secret>\"}".into()
             )
+        );
+    }
+
+    #[test]
+    fn command_line_errors_name_unsupported_capability_arguments() {
+        assert_eq!(
+            command_line_error("--token: secrets cannot be parsed".into()),
+            "secret and other capability arguments are unsupported: --token: secrets cannot be parsed"
+        );
+        assert_eq!(
+            command_line_error("missing value for --count".into()),
+            "missing value for --count"
         );
     }
 }
