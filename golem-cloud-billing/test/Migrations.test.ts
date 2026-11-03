@@ -1,6 +1,6 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
-import type pg from "pg"
+import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import * as App from "../src/App.ts"
 import { BillingConfig, type BillingConfigShape } from "../src/BillingConfig.ts"
@@ -87,6 +87,48 @@ describe("migrations", () => {
       ])
     } finally {
       await dropSchema(pool, concurrent.db.schema)
+    }
+  })
+
+  it("runs as a role that owns only its schema and cannot read the registry tables", async () => {
+    // The setup of the hosted deployment: the role owns the schema of the app and has no
+    // privilege on the database or on the tables of the registry service in `public`.
+    const restricted = testConfig()
+    // A role name that differs from the schema name: the default `search_path` starts with
+    // `"$user"`, which would otherwise select the schema of the app by name.
+    const role = `${restricted.db.schema}_role`
+    const registryTable = `"public"."${restricted.db.schema}_tokens"`
+    await pool.query(`CREATE ROLE "${role}" LOGIN PASSWORD 'restricted'`)
+    await pool.query(`CREATE SCHEMA "${restricted.db.schema}" AUTHORIZATION "${role}"`)
+    await pool.query(`CREATE TABLE ${registryTable} (secret text NOT NULL)`)
+    const rolePool = new pg.Pool({
+      host: restricted.db.host,
+      port: restricted.db.port,
+      database: restricted.db.database,
+      user: role,
+      password: "restricted",
+      max: 1
+    })
+    try {
+      await startServices({
+        ...restricted,
+        db: { ...restricted.db, username: role, password: Redacted.make("restricted") }
+      })
+
+      const tables = await pool.query<{ table_name: string; table_owner: string }>(
+        `SELECT tablename AS table_name, tableowner AS table_owner FROM pg_tables
+         WHERE schemaname = $1 ORDER BY tablename`,
+        [restricted.db.schema]
+      )
+      expect(tables.rows).toEqual(
+        ["account", "session", "user", "verification"].map((table_name) => ({ table_name, table_owner: role }))
+      )
+      await expect(rolePool.query(`SELECT secret FROM ${registryTable}`)).rejects.toThrow(/permission denied/)
+    } finally {
+      await rolePool.end()
+      await pool.query(`DROP TABLE IF EXISTS ${registryTable}`)
+      await dropSchema(pool, restricted.db.schema)
+      await pool.query(`DROP ROLE IF EXISTS "${role}"`)
     }
   })
 })

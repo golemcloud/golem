@@ -4,7 +4,6 @@ import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto"
 import { getMigrations } from "better-auth/db/migration"
 import { decryptOAuthToken } from "better-auth/oauth2"
 import { Context, Data, Effect, Layer, Option, Redacted } from "effect"
-import { PostgresDialect } from "kysely"
 import type pg from "pg"
 import { BillingConfig } from "./BillingConfig.ts"
 import { Database, withAdvisoryLock } from "./Database.ts"
@@ -16,7 +15,6 @@ export type AuthLogLevel = "debug" | "info" | "warn" | "error"
 
 export interface AuthOptions {
   readonly pool: pg.Pool
-  readonly schema: string
   readonly baseUrl: URL
   readonly secret: Redacted.Redacted<string>
   readonly github: { readonly clientId: string; readonly clientSecret: Redacted.Redacted<string> }
@@ -32,12 +30,11 @@ export const authOptions = (options: AuthOptions) =>
     appName: "Golem Cloud",
     baseURL: options.baseUrl.origin,
     secret: Redacted.value(options.secret),
-    database: {
-      dialect: new PostgresDialect({ pool: options.pool }),
-      type: "postgres",
-      schemaName: options.schema,
-      transaction: true
-    },
+    // The pool sets `search_path` to the schema of the billing app, and Better Auth reads its
+    // schema from there. With `database.schemaName` instead, the migrations would run
+    // `CREATE SCHEMA IF NOT EXISTS`, which needs the CREATE privilege on the database even when
+    // the schema exists.
+    database: options.pool,
     socialProviders: {
       github: {
         clientId: options.github.clientId,
@@ -102,6 +99,9 @@ const logAt = (level: AuthLogLevel) => {
   }
 }
 
+const describeCause = (cause: unknown): string =>
+  cause instanceof Error ? cause.message : inspect(cause, { depth: 4, breakLength: Infinity })
+
 export class IdentityBridgeError extends Data.TaggedError("IdentityBridgeError")<{
   readonly reason: string
   readonly cause?: unknown
@@ -111,11 +111,28 @@ export class IdentityBridgeError extends Data.TaggedError("IdentityBridgeError")
   }
 }
 
+export class SessionError extends Data.TaggedError("SessionError")<{
+  readonly reason: string
+  readonly cause: unknown
+}> {
+  override get message(): string {
+    return `Cannot read the session: ${this.reason}: ${describeCause(this.cause)}`
+  }
+}
+
+export class MigrationError extends Data.TaggedError("MigrationError")<{
+  readonly cause: unknown
+}> {
+  override get message(): string {
+    return `Cannot apply the database migrations: ${describeCause(this.cause)}`
+  }
+}
+
 const tryAuth = <A>(reason: string, f: () => Promise<A>) =>
   Effect.tryPromise({ try: f, catch: (cause) => new IdentityBridgeError({ reason, cause }) })
 
-const describeCause = (cause: unknown): string =>
-  cause instanceof Error ? cause.message : inspect(cause, { depth: 4, breakLength: Infinity })
+const trySession = <A>(reason: string, f: () => Promise<A>) =>
+  Effect.tryPromise({ try: f, catch: (cause) => new SessionError({ reason, cause }) })
 
 /**
  * The identity bridge. Before Better Auth stores a new session, it exchanges the GitHub access
@@ -176,21 +193,30 @@ export interface SignedIn {
 export interface AuthShape {
   readonly auth: BillingAuth
   /** Returns the signed-in user of the request, if the session is linked to a Golem account. */
-  readonly getSignedIn: (headers: Headers) => Effect.Effect<Option.Option<SignedIn>, IdentityBridgeError>
+  readonly getSignedIn: (headers: Headers) => Effect.Effect<Option.Option<SignedIn>, SessionError>
 }
 
 export class Auth extends Context.Service<Auth, AuthShape>()("golem-cloud-billing/Auth") {}
 
 /**
- * Applies the Better Auth migrations, then turns `user.golem_account_id` into a `uuid` column.
- * Better Auth has no `uuid` field type, so it creates the column as `text`; its migration check
- * accepts `uuid` for a string field, so later runs leave the column alone.
+ * Creates the schema of the billing app if it is missing, applies the Better Auth migrations,
+ * then turns `user.golem_account_id` into a `uuid` column. Better Auth has no `uuid` field type,
+ * so it creates the column as `text`; its migration check accepts `uuid` for a string field, so
+ * later runs leave the column alone.
+ *
+ * In the hosted deployment an operator creates the schema for the database role of the app, and
+ * the role owns only that schema. Creating a missing schema needs the CREATE privilege on the
+ * database, which a local development database gives.
  *
  * Call it before `betterAuth`: a new Better Auth instance checks the schema at once and logs
  * an error for every missing table.
  */
 export const migrate = (options: BetterAuthOptions, pool: pg.Pool, schema: string): Promise<void> =>
   withAdvisoryLock(pool, "golem-cloud-billing/migrations", async () => {
+    const existing = await pool.query("SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1", [schema])
+    if (existing.rowCount === 0) {
+      await pool.query(`CREATE SCHEMA "${schema}"`)
+    }
     const { runMigrations } = await getMigrations(options)
     await runMigrations()
     const column = await pool.query<{ data_type: string }>(
@@ -206,7 +232,7 @@ export const migrate = (options: BetterAuthOptions, pool: pg.Pool, schema: strin
     }
   })
 
-export const layer: Layer.Layer<Auth, IdentityBridgeError, BillingConfig | Database | Registry> =
+export const layer: Layer.Layer<Auth, MigrationError, BillingConfig | Database | Registry> =
   Layer.effect(
     Auth,
     Effect.gen(function* () {
@@ -218,7 +244,6 @@ export const layer: Layer.Layer<Auth, IdentityBridgeError, BillingConfig | Datab
 
       const options = authOptions({
         pool,
-        schema,
         baseUrl: config.baseUrl,
         secret: config.authSecret,
         github: config.github,
@@ -232,18 +257,21 @@ export const layer: Layer.Layer<Auth, IdentityBridgeError, BillingConfig | Datab
         }
       })
 
-      yield* tryAuth("cannot apply the database migrations", () => migrate(options, pool, schema))
+      yield* Effect.tryPromise({
+        try: () => migrate(options, pool, schema),
+        catch: (cause) => new MigrationError({ cause })
+      })
       yield* Effect.logInfo("Applied the database migrations").pipe(Effect.annotateLogs({ schema }))
       const auth = betterAuth(options)
 
       const getSignedIn = (headers: Headers) =>
         Effect.gen(function* () {
-          const result = yield* tryAuth("cannot read the session", () => auth.api.getSession({ headers }))
+          const result = yield* trySession("Better Auth failed", () => auth.api.getSession({ headers }))
           if (result === null || !result.user.golemAccountId) {
             return Option.none<SignedIn>()
           }
-          const authContext = yield* tryAuth("cannot read the auth context", () => auth.$context)
-          const row = yield* tryAuth("cannot read the session", () =>
+          const authContext = yield* trySession("Better Auth failed", () => auth.$context)
+          const row = yield* trySession("cannot read the session row", () =>
             authContext.adapter.findOne<{ golemToken?: string | null }>({
               model: "session",
               where: [{ field: "id", value: result.session.id }]
@@ -253,7 +281,7 @@ export const layer: Layer.Layer<Auth, IdentityBridgeError, BillingConfig | Datab
             return Option.none<SignedIn>()
           }
           const encrypted = row.golemToken
-          const golemToken = yield* tryAuth("cannot decrypt the Golem API token", async () =>
+          const golemToken = yield* trySession("cannot decrypt the Golem API token", async () =>
             Redacted.make(await symmetricDecrypt({ key: authContext.secretConfig, data: encrypted }))
           )
           return Option.some<SignedIn>({

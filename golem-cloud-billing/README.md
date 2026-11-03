@@ -32,8 +32,22 @@ landing page shows the error.
 
 ## Database
 
-On startup the app applies the Better Auth migrations to its schema (`billing` by default), under
-a PostgreSQL advisory lock so that replicas migrate one at a time.
+The connections of the app set `search_path` to its schema (`billing` by default), and Better Auth
+creates its tables there. On startup the app applies the Better Auth migrations under a PostgreSQL
+advisory lock, so that replicas migrate one at a time.
+
+In the hosted deployment the app connects with its own role, which owns its schema and nothing
+else. The registry tables hold API token secrets and agent secrets, and the app reads registry
+data only through the HTTP API. An administrator creates the role once:
+
+```sql
+CREATE ROLE golem_cloud_billing LOGIN PASSWORD '…' CONNECTION LIMIT 10;
+CREATE SCHEMA billing AUTHORIZATION golem_cloud_billing;
+GRANT CONNECT ON DATABASE <database> TO golem_cloud_billing;
+```
+
+When the schema does not exist, the app creates it, which needs the CREATE privilege on the
+database. A local database where the app connects as its owner works without any setup.
 
 ## Configuration
 
@@ -42,7 +56,7 @@ a PostgreSQL advisory lock so that replicas migrate one at a time.
 | `GOLEM__DB__CONFIG__HOST` | | PostgreSQL host. Same variable as the registry service. |
 | `GOLEM__DB__CONFIG__PORT` | `5432` | PostgreSQL port. |
 | `GOLEM__DB__CONFIG__DATABASE` | | Database name. |
-| `GOLEM__DB__CONFIG__USERNAME` | | Database user. |
+| `GOLEM__DB__CONFIG__USERNAME` | | Database user. In the hosted deployment, the role of the app (see [Database](#database)). |
 | `GOLEM__DB__CONFIG__PASSWORD` | | Database password. |
 | `GOLEM__DB__CONFIG__MAX_CONNECTIONS` | `10` | Size of the connection pool. |
 | `GOLEM__DB__TYPE` | `Postgres` | Must be `Postgres` when set. |

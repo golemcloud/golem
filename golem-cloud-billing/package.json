@@ -19,7 +19,6 @@
     "@effect/platform-node": "4.1.2",
     "better-auth": "1.7.16",
     "effect": "4.1.2",
-    "kysely": "0.29.8",
     "pg": "8.23.1"
   },
   "devDependencies": {

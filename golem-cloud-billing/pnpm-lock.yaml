@@ -17,9 +17,6 @@ importers:
       effect:
         specifier: 4.1.2
         version: 4.1.2
-      kysely:
-        specifier: 0.29.8
-        version: 0.29.8
       pg:
         specifier: 8.23.1
         version: 8.23.1

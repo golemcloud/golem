@@ -3,6 +3,7 @@ import pg from "pg"
 import { BillingConfig, type DbTls, type PostgresConfig } from "./BillingConfig.ts"
 
 export interface DatabaseShape {
+  /** A pool whose connections have the schema of the billing app as their `search_path`. */
   readonly pool: pg.Pool
   /** The PostgreSQL schema that holds every table of the billing app. */
   readonly schema: string
@@ -33,7 +34,10 @@ export const makePool = (config: PostgresConfig): pg.Pool =>
     max: config.maxConnections,
     ssl: sslOptions(config.tls),
     application_name: "golem-cloud-billing",
-    connectionTimeoutMillis: 10_000
+    connectionTimeoutMillis: 10_000,
+    // Every unqualified table name resolves in the schema of the billing app. The schema name
+    // matches the pattern that BillingConfig checks, so it needs no quoting.
+    options: `-c search_path=${config.schema}`
   })
 
 export const layer: Layer.Layer<Database, never, BillingConfig> = Layer.effect(
