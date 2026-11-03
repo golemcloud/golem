@@ -338,7 +338,9 @@ async fn postgres_catalog_qualified_migrator_dispatch_ignores_session_shadows(
         &format!("INSERT INTO {schema}.migrations (migration_id, user_id, tags) VALUES (2, $1::pg_catalog.uuid, $2)"),
         vec![DbValue::Text(Uuid::new_v4().to_string()), DbValue::Array(vec![DbValue::Text("tag".to_string())])],
     ).await.unwrap();
-    let statement = "SELECT pg_catalog.now() IS NOT NULL, $1::pg_catalog.regclass";
+    // Return a built-in OID so SQLx does not discover regclass through its own
+    // unqualified text cast while the hostile search path is active.
+    let statement = "SELECT pg_catalog.now() IS NOT NULL, $1::pg_catalog.regclass::pg_catalog.oid";
     let params = vec![DbValue::Text(format!("{schema}.migrations"))];
     let result = transaction.query(statement, params.clone()).await.unwrap();
     assert!(matches!(
