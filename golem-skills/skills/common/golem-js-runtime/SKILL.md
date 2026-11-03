@@ -37,7 +37,7 @@ These Node.js-compatible modules can be imported:
 | Module | Description |
 |--------|-------------|
 | `node:buffer` | Buffer API |
-| `node:child_process` | Constrained in-runtime JavaScript execution and bound Golem tools; no host processes or general shell |
+| `node:child_process` | Constrained in-runtime JavaScript execution and bound Golem tools; no host processes |
 | `node:crypto` | Hashes, HMAC, ciphers, key generation, sign/verify, DH, ECDH, X509, etc. |
 | `node:events` | EventEmitter |
 | `node:fs`, `node:fs/promises` | Comprehensive filesystem API (read, write, stat, mkdir, readdir, etc.) |
@@ -90,10 +90,16 @@ Additional npm packages can be installed with `npm install` (TypeScript) or adde
 The runtime's `node:child_process` adapter can run JavaScript targets, supported Node shebang files,
 and npm's simple `node <script>` command form. It also runs tools bound to the calling component:
 the command name selects the tool, and its arguments follow the same command schema as the Bash
-tool. Local Node scripts and package launchers take precedence over a tool with the same name. Set
-`GOLEM_NODE_TOOL_PROCESSES=0` or `false` to disable tool dispatch; it is a compatibility switch,
-not a permission control, and tool permissions still apply. The adapter cannot create host
-processes, run a general shell, or execute native binaries. Unsupported commands fail explicitly.
+tool. Local Node scripts and package launchers take precedence over a tool with the same name.
+When a Bash tool is bound, shell commands (`exec`, `execSync`, `shell: true`) that are not a plain
+local Node command run in it: they see the variables `options.env` sets or removes, cannot read
+stdin, and produce UTF-8 text output. Set `GOLEM_NODE_TOOL_PROCESSES` to `0`, `false`, `no` or
+`off` to disable tool dispatch; it is a compatibility switch, not a permission control, and tool
+permissions still apply. npm lifecycle scripts, including those of third-party dependencies, can
+also reach the bound tools; bind only the tools a component needs, and use
+`npm install --ignore-scripts` when dependency scripts should not run. The adapter cannot create
+host processes or execute native binaries.
+Unsupported commands fail explicitly.
 
 ## Fresh JavaScript Execution
 

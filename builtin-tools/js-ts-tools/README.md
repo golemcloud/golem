@@ -43,9 +43,15 @@ The command name and arguments use the same command schema as the Bash tool.
 Local Node scripts and package launchers take precedence over a tool with the
 same name. No host operating-system process is started.
 
-Set `GOLEM_NODE_TOOL_PROCESSES=0` or `false` to disable this dispatch while keeping
-local Node scripts available. The switch is checked for each call. It is a
+Set `GOLEM_NODE_TOOL_PROCESSES` to `0`, `false`, `no` or `off` to disable this dispatch
+while keeping local Node scripts available. The switch is checked for each call. It is a
 compatibility option, not a permission control; Golem tool permissions still apply.
+
+Dispatch is also on inside the built-in `npm` tool, so lifecycle scripts of installed
+packages, including third-party dependencies, can call the tools bound to the caller.
+Those scripts can change the switch themselves, so it does not restrict them. Bind
+only the tools a component needs, rely on tool permissions, and run
+`npm install --ignore-scripts` when dependency scripts should not run at all.
 The shared TypeScript SDK template installs the adapter in both the main runtime
 and fresh JavaScript execution runtimes. Its build requires the generic WRQJS
 process-backend and runtime-init hooks.

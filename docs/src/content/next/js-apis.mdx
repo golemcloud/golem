@@ -154,7 +154,7 @@ Context propagates through `Promise.prototype.then`, `catch`, and `finally`, and
 
 The runtime cannot create operating-system subprocesses. A limited compatibility adapter runs JavaScript targets invoked through `process.execPath`, with separate argument, environment, and working-directory views. It also recognizes npm's literal `sh -c` form for plain Node commands and executable Node shebang files. On Preview 3, these local Node children run in separate JavaScript runtimes; Preview 2 runs them inline.
 
-Commands that name a tool bound to the calling component run that tool, with arguments parsed by the same command schema as the Bash tool. Local Node scripts and package launchers take precedence over a tool with the same name. `GOLEM_NODE_TOOL_PROCESSES=0` or `false` disables tool dispatch; tool permissions still apply.
+Commands that name a tool bound to the calling component run that tool, with arguments parsed by the same command schema as the Bash tool. Local Node scripts and package launchers take precedence over a tool with the same name. When a Bash tool is bound, shell commands that are not a plain local Node command run in it: they see the variables `options.env` sets or removes, cannot read stdin, and produce UTF-8 text output. Setting `GOLEM_NODE_TOOL_PROCESSES` to `0`, `false`, `no` or `off` disables tool dispatch; it is a compatibility switch, not a permission control, and tool permissions still apply. npm lifecycle scripts, including those of third-party dependencies, can also call the bound tools; bind only the tools a component needs, and use `npm install --ignore-scripts` when dependency scripts should not run.
 
 Other executables, unsupported shells and shell syntax, and unsupported shebangs fail with `ENOSYS`.
 
