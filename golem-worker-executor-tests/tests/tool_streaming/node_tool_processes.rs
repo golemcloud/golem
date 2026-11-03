@@ -330,7 +330,6 @@ async fn builtin_npm_lifecycle_crash_during_pending_tool_output(
 /// `tool-stdin-closed::wait` Start at the crash, and its `End` was the first entry recorded
 /// after recovery. No passing run logged it.
 #[test]
-#[ignore = "intermittently hangs: crash teardown can settle a pending tool stdin-closed wait, and replay then treats the open stdin as closed"]
 #[timeout("5m")]
 async fn builtin_node_crash_during_open_tool_stdin(
     last_unique_id: &LastUniqueId,
@@ -360,7 +359,6 @@ async fn builtin_node_crash_during_open_tool_stdin(
 /// with the same log. A local Node child started by built-in `node` with `execFile` instead of
 /// npm also hung, so the hang is not specific to npm.
 #[test]
-#[ignore = "intermittently hangs: crash teardown can settle a pending tool stdin-closed wait, and replay then treats the open stdin as closed"]
 #[timeout("5m")]
 async fn builtin_npm_lifecycle_crash_during_open_tool_stdin(
     last_unique_id: &LastUniqueId,
