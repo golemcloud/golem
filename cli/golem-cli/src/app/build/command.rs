@@ -340,6 +340,15 @@ pub async fn execute_external_command(
         .map(|dir| base_command_dir.join(dir))
         .unwrap_or_else(|| base_command_dir.to_path_buf());
 
+    let command_tokens = shlex::split(&command.command)
+        .ok_or_else(|| anyhow!("Failed to parse external command: {}", command.command))?;
+    if command_tokens.is_empty() {
+        return Err(anyhow!("Empty command!"));
+    }
+    if is_managed_node_tool(&normalized_program_name(&command_tokens[0])) {
+        ensure_common_deps_for_tool(ctx, &command_tokens[0], &build_dir, go_component).await?;
+    }
+
     let (sources, targets) = {
         if !command.sources.is_empty() && !command.targets.is_empty() {
             (
@@ -360,6 +369,7 @@ pub async fn execute_external_command(
         .with_task_result_marker(ResolvedExternalCommandMarkerHash {
             build_dir: &build_dir,
             command,
+            source_paths: &sources,
         })?
         .with_sources(|| sources)
         .with_targets(|| targets)
@@ -388,6 +398,9 @@ pub async fn execute_external_command(
                         let dir = build_dir.join(dir);
                         fs::delete_logged("directory", &dir)?;
                     }
+                    ctx.tools_with_ensured_common_deps()
+                        .invalidate_common_deps_for_tool("node")
+                        .await;
                 }
 
                 if !command.mkdirs.is_empty() {
@@ -402,13 +415,6 @@ pub async fn execute_external_command(
                             std::fs::create_dir_all(dir)?
                         }
                     }
-                }
-
-                let command_tokens = shlex::split(&command.command).ok_or_else(|| {
-                    anyhow::anyhow!("Failed to parse external command: {}", command.command)
-                })?;
-                if command_tokens.is_empty() {
-                    return Err(anyhow!("Empty command!"));
                 }
 
                 ensure_common_deps_for_tool(
@@ -477,6 +483,10 @@ fn external_command_display_name(command: &str) -> &str {
         .unwrap_or(command)
 }
 
+fn is_managed_node_tool(normalized: &str) -> bool {
+    matches!(normalized, "node" | "npx")
+}
+
 pub async fn ensure_common_deps_for_tool(
     ctx: &BuildContext<'_>,
     tool: &str,
@@ -485,7 +495,7 @@ pub async fn ensure_common_deps_for_tool(
 ) -> anyhow::Result<()> {
     let normalized = normalized_program_name(tool);
     match normalized.as_str() {
-        "node" | "npx" => {
+        tool if is_managed_node_tool(tool) => {
             let package_json_path = ctx.application().app_root_dir().join("package.json");
             if !package_json_path.exists() {
                 return Ok(());
@@ -552,18 +562,17 @@ fn tool_lives_in_mooncakes(tool: &str) -> bool {
         .any(|c| c.as_os_str() == ".mooncakes")
 }
 
-async fn ensure_npm_dependencies(
-    ctx: &BuildContext<'_>,
+fn npm_dependency_marker(
+    marker_dir: &Path,
     app_root_dir: &Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<TaskResultMarker> {
     let package_json_path = app_root_dir.join("package.json");
     let package_lock_path = app_root_dir.join("package-lock.json");
-    let node_modules_path = app_root_dir.join("node_modules");
 
     let package_json_hash = blake3::hash(&std::fs::read(&package_json_path)?)
         .to_hex()
         .to_string();
-    let package_lock_hash = if package_lock_path.exists() {
+    let package_lock_hash = if std::fs::exists(&package_lock_path)? {
         Some(
             blake3::hash(&std::fs::read(&package_lock_path)?)
                 .to_hex()
@@ -573,13 +582,34 @@ async fn ensure_npm_dependencies(
         None
     };
 
-    let marker = TaskResultMarker::new(
-        &ctx.application().task_result_marker_dir(),
+    TaskResultMarker::new(
+        marker_dir,
         NpmInstallDepsMarkerHash {
             package_json_hash: &package_json_hash,
             package_lock_hash: package_lock_hash.as_deref(),
         },
-    )?;
+    )
+}
+
+async fn ensure_npm_dependencies(
+    ctx: &BuildContext<'_>,
+    app_root_dir: &Path,
+) -> anyhow::Result<()> {
+    ensure_npm_dependencies_with_install(
+        &ctx.application().task_result_marker_dir(),
+        app_root_dir,
+        || async { run_npm_install(app_root_dir).await },
+    )
+    .await
+}
+
+async fn ensure_npm_dependencies_with_install(
+    marker_dir: &Path,
+    app_root_dir: &Path,
+    install: impl AsyncFnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let marker = npm_dependency_marker(marker_dir, app_root_dir)?;
+    let node_modules_path = app_root_dir.join("node_modules");
 
     if marker.is_up_to_date() && std::fs::exists(&node_modules_path)? {
         return Ok(());
@@ -604,7 +634,9 @@ async fn ensure_npm_dependencies(
         );
     }
 
-    marker.result(run_npm_install(app_root_dir).await)
+    marker.failure()?;
+    install().await?;
+    npm_dependency_marker(marker_dir, app_root_dir)?.success()
 }
 
 async fn run_npm_install(app_root_dir: &Path) -> anyhow::Result<()> {
@@ -785,4 +817,172 @@ fn apply_cargo_term_color_env(command: &mut Command, should_colorize: bool) {
 
     let color = if should_colorize { "always" } else { "never" };
     command.env("CARGO_TERM_COLOR", color);
+}
+
+#[cfg(test)]
+mod npm_dependency_tests {
+    use super::{
+        ensure_npm_dependencies_with_install, is_managed_node_tool, npm_dependency_marker,
+    };
+    use crate::process::normalized_program_name;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use test_r::test;
+
+    fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("app");
+        let markers = temp.path().join("markers");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&markers).unwrap();
+        std::fs::write(root.join("package.json"), "{}").unwrap();
+        (temp, root, markers)
+    }
+
+    #[test]
+    fn managed_node_tools_reuse_program_normalization() {
+        for name in ["node", "NODE.EXE", "npx.cmd", "C:/Tools/Npx.ExE"] {
+            assert!(
+                is_managed_node_tool(&normalized_program_name(name)),
+                "{name}"
+            );
+        }
+        for name in ["npm", "go", "moon", "nodejs"] {
+            assert!(
+                !is_managed_node_tool(&normalized_program_name(name)),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    async fn npm_marker_settles_generated_lock_and_repairs_missing_root() {
+        let (_temp, root, markers) = fixture();
+        let calls = AtomicUsize::new(0);
+        for step in [
+            "initial",
+            "unchanged",
+            "package-edit",
+            "unchanged",
+            "lock-edit",
+            "unchanged",
+            "delete-lock",
+            "unchanged",
+            "delete-root",
+            "unchanged",
+        ] {
+            if step == "package-edit" {
+                std::fs::write(root.join("package.json"), r#"{"name":"changed"}"#).unwrap();
+            }
+            if step == "lock-edit" {
+                std::fs::write(
+                    root.join("package-lock.json"),
+                    r#"{"name":"changed","lockfileVersion":3,"packages":{}}"#,
+                )
+                .unwrap();
+            }
+            if step == "delete-lock" {
+                std::fs::remove_file(root.join("package-lock.json")).unwrap();
+            }
+            if step == "delete-root" {
+                std::fs::remove_dir_all(root.join("node_modules")).unwrap();
+            }
+            let before = calls.load(Ordering::SeqCst);
+            ensure_npm_dependencies_with_install(&markers, &root, || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::fs::create_dir_all(root.join("node_modules"))?;
+                std::fs::write(
+                    root.join("package-lock.json"),
+                    r#"{"lockfileVersion":3,"packages":{}}"#,
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+            assert!(
+                npm_dependency_marker(&markers, &root)
+                    .unwrap()
+                    .is_up_to_date()
+            );
+            if step == "unchanged" {
+                assert_eq!(calls.load(Ordering::SeqCst), before);
+            } else {
+                assert_eq!(calls.load(Ordering::SeqCst), before + 1);
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    async fn npm_marker_retries_partial_install_and_post_install_hash_failure() {
+        let (_temp, root, markers) = fixture();
+        let failed = ensure_npm_dependencies_with_install(&markers, &root, || async {
+            std::fs::create_dir_all(root.join("node_modules"))?;
+            anyhow::bail!("partial install")
+        })
+        .await;
+        assert!(failed.is_err());
+        assert!(
+            !npm_dependency_marker(&markers, &root)
+                .unwrap()
+                .is_up_to_date()
+        );
+        ensure_npm_dependencies_with_install(&markers, &root, || async { Ok(()) })
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(root.join("node_modules")).unwrap();
+        let failed = ensure_npm_dependencies_with_install(&markers, &root, || async {
+            std::fs::create_dir_all(root.join("node_modules"))?;
+            std::fs::remove_file(root.join("package.json"))?;
+            Ok(())
+        })
+        .await;
+        assert!(failed.is_err());
+        std::fs::write(root.join("package.json"), "{}").unwrap();
+        assert!(
+            !npm_dependency_marker(&markers, &root)
+                .unwrap()
+                .is_up_to_date()
+        );
+        let retried = AtomicUsize::new(0);
+        ensure_npm_dependencies_with_install(&markers, &root, || async {
+            retried.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(retried.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn npm_marker_cancellation_cannot_reuse_previous_success() {
+        let (_temp, root, markers) = fixture();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        npm_dependency_marker(&markers, &root)
+            .unwrap()
+            .success()
+            .unwrap();
+        std::fs::remove_dir_all(root.join("node_modules")).unwrap();
+        let mut pending = Box::pin(ensure_npm_dependencies_with_install(
+            &markers,
+            &root,
+            || async { std::future::pending::<anyhow::Result<()>>().await },
+        ));
+        assert!(futures_util::poll!(pending.as_mut()).is_pending());
+        drop(pending);
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        assert!(
+            !npm_dependency_marker(&markers, &root)
+                .unwrap()
+                .is_up_to_date()
+        );
+        let calls = AtomicUsize::new(0);
+        ensure_npm_dependencies_with_install(&markers, &root, || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
 }

@@ -626,6 +626,17 @@ Agent, configuration, schema, and tool definitions are evaluated normally at run
 metadata computed by application functions. Component builds do not statically evaluate or rewrite
 these definitions.
 
+Use `golem build -P debug` with the generated TypeScript template to retain a readable
+application bundle and skip pre-initialization. The `optimized` and `quick` presets retain
+minification. The bundle is written to `golem-temp/ts-dist/<component>/main.js`.
+This option does not remap TypeScript source locations or demangle prebuilt SDK artifacts.
+
+Custom Rollup configurations can pass `{ minify: false }` as the third argument to
+`componentPlugin`. The option defaults to `true`. Disabling it bypasses Terser after the
+component and HTTP initialization transforms; registration and failure cleanup still run.
+Generated presets declare `GOLEM_COMPONENT_MINIFY` in the build command's environment so
+switching presets invalidates the shared bundle output. Values must be `"true"` or `"false"`.
+
 After building the SDK and agent template, run `node scripts/measure-components.mjs` from this
 package to build the five capability fixtures, check their full-world ABI, and record JS,
 release/stripped, and preinitialized component sizes in `.component-measurements/sizes.json`.
