@@ -69,6 +69,7 @@ pub fn PublicValueCodec::encode_application(
   value : SchemaValue,
 ) -> Json raise {
   self.stream_elements.clear()
+  schema_value_check_text(value)
   self.encode_at(
     pvc_field(pvc_object(self.graph), "root"),
     value,
@@ -727,7 +728,7 @@ fn pvc_binary_restrictions(
           if !allowed.any(fn(x) { x == m }) {
             pvc_fail("binary MIME type is not allowed")
           }
-        None => pvc_fail("binary MIME type is required by the schema")
+        None => ()
       }
     }
     None => ()
@@ -1006,6 +1007,14 @@ fn PublicValueCodec::encode_at(
       pvc_charge(charge, @utf8.encode(v).length())
       if materialize {
         Json::string(v)
+      } else {
+        Json::null()
+      }
+    }
+    ("uuid", UuidValue(v)) => {
+      pvc_charge(charge, 36)
+      if materialize {
+        Json::string(v.to_string())
       } else {
         Json::null()
       }

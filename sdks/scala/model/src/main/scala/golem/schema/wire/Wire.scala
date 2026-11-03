@@ -16,8 +16,9 @@
 
 package golem.schema.wire
 
-import golem.Uuid
 import golem.schema._
+
+import java.util.UUID
 
 // Flat-with-indices carrier ADT mirroring `golem:core/types@2.0.0`
 // (`schema-graph` / `schema-value-tree` / `typed-schema-value`) exactly.
@@ -156,7 +157,7 @@ object WitSchemaValueNode {
   final case class BinaryValue(payload: WitBinaryValuePayload)     extends WitSchemaValueNode
   final case class PathValue(value: String)                        extends WitSchemaValueNode
   final case class UrlValue(value: String)                         extends WitSchemaValueNode
-  final case class UuidValue(value: Uuid)                          extends WitSchemaValueNode
+  final case class UuidValue(value: UUID)                          extends WitSchemaValueNode
   final case class DatetimeValue(value: Datetime)                  extends WitSchemaValueNode
   final case class DurationValue(payload: WitDurationValuePayload) extends WitSchemaValueNode
   final case class QuantityValueNode(value: QuantityValue)         extends WitSchemaValueNode

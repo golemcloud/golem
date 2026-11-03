@@ -731,6 +731,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "retention-tool-client-refined"
+version = "0.0.1"
+dependencies = [
+ "golem-rust",
+]
+
+[[package]]
 name = "retention-typed-floor"
 version = "0.0.1"
 dependencies = [

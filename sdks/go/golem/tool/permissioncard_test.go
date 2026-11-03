@@ -339,7 +339,7 @@ func TestARejectedMiddlewareResultReleasesItsCards(t *testing.T) {
 		return golem.Some(result), nil
 	})
 	input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "m" })
-	res, _ := runMiddlewareFor(t, r, d, "keeper", middlewareRun{path: []string{"commit"}, input: input, params: mustTypedValue(t, golem.Unit{})})
+	res, _ := runMiddlewareFor(t, r, d, "keeper", middlewareRun{path: []string{"commit"}, input: input, params: paramsValue(golem.Unit{})})
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidResult {
 		t.Errorf("the result passed as %+v", res)
 	}
@@ -390,7 +390,7 @@ func TestARefusedInvocationReleasesItsInputCards(t *testing.T) {
 		t.Fatal("an unknown tool ran")
 	}
 	middlewareInput, middlewareLive := liveCardValue(t)
-	if res := mwExports.Exports.InvokeToolMiddleware("no-such-middleware", "keys", toolCommon.Tool{}, witOf(golem.EncodeTypedValue(golem.Unit{})),
+	if res := mwExports.Exports.InvokeToolMiddleware("no-such-middleware", "keys", toolCommon.Tool{}, witOf(emptyRecord()),
 		nil, middlewareInput, mwExports.Stdin{}, mwExports.Stdout{}, mwExports.Stderr{}, common.MakePrincipalAnonymous(), nil); res.IsOk() {
 		t.Fatal("an unknown middleware ran")
 	}
@@ -456,7 +456,7 @@ func TestAReturnedValueIsSentOnce(t *testing.T) {
 		return golem.Some(cached), nil
 	})
 	input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "m" })
-	run := middlewareRun{path: []string{"commit"}, input: input, params: mustTypedValue(t, golem.Unit{})}
+	run := middlewareRun{path: []string{"commit"}, input: input, params: paramsValue(golem.Unit{})}
 	first, _ := runMiddlewareFor(t, r, d, "cache", run)
 	if first.IsErr() || engine.CheckCardsPresent(first.Ok().Result.Some().Value) != nil {
 		t.Fatalf("the first return gave %+v", first)

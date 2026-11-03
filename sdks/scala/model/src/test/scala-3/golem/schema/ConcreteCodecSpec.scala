@@ -17,10 +17,13 @@
 package golem.schema
 
 import golem.schema.wire.*
+import golem.schema.Implicits.golemUriSchema
 import zio.ZIO
 import zio.blocks.schema.Schema
 import zio.test.*
 
+import java.net.URI
+import java.util.UUID
 import scala.concurrent.Future
 import scala.util.Try
 
@@ -33,6 +36,56 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
     case Fields(name: String, count: Int)
   }
   object Choice { implicit val schema: Schema[Choice] = Schema.derived }
+  final case class UuidHolder(id: UUID, parent: Option[UUID], children: List[UUID])
+  object UuidHolder { implicit val schema: Schema[UuidHolder] = Schema.derived }
+  sealed trait Animal
+  sealed trait Pet                    extends Animal
+  final case class Dog(name: String)  extends Pet
+  case object Cat                     extends Pet
+  final case class Wild(kind: String) extends Animal
+  object Animal { implicit val schema: Schema[Animal] = Schema.derived }
+  final case class Timed(at: java.time.Instant, took: java.time.Duration, history: List[java.time.Instant])
+  object Timed { implicit val schema: Schema[Timed] = Schema.derived }
+  type Wide = (
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    Int,
+    String
+  )
+  implicit val wideSchema: Schema[Wide] = Schema.derived
+
+  final case class Located(path: GolemPath, url: URI)
+  object Located { implicit val schema: Schema[Located] = Schema.derived }
+  final case class Captioned(caption: Text, note: Option[Text], lines: List[Text])
+  object Captioned { implicit val schema: Schema[Captioned] = Schema.derived }
+
+  private def decodeFailure[A](result: Try[A]): Boolean =
+    result.failed.toOption.exists(_.isInstanceOf[SchemaDecodeError])
+  private def encodeFailure[A](result: Try[A]): Boolean =
+    result.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError])
+
+  // Scala.js already rejects a lone surrogate when the URI is constructed; the JVM accepts it and the encoder rejects it.
+  private def uriEncodeFailure[A](text: String)(encode: URI => A): Boolean =
+    Try(new URI(text)).fold(_.isInstanceOf[java.net.URISyntaxException], uri => encodeFailure(Try(encode(uri))))
 
   override def spec = suite("ConcreteCodecSpec")(
     test("recursive concrete values and named descriptors match the wire contract") {
@@ -75,6 +128,50 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
         Try(
           datetime.decode(WitSchemaValueTree(Vector(WitSchemaValueNode.DatetimeValue(Datetime(0, 1000000000))), 0))
         ).isFailure
+      )
+    },
+    test("UUIDs use the native uuid node and match the schema-value path") {
+      val nil    = new UUID(0L, 0L)
+      val max    = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
+      val codec  = ConcreteCodec.derived[UuidHolder]
+      val holder = UuidHolder(max, Some(nil), List(nil, max))
+      val nested = codec.encode(holder)
+      assertTrue(
+        ConcreteCodec.uuid.graph == WitSchemaGraph(
+          Vector(WitSchemaTypeNode(WitSchemaTypeBody.UuidType, MetadataEnvelope.empty)),
+          Vector.empty,
+          0
+        ),
+        ConcreteCodec.uuid.encodeValue(max) == WitSchemaValueTree(Vector(WitSchemaValueNode.UuidValue(max)), 0),
+        ConcreteCodec.uuid.decode(ConcreteCodec.uuid.encodeValue(nil)) == nil,
+        ConcreteCodec.uuid.decode(ConcreteCodec.uuid.encodeValue(max)) == max,
+        SchemaWire.schemaGraphFromWit(ConcreteCodec.uuid.graph) == IntoSchema[UUID].graph,
+        codec.decode(nested.value) == holder,
+        SchemaWire.schemaGraphFromWit(nested.graph) == IntoSchema[UuidHolder].graph,
+        SchemaWire.schemaValueFromWit(nested.value) == IntoSchema[UuidHolder].toValue(holder),
+        FromSchema[UuidHolder].fromValue(SchemaWire.schemaValueFromWit(nested.value)) == Right(holder)
+      )
+    },
+    test("bare text uses the text node and matches the schema-value path") {
+      val codec  = ConcreteCodec.derived[Captioned]
+      val record = Captioned(Text("caption", Some("en")), Some(Text("note")), List(Text("a"), Text("b", Some("de"))))
+      val nested = codec.encode(record)
+      assertTrue(
+        ConcreteCodec.text.graph == WitSchemaGraph(
+          Vector(WitSchemaTypeNode(WitSchemaTypeBody.TextType(TextRestrictions.empty), MetadataEnvelope.empty)),
+          Vector.empty,
+          0
+        ),
+        ConcreteCodec.text.encodeValue(Text("hi", Some("en"))) ==
+          WitSchemaValueTree(Vector(WitSchemaValueNode.TextValue(WitTextValuePayload("hi", Some("en")))), 0),
+        ConcreteCodec.text.decode(ConcreteCodec.text.encodeValue(Text("hi"))) == Text("hi"),
+        SchemaWire.schemaGraphFromWit(ConcreteCodec.text.graph) == IntoSchema[Text].graph,
+        codec.decode(nested.value) == record,
+        SchemaWire.schemaGraphFromWit(nested.graph) == IntoSchema[Captioned].graph,
+        SchemaWire.schemaValueFromWit(nested.value) == IntoSchema[Captioned].toValue(record),
+        FromSchema[Captioned].fromValue(SchemaWire.schemaValueFromWit(nested.value)) == Right(record),
+        encodeFailure(Try(ConcreteCodec.text.encodeValue(Text("a\ud800")))),
+        encodeFailure(Try(ConcreteCodec.text.encodeValue(Text("ok", Some("\udc00")))))
       )
     },
     test("sets use list carriers and decode with set semantics") {
@@ -174,6 +271,129 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
         val result = Try(codec.encodeValue((source, new golem.UInt(-1))))
         Future.successful(assertTrue(result.isFailure, closes == 1))
       }
+    },
+    test("unsigned values outside their range fail with the encode error") {
+      assertTrue(
+        encodeFailure(Try(ConcreteCodec.ulong.encodeValue(new golem.ULong(BigInt(1) << 64)))),
+        encodeFailure(Try(ConcreteCodec.ulong.encodeValue(new golem.ULong(BigInt(-1))))),
+        encodeFailure(Try(ConcreteCodec.uint.encodeValue(new golem.UInt(0x100000000L)))),
+        encodeFailure(Try(ConcreteCodec.uint.encodeValue(new golem.UInt(-1)))),
+        encodeFailure(Try(ConcreteCodec.ushort.encodeValue(new golem.UShort(65536)))),
+        encodeFailure(Try(ConcreteCodec.ubyte.encodeValue(new golem.UByte(256.toShort)))),
+        ConcreteCodec.ulong.decode(ConcreteCodec.ulong.encodeValue(new golem.ULong((BigInt(1) << 64) - 1))) ==
+          new golem.ULong((BigInt(1) << 64) - 1)
+      )
+    },
+    test("unparsable numbers and out-of-range time values fail with the schema errors") {
+      val text    = WitSchemaValueTree(Vector(WitSchemaValueNode.StringValue("twelve")), 0)
+      val instant = WitSchemaValueTree(Vector(WitSchemaValueNode.DatetimeValue(Datetime(Long.MaxValue, 0))), 0)
+      assertTrue(
+        decodeFailure(Try(ConcreteCodec.derived[BigInt].decode(text))),
+        decodeFailure(Try(ConcreteCodec.derived[BigDecimal].decode(text))),
+        decodeFailure(Try(ConcreteCodec.instant.decode(instant))),
+        encodeFailure(Try(ConcreteCodec.duration.encodeValue(java.time.Duration.ofSeconds(Long.MaxValue)))),
+        ConcreteCodec
+          .derived[BigInt]
+          .decode(ConcreteCodec.derived[BigInt].encodeValue(BigInt("-123456789012345678901"))) ==
+          BigInt("-123456789012345678901")
+      )
+    },
+    test("surrogate chars and strings with a lone surrogate fail with the encode error") {
+      val emoji    = "a\ud83d\ude00b"
+      val charNode = (value: Int) => WitSchemaValueTree(Vector(WitSchemaValueNode.CharValue(value)), 0)
+      assertTrue(
+        encodeFailure(Try(ConcreteCodec.char.encodeValue('\ud800'))),
+        encodeFailure(Try(ConcreteCodec.char.encodeValue('\udfff'))),
+        encodeFailure(Try(ConcreteCodec.string.encodeValue("a\ud800"))),
+        encodeFailure(Try(ConcreteCodec.string.encodeValue("\udc00a"))),
+        encodeFailure(Try(ConcreteCodec.string.encodeValue("\ude00\ud83d"))),
+        encodeFailure(Try(ConcreteCodec.derived[Item].encodeValue(Item("\ud800", List(Left("ok")), None)))),
+        encodeFailure(Try(ConcreteCodec.derived[Item].encodeValue(Item("ok", List(Left("\udfff")), None)))),
+        encodeFailure(Try(IntoSchema[Item].toValue(Item("\ud800", Nil, None)))),
+        encodeFailure(Try(IntoSchema[Char].toValue('\ud800'))),
+        decodeFailure(Try(ConcreteCodec.char.decode(charNode(0xd800)))),
+        decodeFailure(Try(ConcreteCodec.char.decode(charNode(0x1f600)))),
+        FromSchema[Char].fromValue(SchemaValue.CharValue(0xdfff)).isLeft,
+        ConcreteCodec.string.decode(ConcreteCodec.string.encodeValue(emoji)) == emoji,
+        ConcreteCodec.char.decode(ConcreteCodec.char.encodeValue('\uffff')) == '\uffff',
+        IntoSchema[String].toValue(emoji) == SchemaValue.StringValue(emoji),
+        UnicodeText.loneSurrogateIndex(emoji) == -1,
+        UnicodeText.loneSurrogateIndex("ab\ud83d") == 2
+      )
+    },
+    test("textual leaves with a lone surrogate fail with the encode error") {
+      val text   = UnstructuredText.concreteCodec[String]
+      val binary = UnstructuredBinary.concreteCodec[String]
+      assertTrue(
+        encodeFailure(Try(ConcreteCodec.path.encodeValue(GolemPath("a\ud800")))),
+        uriEncodeFailure("\udfff")(ConcreteCodec.url.encodeValue),
+        encodeFailure(Try(IntoSchema[GolemPath].toValue(GolemPath("a\ud800")))),
+        uriEncodeFailure("\udfff")(IntoSchema[URI].toValue),
+        encodeFailure(Try(IntoSchema[Located].toValue(Located(GolemPath("\ud800"), new URI("ok"))))),
+        uriEncodeFailure("\udc00")(uri => IntoSchema[Located].toValue(Located(GolemPath("ok"), uri))),
+        encodeFailure(Try(text.encodeValue(UnstructuredText.fromInline[String]("a\ud800")))),
+        encodeFailure(Try(text.encodeValue(UnstructuredText.fromInline[String]("ok", "\ud800")))),
+        encodeFailure(Try(text.encodeValue(UnstructuredText.fromUrl[String]("\udfff")))),
+        encodeFailure(Try(IntoSchema[UnstructuredText[String]].toValue(UnstructuredText.fromInline[String]("\ud800")))),
+        encodeFailure(Try(binary.encodeValue(UnstructuredBinary.fromInline[String](Array[Byte](1), "\ud800")))),
+        ConcreteCodec.url.decode(ConcreteCodec.url.encodeValue(new URI("https://example.com/\ud83d\ude00"))) ==
+          new URI("https://example.com/\ud83d\ude00"),
+        text.decode(text.encodeValue(UnstructuredText.fromInline[String]("\ud83d\ude00", "en"))) ==
+          UnstructuredText.fromInline[String]("\ud83d\ude00", "en")
+      )
+    },
+    test("nested sealed traits are nested variants on both paths") {
+      val codec  = ConcreteCodec.derived[Animal]
+      val values = List[Animal](Dog("rex"), Cat, Wild("wolf"))
+      assertTrue(
+        SchemaWire.schemaGraphFromWit(codec.graph) == IntoSchema[Animal].graph,
+        values.forall { value =>
+          val encoded = codec.encodeValue(value)
+          codec.decode(encoded) == value &&
+          SchemaWire.schemaValueFromWit(encoded) == IntoSchema[Animal].toValue(value) &&
+          FromSchema[Animal].fromValue(SchemaWire.schemaValueFromWit(encoded)) == Right(value)
+        }
+      )
+    },
+    test("tuples over 22 elements are flat tuples on both paths") {
+      val codec       = ConcreteCodec.derived[Wide]
+      val value: Wide = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, "last")
+      val encoded     = codec.encodeValue(value)
+      assertTrue(
+        SchemaWire.schemaGraphFromWit(codec.graph) == IntoSchema[Wide].graph,
+        IntoSchema[Wide].graph.root.body == SchemaTypeBody.TupleType(List.fill(22)(t.s32) :+ t.string),
+        codec.decode(encoded) == value,
+        SchemaWire.schemaValueFromWit(encoded) == IntoSchema[Wide].toValue(value),
+        FromSchema[Wide].fromValue(SchemaWire.schemaValueFromWit(encoded)) == Right(value)
+      )
+    },
+    test("nested Instant and Duration fields use the zio-blocks primitives on the schema path") {
+      val codec = ConcreteCodec.derived[Timed]
+      val value = Timed(
+        java.time.Instant.ofEpochSecond(-5, 7),
+        java.time.Duration.ofMillis(1500),
+        List(java.time.Instant.EPOCH)
+      )
+      val encoded = codec.encodeValue(value)
+      assertTrue(
+        SchemaWire.schemaGraphFromWit(codec.graph) == IntoSchema[Timed].graph,
+        codec.decode(encoded) == value,
+        SchemaWire.schemaValueFromWit(encoded) == IntoSchema[Timed].toValue(value),
+        FromSchema[Timed].fromValue(SchemaWire.schemaValueFromWit(encoded)) == Right(value)
+      )
+    },
+    test("collection subtypes without a concrete carrier do not compile") {
+      assertTrue(
+        scala.compiletime.testing
+          .typeCheckErrors("golem.schema.wire.ConcreteCodec.derived[scala.collection.immutable.ListMap[String, Int]]")
+          .exists(_.message.contains("ListMap")),
+        scala.compiletime.testing
+          .typeCheckErrors("golem.schema.wire.ConcreteCodec.derived[scala.collection.immutable.SortedSet[Int]]")
+          .exists(_.message.contains("SortedSet")),
+        scala.compiletime.testing
+          .typeCheckErrors("golem.schema.wire.ConcreteCodec.derived[IndexedSeq[Int]]")
+          .exists(_.message.contains("IndexedSeq"))
+      )
     },
     test("recursive wire nodes and wrong variant payloads reject") {
       val item   = ConcreteCodec.derived[Item]

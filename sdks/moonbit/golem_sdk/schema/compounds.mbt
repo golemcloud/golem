@@ -29,6 +29,15 @@ pub impl IntoSchema for Unit with fn to_value(_self) {
 }
 
 ///|
+pub impl FromSchema for Unit with fn from_result_payload(payload) {
+  match payload {
+    None => ()
+    Some(_) =>
+      raise FromSchemaError::custom("unexpected payload for a unit result arm")
+  }
+}
+
+///|
 pub impl FromSchema for Unit with fn from_value(v) {
   match v {
     Tuple(elems) =>
@@ -170,26 +179,9 @@ pub impl[T : IntoSchema, E : IntoSchema] IntoSchema for Result[T, E] with fn to_
 pub impl[T : FromSchema, E : FromSchema] FromSchema for Result[T, E] with fn from_value(
   v,
 ) {
-  let unit_value : @model.SchemaValue = Tuple([])
   match v {
-    ResultOk(inner) =>
-      Ok(
-        T::from_value(
-          match inner {
-            Some(x) => x
-            None => unit_value
-          },
-        ),
-      )
-    ResultErr(inner) =>
-      Err(
-        E::from_value(
-          match inner {
-            Some(x) => x
-            None => unit_value
-          },
-        ),
-      )
+    ResultOk(inner) => Ok(T::from_result_payload(inner))
+    ResultErr(inner) => Err(E::from_result_payload(inner))
     other =>
       raise FromSchemaError::shape_mismatch(
         "result",
@@ -227,14 +219,26 @@ pub impl[K : IntoSchema, V : IntoSchema] IntoSchema for Map[K, V] with fn to_val
 }
 
 ///|
+/// A repeated key keeps the value of its last entry at the position of its
+/// first entry; the values of earlier entries are not decoded.
 pub impl[K : FromSchema + Hash + Eq, V : FromSchema] FromSchema for Map[K, V] with fn from_value(
   v,
 ) {
   match v {
     Map(entries) => {
+      let keys : Array[K] = []
+      let last : Map[K, Int] = Map([])
+      for i, e in entries {
+        let key : K = FromSchema::from_value(e.key)
+        keys.push(key)
+        last[key] = i
+      }
       let m : Map[K, V] = Map([])
-      for e in entries {
-        m[FromSchema::from_value(e.key)] = V::from_value(e.value)
+      for key in keys {
+        guard last.get(key) is Some(winner) else { continue }
+        if !m.contains(key) {
+          m[key] = V::from_value(entries[winner].value)
+        }
       }
       m
     }

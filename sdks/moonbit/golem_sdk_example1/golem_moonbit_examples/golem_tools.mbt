@@ -1888,7 +1888,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Datetime]),
                   ),
                 ),
                 default: None,
@@ -1903,7 +1903,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Datetime]),
                   ),
                 ),
                 default: None,
@@ -2609,7 +2609,7 @@ async fn __golem_tool_invoke_CanonicalGit(
         )
       }
     }
-    let since : @types.Datetime? = @schema.FromWire::read_wire(
+    let since : @schema.Datetime? = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[2],
     ) catch {
@@ -2624,7 +2624,7 @@ async fn __golem_tool_invoke_CanonicalGit(
         )
       }
     }
-    let until : @types.Datetime? = @schema.FromWire::read_wire(
+    let until : @schema.Datetime? = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[3],
     ) catch {
@@ -7554,7 +7554,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
               shape: @toolCommon.OptionShape::Scalar(
                 @tool.wire_tool_type(
                   __golem_schema,
-                  (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
+                  (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Datetime]),
                 ).index,
               ),
               default: None,
@@ -7570,7 +7570,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
               shape: @toolCommon.OptionShape::Scalar(
                 @tool.wire_tool_type(
                   __golem_schema,
-                  (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
+                  (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Datetime]),
                 ).index,
               ),
               default: None,

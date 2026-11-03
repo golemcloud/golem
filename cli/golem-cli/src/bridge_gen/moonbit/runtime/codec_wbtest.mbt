@@ -15,7 +15,7 @@ test "direct writer preserves all optional payloads and numeric tokens" {
     F64Value(-1.0 / 0.0),
     F64Value(0.0 / 0.0),
     StringValue("\"\\\n\t\u0001é😀"),
-    UuidValue("id"),
+    UuidValue(Uuid::from_bits(0x0123456789abcdefUL, 0xfedcba9876543210UL)),
     FixedListValue([U8Value(7)]),
     VariantValue(1, None),
     VariantValue(0, Some(StringValue("x"))),
@@ -61,7 +61,7 @@ test "direct requests preserve configuration and optional members" {
       value: @json.parse("{\"$float\":\"ordinary\",\"x\":null,\"z\":-0}"),
     },
   ]
-  for optional in [None, Some("\"\\\n😀")] {
+  for optional in [None, Some(Uuid::from_bits(1UL, 2UL))] {
     @debug.assert_eq(
       @json.parse(
         render_create_agent_request(
@@ -392,9 +392,9 @@ fn encode_create_agent_request(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
-) -> Json {
+) -> Json raise {
   let fields : Array[(String, Json)] = [
     ("appName", Json::string(app_name)),
     ("envName", Json::string(env_name)),
@@ -402,7 +402,7 @@ fn encode_create_agent_request(
     ("parameters", schema_value_to_json(parameters)),
   ]
   match phantom_id {
-    Some(id) => fields.push(("phantomId", Json::string(id)))
+    Some(id) => fields.push(("phantomId", Json::string(id.to_string())))
     None => ()
   }
   fields.push(("config", Json::array(config.map(encode_config_entry))))
@@ -415,14 +415,14 @@ fn encode_agent_invocation_request(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
   method_name : String,
   method_parameters : SchemaValue,
   mode : String,
   schedule_at : String?,
   idempotency_key : String?,
-) -> Json {
+) -> Json raise {
   let fields : Array[(String, Json)] = [
     ("appName", Json::string(app_name)),
     ("envName", Json::string(env_name)),
@@ -434,7 +434,7 @@ fn encode_agent_invocation_request(
     ("mode", Json::string(mode)),
   ]
   match phantom_id {
-    Some(id) => fields.push(("phantomId", Json::string(id)))
+    Some(id) => fields.push(("phantomId", Json::string(id.to_string())))
     None => ()
   }
   match schedule_at {
@@ -446,4 +446,113 @@ fn encode_agent_invocation_request(
     None => ()
   }
   obj(fields)
+}
+
+///|
+test "encoders reject unpaired surrogates and non-scalar chars" {
+  fn utf16(units : Array[Int]) -> String {
+    String::from_array(units.map(unit => unit.unsafe_to_char()))
+  }
+
+  let rejected : Array[SchemaValue] = [
+    StringValue(utf16([0xD800])),
+    StringValue(utf16([0x61, 0xDC00])),
+    StringValue(utf16([0xD83D, 0x61])),
+    ListValue([StringValue("ok"), StringValue(utf16([0xDBFF]))]),
+    TextValue(utf16([0xDC00]), None),
+    PathValue(utf16([0xD800])),
+    UrlValue(utf16([0xD800])),
+    UnionValue(utf16([0xD800]), BoolValue(true)),
+    CharValue(0xD800),
+    CharValue(0x110000),
+  ]
+  for value in rejected {
+    let encoders : Array[(SchemaValue) -> Unit raise] = [
+      v => ignore(schema_value_render(v)),
+      v => ignore(schema_value_to_json(v)),
+      v => {
+        ignore(render_create_agent_request("app", "env", "Agent", v, None, []))
+      },
+      v => {
+        ignore(
+          render_agent_invocation_request(
+            "app",
+            "env",
+            "Agent",
+            RecordValue([]),
+            None,
+            [],
+            "method",
+            v,
+            "await",
+            None,
+            None,
+          ),
+        )
+      },
+    ]
+    for encode in encoders {
+      try encode(value) catch {
+        BridgeError(message) =>
+          assert_true(
+            message.contains("unpaired surrogate") ||
+            message.contains("Unicode scalar value"),
+          )
+        other => fail("unexpected error: \{@debug.to_string(other)}")
+      } noraise {
+        _ => fail("encoded invalid text: \{@debug.to_string(value)}")
+      }
+    }
+  }
+  let emoji = utf16([0x61, 0xD83D, 0xDE00])
+  assert_eq(round_trip(StringValue(emoji)), StringValue(emoji))
+  assert_eq(round_trip(CharValue(0x1F600)), CharValue(0x1F600))
+}
+
+///|
+fn rejects(f : () -> Unit raise) -> Bool {
+  try f() catch {
+    _ => true
+  } noraise {
+    _ => false
+  }
+}
+
+///|
+test "public codec checks binary MIME restrictions like the server" {
+  let codec = public_value_codec(
+    "{\"root\":{\"kind\":\"binary\",\"value\":{\"restrictions\":{\"mimeTypes\":[\"image/png\"]}}}}",
+  )
+  for value in [BinaryValue(b"\x01", None), BinaryValue(b"\x01", Some("image/png"))] {
+    assert_eq(codec.decode(codec.encode(value)), value)
+  }
+  let foreign = BinaryValue(b"\x01", Some("image/gif"))
+  assert_true(rejects(() => ignore(codec.encode(foreign))))
+  assert_true(rejects(() => ignore(codec.decode(schema_value_to_json(foreign)))))
+}
+
+///|
+test "public codec checks quantity units on encode and decode" {
+  let suffixed = public_value_codec(
+    "{\"root\":{\"kind\":\"quantity\",\"value\":{\"spec\":{\"baseUnit\":\"kg\",\"allowedSuffixes\":[\"g\",\"kg\"]}}}}",
+  )
+  let base_only = public_value_codec(
+    "{\"root\":{\"kind\":\"quantity\",\"value\":{\"spec\":{\"baseUnit\":\"m\"}}}}",
+  )
+  for accepted in [
+    (suffixed, QuantityValue(5L, 0, "g")),
+    (suffixed, QuantityValue(5L, 0, "kg")),
+    (base_only, QuantityValue(5L, 0, "m")),
+  ] {
+    assert_eq(accepted.0.decode(accepted.0.encode(accepted.1)), accepted.1)
+  }
+  for rejected in [
+    (suffixed, QuantityValue(5L, 0, "lb")),
+    (base_only, QuantityValue(5L, 0, "km")),
+  ] {
+    assert_true(rejects(() => ignore(rejected.0.encode(rejected.1))))
+    assert_true(
+      rejects(() => ignore(rejected.0.decode(schema_value_to_json(rejected.1)))),
+    )
+  }
 }

@@ -16,13 +16,14 @@
 
 package golem.schema
 
-import golem.{EnvironmentId, Uuid}
+import golem.EnvironmentId
 import golem.config.Secret
 import golem.{UByte, UInt, ULong, UShort}
 import zio.blocks.schema.Schema
 import zio.test.Assertion._
 import zio.test._
 
+import java.util.UUID
 import scala.util.Try
 
 object SchemaDerivationSpec extends ZIOSpecDefault {
@@ -89,6 +90,11 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
   }
   object Pong {
     implicit val schema: Schema[Pong] = Schema.derived
+  }
+
+  final case class UuidHolder(id: UUID, parent: Option[UUID], children: List[UUID])
+  object UuidHolder {
+    implicit val schema: Schema[UuidHolder] = Schema.derived
   }
 
   // ---- helpers ----
@@ -264,34 +270,58 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
         assert(roundTrip(p))(isRight(equalTo(p)))
       },
       // -------------------------------------------------------------------
-      // built-ins: Uuid + unsigned wrappers
+      // built-ins: UUID + unsigned wrappers
       // -------------------------------------------------------------------
-      test("Uuid derives the first-class UUID schema and round-trips") {
-        val g = IntoSchema[Uuid].graph
+      test("UUID derives the first-class UUID schema and round-trips") {
+        val g    = IntoSchema[UUID].graph
+        val uuid = UUID.fromString("12345678-1234-5678-1234-567812345678")
         assertTrue(
           g.root.body == UuidType,
           g.defs.isEmpty
-        ) && assert(
-          Uuid.fromStandardString("12345678-1234-5678-1234-567812345678").flatMap(roundTrip(_).left.map(_.getMessage))
-        )(isRight(equalTo(Uuid.fromStandardString("12345678-1234-5678-1234-567812345678").toOption.get)))
+        ) && assert(roundTrip(uuid))(isRight(equalTo(uuid)))
       },
-      test("EnvironmentId derives a record over the first-class Uuid and round-trips") {
+      test("EnvironmentId derives a record over the first-class UUID and round-trips") {
         val g        = IntoSchema[EnvironmentId].graph
         val id       = refId(g.root)
         val uuidBody = defBody(g, id) match {
           case RecordType(List(NamedFieldType("uuid", body, _))) => body.body
           case other                                             => throw new AssertionError(other.toString)
         }
-        val envId = EnvironmentId(Uuid.fromStandardString("12345678-1234-5678-1234-567812345678").toOption.get)
+        val envId = EnvironmentId(UUID.fromString("12345678-1234-5678-1234-567812345678"))
         assertTrue(g.defs.contains(id), uuidBody == UuidType) &&
         assert(roundTrip(envId))(isRight(equalTo(envId)))
       },
-      test("Uuid value uses the first-class UUID node") {
-        val maxHi   = Uuid(BigInt("18446744073709551615"), BigInt(0)) // 2^64 - 1, 0
-        val encoded = IntoSchema[Uuid].toValue(maxHi)
+      test("nil and max UUID values use the first-class UUID node and round-trip") {
+        val nil = new UUID(0L, 0L)
+        val max = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
         assertTrue(
-          encoded == SchemaValue.UuidValue(maxHi)
-        ) && assert(roundTrip(maxHi))(isRight(equalTo(maxHi)))
+          IntoSchema[UUID].toValue(nil) == SchemaValue.UuidValue(nil),
+          IntoSchema[UUID].toValue(max) == SchemaValue.UuidValue(max)
+        ) && assert(roundTrip(nil))(isRight(equalTo(nil))) && assert(roundTrip(max))(isRight(equalTo(max)))
+      },
+      test("UUID inside Option, List and a case class field uses the first-class UUID node") {
+        val max    = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
+        val nil    = new UUID(0L, 0L)
+        val g      = IntoSchema[UuidHolder].graph
+        val fields = defBody(g, refId(g.root)) match {
+          case RecordType(fs) =>
+            fs.map { f =>
+              f.name -> (f.body.body match {
+                case OptionType(element) => s"option<${element.body}>"
+                case ListType(element)   => s"list<${element.body}>"
+                case other               => other.toString
+              })
+            }
+          case other => throw new AssertionError(other.toString)
+        }
+        val holder = UuidHolder(max, Some(nil), List(nil, max))
+        assertTrue(
+          fields == List(
+            "id"       -> UuidType.toString,
+            "parent"   -> s"option<$UuidType>",
+            "children" -> s"list<$UuidType>"
+          )
+        ) && assert(roundTrip(holder))(isRight(equalTo(holder)))
       },
       test("unsigned wrappers derive u8/u16/u32/u64 and round-trip (incl. boundary)") {
         assertTrue(
@@ -305,22 +335,6 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
         assert(roundTrip(UInt(4294967295L)))(isRight(equalTo(UInt(4294967295L)))) &&
         assert(roundTrip(ULong(BigInt("18446744073709551615"))))(
           isRight(equalTo(ULong(BigInt("18446744073709551615"))))
-        )
-      },
-      test("Uuid encode rejects out-of-range high/low bits with SchemaEncodeError") {
-        val negHi  = Try(IntoSchema[Uuid].toValue(Uuid(BigInt(-1), BigInt(0))))
-        val overLo = Try(IntoSchema[Uuid].toValue(Uuid(BigInt(0), BigInt(1) << 64)))
-        val overHi = Try(IntoSchema[Uuid].toValue(Uuid((BigInt(1) << 64) + 123, BigInt(0))))
-        assertTrue(
-          negHi.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError]),
-          overLo.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError]),
-          overHi.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError])
-        )
-      },
-      test("Uuid decode rejects out-of-range high/low bits with FromSchemaError") {
-        assertTrue(
-          FromSchema[Uuid].fromValue(SchemaValue.UuidValue(Uuid(BigInt(-1), BigInt(0)))).isLeft,
-          FromSchema[Uuid].fromValue(SchemaValue.UuidValue(Uuid(BigInt(0), BigInt(1) << 64))).isLeft
         )
       },
       test("char decode rejects out-of-Char-range code points with FromSchemaError") {

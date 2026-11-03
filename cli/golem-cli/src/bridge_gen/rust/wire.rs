@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{RustBridgeGenerator, RustInput, RustOutput, RustRemappedType, RustTypeName};
+use super::{RustBridgeGenerator, RustInput, RustOutput, RustTypeName};
 use anyhow::{anyhow, bail};
 use golem_common::schema::agent::{InputSchema, OutputSchema};
 use golem_common::schema::schema_type::SchemaType;
@@ -37,7 +37,7 @@ impl RustBridgeGenerator {
             return Ok(quote! {});
         }
         if body.is_none()
-            && let Some(RustTypeName::Derived(name)) = self.type_naming.type_name_for_type(typ)
+            && let Some(RustTypeName(name)) = self.type_naming.type_name_for_type(typ)
         {
             let function = Ident::new(
                 &format!("{}_{name}", if prepare { "prepare" } else { "preflight" }),
@@ -152,8 +152,10 @@ impl RustBridgeGenerator {
                 }
             }
             SchemaType::Datetime { .. } if !prepare => quote! {
-                chrono::DateTime::parse_from_rfc3339(#value)
-                    .map_err(|__error| format!("Invalid RFC3339 datetime: {__error}"))?;
+                crate::__golem_bridge_runtime::check_datetime(#value)?;
+            },
+            SchemaType::Duration { .. } if !prepare => quote! {
+                crate::__golem_bridge_runtime::duration_nanoseconds(#value)?;
             },
             _ => quote! {},
         })
@@ -314,21 +316,9 @@ impl RustBridgeGenerator {
         box_recursive: bool,
         depth: usize,
     ) -> anyhow::Result<TokenStream> {
-        let inner = if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
-            match name {
-                RustTypeName::Remapped(RustRemappedType::Uuid) => quote! {{
-                    let (__high, __low) = (#val).as_u64_pair();
-                    let __fields = vec![
-                        __writer.push(__wire::SchemaValueNode::U64Value(__high)),
-                        __writer.push(__wire::SchemaValueNode::U64Value(__low)),
-                    ];
-                    Ok(__writer.push(__wire::SchemaValueNode::RecordValue(__fields)))
-                }},
-                RustTypeName::Derived(name) => {
-                    let function = Ident::new(&format!("encode_{name}"), Span::call_site());
-                    quote! { #function(#val, __writer) }
-                }
-            }
+        let inner = if let Some(RustTypeName(name)) = self.type_naming.type_name_for_type(typ) {
+            let function = Ident::new(&format!("encode_{name}"), Span::call_site());
+            quote! { #function(#val, __writer) }
         } else {
             let inner =
                 self.guest_wire_encode_structural(quote! { __source }, typ, box_recursive, depth)?;
@@ -344,31 +334,12 @@ impl RustBridgeGenerator {
         box_recursive: bool,
         depth: usize,
     ) -> anyhow::Result<TokenStream> {
-        let inner = if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
-            match name {
-                RustTypeName::Remapped(RustRemappedType::Uuid) => quote! {
-                    match __reader.take(#index).map_err(|e| e.to_string())? {
-                        __wire::SchemaValueNode::RecordValue(__fields) if __fields.len() == 2 => {
-                            let mut __halves = [0u64; 2];
-                            for (__half, __field) in __halves.iter_mut().zip(__fields) {
-                                *__half = match __reader.take(__field).map_err(|e| e.to_string())? {
-                                    __wire::SchemaValueNode::U64Value(__value) => __value,
-                                    __other => return Err(format!("Expected u64 uuid half, got {:?}", __other)),
-                                };
-                            }
-                            Ok(golem_rust::Uuid::from_u64_pair(__halves[0], __halves[1]))
-                        }
-                        __other => Err(format!("Expected uuid record value, got {:?}", __other)),
-                    }
-                },
-                RustTypeName::Derived(name) => {
-                    let function = Ident::new(&format!("decode_{name}"), Span::call_site());
-                    if box_recursive && self.type_naming.is_recursive_ref(typ) {
-                        quote! { #function(#index, __reader).map(Box::new) }
-                    } else {
-                        quote! { #function(#index, __reader) }
-                    }
-                }
+        let inner = if let Some(RustTypeName(name)) = self.type_naming.type_name_for_type(typ) {
+            let function = Ident::new(&format!("decode_{name}"), Span::call_site());
+            if box_recursive && self.type_naming.is_recursive_ref(typ) {
+                quote! { #function(#index, __reader).map(Box::new) }
+            } else {
+                quote! { #function(#index, __reader) }
             }
         } else {
             self.guest_wire_decode_structural(index, typ, box_recursive, depth)?
@@ -423,18 +394,20 @@ impl RustBridgeGenerator {
                 push(quote! { __wire::SchemaValueNode::PathValue(#val.clone()) })
             }
             SchemaType::Url { .. } => {
-                push(quote! { __wire::SchemaValueNode::UrlValue(#val.clone()) })
+                push(quote! { __wire::SchemaValueNode::UrlValue(#val.to_string()) })
             }
             SchemaType::Uuid { .. } => quote! {
                 golem_rust::schema::wit::direct::IntoWire::write_wire(#val, __writer)
                     .map_err(|__error| __error.to_string())
             },
-            SchemaType::Duration { .. } => push(quote! {
-                __wire::SchemaValueNode::DurationValue(__wire::DurationValuePayload { nanoseconds: *#val })
-            }),
+            SchemaType::Duration { .. } => quote! {
+                crate::__golem_bridge_runtime::duration_nanoseconds(#val)
+                    .map(|__nanoseconds| __writer.push(__wire::SchemaValueNode::DurationValue(
+                        __wire::DurationValuePayload { nanoseconds: __nanoseconds }
+                    )))
+            },
             SchemaType::Datetime { .. } => quote! {
-                chrono::DateTime::parse_from_rfc3339(&#val)
-                    .map_err(|__error| format!("Invalid RFC3339 datetime: {__error}"))
+                crate::__golem_bridge_runtime::check_datetime(#val)
                     .map(|__datetime| __writer.push(__wire::SchemaValueNode::DatetimeValue(
                         __wire::Datetime {
                             seconds: __datetime.timestamp(),
@@ -546,9 +519,33 @@ impl RustBridgeGenerator {
                 golem_rust::schema::wit::direct::IntoWire::write_wire(#val, __writer)
                     .map_err(|__error| __error.to_string())
             },
-            SchemaType::Text { .. } => bail!("Bare text rich scalars have no Rust bridge surface"),
-            SchemaType::Binary { .. } => {
-                bail!("Bare binary rich scalars have no guest Rust bridge surface")
+            SchemaType::Text { .. } => push(quote! {
+                __wire::SchemaValueNode::TextValue(__wire::TextValuePayload {
+                    text: #val.text.clone(),
+                    language: #val.language.clone(),
+                })
+            }),
+            SchemaType::Binary { .. } => push(quote! {
+                __wire::SchemaValueNode::BinaryValue(__wire::BinaryValuePayload {
+                    bytes: #val.bytes.clone(),
+                    mime_type: #val.mime_type.clone(),
+                })
+            }),
+            SchemaType::Quantity { spec, .. } => {
+                let (allowed, message) =
+                    Self::quantity_unit_check(spec, quote! { __q.unit.as_str() });
+                quote! {{
+                    let __q = #val.as_quantity_value();
+                    if #allowed {
+                        Ok(__writer.push(__wire::SchemaValueNode::QuantityValueNode(__wire::QuantityValue {
+                            mantissa: __q.mantissa,
+                            scale: __q.scale,
+                            unit: __q.unit.clone(),
+                        })))
+                    } else {
+                        Err(#message)
+                    }
+                }}
             }
             SchemaType::Ref { .. }
             | SchemaType::Record { .. }
@@ -558,7 +555,7 @@ impl RustBridgeGenerator {
             | SchemaType::Union { .. } => {
                 bail!("Expected a generated type name for {typ:?} during wire encoding")
             }
-            SchemaType::Quantity { .. } | SchemaType::Future { .. } => {
+            SchemaType::Future { .. } => {
                 bail!("SchemaType variant has no guest wire encoding yet; type = {typ:?}")
             }
         })
@@ -612,14 +609,20 @@ impl RustBridgeGenerator {
             SchemaType::Char { .. } => scalar!(CharValue, "char"),
             SchemaType::String { .. } => scalar!(StringValue, "string"),
             SchemaType::Path { .. } => scalar!(PathValue, "path"),
-            SchemaType::Url { .. } => scalar!(UrlValue, "url"),
+            SchemaType::Url { .. } => {
+                quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
+                    __wire::SchemaValueNode::UrlValue(__value) => url::Url::parse(&__value)
+                        .map_err(|__error| format!("Invalid url {__value:?}: {__error}")),
+                    __other => Err(format!("Expected url value, got {:?}", __other)),
+                }}
+            }
             SchemaType::Uuid { .. } => quote! {
                 <golem_rust::Uuid as golem_rust::schema::wit::direct::FromWire>::read_wire(__reader, #index)
                     .map_err(|__error| __error.to_string())
             },
             SchemaType::Duration { .. } => {
                 quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
-                    __wire::SchemaValueNode::DurationValue(__value) => Ok(__value.nanoseconds),
+                    __wire::SchemaValueNode::DurationValue(__value) => Ok(chrono::TimeDelta::nanoseconds(__value.nanoseconds)),
                     __other => Err(format!("Expected duration value, got {:?}", __other)),
                 }}
             }
@@ -627,8 +630,8 @@ impl RustBridgeGenerator {
                 quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
                     __wire::SchemaValueNode::DatetimeValue(__value) =>
                         chrono::DateTime::<chrono::Utc>::from_timestamp(__value.seconds, __value.nanoseconds)
-                            .map(|__value| __value.to_rfc3339())
-                            .ok_or_else(|| "Expected valid datetime value".to_string()),
+                            .ok_or_else(|| format!("Invalid datetime {}s {}ns", __value.seconds, __value.nanoseconds))
+                            .and_then(|__datetime| crate::__golem_bridge_runtime::check_datetime(&__datetime)),
                     __other => Err(format!("Expected datetime value, got {:?}", __other)),
                 }}
             }
@@ -765,9 +768,38 @@ impl RustBridgeGenerator {
                     }))
                 }}
             }
-            SchemaType::Text { .. } => bail!("Bare text rich scalars have no Rust bridge surface"),
+            SchemaType::Text { .. } => {
+                quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
+                    __wire::SchemaValueNode::TextValue(__value) => Ok(crate::__golem_bridge_types::AgentText {
+                        text: __value.text,
+                        language: __value.language,
+                    }),
+                    __other => Err(format!("Expected text value, got {:?}", __other)),
+                }}
+            }
             SchemaType::Binary { .. } => {
-                bail!("Bare binary rich scalars have no guest Rust bridge surface")
+                quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
+                    __wire::SchemaValueNode::BinaryValue(__value) => Ok(crate::__golem_bridge_types::AgentBinary {
+                        bytes: __value.bytes,
+                        mime_type: __value.mime_type,
+                    }),
+                    __other => Err(format!("Expected binary value, got {:?}", __other)),
+                }}
+            }
+            SchemaType::Quantity { spec, .. } => {
+                let ty = self.quantity_type(spec);
+                let (allowed, message) =
+                    Self::quantity_unit_check(spec, quote! { __q.unit.as_str() });
+                quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
+                    __wire::SchemaValueNode::QuantityValueNode(__q) => {
+                        if #allowed {
+                            <#ty>::new(__q.mantissa, __q.scale, __q.unit).map_err(|__error| __error.to_string())
+                        } else {
+                            Err(#message)
+                        }
+                    }
+                    __other => Err(format!("Expected quantity value, got {:?}", __other)),
+                }}
             }
             SchemaType::Ref { .. }
             | SchemaType::Record { .. }
@@ -777,7 +809,7 @@ impl RustBridgeGenerator {
             | SchemaType::Union { .. } => {
                 bail!("Expected a generated type name for {typ:?} during wire decoding")
             }
-            SchemaType::Quantity { .. } | SchemaType::Future { .. } => {
+            SchemaType::Future { .. } => {
                 bail!("SchemaType variant has no guest wire decoding yet; type = {typ:?}")
             }
         })

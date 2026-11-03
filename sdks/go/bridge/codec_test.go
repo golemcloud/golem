@@ -15,6 +15,7 @@
 package bridge
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -55,6 +56,14 @@ func TestLeavesRoundTrip(t *testing.T) {
 	throughTheWire(t, "char", values.Char('✓'), EncodeChar, DecodeChar)
 	throughTheWire(t, "text", values.Text("prose"), EncodeText, DecodeText)
 	throughTheWire(t, "binary", values.Binary{0, 127, 255}, EncodeBinary, DecodeBinary)
+	throughTheWire(t, "empty binary", values.Binary{}, EncodeBinary, DecodeBinary)
+	if out, err := DecodeBinary(schema.BinaryValue{}); err != nil || out == nil {
+		t.Fatalf("an empty binary decoded to %#v, %v; want an empty, non-nil value", out, err)
+	}
+	inline := EncodeUnstructuredBinary(values.UnstructuredBinary[values.AnyMimeType]{})
+	if out, err := DecodeUnstructuredBinary[values.AnyMimeType](inline); err != nil || out.Data == nil {
+		t.Fatalf("empty inline data decoded to %#v, %v; want an empty, non-nil value", out, err)
+	}
 	throughTheWire(t, "path", values.Path("/tmp/x"), EncodePath, DecodePath)
 	throughTheWire(t, "url", values.URL("https://example.test"), EncodeURL, DecodeURL)
 	throughTheWire(t, "datetime",
@@ -134,17 +143,17 @@ func TestCompositesRoundTrip(t *testing.T) {
 // A result arm that carries no value is spelled struct{} in Go and has no
 // encoder; it travels without a value, and a value arriving for it is an error.
 func TestAUnitResultArm(t *testing.T) {
-	sv := EncodeResult(values.Ok[struct{}, string](struct{}{}), nil, EncodeString)
+	sv := EncodeResult(values.Ok[values.Unit, string](values.Unit{}), nil, EncodeString)
 	if sv.(schema.ResultValue).Value != nil {
 		t.Fatalf("a unit ok arm must travel without a value: %#v", sv)
 	}
-	got, err := DecodeResult[struct{}, string](sv, nil, DecodeString)
+	got, err := DecodeResult[values.Unit, string](sv, nil, DecodeString)
 	if err != nil || !got.IsOk() {
 		t.Fatalf("decode: %#v %v", got, err)
 	}
 
 	withValue := schema.ResultValue{Value: ptr[schema.SchemaValue](schema.BoolValue{Value: true})}
-	if _, err := DecodeResult[struct{}, string](withValue, nil, DecodeString); err == nil ||
+	if _, err := DecodeResult[values.Unit, string](withValue, nil, DecodeString); err == nil ||
 		!strings.Contains(err.Error(), "declares no value") {
 		t.Fatalf("a value for a unit arm must be rejected, got %v", err)
 	}
@@ -167,12 +176,112 @@ func TestDecodingTheWrongKindSaysWhatWasExpected(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
-func TestAMapWithARepeatedKeyIsRejected(t *testing.T) {
+// A key named twice keeps its later entry, as the host's validation and the
+// Rust conversion do.
+func TestAMapWithARepeatedKeyKeepsTheLaterEntry(t *testing.T) {
 	m := schema.MapValue{Entries: []schema.MapEntry{
 		{Key: schema.StringValue{Value: "k"}, Value: schema.BoolValue{Value: true}},
 		{Key: schema.StringValue{Value: "k"}, Value: schema.BoolValue{Value: false}},
 	}}
-	if _, err := DecodeMap(m, DecodeString, DecodeBool); err == nil || !strings.Contains(err.Error(), "appears twice") {
+	got, err := DecodeMap(m, DecodeString, DecodeBool)
+	if err != nil || len(got) != 1 || got["k"] {
+		t.Fatalf("got %v, %v", got, err)
+	}
+}
+
+func TestUnitIsTheEmptyTuple(t *testing.T) {
+	sv := EncodeUnit(values.Unit{})
+	if tv, ok := sv.(schema.TupleValue); !ok || len(tv.Elements) != 0 {
+		t.Fatalf("unit encoded as %#v", sv)
+	}
+	data, err := schema.MarshalWireValue(sv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := schema.UnmarshalWireValue(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeUnit(back); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeUnit(schema.TupleValue{Elements: []schema.SchemaValue{schema.BoolValue{}}}); err == nil {
+		t.Fatal("a 1-tuple decoded as unit")
+	}
+}
+
+// A string that is not valid UTF-8 is refused when the value is marshalled,
+// rather than travelling with U+FFFD in its place.
+func TestInvalidUTF8IsRefusedOnTheWire(t *testing.T) {
+	for _, sv := range []schema.SchemaValue{
+		EncodeString("ok\xffno"),
+		EncodeText("ok\xffno"),
+		EncodePath("ok\xffno"),
+		EncodeURL("ok\xffno"),
+		EncodeList([]string{"ok", "\xff"}, EncodeString),
+	} {
+		if _, err := schema.MarshalWireValue(sv); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+			t.Errorf("%#v: got %v", sv, err)
+		}
+	}
+}
+
+type meters struct{}
+
+func (meters) BaseUnit() string          { return "m" }
+func (meters) AllowedSuffixes() []string { return []string{"m", "km"} }
+
+type kilograms struct{}
+
+func (kilograms) BaseUnit() string          { return "kg" }
+func (kilograms) AllowedSuffixes() []string { return nil }
+
+// A quantity in a unit its schema does not list is an encode error, which
+// Encode returns rather than letting it panic out of the client.
+func TestEncodeRefusesAUnitTheQuantityDoesNotAccept(t *testing.T) {
+	for _, accepted := range []func() schema.SchemaValue{
+		func() schema.SchemaValue { return EncodeQuantity(values.Quantity[meters]{Mantissa: 1, Unit: "km"}) },
+		func() schema.SchemaValue { return EncodeQuantity(values.Quantity[meters]{Mantissa: 1}) },
+		func() schema.SchemaValue { return EncodeQuantity(values.Quantity[kilograms]{Mantissa: 1, Unit: "kg"}) },
+	} {
+		if _, err := Encode(accepted); err != nil {
+			t.Fatalf("an accepted unit was refused: %v", err)
+		}
+	}
+	for _, refused := range []func() schema.SchemaValue{
+		func() schema.SchemaValue {
+			return EncodeList([]values.Quantity[meters]{{Mantissa: 1, Unit: "mi"}}, EncodeQuantity[meters])
+		},
+		func() schema.SchemaValue { return EncodeQuantity(values.Quantity[kilograms]{Mantissa: 1, Unit: "g"}) },
+	} {
+		_, err := Encode(refused)
+		var ee *EncodeError
+		if !errors.As(err, &ee) || !strings.Contains(err.Error(), "unit") {
+			t.Fatalf("got %v, want an *EncodeError naming the unit", err)
+		}
+	}
+}
+
+// Encode returns only an EncodeError: any other panic is a programming error
+// and goes on.
+func TestEncodeLetsOtherPanicsThrough(t *testing.T) {
+	defer func() {
+		if r := recover(); r != "boom" {
+			t.Fatalf("recovered %v, want the original panic", r)
+		}
+	}()
+	_, _ = Encode(func() schema.SchemaValue { panic("boom") })
+}
+
+// A configuration value its schema does not accept is reported by NewAgent.
+func TestNewAgentReportsAConfigValueThatDoesNotEncode(t *testing.T) {
+	configuration := Configuration{Server: Custom("http://localhost:1", "t"), AppName: "app", EnvName: "env"}
+	_, err := NewAgent("scale", schema.RecordValue{}, WithConfiguration(configuration), WithTypedConfig(TypedConfigEntry{
+		Path:  []string{"limit"},
+		Type:  "{}",
+		Value: func() schema.SchemaValue { return EncodeQuantity(values.Quantity[kilograms]{Mantissa: 1, Unit: "lb"}) },
+	}))
+	if err == nil || !strings.Contains(err.Error(), `unit "lb"`) {
 		t.Fatalf("got %v", err)
 	}
 }

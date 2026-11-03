@@ -19,10 +19,6 @@ use itertools::Itertools;
 use std::fmt::{Display, Formatter};
 
 /// A generated MoonBit type name (always UpperCamelCase).
-///
-/// Unlike the Scala generator there is no remapping layer: the `uuid.Uuid`
-/// builtin and friends are emitted as ordinary structural types, matching the
-/// Rust and TypeScript generators.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MoonBitTypeName {
     pub name: String,
@@ -49,10 +45,6 @@ impl Display for MoonBitTypeName {
 }
 
 impl TypeName for MoonBitTypeName {
-    fn from_schema_type(_typ: &SchemaType) -> Option<Self> {
-        None
-    }
-
     fn from_owner_and_name(
         owner: Option<impl AsRef<str>>,
         name: impl AsRef<str>,

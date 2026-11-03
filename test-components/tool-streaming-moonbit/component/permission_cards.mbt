@@ -183,7 +183,7 @@ pub fn MoonBitPermissionAgent::negative_cases(
     observations.push("mismatched-card-moved=\{narrow.is_moved()}")
     let account = @permissions.derive_from_wallet(inspect_bounds(grant))
     try {
-      account.install(Account({ high_bits: 0, low_bits: 0, }))
+      account.install(Account(@schema.Uuid::from_bits(0, 0)))
       observations.push("account-target=accepted")
     } catch {
       error => observations.push("account-target=\{error.kind()}")
