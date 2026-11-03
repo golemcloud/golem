@@ -100,6 +100,24 @@ async fn sdk_templates_dispatch_child_processes_to_bound_tools(
             observation, "sync=0:000001010202;async=000001010202;usage=2",
             "{language} caller"
         );
+
+        // The adapter is shared, so its edge cases run once, from the TypeScript caller.
+        if language == "typescript" {
+            let edge_cases: String = executor
+                .invoke_and_await_agent(
+                    &caller,
+                    &agent_id,
+                    "child_process_tool_edge_cases",
+                    data_value!(),
+                )
+                .await?
+                .into_typed()?;
+            assert_eq!(
+                edge_cases,
+                "echo=0:ping;overflow=ERR_CHILD_PROCESS_STDIO_MAXBUFFER;\
+                 abort=error:AbortError,exit:null:SIGTERM;disabled=error"
+            );
+        }
     }
 
     Ok(())

@@ -18,7 +18,7 @@ import { getConfigValue } from 'golem:agent/host@2.0.0';
 import type { SchemaGraph, Secret } from 'golem:core/types@2.0.0';
 import { z } from 'zod/v4';
 import { Buffer } from 'node:buffer';
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
@@ -34,6 +34,40 @@ async function childProcessToolObservation(): Promise<string> {
   });
   const usage = spawnSync('streaming', ['no-such-command']);
   return `sync=${sync.status}:${hex(sync.stdout)};async=${asynchronous};usage=${usage.status}`;
+}
+
+// Edge cases of the same dispatch: `optional-streams` echoes stdin, async output above
+// maxBuffer fails like Node, an aborted spawn reports error, exit and close in Node's order,
+// and the disable switch leaves the command to the default (unsupported) process backend.
+async function childProcessToolEdgeCases(): Promise<string> {
+  const echo = spawnSync('streaming', ['optional-streams'], { input: 'ping' });
+  const overflow = await new Promise<string>((resolve) => {
+    execFile('streaming', ['produce', '64', '64'], { maxBuffer: 1024 }, (error) =>
+      resolve(String((error as { code?: string } | null)?.code)),
+    );
+  });
+  const controller = new AbortController();
+  const aborted = await new Promise<string>((resolve) => {
+    const events: string[] = [];
+    const child = spawn('streaming', ['produce', '100000', '1024'], {
+      signal: controller.signal,
+    });
+    child.on('error', (error) => events.push(`error:${error.name}`));
+    child.on('exit', (code, signal) => events.push(`exit:${code}:${signal}`));
+    child.on('close', () => resolve(events.join(',')));
+    child.stdout.once('data', () => controller.abort());
+  });
+  const previous = process.env.GOLEM_NODE_TOOL_PROCESSES;
+  process.env.GOLEM_NODE_TOOL_PROCESSES = ' Off ';
+  let disabled: string;
+  try {
+    const result = spawnSync('streaming', ['produce', '1', '1']);
+    disabled = result.error ? 'error' : `status:${result.status}`;
+  } finally {
+    if (previous === undefined) delete process.env.GOLEM_NODE_TOOL_PROCESSES;
+    else process.env.GOLEM_NODE_TOOL_PROCESSES = previous;
+  }
+  return `echo=${echo.status}:${echo.stdout};overflow=${overflow};abort=${aborted};disabled=${disabled}`;
 }
 
 const TscClient = client(
@@ -216,6 +250,10 @@ const Caller = defineAgent({
       returns: MatrixCoreObservation,
     }),
     child_process_tool_observation: method({
+      input: {},
+      returns: z.string(),
+    }),
+    child_process_tool_edge_cases: method({
       input: {},
       returns: z.string(),
     }),
@@ -444,6 +482,9 @@ Caller.implement({
     },
     child_process_tool_observation() {
       return childProcessToolObservation();
+    },
+    child_process_tool_edge_cases() {
+      return childProcessToolEdgeCases();
     },
     async matrix_core_observation() {
       const client = MatrixCoreClient.newClient();

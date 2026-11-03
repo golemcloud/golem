@@ -535,6 +535,8 @@ dependencies = [
     "check-rustfmt",
     "check-clippy-dev-tools",
     "check-rustfmt-dev-tools",
+    "check-clippy-javascript-tool-process-bridge",
+    "check-rustfmt-javascript-tool-process-bridge",
 ]
 
 [tasks.check-rustfmt]
@@ -562,6 +564,28 @@ args = [
     "clippy",
     "--manifest-path",
     "dev-tools/Cargo.toml",
+    "--all-targets",
+    "--",
+    "--no-deps",
+    "-Dwarnings",
+]
+
+# The JavaScript tool-process bridge is a standalone guest crate that only builds for wasm32-wasip2.
+[tasks.check-rustfmt-javascript-tool-process-bridge]
+description = "Runs rustfmt checks on the JavaScript tool-process bridge without applying any fix"
+command = "cargo"
+args = ["fmt", "--manifest-path", "sdks/javascript/tool-process-bridge/Cargo.toml", "--", "--check"]
+
+[tasks.check-clippy-javascript-tool-process-bridge]
+description = "Runs clippy checks on the JavaScript tool-process bridge without applying any fix"
+command = "cargo"
+args = [
+    "clippy",
+    "--manifest-path",
+    "sdks/javascript/tool-process-bridge/Cargo.toml",
+    "--locked",
+    "--target",
+    "wasm32-wasip2",
     "--all-targets",
     "--",
     "--no-deps",
