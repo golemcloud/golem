@@ -11,7 +11,7 @@ import { templateMatrix } from './template-matrix.mjs';
 // rewrite that dependency after generation.
 // ---------------------------------------------------------------------------
 const WIT_BINDGEN_GIT = 'https://github.com/golemcloud/wit-bindgen';
-const WIT_BINDGEN_REVISION = '4407232ead86d9bcbd06cbebd790a52120a4087a';
+const WIT_BINDGEN_REVISION = 'c0eb9d2ff0dac16cbf04f6206fc9e86cfa70f5bd';
 
 function useForkedWitBindgen(cargoTomlPath) {
   const original = readFileSync(cargoTomlPath, 'utf8');
