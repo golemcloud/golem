@@ -288,3 +288,4 @@ their own workspace manifests.
 - `integration-tests/` - Integration test suite
 - `test-components/` - Test WASM components
 - `website/` - Marketing site for golem.cloud (Astro, deployed to Netlify) - separate from `docs/`
+- `golem-cloud-billing/` - Billing app of the hosted Golem Cloud (TypeScript, Effect, Better Auth, pnpm) - **not part of main build flow, see `golem-cloud-billing/README.md`**
