@@ -364,6 +364,15 @@ wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branc
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 # The head of the branch `golem-rustic_core-v0.13.0` of the fork.
 rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "2269cbb0b2b89dc55cd4dca0172ead894b7b43fd" }
+# SQLx 0.8.6 with its type lookup queries qualified by `pg_catalog`, so that a session
+# `search_path` cannot change them. The head of the branch `golem/0.8.6-qualified-type-lookup`.
+sqlx = { git = "https://github.com/Aditya1404Sal/sqlx", rev = "10ef9532a01520372ac17beb0f2bbc0ce0cf19a0" }
+sqlx-core = { git = "https://github.com/Aditya1404Sal/sqlx", rev = "10ef9532a01520372ac17beb0f2bbc0ce0cf19a0" }
+sqlx-macros = { git = "https://github.com/Aditya1404Sal/sqlx", rev = "10ef9532a01520372ac17beb0f2bbc0ce0cf19a0" }
+sqlx-macros-core = { git = "https://github.com/Aditya1404Sal/sqlx", rev = "10ef9532a01520372ac17beb0f2bbc0ce0cf19a0" }
+sqlx-mysql = { git = "https://github.com/Aditya1404Sal/sqlx", rev = "10ef9532a01520372ac17beb0f2bbc0ce0cf19a0" }
+sqlx-postgres = { git = "https://github.com/Aditya1404Sal/sqlx", rev = "10ef9532a01520372ac17beb0f2bbc0ce0cf19a0" }
+sqlx-sqlite = { git = "https://github.com/Aditya1404Sal/sqlx", rev = "10ef9532a01520372ac17beb0f2bbc0ce0cf19a0" }
 
 [profile.dev]
 panic = "abort"

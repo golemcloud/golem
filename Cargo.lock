@@ -10074,8 +10074,7 @@ dependencies = [
 [[package]]
 name = "sqlx"
 version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fefb893899429669dcdd979aff487bd78f4064e5e7907e4269081e0ef7d97dc"
+source = "git+https://github.com/Aditya1404Sal/sqlx?rev=10ef9532a01520372ac17beb0f2bbc0ce0cf19a0#10ef9532a01520372ac17beb0f2bbc0ce0cf19a0"
 dependencies = [
  "sqlx-core",
  "sqlx-macros",
@@ -10087,8 +10086,7 @@ dependencies = [
 [[package]]
 name = "sqlx-core"
 version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
+source = "git+https://github.com/Aditya1404Sal/sqlx?rev=10ef9532a01520372ac17beb0f2bbc0ce0cf19a0#10ef9532a01520372ac17beb0f2bbc0ce0cf19a0"
 dependencies = [
  "base64 0.22.1",
  "bigdecimal",
@@ -10129,8 +10127,7 @@ dependencies = [
 [[package]]
 name = "sqlx-macros"
 version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2d452988ccaacfbf5e0bdbc348fb91d7c8af5bee192173ac3636b5fb6e6715d"
+source = "git+https://github.com/Aditya1404Sal/sqlx?rev=10ef9532a01520372ac17beb0f2bbc0ce0cf19a0#10ef9532a01520372ac17beb0f2bbc0ce0cf19a0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -10142,8 +10139,7 @@ dependencies = [
 [[package]]
 name = "sqlx-macros-core"
 version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19a9c1841124ac5a61741f96e1d9e2ec77424bf323962dd894bdb93f37d5219b"
+source = "git+https://github.com/Aditya1404Sal/sqlx?rev=10ef9532a01520372ac17beb0f2bbc0ce0cf19a0#10ef9532a01520372ac17beb0f2bbc0ce0cf19a0"
 dependencies = [
  "dotenvy",
  "either",
@@ -10167,8 +10163,7 @@ dependencies = [
 [[package]]
 name = "sqlx-mysql"
 version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa003f0038df784eb8fecbbac13affe3da23b45194bd57dba231c8f48199c526"
+source = "git+https://github.com/Aditya1404Sal/sqlx?rev=10ef9532a01520372ac17beb0f2bbc0ce0cf19a0#10ef9532a01520372ac17beb0f2bbc0ce0cf19a0"
 dependencies = [
  "atoi",
  "base64 0.22.1",
@@ -10212,8 +10207,7 @@ dependencies = [
 [[package]]
 name = "sqlx-postgres"
 version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db58fcd5a53cf07c184b154801ff91347e4c30d17a3562a635ff028ad5deda46"
+source = "git+https://github.com/Aditya1404Sal/sqlx?rev=10ef9532a01520372ac17beb0f2bbc0ce0cf19a0#10ef9532a01520372ac17beb0f2bbc0ce0cf19a0"
 dependencies = [
  "atoi",
  "base64 0.22.1",
@@ -10256,8 +10250,7 @@ dependencies = [
 [[package]]
 name = "sqlx-sqlite"
 version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2d12fe70b2c1b4401038055f90f151b78208de1f9f89a7dbfd41587a10c3eea"
+source = "git+https://github.com/Aditya1404Sal/sqlx?rev=10ef9532a01520372ac17beb0f2bbc0ce0cf19a0#10ef9532a01520372ac17beb0f2bbc0ce0cf19a0"
 dependencies = [
  "atoi",
  "chrono",
