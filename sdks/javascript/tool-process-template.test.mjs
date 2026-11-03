@@ -2,40 +2,14 @@
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
 import assert from "node:assert/strict";
-import {
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import {
-  installToolProcessBridge,
+  templateGeneratorArgs,
   toolProcessModules,
 } from "./tool-process-template.mjs";
-
-function wrapper(t, supported = true) {
-  const directory = mkdtempSync(join(tmpdir(), "golem-process-template-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  mkdirSync(join(directory, "src/builtin"), { recursive: true });
-  mkdirSync(join(directory, "src/modules"));
-  writeFileSync(join(directory, "Cargo.toml"), "[dependencies]\n");
-  writeFileSync(
-    join(directory, "src/builtin/mod.rs"),
-    supported
-      ? 'resolver.with_module("wasm-rquickjs:child-process")'
-      : "resolver",
-  );
-  writeFileSync(
-    join(directory, "src/modules/mod.rs"),
-    "    resolver\n    rquickjs::loader::ModuleLoader::default()\n",
-  );
-  return directory;
-}
 
 test("template modules include the runtime initializer and portable source paths", () => {
   assert.deepEqual(
@@ -52,45 +26,29 @@ test("template modules include the runtime initializer and portable source paths
   }
 });
 
-test("the template installs the Golem native module and dependency", (t) => {
-  const directory = wrapper(t);
-  installToolProcessBridge(directory);
-  assert.match(
-    readFileSync(join(directory, "Cargo.toml"), "utf8"),
-    /golem-js-tool-process-bridge = \{ path = /,
-  );
-  assert.match(
-    readFileSync(join(directory, "src/modules/mod.rs"), "utf8"),
-    /golem_js_tool_process_bridge::ToolProcessBridge/,
-  );
-  assert.match(
-    readFileSync(join(directory, "src/modules/mod.rs"), "utf8"),
-    /\.with_module\("golem-tool-process-bridge"\)/,
-  );
-});
-
-test("an unsupported runtime fails before changing the generated crate", (t) => {
-  const directory = wrapper(t, false);
-  assert.throws(
-    () => installToolProcessBridge(directory),
-    /must provide runtime-local child process backends/,
+test("generator arguments register the native bridge and the forked wit-bindgen", () => {
+  const pairs = [];
+  for (let index = 0; index < templateGeneratorArgs.length; index += 2) {
+    pairs.push([templateGeneratorArgs[index], templateGeneratorArgs[index + 1]]);
+  }
+  assert.deepEqual(
+    pairs.map(([flag, value]) => [flag, value.split("=")[0]]),
+    [
+      ["--native-module", "golem-tool-process-bridge"],
+      ["--dependency", "golem-js-tool-process-bridge"],
+      ["--dependency", "wit-bindgen-p3"],
+    ],
   );
   assert.equal(
-    readFileSync(join(directory, "Cargo.toml"), "utf8"),
-    "[dependencies]\n",
+    pairs[0][1],
+    "golem-tool-process-bridge=golem_js_tool_process_bridge::ToolProcessBridge",
   );
+  const path = JSON.parse(pairs[1][1].match(/path = ("[^"]*")/)[1]);
+  assert.ok(existsSync(join(path, "Cargo.toml")));
+  assert.match(pairs[2][1], /git = "https:\/\/github.com\/golemcloud\/wit-bindgen"/);
 });
 
-test("changed native module registration points fail closed", (t) => {
-  const directory = wrapper(t);
-  writeFileSync(join(directory, "src/modules/mod.rs"), "changed skeleton");
-  assert.throws(
-    () => installToolProcessBridge(directory),
-    /Expected one registration point/,
-  );
-});
-
-test("every JavaScript SDK template generator embeds the modules and installs the bridge", () => {
+test("every JavaScript SDK template generator embeds the modules and passes the arguments", () => {
   const sdks = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   for (const generator of [
     "ts/packages/golem-ts-sdk/scripts/generate-agent-template.mjs",
@@ -100,6 +58,7 @@ test("every JavaScript SDK template generator embeds the modules and installs th
     const source = readFileSync(join(sdks, generator), "utf8");
     assert.match(source, /javascript\/tool-process-template\.mjs/, generator);
     assert.match(source, /\btoolProcessModules\b/, generator);
-    assert.match(source, /\binstallToolProcessBridge\(/, generator);
+    assert.match(source, /\btemplateGeneratorArgs\b/, generator);
+    assert.doesNotMatch(source, /wit-bindgen-p3 = /, generator);
   }
 });

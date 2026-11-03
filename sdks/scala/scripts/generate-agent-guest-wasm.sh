@@ -43,17 +43,21 @@ if ! command -v node &>/dev/null; then
 fi
 
 tool_process_template="$sdk_root/../javascript/tool-process-template.mjs"
-tool_process_modules=()
-while IFS= read -r module; do
-  tool_process_modules+=(--js-modules "$module")
+# The tool-process JavaScript modules, the user slot, and the shared generator arguments
+# (the native bridge module and the forked wit-bindgen), one argument per line.
+template_args=()
+while IFS= read -r argument; do
+  template_args+=("$argument")
 done < <(
   node --input-type=module -e '
-    const { toolProcessModules } = await import(process.argv[1]);
-    for (const [name, source] of toolProcessModules) console.log(`${name}=${source}`);
+    const { templateGeneratorArgs, toolProcessModules } = await import(process.argv[1]);
+    for (const [name, source] of toolProcessModules) console.log(`--js-modules\n${name}=${source}`);
+    console.log("--js-modules\nuser=@slot");
+    for (const argument of templateGeneratorArgs) console.log(argument);
   ' "$tool_process_template"
 )
-if (( ${#tool_process_modules[@]} == 0 )); then
-  echo "[agent-guest] ERROR: no tool-process modules from $tool_process_template" >&2
+if (( ${#template_args[@]} == 0 )); then
+  echo "[agent-guest] ERROR: no template arguments from $tool_process_template" >&2
   exit 1
 fi
 
@@ -74,9 +78,6 @@ if [[ ! -d "$wit_dir/deps" ]]; then
   echo "[agent-guest]   Run 'cargo make wit' from the repository root first." >&2
   exit 1
 fi
-
-wit_bindgen_line='wit-bindgen-p3 = { package = "wit-bindgen", version = "0.58.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
-forked_line='wit-bindgen-p3 = { package = "wit-bindgen", git = "https://github.com/golemcloud/wit-bindgen", rev = "4407232ead86d9bcbd06cbebd790a52120a4087a", version = "=0.59.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
 
 if [[ -f "$HOME/.cargo/env" ]]; then
   # shellcheck disable=SC1091
@@ -134,36 +135,11 @@ for role_spec in "${roles[@]}"; do
     --wit "$wit_root" \
     --world "$world" \
     --target wasi-p3 \
-    "${tool_process_modules[@]}" \
-    --js-modules "user=@slot" \
+    "${template_args[@]}" \
     --output "$wrapper_dir"
 
-  # wasm-rquickjs has no dependency override for its generated skeleton, so
-  # point Preview 3 bindings at Golem's outline-lift fork for every role.
-  cargo_toml="$wrapper_dir/Cargo.toml"
-  if [[ "$(grep -cF -- "$wit_bindgen_line" "$cargo_toml")" != "1" ]]; then
-    echo "[agent-guest] ERROR: expected exactly one wit-bindgen dependency line in $cargo_toml" >&2
-    echo "[agent-guest]   The wasm-rquickjs skeleton may have changed; update this script." >&2
-    exit 1
-  fi
-  WB_LINE="$wit_bindgen_line" FORK_LINE="$forked_line" \
-    perl -ni -e '
-      chomp(my $chomped = $_);
-      if ($chomped eq $ENV{WB_LINE}) { print "$ENV{FORK_LINE}\n"; next; }
-      print;
-    ' "$cargo_toml"
-  if ! grep -qF -- "$forked_line" "$cargo_toml" || grep -qF -- "$wit_bindgen_line" "$cargo_toml"; then
-    echo "[agent-guest] ERROR: failed to rewrite wit-bindgen dependency in $cargo_toml" >&2
-    exit 1
-  fi
-
-  # The generated lock still pins the replaced upstream dependency graph.
+  # The generated lock pins the skeleton's upstream wit-bindgen dependency graph.
   rm -f "$wrapper_dir/Cargo.lock"
-
-  node --input-type=module -e '
-    const { installToolProcessBridge } = await import(process.argv[1]);
-    installToolProcessBridge(process.argv[2]);
-  ' "$tool_process_template" "$wrapper_dir"
 
   out_wasm="$target_dir/wasm32-wasip2/release/$artifact"
   rm -f "$out_wasm"

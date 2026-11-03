@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,44 +17,29 @@ export const toolProcessModules = [
   ],
 ];
 
-function replaceOnce(text, from, to, file) {
-  if (text.split(from).length !== 2) {
-    throw new Error(`Expected one registration point in ${file}: ${from}`);
-  }
-  return text.replace(from, to);
-}
+// Golem's wit-bindgen fork adds an "outline-lift" optimization that shrinks the generated
+// Preview 3 lift/lower wrappers. It replaces the skeleton's `wit-bindgen-p3` entry as a whole.
+const witBindgenP3 =
+  '{ package = "wit-bindgen", git = "https://github.com/golemcloud/wit-bindgen", ' +
+  'rev = "4407232ead86d9bcbd06cbebd790a52120a4087a", version = "=0.59.0", ' +
+  'default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], ' +
+  "optional = true }";
 
-export function installToolProcessBridge(wrapper) {
-  const builtins = readFileSync(resolve(wrapper, "src/builtin/mod.rs"), "utf8");
-  if (!builtins.includes('.with_module("wasm-rquickjs:child-process")')) {
-    throw new Error(
-      "The wasm-rquickjs toolchain must provide runtime-local child process backends",
-    );
-  }
-  const cargo = resolve(wrapper, "Cargo.toml");
-  writeFileSync(
-    cargo,
-    replaceOnce(
-      readFileSync(cargo, "utf8"),
-      "[dependencies]\n",
-      `[dependencies]\ngolem-js-tool-process-bridge = { path = ${JSON.stringify(bridge)} }\n`,
-      cargo,
-    ),
-  );
+// `wasm-rquickjs generate-wrapper-crate` arguments shared by the SDK agent templates: the
+// native `golem-tool-process-bridge` module from the Golem-owned bridge crate, and the forked
+// wit-bindgen. The JavaScript modules are passed separately with `--js-modules`.
+export const templateGeneratorArgs = [
+  "--native-module",
+  "golem-tool-process-bridge=golem_js_tool_process_bridge::ToolProcessBridge",
+  "--dependency",
+  `golem-js-tool-process-bridge={ path = ${JSON.stringify(bridge)} }`,
+  "--dependency",
+  `wit-bindgen-p3=${witBindgenP3}`,
+];
 
-  const modules = resolve(wrapper, "src/modules/mod.rs");
-  let text = readFileSync(modules, "utf8");
-  text = replaceOnce(
-    text,
-    "    resolver\n",
-    '    resolver\n        .with_module("golem-tool-process-bridge")\n',
-    modules,
-  );
-  text = replaceOnce(
-    text,
-    "    rquickjs::loader::ModuleLoader::default()\n",
-    '    rquickjs::loader::ModuleLoader::default()\n        .with_module("golem-tool-process-bridge", golem_js_tool_process_bridge::ToolProcessBridge)\n',
-    modules,
-  );
-  writeFileSync(modules, text);
+// The generated Cargo.lock pins the skeleton's upstream wit-bindgen dependencies, which
+// conflict with the fork (its wit-parser needs a newer indexmap). Cargo resolves a fresh lock
+// during the template build instead.
+export function removeSkeletonLock(wrapper) {
+  rmSync(resolve(wrapper, "Cargo.lock"), { force: true });
 }
