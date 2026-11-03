@@ -369,6 +369,91 @@ async fn postgres_catalog_qualified_migrator_dispatch_ignores_session_shadows(
     service.remove(&key, &agent_id).await;
 }
 
+/// SQLx finds the name of a result type that it does not know (here `regclass`) with its own
+/// lookup query, and keeps that query prepared on the connection. `begin_transaction` already
+/// runs the lookup once, because SQLx does not know `xid8`, the type of `pg_current_xact_id()`.
+/// A session `search_path` that puts a `text` domain before `pg_catalog` must not change what
+/// that lookup returns or runs.
+async fn postgres_type_lookup_ignores_session_shadows(
+    postgres: &DockerPostgresRdb,
+    rdbms_service: &RdbmsServiceDefault,
+    earlier_lookup: bool,
+) {
+    use postgres_types::DbValue;
+
+    let service = rdbms_service.postgres();
+    let agent_id = new_agent_id();
+    // A new pool, so that the connection has no type information from other tests.
+    let address = format!(
+        "{}?application_name=type_lookup_{}",
+        postgres.public_connection_string(),
+        Uuid::new_v4().simple()
+    );
+    let key = service.create(&address, &agent_id).await.unwrap();
+    let transaction = service.begin_transaction(&key, &agent_id).await.unwrap();
+    if earlier_lookup {
+        // SQLx looks up the enum type with the default search_path and keeps the lookup query.
+        let warm_up = format!("type_lookup_warm_up_{}", Uuid::new_v4().simple());
+        for statement in [
+            format!("CREATE SCHEMA {warm_up}"),
+            format!("CREATE TYPE {warm_up}.mood AS ENUM ('calm')"),
+        ] {
+            transaction.execute(&statement, vec![]).await.unwrap();
+        }
+        transaction
+            .query(&format!("SELECT 'calm'::{warm_up}.mood"), vec![])
+            .await
+            .unwrap();
+    }
+    let schema = format!("type_lookup_{}", Uuid::new_v4().simple());
+    for statement in [
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE TABLE {schema}.effects (value integer)"),
+        format!("INSERT INTO {schema}.effects VALUES (0)"),
+        format!(
+            "CREATE FUNCTION {schema}.bump() RETURNS boolean LANGUAGE plpgsql AS 'BEGIN UPDATE {schema}.effects SET value = value + 1; RETURN true; END'"
+        ),
+        format!("CREATE DOMAIN {schema}.text AS pg_catalog.text CHECK ({schema}.bump())"),
+        format!("SET LOCAL search_path = {schema}, pg_catalog, public"),
+    ] {
+        transaction.execute(&statement, vec![]).await.unwrap();
+    }
+    let result = transaction
+        .query(
+            "SELECT $1::pg_catalog.regclass",
+            vec![DbValue::Text(format!("{schema}.effects"))],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        result.rows[0].values.as_slice(),
+        [DbValue::Oid(_)]
+    ));
+    let effects = transaction
+        .query(&format!("SELECT value FROM {schema}.effects"), vec![])
+        .await
+        .unwrap();
+    assert_eq!(effects.rows[0].values, vec![DbValue::Int4(0)]);
+    transaction.rollback().await.unwrap();
+    service.remove(&key, &agent_id).await;
+}
+
+#[test]
+async fn postgres_type_lookup_ignores_session_shadows_in_a_new_pool(
+    postgres: &DockerPostgresRdb,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    postgres_type_lookup_ignores_session_shadows(postgres, rdbms_service, false).await;
+}
+
+#[test]
+async fn postgres_type_lookup_ignores_session_shadows_after_an_enum_lookup(
+    postgres: &DockerPostgresRdb,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    postgres_type_lookup_ignores_session_shadows(postgres, rdbms_service, true).await;
+}
+
 #[test]
 async fn postgres_custom_bound_cast_source_is_not_builtin_text(
     postgres: &DockerPostgresRdb,
