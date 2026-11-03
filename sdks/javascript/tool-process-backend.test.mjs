@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { Readable, PassThrough } from "node:stream";
 import { createToolProcessBackend } from "./tool-process-backend.js";
 
@@ -340,22 +341,30 @@ test("a deadline cannot replace overflow or an ordinary terminal winner", () => 
   }
 });
 
-test("invalid sync deadlines are rejected before tool discovery or admission", () => {
+const invoked = (f) => f.calls.some(([operation]) => operation === "invoke");
+
+test("invalid sync deadlines are rejected only once a tool handles the call", () => {
   const f = fixture();
-  for (const timeout of [-1, 0.5, NaN, Infinity, "1", null, 2 ** 53]) {
+  for (const timeout of [-1, 0.5, NaN, Infinity, "1"]) {
     assert.throws(
       () => f.backend.spawnSync("tsc", [], { timeout }),
       RangeError,
     );
   }
-  assert.deepEqual(f.calls, []);
-  assert.equal(f.backend.spawnSync("tsc", [], { timeout: 0 }).status, 7);
+  assert.equal(invoked(f), false);
+  for (const timeout of [0, null, 2 ** 53])
+    assert.equal(f.backend.spawnSync("tsc", [], { timeout }).status, 7);
+  const declined = fixture({ prepareCommand: () => undefined });
+  assert.equal(declined.backend.spawnSync("tsc", [], { timeout: -1 }), undefined);
 });
 
-test("invalid input is rejected before tool discovery or admission", () => {
+test("invalid input is rejected only once a tool handles the call", () => {
   const f = fixture();
   assert.throws(() => f.backend.spawnSync("tsc", [], { input: 7 }), TypeError);
-  assert.deepEqual(f.calls, []);
+  assert.equal(invoked(f), false);
+  assert.equal(f.closed.includes("prepared"), true);
+  const declined = fixture({ prepareCommand: () => undefined });
+  assert.equal(declined.backend.spawnSync("tsc", [], { input: 7 }), undefined);
 });
 
 function deferred() {
@@ -555,10 +564,10 @@ test("result projection and tool RPC failures keep their original shell outcome"
   assert.equal(output.stderr.toString(), "denied\n");
 });
 
-test("invalid shell options cannot discover or dispatch tools", () => {
+test("invalid shell options decline without discovering tools", () => {
   const f = fixture();
-  assert.throws(() => f.backend.spawnSync("echo", [], { shell: 7 }), TypeError);
-  assert.throws(() => f.backend.spawn("echo", [], { shell: {} }), TypeError);
+  assert.equal(f.backend.spawnSync("echo", [], { shell: 7 }), undefined);
+  assert.equal(f.backend.spawn("echo", [], { shell: {} }), undefined);
   assert.deepEqual(f.calls, []);
 });
 
@@ -808,20 +817,31 @@ test("synchronous inherited stdin is explicitly rejected before dispatch when de
   assert.deepEqual(f.closed, ["prepared"]);
 });
 
-test("invalid stdio fails before discovery", () => {
-  const f = fixture();
+test("stdio a tool process cannot provide fails the call with ENOTSUP", async () => {
   for (const stdio of [
     false,
     {},
     "ipc",
     ["pipe", 0, "pipe"],
     ["pipe", "pipe", "pipe", "pipe"],
+    ["pipe", new PassThrough(), "pipe"],
     "inherit",
   ]) {
-    assert.throws(() => f.backend.spawnSync("tsc", [], { stdio }), TypeError);
-    assert.throws(() => f.backend.spawn("tsc", [], { stdio }), TypeError);
-    assert.deepEqual(f.calls, []);
+    const f = fixture();
+    assert.equal(f.backend.spawnSync("tsc", [], { stdio }).error.code, "ENOTSUP");
+    const child = f.backend.spawn("tsc", [], { stdio });
+    const [error] = await once(child, "error");
+    assert.equal(error.code, "ENOTSUP");
+    assert.equal(invoked(f), false);
+    const declined = fixture({ prepareCommand: () => undefined });
+    assert.equal(declined.backend.spawnSync("tsc", [], { stdio }), undefined);
   }
+  const f = fixture();
+  assert.equal(
+    f.backend.spawnSync("tsc", [], { stdio: ["overlapped", "pipe", "pipe", "ignore"] })
+      .status,
+    7,
+  );
 });
 
 test(
@@ -1167,18 +1187,38 @@ test(
   },
 );
 
-test("invalid async options throw before discovery or effect admission", () => {
+test("invalid async options throw only once a tool handles the call", () => {
   const f = asyncFixture();
+  const declined = fixture({ prepareCommand: () => undefined });
   for (const options of [
     { signal: {} },
     { signal: null },
     { timeout: -1 },
     { maxBuffer: -1 },
+    { maxBuffer: NaN },
     { killSignal: "invalid" },
   ]) {
     assert.throws(() => f.backend.spawn("tsc", [], options));
-    assert.deepEqual(f.calls, []);
+    assert.equal(invoked(f), false);
+    assert.equal(declined.backend.spawn("tsc", [], options), undefined);
   }
+});
+
+test("Node's valid option values are accepted", async () => {
+  for (const options of [
+    { maxBuffer: Infinity },
+    { timeout: null },
+    { killSignal: "SIGHUP" },
+    { killSignal: "SIGUSR1" },
+    { killSignal: 3 },
+  ]) {
+    const f = fixture();
+    assert.equal(f.backend.spawnSync("tsc", [], options).status, 7);
+  }
+  const f = asyncFixture();
+  const child = f.backend.spawn("tsc", [], { killSignal: "SIGQUIT" });
+  await once(child, "spawn");
+  assert.equal(child.kill("SIGHUP"), true);
 });
 
 test(
@@ -1352,3 +1392,124 @@ test(
     });
   },
 );
+
+test("the compatibility switch accepts common false values", () => {
+  for (const value of ["0", "false", "FALSE", " off ", "no"]) {
+    const f = fixture();
+    f.process.env.GOLEM_NODE_TOOL_PROCESSES = value;
+    assert.equal(f.backend.spawnSync("tsc", [], {}), undefined);
+    assert.deepEqual(f.calls, []);
+  }
+  for (const value of ["", "1", "true"]) {
+    const f = fixture();
+    f.process.env.GOLEM_NODE_TOOL_PROCESSES = value;
+    assert.equal(f.backend.spawnSync("tsc", [], {}).status, 7);
+  }
+});
+
+test("unref is a hint that returns the child", async () => {
+  const f = asyncFixture();
+  const child = f.backend.spawn("tsc", []);
+  assert.equal(child.unref(), child);
+  assert.equal(child.ref(), child);
+  const closed = once(child, "close");
+  child.stdout.resume();
+  child.stderr.resume();
+  f.complete();
+  await closed;
+});
+
+test("an aborted child emits error, exit with its signal, then close", async () => {
+  const f = asyncFixture();
+  const controller = new AbortController();
+  const child = f.backend.spawn("tsc", [], { signal: controller.signal });
+  const events = [];
+  child.on("error", (error) => events.push(["error", error.name]));
+  child.on("exit", (...args) => events.push(["exit", ...args]));
+  child.stdout.resume();
+  child.stderr.resume();
+  await once(child, "spawn");
+  // events.once rejects on 'error', which an aborted child emits first.
+  const closed = new Promise((resolve) =>
+    child.once("close", (...args) => resolve(args)),
+  );
+  controller.abort();
+  assert.deepEqual(await closed, [null, "SIGTERM"]);
+  assert.deepEqual(events, [
+    ["error", "AbortError"],
+    ["exit", null, "SIGTERM"],
+  ]);
+});
+
+test("listener exceptions are uncaught and do not lose close or fail the child", async () => {
+  const uncaught = [];
+  const listener = (error) => uncaught.push(error.message);
+  process.prependListener("uncaughtException", listener);
+  const originals = process.listeners("uncaughtException").filter((l) => l !== listener);
+  for (const l of originals) process.removeListener("uncaughtException", l);
+  try {
+    const f = asyncFixture();
+    const child = f.backend.spawn("tsc", []);
+    const errors = [];
+    child.on("error", (error) => errors.push(error));
+    child.on("exit", () => {
+      throw new Error("exit listener");
+    });
+    child.stdout.on("data", () => {
+      throw new Error("data listener");
+    });
+    child.stderr.resume();
+    const closed = once(child, "close");
+    f.complete();
+    assert.deepEqual(await closed, [7, null]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(errors, []);
+    assert.deepEqual(uncaught.sort(), ["data listener", "exit listener"]);
+  } finally {
+    process.removeListener("uncaughtException", listener);
+    for (const l of originals) process.on("uncaughtException", l);
+  }
+});
+
+test("shell commands export the environment difference and refuse stdin data", () => {
+  const f = fixture();
+  f.process.env = { KEEP: "1", DROP: "2" };
+  f.backend.spawnSync("echo $FOO", [], {
+    shell: true,
+    env: { KEEP: "1", FOO: "it's", "NOT-A-NAME": "x" },
+  });
+  const [, name, args] = f.calls.find(([operation]) => operation === "prepare");
+  assert.equal(name, "bash");
+  assert.equal(args.at(-1), "unset DROP; export FOO='it'\\''s'; echo $FOO");
+
+  const input = fixture();
+  const result = input.backend.spawnSync("cat", [], { shell: true, input: "data" });
+  assert.equal(result.error.code, "ENOTSUP");
+  assert.equal(invoked(input), false);
+});
+
+test("bash run is the Bash tool's command unless a local file named run exists", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = mkdtempSync(join(tmpdir(), "golem-bash-run-"));
+  try {
+    const tool = fixture();
+    tool.process.cwd = () => directory;
+    tool.backend.spawnSync("bash", ["run", "--", "true"], {});
+    assert.deepEqual(
+      tool.calls.find(([operation]) => operation === "prepare").slice(1, 3),
+      ["bash", ["run", "--", "true"]],
+    );
+
+    writeFileSync(join(directory, "run"), "echo script\n");
+    const script = fixture();
+    script.process.cwd = () => directory;
+    script.backend.spawnSync("bash", ["run"], {});
+    const [, name, args] = script.calls.find(([operation]) => operation === "prepare");
+    assert.equal(name, "bash");
+    assert.deepEqual(args, ["run", "--cwd", directory, "--", "'bash' 'run'"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

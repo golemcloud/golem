@@ -2,6 +2,8 @@
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
 import { Buffer } from "node:buffer";
+import { existsSync } from "node:fs";
+import { constants } from "node:os";
 import { resolve } from "node:path";
 import { EventEmitter } from "node:events";
 import { nextTick } from "node:process";
@@ -9,33 +11,67 @@ import { PassThrough, Writable } from "node:stream";
 import { finished } from "node:stream/promises";
 
 const DEFAULT_MAX_BUFFER = 1024 * 1024;
+// Pipes of asynchronous children and inherited channels have no buffer limit in Node.
+const UNBOUNDED = Number.MAX_SAFE_INTEGER;
 const PIPE_STDIO = ["pipe", "pipe", "pipe"];
+const DISABLED_VALUES = new Set(["0", "false", "no", "off"]);
+const REJECTED_CALLS = new Set(["denied", "not-found", "remote-tool-error"]);
+const SIGNALS = constants?.signals ?? { SIGINT: 2, SIGKILL: 9, SIGTERM: 15 };
 
-function stdioModes(runtimeProcess, options) {
+// The switch is read from the parent's environment for each call.
+function dispatchDisabled(runtimeProcess) {
+  const value = runtimeProcess.env.GOLEM_NODE_TOOL_PROCESSES;
+  return (
+    value !== undefined &&
+    DISABLED_VALUES.has(String(value).trim().toLowerCase())
+  );
+}
+
+// Valid Node stdio values a tool process cannot provide fail the call with
+// ENOTSUP; they are checked only once a bound tool handles the command.
+function stdioModes(runtimeProcess, options, command, method) {
   const values = options.stdio ?? "pipe";
-  if (Array.isArray(values) && values.length > 3) {
-    throw new TypeError(
-      "Golem tool processes have only stdin, stdout and stderr",
-    );
-  }
-  if (!Array.isArray(values) && typeof values !== "string") {
-    throw new TypeError("stdio must be pipe, ignore, inherit or an array");
-  }
+  const unsupported = (message) => {
+    throw processError("ENOTSUP", command, message, method);
+  };
+  if (!Array.isArray(values) && typeof values !== "string")
+    unsupported("stdio must be pipe, ignore, inherit or an array");
+  const entries = Array.isArray(values) ? values : [values, values, values];
+  if (entries.slice(3).some((value) => value != null && value !== "ignore"))
+    unsupported("Golem tool processes have only stdin, stdout and stderr");
   return PIPE_STDIO.map((_, index) => {
-    const value = Array.isArray(values) ? values[index] : values;
-    const mode = value == null ? "pipe" : value === index ? "inherit" : value;
+    const value = entries[index];
+    const mode =
+      value == null || value === "overlapped"
+        ? "pipe"
+        : value === index
+          ? "inherit"
+          : value;
     if (!["pipe", "ignore", "inherit"].includes(mode))
-      throw new TypeError("Unsupported stdio mode");
+      unsupported(
+        `unsupported stdio ${typeof value === "string" ? value : typeof value}`,
+      );
     if (
       mode === "inherit" &&
       index > 0 &&
       typeof runtimeProcess[index === 1 ? "stdout" : "stderr"]?.write !==
         "function"
     ) {
-      throw new TypeError("Inherited output must be a writable process stream");
+      unsupported("inherited output must be a writable process stream");
     }
     return mode;
   });
+}
+
+function maxBufferOption(value) {
+  if (value == null) return DEFAULT_MAX_BUFFER;
+  if (typeof value !== "number" || !(value >= 0)) {
+    throw Object.assign(
+      new RangeError("maxBuffer must be a non-negative number"),
+      { code: "ERR_OUT_OF_RANGE" },
+    );
+  }
+  return Math.min(Math.floor(value), UNBOUNDED);
 }
 
 function routeOutput(runtimeProcess, result, modes, command) {
@@ -115,6 +151,32 @@ function dispose(resource) {
   resource?.[Symbol.dispose]?.();
 }
 
+// Listener exceptions are the caller's: as in Node, they surface as uncaught
+// exceptions instead of failing the child or skipping its later events.
+function rethrowLater(error) {
+  nextTick(() => {
+    throw error;
+  });
+}
+
+// Emits an event, or ends a stream when the event is "end"; returns false when a
+// listener threw.
+function emit(target, event, ...args) {
+  try {
+    if (event === "end") target.end(...args);
+    else target.emit(event, ...args);
+    return true;
+  } catch (error) {
+    rethrowLater(error);
+    return false;
+  }
+}
+
+// maxBuffer applies to piped output only, as in Node.
+function channelLimit(maxBuffer, modes, index) {
+  return modes[index] === "inherit" ? UNBOUNDED : maxBuffer;
+}
+
 function bounded(
   command,
   result,
@@ -130,8 +192,9 @@ function bounded(
       modes[index] === "ignore"
         ? Buffer.alloc(0)
         : Buffer.from(result[channel] ?? []);
-    if (result[channel].length > maxBuffer) {
-      result[channel] = result[channel].subarray(0, maxBuffer);
+    const limit = channelLimit(maxBuffer, modes, index);
+    if (result[channel].length > limit) {
+      result[channel] = result[channel].subarray(0, limit);
       result.error ??= processError(
         "ENOBUFS",
         command,
@@ -156,15 +219,36 @@ function shellWord(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+// Exports the variables a shell command sets or removes relative to the parent,
+// because the Bash tool runs with its own environment, not options.env.
+function shellEnvironment(runtimeProcess, options) {
+  if (!options.env) return "";
+  const parent = runtimeProcess.env;
+  const names = new Set([...Object.keys(parent), ...Object.keys(options.env)]);
+  const statements = [];
+  for (const name of names) {
+    if (name === "PWD" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+    const value = options.env[name];
+    if (value === undefined) {
+      if (parent[name] !== undefined) statements.push(`unset ${name}; `);
+    } else if (String(value) !== parent[name]) {
+      statements.push(`export ${name}=${shellWord(value)}; `);
+    }
+  }
+  return statements.join("");
+}
+
+// Returns undefined for a call this backend declines.
 function invocation(runtimeProcess, command, args, options) {
   if (
     options.shell != null &&
     typeof options.shell !== "boolean" &&
     typeof options.shell !== "string"
   ) {
-    throw new TypeError("shell must be a boolean or string");
+    return undefined;
   }
   const argv = args.map(String);
+  const cwd = resolve(runtimeProcess.cwd(), options.cwd ?? ".");
   const conventionalShell = [
     "sh",
     "bash",
@@ -180,7 +264,11 @@ function invocation(runtimeProcess, command, args, options) {
     if (typeof options.shell === "string") {
       script = `${shellWord(options.shell)} -c ${shellWord(script)}`;
     }
-  } else if (conventionalShell && !(command === "bash" && argv[0] === "run")) {
+  } else if (
+    conventionalShell &&
+    !(command === "bash" && argv[0] === "run" && !existsSync(resolve(cwd, "run")))
+  ) {
+    // A local file named run is a script for bash, not the tool's run command.
     // Bash's own sh/bash command implements option and positional-argument
     // semantics. Preserve argv as shell words instead of parsing its flags here.
     script = [command, ...argv].map(shellWord).join(" ");
@@ -192,9 +280,9 @@ function invocation(runtimeProcess, command, args, options) {
         args: [
           "run",
           "--cwd",
-          resolve(runtimeProcess.cwd(), options.cwd ?? "."),
+          cwd,
           "--",
-          script,
+          shellEnvironment(runtimeProcess, options) + script,
         ],
         shell: true,
       };
@@ -272,12 +360,19 @@ function project(
     method,
     modes,
   );
+  // The host also fails the output streams of a rejected call (denied, not
+  // found, invalid input or a declared tool error); its exit code is the result.
+  const rejected =
+    collected.result.tag === "err" &&
+    REJECTED_CALLS.has(collected.result.val?.tag);
   for (const [index, channel] of [
     [1, "stdout"],
     [2, "stderr"],
   ]) {
     if (modes[index] === "ignore") continue;
-    const remaining = maxBuffer - (collected[channel]?.forwarded ?? 0);
+    const remaining =
+      channelLimit(maxBuffer, modes, index) -
+      (collected[channel]?.forwarded ?? 0);
     const overflow = result[channel].length > remaining;
     if (overflow) result[channel] = result[channel].subarray(0, remaining);
     if (collected[channel]?.overflow || overflow) {
@@ -288,7 +383,7 @@ function project(
         method,
       );
       result.status = null;
-    } else if (collected[channel]?.failure && !result.error) {
+    } else if (collected[channel]?.failure && !result.error && !rejected) {
       result.error = processError(
         "EIO",
         command,
@@ -298,7 +393,41 @@ function project(
       result.status = null;
     }
   }
+  const stdinFailure = collected.stdin?.failure;
+  if (stdinFailure && !result.error && !rejected) {
+    if (stdinFailure.tag === "closed") {
+      // The tool finished without reading all of its input: Node keeps the status.
+      result.error = processError(
+        "EPIPE",
+        command,
+        "stdin closed by the tool",
+        method,
+      );
+    } else {
+      result.error = processError("EIO", command, "stdin stream failed", method);
+      result.status = null;
+    }
+  }
   return result;
+}
+
+// A call the host rejects before it starts, such as a binding that disappeared
+// after preparation, completes with the rendered exit code.
+function rejectedCall(error, command, method, modes) {
+  if (!error?.rendered) return undefined;
+  return bounded(
+    command,
+    {
+      pid: 1,
+      status: error.rendered.exitCode,
+      signal: null,
+      stdout: error.rendered.stdout,
+      stderr: error.rendered.stderr,
+    },
+    UNBOUNDED,
+    method,
+    modes,
+  );
 }
 
 function deadlineCancelled(collected) {
@@ -314,7 +443,11 @@ function deadlineCancelled(collected) {
   );
 }
 
-function createInput(host, command, resources, onFailure) {
+// The Bash tool's stdin is a cancellation signal, not the script's input, so a
+// shell command refuses data instead of dropping it.
+const SHELL_STDIN_UNSUPPORTED = "shell commands do not read stdin";
+
+function createInput(host, command, resources, onFailure, refuseData = false) {
   const [writer, source, closed] = host.createStdin();
   for (const resource of [writer, source, closed]) resources.add(resource);
   let io = Promise.resolve();
@@ -334,6 +467,12 @@ function createInput(host, command, resources, onFailure) {
     );
   const stream = new Writable({
     write(chunk, _encoding, callback) {
+      if (refuseData && chunk.length) {
+        callback(
+          processError("ENOTSUP", command, SHELL_STDIN_UNSUPPORTED, "spawn"),
+        );
+        return;
+      }
       enqueue(() => writer.write(Buffer.from(chunk))).then(
         () => callback(),
         (error) => callback(inputError(error)),
@@ -399,49 +538,77 @@ function createInput(host, command, resources, onFailure) {
   };
 }
 
+// Any signal cancels the tool call; the child reports the requested signal.
 function killSignal(value) {
-  const signal = { 2: "SIGINT", 9: "SIGKILL", 15: "SIGTERM" }[value] ?? value;
-  if (!["SIGTERM", "SIGINT", "SIGKILL"].includes(signal)) {
-    throw Object.assign(new TypeError(`Unsupported signal: ${value}`), {
-      code: "ERR_UNKNOWN_SIGNAL",
-    });
+  if (typeof value === "string" && Object.hasOwn(SIGNALS, value)) return value;
+  if (typeof value === "number") {
+    const name = Object.keys(SIGNALS).find((name) => SIGNALS[name] === value);
+    if (name) return name;
   }
-  return signal;
+  throw Object.assign(new TypeError(`Unknown signal: ${value}`), {
+    code: "ERR_UNKNOWN_SIGNAL",
+  });
 }
 
 function validateTimeout(timeout) {
-  if (
-    timeout !== undefined &&
-    (!Number.isSafeInteger(timeout) || timeout < 0)
-  ) {
-    throw new RangeError("timeout must be a non-negative safe integer");
+  if (timeout != null && !(Number.isInteger(timeout) && timeout >= 0)) {
+    throw Object.assign(
+      new RangeError("timeout must be a non-negative integer"),
+      { code: "ERR_OUT_OF_RANGE" },
+    );
   }
 }
 
-function spawnTool(host, runtimeProcess, command, args, options) {
-  const enabled = runtimeProcess.env.GOLEM_NODE_TOOL_PROCESSES;
-  if (enabled === "0" || enabled === "false") return undefined;
-  const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  if (!Number.isSafeInteger(maxBuffer) || maxBuffer < 0)
-    throw new RangeError("maxBuffer must be a non-negative safe integer");
-  validateTimeout(options.timeout);
-  const defaultSignal = killSignal(options.killSignal ?? "SIGTERM");
-  const modes = stdioModes(runtimeProcess, options);
-  if (
-    options.signal !== undefined &&
-    (typeof options.signal?.aborted !== "boolean" ||
-      typeof options.signal?.addEventListener !== "function" ||
-      typeof options.signal?.removeEventListener !== "function")
-  ) {
-    throw new TypeError("signal must be an AbortSignal");
-  }
+// Resolves the bound tool before checking any option, so a declined call keeps
+// Node's handling of its options in the local runner.
+function prepareDispatch(host, runtimeProcess, command, args, options) {
+  if (dispatchDisabled(runtimeProcess)) return undefined;
   const target = invocation(runtimeProcess, command, args, options);
+  if (target === undefined) return undefined;
   const prepared = host.prepareCommand(
     target.name,
     target.args,
     variables(runtimeProcess, options),
   );
-  if (prepared === undefined) return undefined;
+  return prepared === undefined ? undefined : { target, prepared };
+}
+
+function validated(prepared, check) {
+  try {
+    return check();
+  } catch (error) {
+    if (prepared.tag === "invoke") dispose(prepared.val);
+    throw error;
+  }
+}
+
+function spawnTool(host, runtimeProcess, command, args, options) {
+  const dispatch = prepareDispatch(host, runtimeProcess, command, args, options);
+  if (dispatch === undefined) return undefined;
+  const { target, prepared } = dispatch;
+  const defaultSignal = validated(prepared, () => {
+    validateTimeout(options.timeout);
+    // exec and execFile collect the output with their own maxBuffer check.
+    maxBufferOption(options.maxBuffer);
+    if (
+      options.signal !== undefined &&
+      (typeof options.signal?.aborted !== "boolean" ||
+        typeof options.signal?.addEventListener !== "function" ||
+        typeof options.signal?.removeEventListener !== "function")
+    ) {
+      throw new TypeError("signal must be an AbortSignal");
+    }
+    return killSignal(options.killSignal ?? "SIGTERM");
+  });
+  let setupError;
+  let modes;
+  try {
+    modes = stdioModes(runtimeProcess, options, command, "spawn");
+  } catch (error) {
+    setupError = error;
+    modes = ["ignore", "ignore", "ignore"];
+  }
+  const maxBuffer = UNBOUNDED;
   const child = new EventEmitter();
   child.connected = false;
   child.killed = false;
@@ -467,7 +634,6 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   let abortError;
   let stdinError;
   let outputError;
-  const outputWrites = new Set();
   let cancellationRequested = false;
   let started = prepared.tag === "output";
   let resolveStartup;
@@ -509,19 +675,14 @@ function spawnTool(host, runtimeProcess, command, args, options) {
     child.killed = true;
     return true;
   };
+  // Reference counting is only a hint in Node; the call is always awaited here.
   child.ref = () => child;
-  child.unref = () => {
-    throw processError(
-      "ENOTSUP",
-      command,
-      "detached tool processes are not supported",
-      "spawn",
-    );
-  };
+  child.unref = () => child;
 
   let collection;
   try {
     if (prepared.tag === "invoke") resources.add(prepared.val);
+    if (setupError) throw setupError;
     if (options.signal?.aborted) {
       abortError = Object.assign(
         new Error("The operation was aborted", {
@@ -566,7 +727,13 @@ function spawnTool(host, runtimeProcess, command, args, options) {
               "spawn",
             );
           }
-          input = createInput(host, command, resources, inputFailed);
+          input = createInput(
+            host,
+            command,
+            resources,
+            inputFailed,
+            target.shell,
+          );
           source = input.source;
           if (modes[0] === "pipe") child.stdin = input.stream;
           else {
@@ -613,29 +780,27 @@ function spawnTool(host, runtimeProcess, command, args, options) {
               ? runtimeProcess[channel]
               : child[channel];
           if (!destination) return;
-          const writing = new Promise((resolve, reject) =>
-            destination.write(bytes, (error) =>
-              error ? reject(error) : resolve(),
-            ),
-          );
-          if (modes[index] === "inherit") {
-            await writing;
-          } else {
-            // These pipes are bounded by maxBuffer. Let collection reach the
-            // terminal even if the caller only starts reading at exit.
-            outputWrites.add(writing);
-            writing.then(
-              () => outputWrites.delete(writing),
-              (error) => {
-                outputWrites.delete(writing);
-                outputError ??= error;
-                try {
-                  cancel();
-                } catch (failure) {
-                  outputError.cause ??= failure;
-                }
-              },
-            );
+          // Output is forwarded under back-pressure, as from a Node child: the
+          // next read waits until the destination accepted this chunk.
+          try {
+            await new Promise((resolve, reject) => {
+              try {
+                destination.write(bytes, (error) =>
+                  error ? reject(error) : resolve(),
+                );
+              } catch (error) {
+                // A throwing 'data' listener is the caller's exception.
+                rethrowLater(error);
+                resolve();
+              }
+            });
+          } catch (error) {
+            outputError ??= error;
+            try {
+              cancel();
+            } catch (failure) {
+              outputError.cause ??= failure;
+            }
           }
         },
       );
@@ -650,34 +815,43 @@ function spawnTool(host, runtimeProcess, command, args, options) {
       timer = setTimeout(() => child.kill(defaultSignal), options.timeout);
     }
   } catch (error) {
-    started = false;
-    const code =
-      error?.code ?? (error?.tag === "resource-exhausted" ? "ENOMEM" : "EIO");
-    terminal = failed(
-      command,
-      code,
-      error instanceof Error ? error.message : "tool process failed",
-      "spawn",
-    );
+    terminal = rejectedCall(error, command, "spawn", modes);
+    started = terminal !== undefined;
+    if (!started) {
+      const code =
+        error?.code ??
+        (error?.tag === "resource-exhausted" ? "ENOMEM" : "EIO");
+      terminal = failed(
+        command,
+        code,
+        error instanceof Error ? error.message : "tool process failed",
+        "spawn",
+      );
+    }
     try {
       cancel();
     } catch (failure) {
+      terminal.error ??= processError("EIO", command, "cancel failed", "spawn");
       terminal.error.cause ??= failure;
     }
   }
   child.stdio = [child.stdin, child.stdout, child.stderr];
   if (started) child.pid = 1;
   nextTick(() => {
-    try {
-      if (started) child.emit("spawn");
-    } finally {
-      resolveStartup();
-    }
+    if (started) emit(child, "spawn");
+    resolveStartup();
   });
   // Collection starts at dispatch. Observe failures until startup has delivered
   // its event; the completion task still awaits the original result below.
   collection?.catch(() => {});
-  startup.then(async () => {
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    emit(child, "close", terminal.status, terminal.signal);
+  };
+  startup
+    .then(async () => {
     try {
       if (collection) {
         const collected = await collection;
@@ -772,24 +946,28 @@ function spawnTool(host, runtimeProcess, command, args, options) {
       terminal.error.cause ??= error;
       terminal.status = null;
     }
+    if (abortError) terminal.signal = signal ?? defaultSignal;
     child.exitCode = terminal.status;
     child.signalCode = terminal.signal;
-    const outputCompletion = Promise.allSettled([
-      ...outputWrites,
-      ...["stdout", "stderr"].map(async (channel) => {
+    const outputCompletion = Promise.allSettled(
+      ["stdout", "stderr"].map(async (channel) => {
         const stream = child[channel];
         if (!stream) return;
         const completion = finished(stream, { cleanup: true });
-        try {
-          stream.end(terminal[channel]);
-        } catch (error) {
-          stream.destroy(error);
+        // A throwing 'data' listener is the caller's exception, not an output
+        // failure; the stream may then never finish, so it is closed instead.
+        if (!emit(stream, "end", terminal[channel])) {
+          completion.catch(() => {});
+          stream.destroy();
+          return;
         }
         await completion;
       }),
-    ]);
-    if (terminal.error) child.emit("error", terminal.error);
-    else child.emit("exit", terminal.status, terminal.signal);
+    );
+    if (terminal.error) emit(child, "error", terminal.error);
+    // An aborted child also exits with its kill signal, as in Node.
+    if (!terminal.error || abortError)
+      emit(child, "exit", terminal.status, terminal.signal);
     child.stdout?.resume();
     child.stderr?.resume();
     const outputFailure = (await outputCompletion).find(
@@ -805,10 +983,16 @@ function spawnTool(host, runtimeProcess, command, args, options) {
       terminal.error.cause = outputFailure?.reason ?? outputError;
       terminal.status = null;
       child.exitCode = null;
-      child.emit("error", terminal.error);
+      emit(child, "error", terminal.error);
     }
-    child.emit("close", terminal.status, terminal.signal);
-  });
+    close();
+  })
+    .catch((error) => {
+      // 'close' always follows, so exec and execFile callbacks still run.
+      terminal ??= failed(command, "EIO", "tool process failed", "spawn");
+      rethrowLater(error);
+      close();
+    });
   return child;
 }
 
@@ -820,23 +1004,37 @@ export function createToolProcessBackend(host, runtimeProcess) {
       return spawnTool(host, runtimeProcess, command, args, options);
     },
     spawnSync(command, args, options = {}) {
-      const enabled = runtimeProcess.env.GOLEM_NODE_TOOL_PROCESSES;
-      if (enabled === "0" || enabled === "false") return undefined;
-      validateTimeout(options.timeout);
-      const timeoutSignal = killSignal(options.killSignal ?? "SIGTERM");
-      const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
-      if (!Number.isSafeInteger(maxBuffer) || maxBuffer < 0) {
-        throw new RangeError("maxBuffer must be a non-negative safe integer");
-      }
-      const inputBytes = finiteInput(options.input, options.encoding);
-      const modes = stdioModes(runtimeProcess, options);
-      const target = invocation(runtimeProcess, command, args, options);
-      const prepared = host.prepareCommand(
-        target.name,
-        target.args,
-        variables(runtimeProcess, options),
+      const dispatch = prepareDispatch(
+        host,
+        runtimeProcess,
+        command,
+        args,
+        options,
       );
-      if (prepared === undefined) return undefined;
+      if (dispatch === undefined) return undefined;
+      const { target, prepared } = dispatch;
+      const { timeoutSignal, maxBuffer, inputBytes } = validated(
+        prepared,
+        () => {
+          validateTimeout(options.timeout);
+          return {
+            timeoutSignal: killSignal(options.killSignal ?? "SIGTERM"),
+            maxBuffer: maxBufferOption(options.maxBuffer),
+            inputBytes: finiteInput(options.input, options.encoding),
+          };
+        },
+      );
+      let modes;
+      try {
+        modes = stdioModes(runtimeProcess, options, command, "spawnSync");
+        if (target.shell && inputBytes.length) {
+          throw processError("ENOTSUP", command, SHELL_STDIN_UNSUPPORTED);
+        }
+      } catch (error) {
+        if (prepared.tag === "invoke") dispose(prepared.val);
+        return failed(command, error.code ?? "EIO", error.message);
+      }
+      const limit = (index) => channelLimit(maxBuffer, modes, index);
       if (prepared.tag === "output") {
         return routeOutput(
           runtimeProcess,
@@ -881,17 +1079,17 @@ export function createToolProcessBackend(host, runtimeProcess) {
             )
           : undefined;
         if (input) resources.add(input);
-        const output = (wanted, mode) => {
+        const output = (wanted, index) => {
           if (!wanted) return undefined;
           const pair =
-            mode === "ignore"
+            modes[index] === "ignore"
               ? [host.createDiscardedOutput()]
-              : host.createCollectedOutput(BigInt(maxBuffer));
+              : host.createCollectedOutput(BigInt(limit(index)));
           for (const resource of pair) resources.add(resource);
           return pair;
         };
-        const stdout = output(spec.stdout, modes[1]);
-        const stderr = output(spec.stderr, modes[2]);
+        const stdout = output(spec.stdout, 1);
+        const stderr = output(spec.stderr, 2);
         const rpc = new host.ToolRpc(target.name);
         resources.add(rpc);
         future = rpc.asyncInvokeAndAwait(
@@ -934,11 +1132,12 @@ export function createToolProcessBackend(host, runtimeProcess) {
           (error?.tag === "resource-exhausted" ? "ENOMEM" : "EIO");
         return routeOutput(
           runtimeProcess,
-          failed(
-            command,
-            code,
-            error instanceof Error ? error.message : "tool process failed",
-          ),
+          rejectedCall(error, command, "spawnSync", modes) ??
+            failed(
+              command,
+              code,
+              error instanceof Error ? error.message : "tool process failed",
+            ),
           modes,
           command,
         );

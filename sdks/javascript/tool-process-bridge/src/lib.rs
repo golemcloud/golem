@@ -1,5 +1,5 @@
 // Copyright 2024-2026 Golem Cloud
-// Licensed under the Apache License, Version 2.0.
+// Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
 use futures::{
     FutureExt,
@@ -8,7 +8,10 @@ use futures::{
 use golem_rust::{
     bindings::golem::tool::{host, streams},
     golem_schema::tool::{
-        process::{ParsedProcessCommand, parse_command, render_custom_error, render_result},
+        process::{
+            ParsedProcessCommand, command_line_error, parse_command, render_custom_error,
+            render_result,
+        },
         wit::decode_tool,
     },
     schema::wit::wire::ToolRpcError,
@@ -175,7 +178,12 @@ fn prepare_command<'js>(
             object.set("tag", "output")?;
             let rendered = match result {
                 Ok(ParsedProcessCommand::Help(text)) => output(&ctx, 0, text.into_bytes(), vec![])?,
-                Err(message) => output(&ctx, 2, vec![], format!("{message}\n").into_bytes())?,
+                Err(message) => output(
+                    &ctx,
+                    2,
+                    vec![],
+                    format!("{}\n", command_line_error(message)).into_bytes(),
+                )?,
                 _ => unreachable!(),
             };
             object.set("val", rendered)?;
@@ -212,8 +220,16 @@ fn create_input(ctx: Ctx<'_>, bytes: Option<TypedArray<'_, u8>>) -> rquickjs::Re
 }
 
 #[rquickjs::function]
-fn create_output(max: Option<usize>) -> Output {
+fn create_output(max: Option<f64>) -> Output {
     let (target, reader) = host::create_output();
+    // JavaScript limits can exceed a 32-bit usize; any limit beyond it is unbounded.
+    let max = max.map(|max| {
+        if max.is_finite() && max >= 0.0 {
+            usize::try_from(max as u64).unwrap_or(usize::MAX)
+        } else {
+            usize::MAX
+        }
+    });
     Output {
         inner: Rc::new(OutputState {
             target: RefCell::new(Some(target)),
@@ -245,20 +261,25 @@ fn invoke(
     let input = input.map(|input| input.inner);
     let stdout = stdout.map(|output| output.inner);
     let stderr = stderr.map(|output| output.inner);
-    let rpc = host::ToolRpc::new(&command.name);
-    let future = rpc.async_invoke_and_await(
-        &command.path,
-        value,
-        input
-            .as_ref()
-            .and_then(|input| input.source.borrow_mut().take()),
-        stdout
-            .as_ref()
-            .and_then(|output| output.target.borrow_mut().take()),
-        stderr
-            .as_ref()
-            .and_then(|output| output.target.borrow_mut().take()),
-    );
+    let source = input
+        .as_ref()
+        .and_then(|input| input.source.borrow_mut().take());
+    let stdout_target = stdout
+        .as_ref()
+        .and_then(|output| output.target.borrow_mut().take());
+    let stderr_target = stderr
+        .as_ref()
+        .and_then(|output| output.target.borrow_mut().take());
+    if command.stdin != source.is_some()
+        || command.stdout != stdout_target.is_some()
+        || command.stderr != stderr_target.is_some()
+    {
+        return Err(error(&ctx, "tool process attachment already used"));
+    }
+    let rpc =
+        host::ToolRpc::create(&command.name).map_err(|reason| rejected(&ctx, &command, reason))?;
+    let future =
+        rpc.async_invoke_and_await(&command.path, value, source, stdout_target, stderr_target);
     Ok(Process {
         inner: Some(Rc::new(Call {
             _rpc: rpc,
@@ -271,6 +292,23 @@ fn invoke(
             collecting: Cell::new(false),
         })),
     })
+}
+
+/// A call the host rejects before it starts completes with the rendered exit code.
+fn rejected(ctx: &Ctx<'_>, command: &Command, reason: ToolRpcError) -> rquickjs::Error {
+    let (code, message, _) = rpc_error(reason, &command.errors);
+    let value = match Object::new(ctx.clone()).and_then(|value| {
+        value.set("tag", "rejected")?;
+        value.set(
+            "rendered",
+            output(ctx, code, vec![], format!("{message}\n").into_bytes())?,
+        )?;
+        Ok(value)
+    }) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    ctx.throw(value.into_value())
 }
 
 #[rquickjs::function]
@@ -499,7 +537,7 @@ fn rpc_error(error: ToolRpcError, declared: &BTreeMap<String, u8>) -> (u8, Strin
 
 struct Collection {
     terminal: Result<host::InvocationResult, ToolRpcError>,
-    pumped: Result<(), ()>,
+    pumped: Result<(), &'static str>,
     stdout: Collected,
     stderr: Collected,
     timed_out: bool,
@@ -519,14 +557,18 @@ async fn collect_inner(
             if let Some(bytes) = bytes {
                 let writer = input.writer.borrow_mut().take();
                 if let Some(writer) = writer {
+                    let failure = |reason| match reason {
+                        streams::StreamWriteError::Closed(_) => "closed",
+                        _ => "failed",
+                    };
                     for chunk in bytes.chunks(32 * 1024) {
-                        writer.write(chunk.to_vec()).await.map_err(|_| ())?;
+                        writer.write(chunk.to_vec()).await.map_err(failure)?;
                     }
-                    writer.finish().await.map_err(|_| ())?;
+                    writer.finish().await.map_err(failure)?;
                 }
             }
         }
-        Ok::<_, ()>(())
+        Ok::<_, &'static str>(())
     };
     let mut timed_out = false;
     let outputs = async {
@@ -630,10 +672,18 @@ fn render_collection<'js>(
     let collected = Object::new(ctx.clone())?;
     collected.set("result", result)?;
     collected.set("timedOut", timed_out)?;
-    for (name, mut stream) in [("stdout", stdout), ("stderr", stderr)] {
-        if pumped.is_err() && failure.is_none() {
-            stream.failure.get_or_insert("failed");
-        }
+    // A stdin failure is its own: a tool that finished without reading all of its
+    // input closes stdin, which Node reports as EPIPE with the exit status kept.
+    if let Err(reason) = pumped
+        && failure.is_none()
+    {
+        let stdin = Object::new(ctx.clone())?;
+        let value = Object::new(ctx.clone())?;
+        value.set("tag", reason)?;
+        stdin.set("failure", value)?;
+        collected.set("stdin", stdin)?;
+    }
+    for (name, stream) in [("stdout", stdout), ("stderr", stderr)] {
         let object = Object::new(ctx.clone())?;
         object.set("bytes", TypedArray::new(ctx.clone(), stream.bytes)?)?;
         object.set("overflow", stream.overflow)?;

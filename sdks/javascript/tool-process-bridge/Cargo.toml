@@ -2,7 +2,7 @@
 name = "golem-js-tool-process-bridge"
 version = "0.0.0"
 edition = "2024"
-license = "Apache-2.0"
+license-file = "../../../LICENSE"
 publish = false
 
 [workspace]

@@ -235,11 +235,12 @@ test(
 );
 
 test(
-  "streamed output and terminal diagnostics share one channel limit",
+  "spawn forwards all output; buffered results share one channel limit",
   { timeout: 1000 },
   async () => {
     const f = fixture();
     f.terminal.result.rendered.stderr = [7, 8];
+    // exec and execFile apply maxBuffer to the output they collect from spawn.
     const child = f.backend.spawn("streaming", [], { maxBuffer: 2 });
     const bytes = [];
     const errors = [];
@@ -248,8 +249,14 @@ test(
     const done = new Promise((resolve) => child.once("close", resolve));
     child.stdin.end();
     await done;
-    assert.deepEqual(bytes, [128, 7]);
-    assert.equal(errors[0]?.code, "ENOBUFS");
+    assert.deepEqual(bytes, [128, 7, 8]);
+    assert.deepEqual(errors, []);
+
+    const sync = fixture();
+    sync.terminal.result.rendered.stderr = [7, 8];
+    const result = sync.backend.spawnSync("streaming", [], { maxBuffer: 2 });
+    assert.deepEqual([...result.stderr], [128, 7]);
+    assert.equal(result.error?.code, "ENOBUFS");
   },
 );
 
@@ -341,31 +348,28 @@ test(
   },
 );
 
-for (const readOnExit of [false, true]) {
-  test(
-    `bounded owned output can exit ${readOnExit ? "before the caller starts reading" : "without a reader"}`,
-    { timeout: 1000 },
-    async () => {
-      const f = fixture();
-      f.terminal.stdout.bytes = Buffer.alloc(256 * 1024, 65);
-      const child = f.backend.spawn("streaming", []);
-      const output = [];
-      let exited = false;
-      child.once("exit", () => {
-        exited = true;
-        if (readOnExit)
-          child.stdout.on("data", (chunk) => output.push(Buffer.from(chunk)));
-      });
-      const done = once(child, "close");
-      child.stdin.end();
-      assert.deepEqual(await done, [7, null]);
-      assert.equal(exited, true);
-      assert.equal(child.stdout.readableEnded, true);
-      if (readOnExit)
-        assert.deepEqual(Buffer.concat(output), f.terminal.stdout.bytes);
-    },
-  );
-}
+test(
+  "owned output is forwarded under back-pressure, as from a Node child",
+  { timeout: 1000 },
+  async () => {
+    const f = fixture();
+    f.terminal.stdout.bytes = Buffer.alloc(256 * 1024, 65);
+    const child = f.backend.spawn("streaming", []);
+    let exited = false;
+    child.once("exit", () => {
+      exited = true;
+    });
+    const done = once(child, "close");
+    child.stdin.end();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(exited, false, "exit did not wait for the unread pipe");
+    const output = [];
+    child.stdout.on("data", (chunk) => output.push(Buffer.from(chunk)));
+    assert.deepEqual(await done, [7, null]);
+    assert.equal(exited, true);
+    assert.deepEqual(Buffer.concat(output), f.terminal.stdout.bytes);
+  },
+);
 
 test("native collection failures cancel the call and release its resources", () => {
   const f = fixture();
@@ -432,4 +436,73 @@ test("help and missing bindings perform no native dispatch or attachment creatio
   f.native.prepareCommand = () => undefined;
   assert.equal(f.backend.spawnSync("unbound", []), undefined);
   assert.deepEqual(f.calls, []);
+});
+
+test("a denied call keeps its exit code although the host failed its outputs", async () => {
+  const denied = {
+    tag: "err",
+    val: { tag: "denied" },
+    rendered: { exitCode: 3, stdout: [], stderr: [...Buffer.from("denied\n")] },
+  };
+  const sync = fixture();
+  sync.terminal.result = denied;
+  sync.terminal.stdout = { bytes: [], failure: { tag: "failed" } };
+  sync.terminal.stderr = { bytes: [], failure: { tag: "failed" } };
+  const result = sync.backend.spawnSync("streaming", [], {});
+  assert.equal(result.status, 3);
+  assert.equal(result.error, undefined);
+  assert.equal(result.stderr.toString(), "denied\n");
+
+  const f = fixture();
+  f.terminal.result = denied;
+  f.native.readOutput = async () => {
+    throw { tag: "failed" };
+  };
+  const child = f.backend.spawn("streaming", []);
+  const errors = [];
+  child.on("error", (error) => errors.push(error));
+  child.stdout.resume();
+  child.stderr.resume();
+  child.stdin.end();
+  assert.deepEqual(await once(child, "close"), [3, null]);
+  assert.deepEqual(errors, []);
+});
+
+test("a tool that closes its stdin early keeps the status with EPIPE", () => {
+  const f = fixture();
+  f.terminal.stdin = { failure: { tag: "closed" } };
+  const result = f.backend.spawnSync("streaming", [], { input: "unread" });
+  assert.equal(result.status, 7);
+  assert.equal(result.error.code, "EPIPE");
+
+  const failed = fixture();
+  failed.terminal.stdin = { failure: { tag: "failed" } };
+  const broken = failed.backend.spawnSync("streaming", [], { input: "x" });
+  assert.equal(broken.status, null);
+  assert.equal(broken.error.code, "EIO");
+});
+
+test("a binding that disappeared before invoke completes with its exit code", async () => {
+  const rejected = {
+    rendered: { exitCode: 127, stdout: [], stderr: [...Buffer.from("gone\n")] },
+  };
+  const sync = fixture();
+  sync.native.invoke = () => {
+    throw rejected;
+  };
+  const result = sync.backend.spawnSync("streaming", [], {});
+  assert.equal(result.status, 127);
+  assert.equal(result.stderr.toString(), "gone\n");
+
+  const f = fixture();
+  f.native.invoke = () => {
+    throw rejected;
+  };
+  const child = f.backend.spawn("streaming", []);
+  const events = [];
+  child.on("spawn", () => events.push("spawn"));
+  child.on("exit", (code) => events.push(["exit", code]));
+  child.stderr.resume();
+  assert.deepEqual(await once(child, "close"), [127, null]);
+  assert.deepEqual(events, ["spawn", ["exit", 127]]);
 });
