@@ -43,6 +43,11 @@ export interface PushSummary {
 }
 
 const MICRO_UNITS = 1_000_000
+/**
+ * Polar refuses a numeric metadata value outside ±(2^53 - 1) with 422 (EventMetadataInput of the
+ * event ingestion API), and a larger `micro_units` would also lose precision as a number.
+ */
+const MAX_EVENT_MICRO_UNITS = BigInt(Number.MAX_SAFE_INTEGER)
 const BATCH_SIZE = 100
 
 const periodOf = (date: Date): Period => ({ year: date.getUTCFullYear(), month: date.getUTCMonth() + 1 })
@@ -132,13 +137,17 @@ export const pushUsage = (
           for (const dimension of dimensions) {
             const from = submittedBy.get(`${accountId}:${dimension}`) ?? 0n
             const to = microUnits[dimension]
-            if (to > from) {
+            // An increase above MAX_EVENT_MICRO_UNITS becomes several events. The ID of each event
+            // ends in the amount that it reaches, so a run that repeats the split creates the same IDs.
+            for (let start = from; start < to; ) {
+              const end = to - start > MAX_EVENT_MICRO_UNITS ? start + MAX_EVENT_MICRO_UNITS : to
               const inserted = yield* query(
                 `INSERT INTO usage_events (event_id, account_id, period, dimension, from_micro_units, to_micro_units)
                  VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (event_id) DO NOTHING`,
-                [`${accountId}:${key}:${dimension}:${to}`, accountId, key, dimension, from.toString(), to.toString()]
+                [`${accountId}:${key}:${dimension}:${end}`, accountId, key, dimension, start.toString(), end.toString()]
               )
               created += inserted.rowCount ?? 0
+              start = end
             }
           }
         }
@@ -155,6 +164,7 @@ export const pushUsage = (
           break
         }
         const events = unsent.rows.map((row): PolarEvent => {
+          // At most MAX_EVENT_MICRO_UNITS, so the conversion to a number is exact.
           const microUnits = Number(BigInt(row.to_micro_units) - BigInt(row.from_micro_units))
           return {
             name: meterEventNames[row.dimension],

@@ -145,8 +145,10 @@ of the registry), so it can also read a month that has closed:
 Each run reads the previous and the current UTC month, so usage that the registry receives for a
 month after its last run in that month still reaches Polar. The table `usage_events` keeps one
 event for every increase: it goes from the amount that earlier events submitted to the current
-billable overage, in millionths of GCU, GB-seconds or GB-month. A run records its events first and
-then sends every event that is not sent yet. Polar skips an event whose `external_id` it has
+billable overage, in millionths of GCU, GB-seconds or GB-month. Polar refuses a numeric metadata
+value above 2^53 - 1, so an increase above that becomes several events, each with an ID that ends
+in the amount that it reaches. A run records its events first and then sends every event that is
+not sent yet. Polar skips an event whose `external_id` it has
 already, so after a failed send the next run sends the same events again and nothing twice. A
 billable overage that goes down, for example after a refund, sends nothing.
 
