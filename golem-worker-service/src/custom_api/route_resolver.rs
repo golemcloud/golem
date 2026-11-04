@@ -1736,9 +1736,9 @@ pub(super) mod tests {
     #[test]
     async fn canonical_origin_policy_is_enforced_through_route_resolution() {
         let trusted: std::net::IpAddr = "10.0.0.1".parse().unwrap();
-        let untrusted: std::net::IpAddr = "10.0.0.2".parse().unwrap();
+        let untrusted: std::net::IpAddr = "10.0.1.2".parse().unwrap();
         let config = RouteResolverConfig {
-            trusted_ingress_addresses: vec![ipnet::IpNet::from(trusted)],
+            trusted_ingress_addresses: vec!["10.0.0.0/24".parse().unwrap()],
             ..Default::default()
         };
         let cases = [
@@ -1855,5 +1855,40 @@ pub(super) mod tests {
                 ),
             }
         }
+    }
+
+    #[test]
+    async fn oidc_return_uri_is_https_for_a_peer_in_a_trusted_range() {
+        let config = RouteResolverConfig {
+            trusted_ingress_addresses: vec!["172.18.128.0/19".parse().unwrap()],
+            ..Default::default()
+        };
+        let resolver = RouteResolver::new(
+            &config,
+            Arc::new(LiteralLookup(vec![
+                "auth-probe".to_string(),
+                "u-1".to_string(),
+                "whoami".to_string(),
+            ])),
+        );
+        let request = request_from_peer(
+            &[
+                ("x-forwarded-proto", "https"),
+                ("x-forwarded-host", "netprobe-oidc.apps.golem.cloud"),
+            ],
+            "172.18.140.7".parse().unwrap(),
+            http::Version::HTTP_2,
+            "http://worker-service:9006/auth-probe/u-1/whoami?x=1",
+            "http",
+        );
+
+        let resolved = resolver.resolve_matching_route(&request).await.unwrap();
+
+        assert_eq!(resolved.public_scheme, "https");
+        assert_eq!(
+            crate::custom_api::oidc::handler::pending_login_original_uri(&resolved, request.uri())
+                .unwrap(),
+            "https://netprobe-oidc.apps.golem.cloud/auth-probe/u-1/whoami?x=1"
+        );
     }
 }
