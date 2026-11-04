@@ -45,7 +45,10 @@ does not support `Upgrade: h2c`.
 To accept public-origin headers from a TLS-terminating proxy, list the address
 range of its direct peer address in worker-service configuration. Each entry is an
 address range in CIDR notation; write one address as `/32` (IPv4) or `/128` (IPv6).
-An entry without a prefix length stops worker-service at startup.
+An entry without a prefix length stops worker-service at startup. An IPv4 peer
+matches IPv4 ranges, also when it reaches a dual-stack listener as `::ffff:a.b.c.d`,
+and IPv4-mapped ranges `::ffff:a.b.c.d/n` with `n` of 96 or more. Other IPv6 ranges,
+such as `::/0`, do not cover IPv4 peers.
 
 ```toml
 [route_resolver]

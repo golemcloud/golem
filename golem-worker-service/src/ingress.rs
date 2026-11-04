@@ -220,6 +220,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn ipv6_ranges_outside_the_mapped_block_do_not_match_ipv4_peers() {
+        // An IPv6 range with the same low 32 bits as 10.0.0.0/24, but not IPv4-mapped.
+        let unique_local = TrustedIngress::new(&["fd00::a00:0/120".parse().unwrap()]);
+        assert!(!forwarded(&unique_local, "10.0.0.5:5000"));
+        assert!(!forwarded(&unique_local, "[::ffff:10.0.0.5]:5000"));
+
+        // The deprecated IPv4-compatible form ::a.b.c.d is not an IPv4-mapped address.
+        let ipv4_compatible = TrustedIngress::new(&["::10.0.0.0/120".parse().unwrap()]);
+        assert!(!forwarded(&ipv4_compatible, "10.0.0.5:5000"));
+        assert!(!forwarded(&ipv4_compatible, "[::ffff:10.0.0.5]:5000"));
+
+        // A range shorter than /96 stays an IPv6 range, even when it contains the mapped block.
+        let wider_than_mapped = TrustedIngress::new(&["::ffff:0:0/95".parse().unwrap()]);
+        assert!(!forwarded(&wider_than_mapped, "10.0.0.5:5000"));
+        assert!(!forwarded(&wider_than_mapped, "[::ffff:10.0.0.5]:5000"));
+    }
+
+    #[test]
     fn http2_request_uses_the_authority_pseudo_header() {
         let ingress = TrustedIngress::default();
         let request = from_peer(

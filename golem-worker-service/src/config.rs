@@ -1383,7 +1383,13 @@ mod tests {
             ))
             .extract::<WorkerServiceConfig>();
 
-        assert!(result.is_err());
+        let error = result
+            .expect_err("a bare address must not load")
+            .to_string();
+        assert!(
+            error.contains("route_resolver.trusted_ingress_addresses"),
+            "{error}"
+        );
     }
 
     #[test]
