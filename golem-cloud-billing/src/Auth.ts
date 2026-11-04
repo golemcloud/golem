@@ -240,6 +240,28 @@ export class Auth extends Context.Service<Auth, AuthShape>()("golem-cloud-billin
  * Call it before `betterAuth`: a new Better Auth instance checks the schema at once and logs
  * an error for every missing table.
  */
+/**
+ * PostgreSQL error codes of a table, column or schema that another session dropped or changed
+ * during the introspection of `getMigrations`. Better Auth reads the columns of every table in
+ * the database, also outside its schema, so migrations of the registry service that run at the
+ * same time can fail the read. A later attempt sees the finished change.
+ */
+const concurrentDdlCodes = new Set(["42P01", "42703", "3F000"])
+
+const getMigrationsRetryingConcurrentDdl = async (options: BetterAuthOptions) => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await getMigrations(options)
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined
+      if (attempt === 5 || typeof code !== "string" || !concurrentDdlCodes.has(code)) {
+        throw error
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt))
+    }
+  }
+}
+
 export const migrate = (options: BetterAuthOptions, pool: pg.Pool, db: PostgresConfig): Promise<void> =>
   withAdvisoryLock(db, "golem-cloud-billing/migrations", async () => {
     const schema = db.schema
@@ -247,7 +269,7 @@ export const migrate = (options: BetterAuthOptions, pool: pg.Pool, db: PostgresC
     if (existing.rowCount === 0) {
       await pool.query(`CREATE SCHEMA "${schema}"`)
     }
-    const { runMigrations } = await getMigrations(options)
+    const { runMigrations } = await getMigrationsRetryingConcurrentDdl(options)
     await runMigrations()
     const column = await pool.query<{ data_type: string }>(
       `SELECT data_type FROM information_schema.columns
