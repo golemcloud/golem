@@ -1,5 +1,5 @@
 import { Context, Data, Effect, Layer, Redacted, Schema } from "effect"
-import { HttpClient, HttpClientError, HttpIncomingMessage } from "effect/http"
+import { HttpBody, HttpClient, HttpClientError, HttpIncomingMessage } from "effect/http"
 import { BillingConfig } from "./BillingConfig.ts"
 
 const Uuid = Schema.String.check(Schema.isUUID())
@@ -17,6 +17,7 @@ export type TokenWithSecret = typeof TokenWithSecret.Type
 /** The fields of the registry service's `Account` that the billing app reads. */
 export const Account = Schema.Struct({
   id: Uuid,
+  revision: Schema.Number,
   name: Schema.String,
   email: Schema.String,
   planId: Uuid
@@ -62,6 +63,15 @@ export interface RegistryShape {
     token: Redacted.Redacted<string>,
     accountId: string
   ) => Effect.Effect<Account, RegistryError>
+  /**
+   * Moves the account to the plan, through `PUT /v1/accounts/{account_id}/plan`. The registry
+   * answers 409 when `revision` is not the current revision of the account.
+   */
+  readonly setAccountPlan: (
+    token: Redacted.Redacted<string>,
+    account: Account,
+    planId: string
+  ) => Effect.Effect<Account, RegistryError>
 }
 
 export class Registry extends Context.Service<Registry, RegistryShape>()(
@@ -99,6 +109,18 @@ export const layer: Layer.Layer<Registry, never, BillingConfig | HttpClient.Http
           Effect.mapError(toRegistryError("get_account"))
         )
 
-    return { exchangeGitHubAccessToken, getAccount }
+    const setAccountPlan = (token: Redacted.Redacted<string>, account: Account, planId: string) =>
+      client
+        .put(`${baseUrl}/v1/accounts/${encodeURIComponent(account.id)}/plan`, {
+          headers: { authorization: `Bearer ${Redacted.value(token)}` },
+          acceptJson: true,
+          body: HttpBody.jsonUnsafe({ currentRevision: account.revision, plan: planId })
+        })
+        .pipe(
+          Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Account)),
+          Effect.mapError(toRegistryError("set_account_plan"))
+        )
+
+    return { exchangeGitHubAccessToken, getAccount, setAccountPlan }
   })
 )

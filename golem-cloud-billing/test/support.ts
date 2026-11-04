@@ -11,6 +11,17 @@ export const baseUrl = "http://localhost:3000"
 export const registryUrl = "http://registry.test"
 export const authSecret = "test-secret-that-is-at-least-32-characters-long"
 
+/** The registry token of the billing account, which has `view` and `set-plan` on every account. */
+export const registryBillingToken = "golem_billing_token"
+export const freePlanId = "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10"
+export const paidPlanId = "9a1f3c2e-5b7d-4e8f-a6c4-2d1e0b9f8a73"
+/** A plan that an administrator gave the account; subscriptions do not change it. */
+export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"
+export const polarApiUrl = "https://sandbox-api.polar.test"
+export const polarWebToken = "polar_oat_web_token_for_the_tests"
+export const polarProductId = "115e800a-2b62-42e0-97bf-9e8a5d6022b3"
+export const webhookSecret = `whsec_${Buffer.from("a webhook secret of 32 bytes!!!!").toString("base64")}`
+
 const requireEnv = (name: string): string => {
   const value = process.env[name]
   if (value === undefined || value === "") {
@@ -38,6 +49,14 @@ export const testConfig = (): BillingConfigShape => {
     github: { clientId: "test-client-id", clientSecret: Redacted.make("test-client-secret") },
     registryUrl: new URL(registryUrl),
     publicApiUrl: new URL("https://release.dev-api.golem.cloud"),
+    registryBillingToken: Redacted.make(registryBillingToken),
+    plans: { free: freePlanId, paid: paidPlanId },
+    polar: {
+      apiUrl: new URL(polarApiUrl),
+      accessToken: Redacted.make(polarWebToken),
+      productId: polarProductId,
+      webhookSecret: Redacted.make(webhookSecret)
+    },
     db: {
       ...db,
       password: Redacted.make(db.password),
@@ -71,6 +90,14 @@ export interface RecordedRequest {
   readonly method: string
   readonly url: URL
   readonly headers: Headers
+  /** The JSON body of a POST or PUT, if it has one. */
+  readonly body: unknown
+}
+
+/** The plan of a fake registry account. */
+export interface RegistryPlan {
+  planId: string
+  revision: number
 }
 
 export interface RegistryAccount {
@@ -108,6 +135,12 @@ export class FakeUpstreams {
   github: GitHubIdentity = newGitHubIdentity(4242)
   readonly registryAccounts = new Map<string, RegistryAccount>()
   registryLoginStatus = 200
+  /** The plan of each account ID; an account starts on the free plan. */
+  readonly registryPlans = new Map<string, RegistryPlan>()
+  /** Whether the permission share of the billing account exists; without it the registry answers 404. */
+  billingShare = true
+  /** The number of plan changes that fail with 409 before one succeeds. */
+  planConflicts = 0
 
   /** The Golem account of the access token of `identity`, created on first use. */
   accountOf(identity: GitHubIdentity = this.github): RegistryAccount {
@@ -123,13 +156,57 @@ export class FakeUpstreams {
     return this.accountOf()
   }
 
+  planOf(accountId: string): RegistryPlan {
+    let plan = this.registryPlans.get(accountId)
+    if (plan === undefined) {
+      plan = { planId: freePlanId, revision: 0 }
+      this.registryPlans.set(accountId, plan)
+    }
+    return plan
+  }
+
+  private accountJson(accountId: string) {
+    const plan = this.planOf(accountId)
+    return {
+      id: accountId,
+      revision: plan.revision,
+      name: "Octo Cat",
+      email: this.github.email,
+      planId: plan.planId,
+      roles: [],
+      accountRootCardId: "0b7a4b6e-8c2b-4f63-bb0e-6a4cf7c1b9d2"
+    }
+  }
+
   readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
     const url = new URL(request.url)
-    this.requests.push({ method: request.method, url, headers: request.headers })
+    const text = request.method === "POST" || request.method === "PUT" ? await request.text() : ""
+    let body: unknown = undefined
+    try {
+      body = text === "" ? undefined : JSON.parse(text)
+    } catch {
+      body = undefined
+    }
+    this.requests.push({ method: request.method, url, headers: request.headers, body })
     const route = `${request.method} ${url.origin}${url.pathname}`
     const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "")
     switch (route) {
+      case `POST ${polarApiUrl}/v1/checkouts/`:
+        return bearer === polarWebToken
+          ? Response.json({ id: "polar_c_test", url: "https://sandbox.polar.sh/checkout/polar_c_test" }, { status: 201 })
+          : Response.json({ error: "invalid token" }, { status: 401 })
+      case `POST ${polarApiUrl}/v1/customer-sessions/`:
+        return bearer === polarWebToken
+          ? Response.json(
+              {
+                id: "polar_cs_test",
+                token: "polar_cst_test",
+                customer_portal_url: "https://sandbox.polar.sh/golem/portal?customer_session_token=polar_cst_test"
+              },
+              { status: 201 }
+            )
+          : Response.json({ error: "invalid token" }, { status: 401 })
       case "POST https://github.com/login/oauth/access_token":
         this.accountOf(this.github)
         return Response.json({
@@ -167,29 +244,54 @@ export class FakeUpstreams {
         })
       }
       default: {
-        const account = [...this.registryAccounts.values()].find(
-          (candidate) => route === `GET ${registryUrl}/v1/accounts/${candidate.accountId}`
-        )
-        if (account === undefined) {
+        const match = /^\/v1\/accounts\/([0-9a-f-]{36})(\/plan)?$/.exec(url.pathname)
+        if (url.origin !== registryUrl || match === null) {
           return new Response(`No fake for ${route}`, { status: 599 })
         }
-        return bearer === account.secret
-          ? Response.json({
-              id: account.accountId,
-              revision: 0,
-              name: "Octo Cat",
-              email: this.github.email,
-              planId: "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10",
-              roles: [],
-              accountRootCardId: "0b7a4b6e-8c2b-4f63-bb0e-6a4cf7c1b9d2"
-            })
-          : new Response(null, { status: 401 })
+        const accountId = match[1]!
+        const account = [...this.registryAccounts.values()].find((candidate) => candidate.accountId === accountId)
+        const isOwner = account !== undefined && bearer === account.secret
+        const isBilling = bearer === registryBillingToken && this.billingShare
+        if (match[2] === undefined && request.method === "GET") {
+          // The billing token sees every account, also one that never signed in to the app.
+          return isOwner || isBilling ? Response.json(this.accountJson(accountId)) : new Response(null, { status: 404 })
+        }
+        if (match[2] !== undefined && request.method === "PUT") {
+          if (isOwner) {
+            return Response.json({ code: "FORBIDDEN" }, { status: 403 })
+          }
+          if (!isBilling) {
+            return new Response(null, { status: 404 })
+          }
+          const update = body as { currentRevision: number; plan: string }
+          const plan = this.planOf(accountId)
+          if (this.planConflicts > 0) {
+            this.planConflicts--
+            plan.revision++
+            return Response.json({ code: "CONCURRENT_UPDATE" }, { status: 409 })
+          }
+          if (update.currentRevision !== plan.revision) {
+            return Response.json({ code: "CONCURRENT_UPDATE" }, { status: 409 })
+          }
+          plan.planId = update.plan
+          plan.revision++
+          return Response.json(this.accountJson(accountId))
+        }
+        return new Response(`No fake for ${route}`, { status: 599 })
       }
     }
   }
 
   registryLogins(): Array<RecordedRequest> {
     return this.requests.filter((request) => request.url.href.startsWith(`${registryUrl}/v1/login/oauth2`))
+  }
+
+  planChanges(): Array<RecordedRequest> {
+    return this.requests.filter((request) => request.method === "PUT" && request.url.pathname.endsWith("/plan"))
+  }
+
+  polarRequests(path: string): Array<RecordedRequest> {
+    return this.requests.filter((request) => request.url.href === `${polarApiUrl}${path}`)
   }
 }
 

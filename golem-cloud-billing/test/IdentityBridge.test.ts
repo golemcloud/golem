@@ -202,8 +202,7 @@ describe("GitHub sign-in", () => {
     expect(body).toContain(upstreams.registryAccount.accountId)
     expect(body).toContain("octocat@example.com")
     expect(body).toContain("golem profile new golem-cloud --url https://release.dev-api.golem.cloud --set-active")
-    expect(body).toMatch(/<button[^>]*disabled>Upgrade to Paid<\/button>/)
-    expect(body).toContain("Coming soon")
+    expect(body).toMatch(/<form method="post" action="\/billing\/checkout">\s*<button type="submit"[^>]*>Upgrade to Paid<\/button>/)
   })
 
   it("shows the sign-in form without a session", async () => {

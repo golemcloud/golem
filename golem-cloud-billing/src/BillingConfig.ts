@@ -36,6 +36,29 @@ export interface BillingConfigShape {
   readonly registryUrl: URL
   /** Public URL of the Golem API that the CLI connects to. */
   readonly publicApiUrl: URL
+  /**
+   * The registry token of the billing account. A permission share of an administrator gives
+   * this account `view` and `set-plan` on every account, so the webhooks can change a plan.
+   */
+  readonly registryBillingToken: Redacted.Redacted<string>
+  /** The plan IDs that a subscription switches between. */
+  readonly plans: {
+    readonly free: string
+    readonly paid: string
+  }
+  readonly polar: {
+    /** The base URL of the Polar API: `https://sandbox-api.polar.sh` or `https://api.polar.sh`. */
+    readonly apiUrl: URL
+    /**
+     * An organization access token of Polar that can create checkouts and customer sessions
+     * (`checkouts:write`, `customer_sessions:write`) and nothing else.
+     */
+    readonly accessToken: Redacted.Redacted<string>
+    /** The Polar product of the paid plan. */
+    readonly productId: string
+    /** The secret that Polar signs the webhooks with (`whsec_...`). */
+    readonly webhookSecret: Redacted.Redacted<string>
+  }
   readonly db: PostgresConfig
 }
 
@@ -44,6 +67,8 @@ export class BillingConfig extends Context.Service<BillingConfig, BillingConfigS
 ) {}
 
 const schemaName = /^[a-z_][a-z0-9_]*$/
+
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const invalid = (message: string): Effect.Effect<never, Config.ConfigError> =>
   Effect.fail(new Config.ConfigError(new ConfigProvider.SourceError({ message })))
@@ -94,13 +119,39 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   }),
   registryUrl: Config.URL("GOLEM_CLOUD_BILLING_REGISTRY_URL"),
   publicApiUrl: Config.URL("GOLEM_CLOUD_BILLING_PUBLIC_API_URL"),
+  registryBillingToken: Config.Redacted("GOLEM_CLOUD_BILLING_REGISTRY_TOKEN"),
+  plans: Config.all({
+    free: Config.String("GOLEM_CLOUD_BILLING_FREE_PLAN_ID"),
+    paid: Config.String("GOLEM_CLOUD_BILLING_PAID_PLAN_ID")
+  }),
+  polar: Config.all({
+    apiUrl: Config.URL("POLAR_API_URL"),
+    accessToken: Config.Redacted("POLAR_ACCESS_TOKEN"),
+    productId: Config.String("POLAR_PRODUCT_ID"),
+    webhookSecret: Config.Redacted("POLAR_WEBHOOK_SECRET")
+  }),
   db: postgresConfig
 }).pipe(
-  Config.mapEffect((config) =>
-    Redacted.value(config.authSecret).length < 32
-      ? invalid("BETTER_AUTH_SECRET must be at least 32 characters")
-      : Effect.succeed(config)
-  )
+  Config.mapEffect((config) => {
+    if (Redacted.value(config.authSecret).length < 32) {
+      return invalid("BETTER_AUTH_SECRET must be at least 32 characters")
+    }
+    for (const [name, value] of [
+      ["GOLEM_CLOUD_BILLING_FREE_PLAN_ID", config.plans.free],
+      ["GOLEM_CLOUD_BILLING_PAID_PLAN_ID", config.plans.paid]
+    ] as const) {
+      if (!uuid.test(value)) {
+        return invalid(`${name} must be a UUID, got ${value}`)
+      }
+    }
+    if (config.plans.free === config.plans.paid) {
+      return invalid("GOLEM_CLOUD_BILLING_FREE_PLAN_ID and GOLEM_CLOUD_BILLING_PAID_PLAN_ID must differ")
+    }
+    if (!Redacted.value(config.polar.webhookSecret).startsWith("whsec_")) {
+      return invalid("POLAR_WEBHOOK_SECRET must start with whsec_")
+    }
+    return Effect.succeed(config)
+  })
 )
 
 export const layer: Layer.Layer<BillingConfig, Config.ConfigError> = Layer.effect(
