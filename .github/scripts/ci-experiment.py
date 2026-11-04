@@ -42,6 +42,7 @@ PREPARE = {
     "build-test-components",
     "merge-test-components",
 }
+CLI_JOBS = {"it-cli", "it-cli-agents", "it-cli-streaming"}
 EXPECTED = (
     PREPARE
     | set(EXCLUDED)
@@ -188,7 +189,7 @@ def inventory(workflow, chunks):
     return stages
 
 
-def commands(stage, context):
+def commands(stage, context, cli_test_threads=4):
     """Translate only setup/publication boundaries; preserve validation commands."""
     job = stage["job"]
     for step in stage["definition"]["steps"]:
@@ -223,8 +224,10 @@ def commands(stage, context):
                 f"cargo-test-r reuse-nextest-archive --archive-file tmp/experiment-products/{producer}.tar.zst"
             )
             if step["with"].get("copy-to-target") == "true":
+                # Restored binaries must not inherit fingerprints from a different
+                # feature build. Keep the native dev-ci compilation cache separate.
                 command += (
-                    "\nmkdir -p target/debug\nfind target/nextest-archive/target/dev-ci "
+                    "\nrm -rf target/debug\nmkdir -p target/debug\nfind target/nextest-archive/target/dev-ci "
                     "-maxdepth 1 -type f -exec cp -t target/debug/ {} +"
                 )
             yield {"name": "Select exact native archive", "run": command}
@@ -261,7 +264,24 @@ def commands(stage, context):
         elif action:
             raise ValueError(f"Unsupported action in {job}: {action}")
         elif "run" in step:
-            yield copy.deepcopy(step)
+            command = copy.deepcopy(step)
+            if (
+                job in CLI_JOBS
+                and cli_test_threads != 4
+                and "cargo make --profile ci " in command["run"]
+            ):
+                # The ci profile overrides --env. Source restoration resets this
+                # experiment-only edit before each logical stage.
+                command["run"] = f"""python3 - <<'PY'
+from pathlib import Path
+path = Path('Makefile.toml')
+source = path.read_text()
+old = 'CLI_TEST_THREADS = "4"'
+assert source.count(old) == 1, 'CLI concurrency baseline changed'
+path.write_text(source.replace(old, 'CLI_TEST_THREADS = "{cli_test_threads}"'))
+PY
+""" + command["run"]
+            yield command
         else:
             raise ValueError(f"Unclassified step in {job}: {step}")
 
@@ -362,7 +382,7 @@ def run(args):
     # Inventory mode must classify every step before any billable trial.
     for stage in stages:
         stage_context = {**context, "matrix": stage["matrix"]}
-        for command in commands(stage, stage_context):
+        for command in commands(stage, stage_context, args.cli_test_threads):
             for field in ("run", "working-directory", "name"):
                 render(command.get(field, ""), stage_context)
             for value in command.get("env", {}).values():
@@ -396,7 +416,12 @@ def run(args):
     selected = [
         s
         for s in stages
-        if args.phase == "all" or (s["job"] in PREPARE) == (args.phase == "prepare")
+        if args.phase == "all"
+        or (args.phase == "cli" and s["job"] in CLI_JOBS)
+        or (
+            args.phase in {"prepare", "checks"}
+            and (s["job"] in PREPARE) == (args.phase == "prepare")
+        )
     ]
     if args.phase == "checks":
         selected = [s for i, s in enumerate(selected) if i % args.workers == args.shard]
@@ -408,6 +433,7 @@ def run(args):
         "phase": args.phase,
         "workers": args.workers,
         "shard": args.shard,
+        "cli_test_threads": args.cli_test_threads,
         "started_at": time.time(),
         "stages": [],
     }
@@ -455,7 +481,9 @@ def run(args):
             for key in ("GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT"):
                 env[key] = str(stage_dir / key)
                 Path(env[key]).write_text("")
-            for i, step in enumerate(commands(stage, stage_context)):
+            for i, step in enumerate(
+                commands(stage, stage_context, args.cli_test_threads)
+            ):
                 step_env = {
                     **env,
                     **{
@@ -533,7 +561,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inventory", action="store_true")
     parser.add_argument("--cycle", default="cold")
-    parser.add_argument("--phase", choices=("all", "prepare", "checks"), default="all")
+    parser.add_argument(
+        "--phase", choices=("all", "prepare", "checks", "cli"), default="all"
+    )
+    parser.add_argument("--cli-test-threads", type=int, choices=(4, 6, 8), default=4)
     parser.add_argument("--workers", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--shard", type=int, default=0)
     raise SystemExit(run(parser.parse_args()))

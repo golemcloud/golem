@@ -105,6 +105,42 @@ class ExperimentInventoryTests(unittest.TestCase):
                 selection = source["with"]["cargo-args"]
                 self.assertEqual(command["run"].count(selection), 2)
 
+    def test_restored_binaries_do_not_inherit_feature_build_fingerprints(self):
+        for stage in self.stages:
+            for command in experiment.commands(stage, self.context(stage)):
+                if command["name"] != "Select exact native archive":
+                    continue
+                script = command["run"]
+                if "cp -t target/debug/" not in script:
+                    continue
+                self.assertLess(
+                    script.index("rm -rf target/debug\n"),
+                    script.index("cp -t target/debug/"),
+                )
+                self.assertNotIn("rm -rf target/dev-ci", script)
+
+    def test_cli_tuning_changes_only_cli_concurrency(self):
+        for threads in (6, 8):
+            changed = 0
+            for stage in self.stages:
+                original = list(experiment.commands(stage, self.context(stage)))
+                tuned = list(experiment.commands(stage, self.context(stage), threads))
+                self.assertEqual(len(original), len(tuned))
+                for before, after in zip(original, tuned):
+                    if before == after:
+                        continue
+                    changed += 1
+                    self.assertIn(stage["job"], experiment.CLI_JOBS)
+                    self.assertIn("cargo make --profile ci ", before["run"])
+                    self.assertTrue(after["run"].endswith(before["run"]))
+                    prefix = after["run"][: -len(before["run"])]
+                    self.assertIn(f'CLI_TEST_THREADS = "{threads}"', prefix)
+                    self.assertEqual(
+                        {k: v for k, v in before.items() if k != "run"},
+                        {k: v for k, v in after.items() if k != "run"},
+                    )
+            self.assertEqual(changed, 9)
+
 
 if __name__ == "__main__":
     unittest.main()

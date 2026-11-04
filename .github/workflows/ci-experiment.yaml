@@ -19,7 +19,7 @@ concurrency:
 jobs:
   linux:
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 360
+    timeout-minutes: 720
     env:
       GH_TOKEN: ${{ github.token }}
       CARGO_BUILD_JOBS: 20
@@ -84,6 +84,14 @@ jobs:
         id: cold
         continue-on-error: true
         run: python3 -u .github/scripts/ci-experiment.py --cycle cold
+      - name: Checkpoint cold measurements
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-experiment-linux-cold-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/experiment-results
+          if-no-files-found: error
+          retention-days: 14
       - name: Warm single-worker full cycle
         id: warm
         if: ${{ !cancelled() }}
@@ -91,6 +99,56 @@ jobs:
         run: |
           rm -rf tmp/experiment-products tmp/test-components-wasm
           python3 -u .github/scripts/ci-experiment.py --cycle warm
+      - name: Checkpoint warm measurements
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-experiment-linux-warm-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/experiment-results
+          if-no-files-found: error
+          retention-days: 14
+      - name: Check CLI baseline completed successfully
+        id: cli-baseline
+        if: ${{ !cancelled() }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path('tmp/experiment-results')
+          inventory = json.loads((root / 'inventory.json').read_text())
+          baseline = json.loads((root / 'warm/all-0.json').read_text())
+          expected = {s['id'] for s in inventory['stages'] if s['id'].startswith('it-cli')}
+          passed = {s['id'] for s in baseline['stages'] if s['status'] == 'passed'}
+          eligible = bool(expected) and bool(baseline.get('finished_at')) and expected <= passed
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print(f'eligible={str(eligible).lower()}', file=output)
+          PY
+      - name: Warm CLI comparison with six test threads
+        id: cli6
+        if: ${{ !cancelled() && steps.cli-baseline.outputs.eligible == 'true' }}
+        continue-on-error: true
+        run: python3 -u .github/scripts/ci-experiment.py --cycle warm-cli6 --phase cli --cli-test-threads 6
+      - name: Check memory headroom for eight CLI test threads
+        id: cli-headroom
+        if: ${{ !cancelled() && steps.cli6.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads(Path('tmp/experiment-results/warm-cli6/cli-0.json').read_text())
+          peak = max(r['memory_used_kib'] for s in report['stages'] for step in s['steps'] for r in step['resources'])
+          total = int(Path('/proc/meminfo').read_text().splitlines()[0].split()[1])
+          # Conservatively scale all used memory, reserving 15% of the host.
+          eligible = peak * 8 / 6 <= total * 0.85
+          print(f'Six-thread peak: {peak / 1024**2:.1f} GiB; host: {total / 1024**2:.1f} GiB; try eight: {eligible}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print(f'eligible={str(eligible).lower()}', file=output)
+          PY
+      - name: Warm CLI comparison with eight test threads
+        id: cli8
+        if: ${{ !cancelled() && steps.cli-headroom.outputs.eligible == 'true' }}
+        continue-on-error: true
+        run: python3 -u .github/scripts/ci-experiment.py --cycle warm-cli8 --phase cli --cli-test-threads 8
       - name: Record allocation end
         if: always()
         run: |
@@ -105,7 +163,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Preserve failure status
-        if: steps.cold.outcome != 'success' || steps.warm.outcome != 'success'
+        if: steps.cold.outcome != 'success' || steps.warm.outcome != 'success' || steps.cli6.outcome == 'failure' || steps.cli8.outcome == 'failure'
         run: exit 1
 
   macos:
