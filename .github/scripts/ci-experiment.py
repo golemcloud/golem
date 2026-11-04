@@ -361,6 +361,8 @@ def execute(command, env, cwd, log, timeout):
 
 
 def run(args):
+    if args.cli_test_threads != 4 and args.test_retries:
+        raise ValueError("CLI concurrency comparisons must not retry tests")
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yaml").read_text())
     chunks = json.loads(
         subprocess.check_output(
@@ -434,6 +436,7 @@ def run(args):
         "workers": args.workers,
         "shard": args.shard,
         "cli_test_threads": args.cli_test_threads,
+        "test_retries": args.test_retries,
         "started_at": time.time(),
         "stages": [],
     }
@@ -494,43 +497,64 @@ def run(args):
                 if step["name"] == "Select prebuilt built-ins":
                     env["GOLEM_BUILTIN_ARTIFACTS_PREBUILT"] = "1"
                 name = render(step.get("name", f"step-{i}"), stage_context)
-                print(f"::group::{args.cycle} {stage['id']} — {name}", flush=True)
-                observation = execute(
-                    render(step["run"], stage_context),
-                    step_env,
-                    ROOT / render(step.get("working-directory", "."), stage_context),
-                    stage_dir / f"{i:02}.log",
-                    step.get("timeout-minutes", 90) * 60,
-                )
-                observation["name"] = name
-                result["steps"].append(observation)
-                report_path.write_text(json.dumps(report, indent=2))
-                print(
-                    json.dumps(
-                        {k: v for k, v in observation.items() if k != "resources"}
-                    ),
-                    flush=True,
-                )
-                print("::endgroup::", flush=True)
+                for attempt in range(args.test_retries + 1):
+                    suffix = f"-retry{attempt}" if attempt else ""
+                    log = stage_dir / f"{i:02}{suffix}.log"
+                    print(
+                        f"::group::{args.cycle} {stage['id']} — {name}{suffix}",
+                        flush=True,
+                    )
+                    observation = execute(
+                        render(step["run"], stage_context),
+                        step_env,
+                        ROOT
+                        / render(step.get("working-directory", "."), stage_context),
+                        log,
+                        step.get("timeout-minutes", 90) * 60,
+                    )
+                    observation.update(name=name, attempt=attempt, log=log.name)
+                    result["steps"].append(observation)
+                    for j, path in enumerate(ROOT.glob("**/target/ctrf*.json")):
+                        shutil.move(path, stage_dir / f"ctrf-{i}-{attempt}-{j}.json")
+                    report_path.write_text(json.dumps(report, indent=2))
+                    print(
+                        json.dumps(
+                            {k: v for k, v in observation.items() if k != "resources"}
+                        ),
+                        flush=True,
+                    )
+                    print("::endgroup::", flush=True)
+                    if not observation["exit_code"]:
+                        break
+                    output = log.read_text(errors="replace")
+                    print(output[-20000:], flush=True)
+                    # Retry only confirmed test failures. Compiler errors, killed
+                    # processes, and timeouts do not qualify as flaky test evidence.
+                    if (
+                        attempt == args.test_retries
+                        # cargo-make wraps a test-r exit of 101 as 105.
+                        or observation["exit_code"] not in {1, 101, 105}
+                        or not re.search(
+                            r"ℹ fail [1-9]\d*\b|test result: FAILED;", output
+                        )
+                    ):
+                        break
+                    time.sleep(2**attempt)
                 if observation["exit_code"]:
                     result["status"] = "failed"
                     failures.add(stage["job"])
-                    print(
-                        (stage_dir / f"{i:02}.log").read_text(errors="replace")[
-                            -20000:
-                        ],
-                        flush=True,
-                    )
                     break
             if result["status"] == "running":
-                result["status"] = "passed"
+                result["status"] = (
+                    "passed_after_retry"
+                    if any(step["attempt"] for step in result["steps"])
+                    else "passed"
+                )
             with (stage_dir / "source.diff").open("w") as output:
                 subprocess.run(
                     ["git", "diff", "--binary"], cwd=ROOT, stdout=output, check=True
                 )
-            for i, path in enumerate(ROOT.glob("**/target/ctrf*.json")):
-                shutil.copy2(path, stage_dir / f"ctrf-{i}.json")
-            if result["status"] == "passed":
+            if result["status"] in {"passed", "passed_after_retry"}:
                 if stage["job"] == "build-cli-test-bins":
                     for binary in ("golem", "golem-cli"):
                         shutil.copy2(
@@ -551,6 +575,9 @@ def run(args):
         )
     report["finished_at"] = time.time()
     report["success"] = not failures
+    report["fully_green"] = not failures and all(
+        stage["status"] == "passed" for stage in report["stages"]
+    )
     (evidence / f"{args.phase}-{args.shard}.json").write_text(
         json.dumps(report, indent=2)
     )
@@ -565,6 +592,7 @@ if __name__ == "__main__":
         "--phase", choices=("all", "prepare", "checks", "cli"), default="all"
     )
     parser.add_argument("--cli-test-threads", type=int, choices=(4, 6, 8), default=4)
+    parser.add_argument("--test-retries", type=int, choices=(0, 1, 2), default=0)
     parser.add_argument("--workers", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--shard", type=int, default=0)
     raise SystemExit(run(parser.parse_args()))

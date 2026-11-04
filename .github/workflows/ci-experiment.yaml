@@ -83,7 +83,7 @@ jobs:
       - name: Cold single-worker full cycle
         id: cold
         continue-on-error: true
-        run: python3 -u .github/scripts/ci-experiment.py --cycle cold
+        run: python3 -u .github/scripts/ci-experiment.py --cycle cold --test-retries 2
       - name: Checkpoint cold measurements
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v6
@@ -94,13 +94,13 @@ jobs:
           retention-days: 14
       - name: Warm single-worker full cycle
         id: warm
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.cold.outcome == 'success' }}
         continue-on-error: true
         run: |
           rm -rf tmp/experiment-products tmp/test-components-wasm
-          python3 -u .github/scripts/ci-experiment.py --cycle warm
+          python3 -u .github/scripts/ci-experiment.py --cycle warm --test-retries 2
       - name: Checkpoint warm measurements
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.warm.outcome != 'skipped' }}
         uses: actions/upload-artifact@v6
         with:
           name: ci-experiment-linux-warm-${{ github.run_id }}-${{ github.run_attempt }}
@@ -109,7 +109,7 @@ jobs:
           retention-days: 14
       - name: Check CLI baseline completed successfully
         id: cli-baseline
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.warm.outcome == 'success' }}
         run: |
           python3 - <<'PY'
           import json, os
@@ -163,8 +163,24 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Preserve failure status
-        if: steps.cold.outcome != 'success' || steps.warm.outcome != 'success' || steps.cli6.outcome == 'failure' || steps.cli8.outcome == 'failure'
-        run: exit 1
+        if: ${{ !cancelled() }}
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('tmp/experiment-results')
+          for cycle, phase, outcome in (
+              ('cold', 'all', '${{ steps.cold.outcome }}'),
+              ('warm', 'all', '${{ steps.warm.outcome }}'),
+              ('warm-cli6', 'cli', '${{ steps.cli6.outcome }}'),
+              ('warm-cli8', 'cli', '${{ steps.cli8.outcome }}'),
+          ):
+              if cycle.startswith('warm-cli') and outcome == 'skipped':
+                  continue
+              assert outcome == 'success', f'{cycle}: {outcome}'
+              report = json.loads((root / cycle / f'{phase}-0.json').read_text())
+              assert report['fully_green'], f'{cycle}: initial failures retained; not fully green'
+          PY
 
   macos:
     runs-on: blacksmith-6vcpu-macos-latest

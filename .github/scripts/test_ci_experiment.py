@@ -1,7 +1,12 @@
 import copy
 import importlib.util
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import yaml
 
@@ -140,6 +145,124 @@ class ExperimentInventoryTests(unittest.TestCase):
                         {k: v for k, v in after.items() if k != "run"},
                     )
             self.assertEqual(changed, 9)
+        with self.assertRaisesRegex(ValueError, "must not retry"):
+            experiment.run(SimpleNamespace(cli_test_threads=6, test_retries=1))
+
+
+class ExperimentRetryTests(unittest.TestCase):
+    def simulate(self, outcomes, retries):
+        stages = [
+            {
+                "id": job,
+                "job": job,
+                "matrix": {},
+                "definition": {
+                    "needs": needs,
+                    "steps": [{"name": "Run tests", "run": "test-command"}],
+                },
+            }
+            for job, needs in (
+                ("build-golem-ts", []),
+                ("worker-tests", ["build-golem-ts"]),
+            )
+        ]
+        observations = iter(enumerate(outcomes))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/ci.yaml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("jobs: {}")
+
+            def execute(command, env, cwd, log, timeout):
+                index, (code, output) = next(observations)
+                log.write_text(output)
+                report = root / "target/ctrf.json"
+                report.parent.mkdir(exist_ok=True)
+                report.write_text(json.dumps({"attempt_marker": index}))
+                return {"exit_code": code, "seconds": 1, "resources": []}
+
+            args = SimpleNamespace(
+                cycle="cold",
+                phase="all",
+                workers=1,
+                shard=0,
+                cli_test_threads=4,
+                test_retries=retries,
+                inventory=False,
+            )
+            with (
+                patch.object(experiment, "ROOT", root),
+                patch.object(experiment, "inventory", return_value=stages),
+                patch.object(experiment, "execute", side_effect=execute),
+                patch.object(
+                    experiment.subprocess,
+                    "check_output",
+                    side_effect=[b"[]", "source-sha"],
+                ),
+                patch.object(experiment.subprocess, "run"),
+                patch.object(experiment.time, "sleep"),
+                patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
+            ):
+                code = experiment.run(args)
+            evidence = root / "tmp/experiment-results/cold"
+            return (
+                code,
+                json.loads((evidence / "all-0.json").read_text()),
+                {
+                    p.name: p.read_text()
+                    for p in (evidence / "build-golem-ts").iterdir()
+                    if p.is_file()
+                },
+            )
+
+    def test_recovery_preserves_attempts_without_marking_fully_green(self):
+        code, report, files = self.simulate(
+            [(1, "ℹ fail 1"), (0, "ℹ fail 0"), (0, "passed")], 2
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(report["success"])
+        self.assertFalse(report["fully_green"])
+        self.assertEqual(
+            [s["status"] for s in report["stages"]], ["passed_after_retry", "passed"]
+        )
+        self.assertEqual([s["exit_code"] for s in report["stages"][0]["steps"]], [1, 0])
+        self.assertEqual(files["00.log"], "ℹ fail 1")
+        self.assertEqual(files["00-retry1.log"], "ℹ fail 0")
+        self.assertEqual(json.loads(files["ctrf-0-0-0.json"])["attempt_marker"], 0)
+        self.assertEqual(json.loads(files["ctrf-0-1-0.json"])["attempt_marker"], 1)
+        code, report, _ = self.simulate([(0, "passed"), (0, "passed")], 2)
+        self.assertEqual(code, 0)
+        self.assertTrue(report["fully_green"])
+
+    def test_only_confirmed_test_failures_retry_within_the_bound(self):
+        for output, exit_code, retries, attempts in (
+            ("error[E0308]: mismatched types", 1, 2, 1),
+            ("error[E0308]: mismatched types", 105, 2, 1),
+            ("test result: FAILED; 1 failed", 124, 2, 1),
+            ("ℹ fail 1", 1, 0, 1),
+            ("ℹ fail 1", 1, 2, 3),
+            ("test result: FAILED; 1 failed", 101, 1, 2),
+            (
+                (
+                    "test result: FAILED; 4 passed; 1 failed;\n"
+                    "Error while executing command, exit code: 101"
+                ),
+                105,
+                2,
+                3,
+            ),
+        ):
+            with self.subTest(output=output, exit_code=exit_code, retries=retries):
+                code, report, _ = self.simulate(
+                    [(exit_code, output)] * attempts, retries
+                )
+                self.assertEqual(code, 1)
+                self.assertFalse(report["success"])
+                self.assertFalse(report["fully_green"])
+                self.assertEqual(
+                    [s["status"] for s in report["stages"]], ["failed", "blocked"]
+                )
+                self.assertEqual(len(report["stages"][0]["steps"]), attempts)
 
 
 if __name__ == "__main__":
