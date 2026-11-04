@@ -1738,7 +1738,7 @@ pub(super) mod tests {
         let trusted: std::net::IpAddr = "10.0.0.1".parse().unwrap();
         let untrusted: std::net::IpAddr = "10.0.0.2".parse().unwrap();
         let config = RouteResolverConfig {
-            trusted_ingress_addresses: vec![trusted],
+            trusted_ingress_addresses: vec![ipnet::IpNet::from(trusted)],
             ..Default::default()
         };
         let cases = [

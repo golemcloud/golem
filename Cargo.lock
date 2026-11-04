@@ -4882,6 +4882,7 @@ dependencies = [
  "hyper-util",
  "include_dir",
  "indexmap 2.14.0",
+ "ipnet",
  "jsonschema",
  "libsqlite3-sys",
  "mimalloc",
@@ -5833,6 +5834,9 @@ name = "ipnet"
 version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "ipnetwork"
