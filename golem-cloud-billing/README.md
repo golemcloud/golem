@@ -161,6 +161,10 @@ billable overage that goes down, for example after a refund, sends nothing.
 
 Each event carries `units` (the increase in the unit of the meter), `micro_units` (the same
 increase as an integer) and `period` (`YYYY-MM`). The Polar meters sum `units`.
+
+A failed run, also one with a missing setting, logs one JSON line with the cause and exits with
+code 1.
+
 ## Configuration
 
 | Variable | Default | Meaning |
