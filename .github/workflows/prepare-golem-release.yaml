@@ -47,7 +47,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 20
       WASI_SDK_PATH: /opt/wasi-sdk
-      WASM_RQUICKJS_VERSION: '0.4.14'
+      WASM_RQUICKJS_VERSION: '0.4.15'
     steps:
       - uses: actions/checkout@v5
         with:

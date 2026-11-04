@@ -29,8 +29,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  # wasm-rquickjs PR #206 (native modules, dependencies, local shell lines) until 0.4.15
-  WASM_RQUICKJS_VERSION: "b61a3d4faaeccd60acf0c16efe445dc58dc31176"
+  WASM_RQUICKJS_VERSION: "0.4.15"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
