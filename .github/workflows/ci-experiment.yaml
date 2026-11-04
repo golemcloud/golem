@@ -1,0 +1,156 @@
+name: Main-only CI experiment
+
+on:
+  push:
+    branches: [ci/main-only-experiment]
+    paths:
+      - .github/workflows/ci-experiment.yaml
+      - .github/scripts/ci-experiment.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: main-only-ci-experiment
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARGO_BUILD_JOBS: 20
+      WASI_SDK_VERSION: '25'
+      WASI_SDK_PATH: /opt/wasi-sdk
+      WASM_RQUICKJS_VERSION: '0.4.13'
+      NPM_CONFIG_AUDIT: 'false'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Record allocation start and source
+        run: |
+          mkdir -p tmp/experiment-results
+          date +%s > tmp/experiment-results/allocation-start
+          git rev-parse HEAD > tmp/experiment-results/source-sha
+          lscpu > tmp/experiment-results/cpu.txt
+          free -h > tmp/experiment-results/memory.txt
+          df -h > tmp/experiment-results/disk.txt
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: wasm32-wasip1 wasm32-wasip2 wasm32-unknown-unknown
+          install-cargo-binstall: 'true'
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          node-version: '24'
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: sbt/setup-sbt@v1
+      - uses: hustcer/setup-moonbit@v1
+        with:
+          version: 0.10.11+6ff76a5f9
+          core-version: 0.10.11+6ff76a5f9
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sdks/go/golem/go.mod
+          cache: false
+      - uses: oven-sh/setup-bun@v2
+      - name: Install remaining tools without workspace caches
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qqy --no-install-recommends redis-server build-essential libcurl4-openssl-dev libssl-dev libexpat1-dev zlib1g-dev time
+          sudo systemctl stop redis-server
+          cargo binstall --force --locked cargo-test-r@2.2.5 wasm-tools@1.248.0 wit-bindgen-cli@0.40.0
+          curl -fsSL https://github.com/golangci/golangci-lint/releases/download/v2.13.2/golangci-lint-2.13.2-linux-amd64.tar.gz | tar -xz -C "$RUNNER_TEMP"
+          sudo install "$RUNNER_TEMP/golangci-lint-2.13.2-linux-amd64/golangci-lint" /usr/local/bin/
+          python3 -m pip install --user --break-system-packages PyYAML==6.0.3
+      - name: Verify complete ordinary-CI inventory
+        run: |
+          python3 .github/scripts/ci-experiment.py --inventory > tmp/experiment-results/inventory.json
+          { rustc -vV; cargo --version; node --version; go version; moon version; java -version; } > tmp/experiment-results/toolchains.txt 2>&1
+      - name: Cold single-worker full cycle
+        id: cold
+        continue-on-error: true
+        run: python3 -u .github/scripts/ci-experiment.py --cycle cold
+      - name: Warm single-worker full cycle
+        id: warm
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          rm -rf tmp/experiment-products tmp/test-components-wasm
+          python3 -u .github/scripts/ci-experiment.py --cycle warm
+      - name: Record allocation end
+        if: always()
+        run: |
+          date +%s > tmp/experiment-results/allocation-end
+          df -h > tmp/experiment-results/disk-final.txt
+      - name: Upload measurements and complete logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-experiment-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/experiment-results
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve failure status
+        if: steps.cold.outcome != 'success' || steps.warm.outcome != 'success'
+        run: exit 1
+
+  macos:
+    runs-on: blacksmith-6vcpu-macos-latest
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 4
+      RUST_MIN_STACK: '33554432'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-make: 'false'
+      - name: Cold and warm native APFS validation
+        run: |
+          mkdir -p tmp/apfs-experiment
+          status=0
+          for cycle in cold warm; do
+            start=$(date +%s)
+            result=0
+            cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor \
+              --features test-utils --lib --no-run --message-format=json-render-diagnostics \
+              > "tmp/apfs-experiment/${cycle}-cargo.jsonl" 2> "tmp/apfs-experiment/${cycle}-build.log" || result=$?
+            if [ "$result" -eq 0 ]; then
+              integration-tests/scripts/managed-filesystem/test-select-cargo-test-executables.py
+              python3 integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py \
+                "tmp/apfs-experiment/${cycle}-cargo.jsonl" "$PWD" lib > tmp/apfs-experiment/executable.tsv
+              IFS=$'\t' read -r target executable < tmp/apfs-experiment/executable.tsv
+              test "$target" = lib
+              bash integration-tests/scripts/apfs/run-native-tests.sh "$executable" \
+                :tag:native_apfs --include-ignored --test-threads 1 --report-time \
+                > "tmp/apfs-experiment/${cycle}-tests.log" 2>&1 || result=$?
+            fi
+            end=$(date +%s)
+            printf '{"cycle":"%s","seconds":%s,"exit_code":%s}\n' "$cycle" "$((end-start))" "$result" >> tmp/apfs-experiment/results.jsonl
+            if [ "$result" -ne 0 ]; then status=1; fi
+          done
+          exit "$status"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ci-experiment-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/apfs-experiment
+          if-no-files-found: error
+          retention-days: 14
