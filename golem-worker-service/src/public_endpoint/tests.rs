@@ -152,7 +152,7 @@ fn dispatcher_with(
         http_api_domains.clone(),
     ));
     let endpoint = PublicEndpoint::new(
-        TrustedIngress::new(&[INGRESS.parse::<IpAddr>().unwrap()]),
+        TrustedIngress::new(&[ipnet::IpNet::from(INGRESS.parse::<IpAddr>().unwrap())]),
         route_resolver.clone(),
         mcp_domains.clone(),
         custom_api(route_resolver),

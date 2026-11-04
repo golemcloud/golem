@@ -27,6 +27,7 @@ use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::http_server::HttpServerConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
+use ipnet::IpNet;
 use poem::web::websocket::WebSocketConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
@@ -675,9 +676,9 @@ pub struct RouteResolverConfig {
     pub router_cache_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub router_cache_eviction_period: Duration,
-    /// Direct peer addresses whose X-Forwarded-Proto and X-Forwarded-Host are authoritative.
+    /// Direct peer address ranges whose X-Forwarded-Proto and X-Forwarded-Host are authoritative.
     #[serde(default)]
-    pub trusted_ingress_addresses: Vec<IpAddr>,
+    pub trusted_ingress_addresses: Vec<IpNet>,
 }
 
 impl SafeDisplay for RouteResolverConfig {
@@ -1346,6 +1347,43 @@ mod tests {
 
         assert!(config.http_session.validate().is_ok());
         assert!(config.route_resolver.trusted_ingress_addresses.is_empty());
+    }
+
+    #[test]
+    fn trusted_ingress_addresses_are_cidr_ranges() {
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [route_resolver]
+                trusted_ingress_addresses = ["172.18.128.0/19", "fd00::/8"]
+                "#,
+            ))
+            .extract()
+            .expect("Failed to load config");
+
+        assert_eq!(
+            config.route_resolver.trusted_ingress_addresses,
+            vec![
+                "172.18.128.0/19".parse::<ipnet::IpNet>().unwrap(),
+                "fd00::/8".parse().unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn trusted_ingress_address_without_prefix_length_is_rejected() {
+        let result = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [route_resolver]
+                trusted_ingress_addresses = ["10.0.0.1"]
+                "#,
+            ))
+            .extract::<WorkerServiceConfig>();
+
+        assert!(result.is_err());
     }
 
     #[test]
