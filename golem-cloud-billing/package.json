@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@effect/platform-node": "4.1.2",
+    "@polar-sh/sdk": "1.0.2",
     "better-auth": "1.7.16",
     "effect": "4.1.2",
     "pg": "8.23.1"

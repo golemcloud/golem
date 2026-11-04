@@ -1,7 +1,8 @@
 # golem-cloud-billing
 
-The billing app of the hosted Golem Cloud. Users sign in with GitHub, see their plan, and (later)
-manage paid plans through Polar.sh. Self-hosted Golem does not use it.
+The billing app of the hosted Golem Cloud. Users sign in with GitHub, subscribe to the paid plan
+through Polar.sh, and manage the subscription in the customer portal of Polar. Self-hosted Golem
+does not use it.
 
 The app calls the HTTP API of the registry service, and reads three metering tables of the
 registry (see [Billable overage](#billable-overage)). It uses nothing else in Golem, and the
@@ -15,7 +16,10 @@ schema.
   registry client.
 - [Better Auth](https://better-auth.com) with the GitHub provider, mounted on the Effect router
   as described in its [Effect integration](https://better-auth.com/docs/integrations/effect).
-  The Polar.sh plugin of Better Auth plugs into the same handler.
+- The [Polar SDK](https://www.npmjs.com/package/@polar-sh/sdk) at API version `2026-10` for
+  checkouts, customer sessions and the webhook signature. The app does not use the Polar plugin of
+  Better Auth: the plugin links a Polar customer to the Better Auth user ID, and the app links it
+  to the Golem account ID, which the usage push also sends.
 - Server-rendered HTML with no client framework. `src/assets/app.js` only copies the CLI command.
 
 ## Identity bridge
@@ -44,9 +48,12 @@ advisory lock, so that replicas migrate one at a time.
 
 In the hosted deployment the app connects with its own role, which owns its schema. The registry
 tables hold API token secrets and agent secrets, so the role can read only the three metering
-tables of the registry. Everything else comes from two calls to the registry HTTP API, both made
-as the signed-in user: `POST /v1/login/oauth2` at sign-in, and `GET /v1/accounts/{account_id}`
-for the account page. An administrator creates the role once:
+tables of the registry. Everything else comes from the registry HTTP API. As the signed-in user,
+the app calls `POST /v1/login/oauth2` at sign-in and `GET /v1/accounts/{account_id}` for the
+account page. As the billing account, the webhooks call `GET /v1/accounts/{account_id}` and
+`PUT /v1/accounts/{account_id}/plan` (see [Subscriptions](#subscriptions)). The app also keeps
+two tables of its own: `polar_subscriptions` and `polar_webhook_deliveries`. An administrator
+creates the role once:
 
 ```sql
 CREATE ROLE golem_cloud_billing LOGIN PASSWORD '…' CONNECTION LIMIT 10;
@@ -63,6 +70,58 @@ database. A local database where the app connects as its owner works without any
 Better Auth reads the columns of every table in the database when the app starts. When a registry
 migration changes a table at the same moment, the read fails; the app tries it again up to five
 times.
+
+## Subscriptions
+
+A subscription of the Polar product `POLAR_PRODUCT_ID` moves the Golem account from
+`GOLEM_CLOUD_BILLING_FREE_PLAN_ID` to `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`. The Polar customer has
+the Golem account ID as its external ID.
+
+- **Checkout.** `POST /billing/checkout` creates a checkout session for the signed-in user and
+  redirects to it: the paid product, the Golem account ID as `external_customer_id`, the email and
+  the name of the user, and the IP address of the browser for the local currency. After the
+  payment Polar redirects to `/?checkout_id=...`, and the page shows that the plan is activating
+  until the webhook changes it.
+- **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
+  redirects to the customer portal of Polar: payment method, invoices, cancellation.
+- **Webhooks.** Polar delivers `subscription.*` events to `POST /api/auth/polar/webhooks`. The
+  handler verifies the Standard Webhooks signature with `POLAR_WEBHOOK_SECRET` (403 when it does
+  not match), skips a `webhook-id` that it handled before, and stores the subscription in
+  `polar_subscriptions`. A state never replaces a state with a later `modified_at`, so a late
+  delivery cannot undo a newer one. Then it sets the plan: the paid plan while the account has a
+  subscription in `active`, `trialing` or `past_due`, else the free plan. A subscription that is
+  canceled at the period end stays `active` until Polar revokes it. A failed payment
+  (`subscription.past_due`) logs `payment_failed` and does not change the plan. An account on any
+  other plan, for example an internal plan that an administrator gave it, keeps it.
+- **Order and retries.** An advisory lock per account serializes the webhooks of one account, also
+  across replicas. When the registry or the database fails, the handler answers 500 and Polar
+  delivers the webhook again. A 409 of the registry (the account changed between the read and the
+  write) makes the handler read the account again.
+
+The plan of a customer is not up to its owner: the registry refuses `set-plan` on the own account.
+The app changes plans with the token of a separate billing account
+(`GOLEM_CLOUD_BILLING_REGISTRY_TOKEN`). An administrator gives that account the two permissions
+once, with a permission share from the administrator account
+(`POST /v1/accounts/<administrator account ID>/permission-shares` with an administrator token):
+
+```json
+{
+  "targetAccountEmail": "<email of the billing account>",
+  "name": "cloud-billing-set-plan",
+  "data": {
+    "lowerPositive": [
+      "account(*) @ <email of the billing account> : view :",
+      "account(*) @ <email of the billing account> : set-plan :"
+    ],
+    "lowerNegative": [],
+    "upperPositive": [],
+    "upperNegative": []
+  }
+}
+```
+
+`set-plan` needs `view`, because the registry reads the account before it changes the plan. The
+token of the billing account can change plans and read accounts, and nothing else.
 
 ## Billable overage
 
@@ -120,8 +179,12 @@ increase as an integer) and `period` (`YYYY-MM`). The Polar meters sum `units`.
 | `BETTER_AUTH_URL` | | Public origin of the app, for example `https://billing.golem.cloud`. |
 | `BETTER_AUTH_SECRET` | | At least 32 characters. Signs cookies and encrypts tokens. |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | | GitHub OAuth app with the callback URL `<BETTER_AUTH_URL>/api/auth/callback/github`. |
-| `POLAR_API_URL` | | `push-usage` only: `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
-| `POLAR_ACCESS_TOKEN` | | `push-usage` only: an organization access token of Polar that can ingest events. |
+| `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view` and `set-plan` on every account through a permission share (see [Subscriptions](#subscriptions)). |
+| `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID` | | The plans that a subscription switches between. |
+| `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
+| `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` and `customer_sessions:write`; `push-usage` needs `events:write`. Each gets its own token. |
+| `POLAR_PRODUCT_ID` | | The Polar product of the paid plan. |
+| `POLAR_WEBHOOK_SECRET` | | The secret that Polar signs the webhooks with (`whsec_...`). |
 
 ## Endpoints
 
@@ -129,6 +192,8 @@ increase as an integer) and `period` (`YYYY-MM`). The Polar meters sum `units`.
 | --- | --- |
 | `GET /` | Landing page: the sign-in form, or the plan, the account and the CLI command. |
 | `POST /sign-in/github`, `POST /sign-out` | Form targets of the landing page. |
+| `POST /billing/checkout`, `POST /billing/portal` | Form targets of the plan: redirect to the checkout or the customer portal of Polar. |
+| `POST /api/auth/polar/webhooks` | The webhooks of Polar (see [Subscriptions](#subscriptions)). |
 | `GET /api/auth/callback/github` | The GitHub OAuth callback of Better Auth. The other Better Auth endpoints are not routed; the pages call them on the server. |
 | `GET /healthz` | Liveness. |
 | `GET /readyz` | Readiness: returns 503 when the database is unreachable. |

@@ -1,4 +1,5 @@
 import type { Account } from "./Registry.ts"
+import type { Subscription } from "./Subscriptions.ts"
 
 /** HTML that `html` inserts as it is. */
 export class SafeHtml {
@@ -119,12 +120,79 @@ export const signedOutPage = (options: { readonly error: string | undefined }) =
       </section>`
   })
 
+/**
+ * The plan of the account: one of the two plans that a subscription switches between, another
+ * plan that an administrator gave the account, or `unknown` when the registry call failed.
+ */
+export type PlanState = "free" | "paid" | "other" | "unknown"
+
 export interface SignedInPageOptions {
   readonly email: string
   readonly golemAccountId: string
   /** The account as the registry returns it; `undefined` when the registry call failed. */
   readonly account: Account | undefined
+  readonly plan: PlanState
+  /** The subscription of the paid product that changed last, if the account had one. */
+  readonly subscription: Subscription | undefined
+  /** Polar has redirected back after a payment, and the plan has not changed yet. */
+  readonly checkoutPending: boolean
   readonly cliCommand: string
+}
+
+const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "UTC" })
+
+const checkoutForm = html`<form method="post" action="/billing/checkout">
+            <button type="submit" class="btn btn-primary">Upgrade to Paid</button>
+          </form>`
+
+const portalForm = (label: string) => html`<form method="post" action="/billing/portal">
+            <button type="submit" class="btn btn-secondary">${label}</button>
+          </form>`
+
+const renewal = (subscription: Subscription | undefined) => {
+  if (subscription?.currentPeriodEnd === undefined) return null
+  const date = longDate.format(subscription.currentPeriodEnd)
+  return subscription.cancelAtPeriodEnd
+    ? html`<p class="lead">Your subscription ends on ${date}. The account moves to Free then.</p>`
+    : html`<p class="lead">Your subscription renews on ${date}.</p>`
+}
+
+const planHero = (options: SignedInPageOptions) => {
+  if (options.checkoutPending) {
+    return html`<span class="eyebrow">Your plan</span>
+        <h1>Activating Paid</h1>
+        <p class="lead">Polar has the payment. Your plan changes to Paid within a minute; reload the page to see it.</p>`
+  }
+  switch (options.plan) {
+    case "paid":
+      return html`<span class="eyebrow">Your plan</span>
+        <h1>You're on Paid</h1>
+        ${renewal(options.subscription)}
+        ${
+          options.subscription?.status === "past_due"
+            ? html`<p class="alert" role="alert">The last payment failed. Update the payment method in Manage billing to keep the Paid plan.</p>`
+            : null
+        }
+        <div class="actions">
+          ${portalForm("Manage billing")}
+        </div>`
+    case "free":
+      return html`<span class="eyebrow">Your plan</span>
+        <h1>You're on Free</h1>
+        <p class="lead">Paid has larger monthly allowances. Polar handles the payment.</p>
+        <div class="actions">
+          ${checkoutForm}
+          ${options.subscription === undefined ? null : portalForm("Billing history")}
+        </div>`
+    case "other":
+      return html`<span class="eyebrow">Your plan</span>
+        <h1>You're on a custom plan</h1>
+        <p class="lead">Golem gave this account its plan. Contact Golem to change it.</p>`
+    case "unknown":
+      return html`<span class="eyebrow">Your plan</span>
+        <h1>Plans and billing</h1>
+        <p class="lead">Golem did not return the plan of the account. Reload the page to try again.</p>`
+  }
 }
 
 export const signedInPage = (options: SignedInPageOptions) =>
@@ -135,15 +203,7 @@ export const signedInPage = (options: SignedInPageOptions) =>
           <form method="post" action="/sign-out"><button type="submit" class="btn btn-secondary btn-small">Sign out</button></form>
         </div>`,
     body: html`      <section class="hero">
-        <span class="eyebrow">Your plan</span>
-        <h1>You're on Free</h1>
-        <p class="lead">Paid plans are not available yet.</p>
-        <div class="actions">
-          <span class="tooltip-anchor" tabindex="0" aria-describedby="upgrade-tooltip">
-            <button type="button" class="btn btn-primary" disabled>Upgrade to Paid</button>
-            <span class="tooltip" role="tooltip" id="upgrade-tooltip">Coming soon</span>
-          </span>
-        </div>
+        ${planHero(options)}
       </section>
       <div class="grid">
         <section class="card" aria-labelledby="account-heading">
