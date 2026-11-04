@@ -1,7 +1,9 @@
 import { createHmac, randomUUID } from "node:crypto"
+import { Effect } from "effect"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
+import * as Settlement from "../src/Settlement.ts"
 import {
   baseUrl,
   CookieJar,
@@ -10,6 +12,8 @@ import {
   freePlanId,
   internalPlanId,
   makeApp,
+  makeServices,
+  paidCappedPlanId,
   paidPlanId,
   polarProductId,
   polarWebToken,
@@ -25,18 +29,21 @@ describe("Polar billing", () => {
   let config: BillingConfigShape
   let pool: pg.Pool
   let app: ReturnType<typeof makeApp>
+  let services: ReturnType<typeof makeServices>
   let upstreams: FakeUpstreams
 
   beforeAll(() => {
     config = testConfig()
     pool = queryPool(config)
     app = makeApp(config)
+    services = makeServices(config)
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => upstreams.fetch(input, init))
   })
 
   afterAll(async () => {
     vi.unstubAllGlobals()
     await app.dispose()
+    await services.dispose()
     await dropSchema(pool, config.db.schema)
     await pool.end()
   })
@@ -96,6 +103,13 @@ describe("Polar billing", () => {
   }
 
   const page = async (jar: CookieJar, path = "/") => (await request(app.handler, jar, "GET", path)).text()
+
+  /** One run of the sweep of the web app at `now`. */
+  const sweep = (now: Date) => services.runPromise(Effect.flatMap(Settlement.make, (settlement) => settlement.sweep(now)))
+
+  const MINUTE = 60 * 1000
+  const DAY = 24 * 60 * MINUTE
+  const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "UTC" })
 
   describe("checkout and customer portal", () => {
     it("starts a checkout of the paid product for the Golem account", async () => {
@@ -212,17 +226,41 @@ describe("Polar billing", () => {
       expect(upstreams.planChanges()).toHaveLength(1)
     })
 
-    it("keeps the paid plan until the period ends when the subscription is canceled", async () => {
+    it("keeps the paid plan when the subscription is canceled at the end of a later period", async () => {
       const { jar, accountId } = await signedIn()
+      const end = new Date(Date.now() + 30 * DAY)
 
-      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.active", subscription(accountId, { current_period_end: end.toISOString() }))
       await deliver(
         "subscription.canceled",
-        subscription(accountId, { cancel_at_period_end: true, modified_at: "2026-11-05T10:00:00Z" })
+        subscription(accountId, {
+          cancel_at_period_end: true,
+          current_period_end: end.toISOString(),
+          modified_at: "2026-11-05T10:00:00Z"
+        })
       )
 
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
-      expect(await page(jar)).toContain("ends on December 4, 2026")
+      expect(await page(jar)).toContain(`ends on ${longDate.format(end)}`)
+    })
+
+    it("moves the account to the capped plan when its subscription ends within the settlement margin", async () => {
+      const { jar, accountId } = await signedIn()
+      const end = new Date(Date.now() + DAY)
+      await deliver(
+        "subscription.canceled",
+        subscription(accountId, { cancel_at_period_end: true, current_period_end: end.toISOString() })
+      )
+
+      await sweep(new Date(end.getTime() - Settlement.SETTLEMENT_MARGIN_MS - MINUTE))
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+
+      await sweep(new Date(end.getTime() - Settlement.SETTLEMENT_MARGIN_MS + MINUTE))
+      expect(upstreams.planOf(accountId).planId).toBe(paidCappedPlanId)
+      expect(await page(jar)).toContain("Paid overage is off")
+
+      await sweep(new Date(end.getTime() - MINUTE))
+      expect(upstreams.planChanges()).toHaveLength(2)
     })
 
     it("moves the account back to the free plan when the subscription is revoked", async () => {
@@ -244,7 +282,7 @@ describe("Polar billing", () => {
       expect(upstreams.planChanges()).toEqual([])
     })
 
-    it("keeps the plan when a payment fails, and shows it on the page", async () => {
+    it("caps the paid plan while a payment fails, and lifts the cap after the payment", async () => {
       const { jar, accountId } = await signedIn()
 
       await deliver("subscription.active", subscription(accountId))
@@ -254,8 +292,22 @@ describe("Polar billing", () => {
       )
 
       expect(response.status).toBe(200)
+      expect(upstreams.planOf(accountId).planId).toBe(paidCappedPlanId)
+      const html = await page(jar)
+      expect(html).toContain("You're on Paid")
+      expect(html).toContain("The last payment failed")
+      expect(html).toContain("Paid overage is off")
+
+      await deliver("subscription.active", subscription(accountId, { modified_at: "2026-12-05T10:00:00Z" }))
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
-      expect(await page(jar)).toContain("The last payment failed")
+    })
+
+    it("caps the paid plan during a trial, which Polar does not bill usage for", async () => {
+      const accountId = randomUUID()
+
+      await deliver("subscription.created", subscription(accountId, { status: "trialing" }))
+
+      expect(upstreams.planOf(accountId).planId).toBe(paidCappedPlanId)
     })
 
     it("leaves a plan that an administrator gave the account", async () => {

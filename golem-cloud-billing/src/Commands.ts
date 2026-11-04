@@ -23,7 +23,7 @@ const messageOf = (cause: Cause.Cause<unknown>): string => {
 export const pushUsage = Effect.gen(function* () {
   const summary = yield* UsagePush.pushUsage(new Date())
   yield* Effect.logInfo("Pushed the billable overage to Polar").pipe(
-    Effect.annotateLogs({ created: summary.created, sent: summary.sent })
+    Effect.annotateLogs({ created: summary.created, sent: summary.sent, held: summary.held })
   )
 }).pipe(
   Effect.provide(

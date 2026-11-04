@@ -4,11 +4,11 @@ import { Auth } from "./Auth.ts"
 import { Database, withAdvisoryLock } from "./Database.ts"
 
 /**
- * The statuses in which a subscription keeps its account on the paid plan. A subscription that
- * is canceled at the period end stays `active` until the period ends; a failed payment makes it
- * `past_due`, which does not change the plan.
+ * The statuses in which Polar bills the usage events of a subscription (`billable` of a Polar
+ * subscription). A subscription that is canceled at the period end stays `active` until the
+ * period ends; a failed payment makes it `past_due`.
  */
-export const paidStatuses: ReadonlyArray<string> = ["active", "trialing", "past_due"]
+export const billableStatuses: ReadonlyArray<string> = ["active", "trialing", "past_due"]
 
 /** The state of a Polar subscription, as the last webhook for it reported it. */
 export interface Subscription {
@@ -38,11 +38,20 @@ export interface SubscriptionsShape {
    * order, so an older state never replaces a newer one.
    */
   readonly record: (subscription: Subscription) => Effect.Effect<void, SubscriptionsError>
-  /** Whether the account has a subscription of the product in one of `paidStatuses`. */
-  readonly hasPaidSubscription: (
+  /** The subscriptions of the product that the account has, in every status. */
+  readonly ofAccount: (
     accountId: string,
     productId: string
-  ) => Effect.Effect<boolean, SubscriptionsError>
+  ) => Effect.Effect<ReadonlyArray<Subscription>, SubscriptionsError>
+  /**
+   * The accounts with a billable subscription of the product that is canceled at the period end,
+   * with the period end between `from` and `to`.
+   */
+  readonly ending: (
+    productId: string,
+    from: Date,
+    to: Date
+  ) => Effect.Effect<ReadonlyArray<string>, SubscriptionsError>
   /** The subscription of the product that changed last, for the plan page. */
   readonly latest: (
     accountId: string,
@@ -65,7 +74,11 @@ export class Subscriptions extends Context.Service<Subscriptions, SubscriptionsS
   "golem-cloud-billing/Subscriptions"
 ) {}
 
-const tables = `
+/**
+ * The tables of the subscriptions. The usage push also creates them, because it reads
+ * `polar_subscriptions` and can run before the web app.
+ */
+export const tables = `
   CREATE TABLE IF NOT EXISTS polar_subscriptions (
     subscription_id TEXT PRIMARY KEY,
     account_id UUID NOT NULL,
@@ -148,14 +161,23 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
         ]
       ).pipe(Effect.asVoid)
 
-    const hasPaidSubscription = (accountId: string, productId: string) =>
-      query<{ paid: boolean }>(
-        `SELECT EXISTS (
-           SELECT 1 FROM polar_subscriptions
-            WHERE account_id = $1 AND product_id = $2 AND status = ANY($3)
-         ) AS paid`,
-        [accountId, productId, paidStatuses]
-      ).pipe(Effect.map((result) => result.rows[0]?.paid === true))
+    const ofAccount = (accountId: string, productId: string) =>
+      query<SubscriptionRow>(
+        `SELECT subscription_id, account_id::text AS account_id, product_id, status, current_period_end,
+                cancel_at_period_end, modified_at
+           FROM polar_subscriptions
+          WHERE account_id = $1 AND product_id = $2`,
+        [accountId, productId]
+      ).pipe(Effect.map((result) => result.rows.map(fromRow)))
+
+    const ending = (productId: string, from: Date, to: Date) =>
+      query<{ account_id: string }>(
+        `SELECT DISTINCT account_id::text AS account_id
+           FROM polar_subscriptions
+          WHERE product_id = $1 AND status = ANY($2) AND cancel_at_period_end
+            AND current_period_end BETWEEN $3 AND $4`,
+        [productId, billableStatuses, from, to]
+      ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
 
     const latest = (accountId: string, productId: string) =>
       query<SubscriptionRow>(
@@ -208,7 +230,7 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
           })
       )
 
-    return { record, hasPaidSubscription, latest, isDelivered, markDelivered, withAccountLock }
+    return { record, ofAccount, ending, latest, isDelivered, markDelivered, withAccountLock }
   })
 )
 

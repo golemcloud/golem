@@ -1,7 +1,8 @@
 import { webhooks } from "@polar-sh/sdk/2026-10"
 import { Data, Effect, Redacted } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
-import { Registry, type RegistryError } from "./Registry.ts"
+import type { RegistryError } from "./Registry.ts"
+import * as Settlement from "./Settlement.ts"
 import { type Subscription, Subscriptions, type SubscriptionsError } from "./Subscriptions.ts"
 
 type SubscriptionPayload = Extract<webhooks.WebhookPayload, { readonly type: `subscription.${string}` }>
@@ -43,13 +44,13 @@ const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): S
  *
  * It verifies the Standard Webhooks signature, skips a `webhook-id` that it handled before, and
  * for a `subscription.*` event of the paid product stores the subscription and moves the account
- * between the free and the paid plan. An account on any other plan keeps it. A failed registry
- * or database call answers 500, so Polar delivers the webhook again.
+ * to the plan of its subscriptions (`Settlement.planFor`). An account on any other plan keeps it.
+ * A failed registry or database call answers 500, so Polar delivers the webhook again.
  */
 export const makeHandler = Effect.gen(function* () {
   const config = yield* BillingConfig
-  const registry = yield* Registry
   const subscriptions = yield* Subscriptions
+  const settlement = yield* Settlement.make
   const secret = Redacted.value(config.polar.webhookSecret)
 
   const verify = (body: string, headers: Readonly<Record<string, string>>) =>
@@ -65,28 +66,6 @@ export const makeHandler = Effect.gen(function* () {
         return new WebhookRejected({ status: 400, reason: "the body is not a webhook payload" })
       }
     })
-
-  /** Moves the account to `target` when it is on the free or the paid plan. */
-  const reconcilePlan = (accountId: string, target: string) =>
-    Effect.gen(function* () {
-      const account = yield* registry.getAccount(config.registryBillingToken, accountId)
-      if (account.planId === target) {
-        return
-      }
-      if (account.planId !== config.plans.free && account.planId !== config.plans.paid) {
-        yield* Effect.logWarning("The account has a plan that subscriptions do not change").pipe(
-          Effect.annotateLogs({ golemAccountId: accountId, planId: account.planId })
-        )
-        return
-      }
-      yield* registry.setAccountPlan(config.registryBillingToken, account, target)
-      yield* Effect.logInfo("Changed the plan of the account").pipe(
-        Effect.annotateLogs({ golemAccountId: accountId, fromPlanId: account.planId, toPlanId: target })
-      )
-    }).pipe(
-      // 409: the account changed between the read and the write; read it again.
-      Effect.retry({ times: 3, while: (error: RegistryError) => error.status === 409 })
-    )
 
   const handleSubscription = (
     payload: SubscriptionPayload
@@ -112,8 +91,7 @@ export const makeHandler = Effect.gen(function* () {
             Effect.annotateLogs({ event: "payment_failed", golemAccountId: accountId, subscriptionId: data.id })
           )
         }
-        const paid = yield* subscriptions.hasPaidSubscription(accountId, config.polar.productId)
-        yield* reconcilePlan(accountId, paid ? config.plans.paid : config.plans.free)
+        yield* settlement.reconcile(accountId, new Date())
       })
     )
   }

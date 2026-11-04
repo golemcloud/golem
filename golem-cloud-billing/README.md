@@ -73,9 +73,19 @@ times.
 
 ## Subscriptions
 
-A subscription of the Polar product `POLAR_PRODUCT_ID` moves the Golem account from
-`GOLEM_CLOUD_BILLING_FREE_PLAN_ID` to `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`. The Polar customer has
-the Golem account ID as its external ID.
+A subscription of the Polar product `POLAR_PRODUCT_ID` moves the Golem account between three
+plans. The Polar customer has the Golem account ID as its external ID.
+
+| Plan | Variable | Overage | When |
+| --- | --- | --- | --- |
+| free | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID` | no | no billable subscription |
+| paid | `GOLEM_CLOUD_BILLING_PAID_PLAN_ID` | yes | an `active` subscription that does not end within 15 minutes |
+| paid, capped | `GOLEM_CLOUD_BILLING_PAID_CAPPED_PLAN_ID` | no | a `trialing` or `past_due` subscription, or one that ends within 15 minutes |
+
+The capped plan has the monthly amounts of the paid plan and `overage_eligible: false`, so the
+registry sets an account on it to `hardLimit`. Only the owner can turn paid overage on again
+(`PUT /v1/accounts/{account_id}/monthly-usage-mode`), also after the account is back on the paid
+plan.
 
 - **Checkout.** `POST /billing/checkout` creates a checkout session for the signed-in user and
   redirects to it: the paid product, the Golem account ID as `external_customer_id`, the email and
@@ -88,13 +98,14 @@ the Golem account ID as its external ID.
   handler verifies the Standard Webhooks signature with `POLAR_WEBHOOK_SECRET` (403 when it does
   not match), skips a `webhook-id` that it handled before, and stores the subscription in
   `polar_subscriptions`. A state never replaces a state with a later `modified_at`, so a late
-  delivery cannot undo a newer one. Then it sets the plan: the paid plan while the account has a
-  subscription in `active`, `trialing` or `past_due`, else the free plan. A subscription that is
-  canceled at the period end stays `active` until Polar revokes it. A failed payment
-  (`subscription.past_due`) logs `payment_failed` and does not change the plan. An account on any
-  other plan, for example an internal plan that an administrator gave it, keeps it.
-- **Order and retries.** An advisory lock per account serializes the webhooks of one account, also
-  across replicas. When the registry or the database fails, the handler answers 500 and Polar
+  delivery cannot undo a newer one. Then it sets the plan from the table above. A failed payment
+  (`subscription.past_due`) also logs `payment_failed`. An account on any other plan, for example
+  an internal plan that an administrator gave it, keeps it.
+- **Sweep.** A subscription that is canceled at the period end stays `active` until Polar revokes
+  it. Every minute, each replica of the web app moves the accounts whose subscription ends within
+  15 minutes to the capped plan.
+- **Order and retries.** An advisory lock per account serializes the webhooks and the sweep of one
+  account, also across replicas. When the registry or the database fails, the handler answers 500 and Polar
   delivers the webhook again. A 409 of the registry (the account changed between the read and the
   write) makes the handler read the account again.
 
@@ -123,11 +134,33 @@ once, with a permission share from the administrator account
 `set-plan` needs `view`, because the registry reads the account before it changes the plan. The
 token of the billing account can change plans and read accounts, and nothing else.
 
+### Settlement
+
+Polar bills a usage event only if the customer has a billable subscription (`active`, `trialing`
+or `past_due`) when Polar processes the event. Polar accepts a later event and does not bill it.
+Polar also does not bill usage during a trial, and invoices the usage of a `past_due`
+subscription only after the payment. The plans above keep the paid overage inside the time that
+Polar bills:
+
+- **Cancellation.** The account loses paid overage 15 minutes before the scheduled end. The
+  executors report usage every minute and the usage push runs every 10 minutes, so the push sends
+  the last paid overage before the end.
+- **Renewal.** Overage that reaches Polar after the period ends goes on the next invoice, at the
+  same prices.
+- **Failed payment and trial.** The account has no paid overage while its subscription is
+  `past_due` or `trialing`.
+- **Product change.** The app has one paid product, so a subscription does not change its
+  product. Polar invoices the usage of the old product at the change; a second product needs a
+  push before that change.
+
+The usage push does not send an event that Polar would not bill (see
+[Billable overage](#billable-overage)).
+
 ## Billable overage
 
 `node main.mjs push-usage` sends the billable overage to the meters of Polar once and exits, with
-a nonzero exit code when it fails. A CronJob runs it once a day, shortly after midnight UTC, so the
-run on the first day of a month sends the rest of the closed month. It needs only the
+a nonzero exit code when it fails. A CronJob runs it every 10 minutes; the 15 minutes of
+[Settlement](#settlement) need an interval of at most 10 minutes. It needs only the
 `GOLEM__DB__*` variables and the Polar variables.
 
 The billable overage of an account and month is the usage that a policy revision in
@@ -151,6 +184,12 @@ in the amount that it reaches. A run records its events first and then sends eve
 not sent yet. Polar skips an event whose `external_id` it has
 already, so after a failed send the next run sends the same events again and nothing twice. A
 billable overage that goes down, for example after a refund, sends nothing.
+
+Before it sends, a run holds the unsent events of each account without a billable subscription in
+`polar_subscriptions`, or with a subscription past its scheduled end. Polar would accept them and
+not bill them. A held event is never sent: the run logs the warning `unbilled_usage` with the
+account, the meter and the amount, and `usage_events` keeps the event with `held_at`. The usage
+of an account on an internal plan with overage is held in the same way.
 
 | Event name | Unit |
 | --- | --- |
@@ -186,7 +225,7 @@ code 1.
 | `BETTER_AUTH_SECRET` | | At least 32 characters. Signs cookies and encrypts tokens. |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | | GitHub OAuth app with the callback URL `<BETTER_AUTH_URL>/api/auth/callback/github`. |
 | `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view` and `set-plan` on every account through a permission share (see [Subscriptions](#subscriptions)). |
-| `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID` | | The plans that a subscription switches between. |
+| `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_CAPPED_PLAN_ID` | | The plans that a subscription switches between (see [Subscriptions](#subscriptions)). |
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
 | `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` and `customer_sessions:write`; `push-usage` needs `events:write`. Each gets its own token. |
 | `POLAR_PRODUCT_ID` | | The Polar product of the paid plan. |
