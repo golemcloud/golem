@@ -71,7 +71,9 @@ Every peer in a listed range can then set the public origin, and every request f
 such a peer must carry both headers, or it fails. So allow only the ingress pods to
 connect to the custom request port and the MCP port, with a network policy whose
 ingress rule for ports 9006 and 9007 selects only the ingress proxy pods, for
-example a Kubernetes `NetworkPolicy` or a `CiliumNetworkPolicy`.
+example a Kubernetes `NetworkPolicy` or a `CiliumNetworkPolicy`. For the single
+`golem` binary with `router.management_host`, restrict its router port (default
+9881) in the same way.
 
 The setting applies to the custom request port, the MCP port and, in the single
 `golem` binary, the host routing of `router.management_host`.
