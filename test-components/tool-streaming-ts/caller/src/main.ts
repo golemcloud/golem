@@ -87,6 +87,24 @@ async function childProcessToolEdgeCases(): Promise<string> {
   } finally {
     process.stdout.write = write;
   }
+  // Exercise the unmodified runtime stdout and stderr sinks, not the byte
+  // recorder above. The executor asserts the emitted text in the agent's log.
+  const utf8 = spawnSync('streaming', ['dual-reconstruct', 'utf8-terminals'], {
+    stdio: ['ignore', 'inherit', 'inherit'],
+    maxBuffer: 0,
+  });
+  if (utf8.error || utf8.status !== 0) {
+    throw new Error(`Inherited UTF-8 output failed: ${utf8.error}`);
+  }
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('streaming', ['dual-reconstruct', 'utf8-terminals'], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    child.on('error', reject);
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`Async inherited UTF-8 output failed: ${code}`)),
+    );
+  });
   const overflow = await new Promise<string>((resolve) => {
     execFile('streaming', ['produce', '64', '64'], { maxBuffer: 1024 }, (error) =>
       resolve(String((error as { code?: string } | null)?.code)),

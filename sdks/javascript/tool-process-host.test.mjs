@@ -167,30 +167,157 @@ test("synchronous inherited chunks reach the parent before collection finishes w
   assert.equal(received, 65 * chunk.length);
 });
 
-test("synchronous inherited output refuses a destination that needs asynchronous backpressure", () => {
-  const f = fixture();
-  let writes = 0;
-  const backend = createToolProcessBackend(f.host, {
-    env: {},
-    cwd: () => "/workspace",
-    stdout: {
-      write() {
-        writes++;
-        return false;
-      },
-    },
-  });
-  f.native.collectSync = (_process, _timeout, stdout) => {
-    assert.equal(stdout(Uint8Array.of(7)), false);
-    return { ...f.terminal, stdout: { bytes: [], failure: { tag: "failed" } } };
+test("sync inherit preserves split UTF-8 and raw bytes on both channels, including EOF tails", () => {
+  const inputs = [
+    Buffer.from("A¢€😀Z"),
+    Buffer.from([0xff, 0xc0, 0x80, 0xe0, 0x80, 0xf5, 0x80, 0x00, 0xe2, 0x82]),
+  ];
+  for (const input of inputs) {
+    // Every two-chunk split, plus one byte at a time (including multi-chunk
+    // code points). Expected decoding comes from Node over the whole input.
+    const partitions = Array.from({ length: input.length + 1 }, (_, index) => [
+      input.subarray(0, index),
+      input.subarray(index),
+    ]);
+    partitions.push([...input].map((byte) => Buffer.from([byte])));
+    for (const chunks of partitions) {
+      const f = fixture();
+      const raw = { stdout: [], stderr: [] };
+      const text = { stdout: [], stderr: [] };
+      const runtime = { env: {}, cwd: () => "/workspace" };
+      for (const channel of ["stdout", "stderr"]) {
+        runtime[channel] = {
+          write(bytes) {
+            raw[channel].push(Buffer.from(bytes));
+            // The released runtime's default stdio sink coerces each write.
+            text[channel].push(String(bytes));
+            return true;
+          },
+        };
+      }
+      f.native.collectSync = (_process, _timeout, stdout, stderr) => {
+        let delivered = 0;
+        for (const chunk of chunks) {
+          delivered += chunk.length;
+          assert.equal(stdout(chunk), true);
+          assert.equal(stderr(chunk), true);
+          for (const channel of ["stdout", "stderr"]) {
+            const received = Buffer.concat(raw[channel]).length;
+            assert.ok(
+              delivered - received <= 3,
+              "only an incomplete UTF-8 suffix may be held",
+            );
+          }
+        }
+        return { ...f.terminal, stdout: { bytes: [] }, stderr: { bytes: [] } };
+      };
+      const result = createToolProcessBackend(f.host, runtime).spawnSync(
+        "streaming",
+        [],
+        {
+          stdio: ["ignore", "inherit", "inherit"],
+          maxBuffer: 0,
+        },
+      );
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 7);
+      for (const channel of ["stdout", "stderr"]) {
+        assert.deepEqual(Buffer.concat(raw[channel]), input);
+        assert.equal(text[channel].join(""), input.toString("utf8"));
+      }
+    }
+  }
+});
+
+test("async inherit preserves split UTF-8 and joins both EOF writes before close", async () => {
+  const inputs = {
+    stdout: Buffer.concat([Buffer.from("A¢€😀Z"), Buffer.from([0xff, 0xe2])]),
+    stderr: Buffer.concat([
+      Buffer.from("Bé🦀Y"),
+      Buffer.from([0xc0, 0xf0, 0x9f]),
+    ]),
   };
-  const result = backend.spawnSync("streaming", [], {
-    stdio: ["ignore", "inherit", "pipe"],
-  });
-  assert.equal(result.error.code, "ENOTSUP");
-  assert.equal(result.status, null);
-  assert.deepEqual([...result.stderr], [128]);
-  assert.equal(writes, 1);
+  const splits = [
+    ...Array(
+      Math.max(...Object.values(inputs).map((b) => b.length)) + 1,
+    ).keys(),
+    "bytes",
+  ];
+  for (const split of splits) {
+    const f = fixture();
+    const chunks = {};
+    const raw = { stdout: [], stderr: [] };
+    const text = { stdout: "", stderr: "" };
+    const runtime = { env: {}, cwd: () => "/workspace" };
+    for (const channel of ["stdout", "stderr"]) {
+      const bytes = inputs[channel];
+      chunks[channel] =
+        split === "bytes"
+          ? [...bytes].map((byte) => Buffer.from([byte]))
+          : [bytes.subarray(0, split), bytes.subarray(split)];
+      f.terminal[channel].bytes = [];
+      runtime[channel] = {
+        write(bytes, callback) {
+          setImmediate(() => {
+            raw[channel].push(Buffer.from(bytes));
+            text[channel] += String(bytes);
+            callback();
+          });
+          return false;
+        },
+      };
+    }
+    f.native.readOutput = async (output) => chunks[output.channel].shift();
+    const child = createToolProcessBackend(f.host, runtime).spawn(
+      "streaming",
+      [],
+      {
+        stdio: ["pipe", "inherit", "inherit"],
+      },
+    );
+    const done = once(child, "close");
+    child.stdin.end();
+    assert.deepEqual(await done, [7, null]);
+    for (const channel of ["stdout", "stderr"]) {
+      assert.deepEqual(Buffer.concat(raw[channel]), inputs[channel]);
+      assert.equal(text[channel], inputs[channel].toString("utf8"));
+    }
+  }
+});
+
+test("synchronous inherited output refuses asynchronous backpressure, including at EOF", () => {
+  for (const byte of [7, 0xe2]) {
+    const f = fixture();
+    let writes = 0;
+    const backend = createToolProcessBackend(f.host, {
+      env: {},
+      cwd: () => "/workspace",
+      stdout: {
+        write() {
+          writes++;
+          return false;
+        },
+      },
+    });
+    f.native.collectSync = (_process, _timeout, stdout) => {
+      const accepted = stdout(Uint8Array.of(byte));
+      assert.equal(accepted, byte === 0xe2);
+      return {
+        ...f.terminal,
+        stdout: {
+          bytes: [],
+          failure: accepted ? undefined : { tag: "failed" },
+        },
+      };
+    };
+    const result = backend.spawnSync("streaming", [], {
+      stdio: ["ignore", "inherit", "pipe"],
+    });
+    assert.equal(result.error.code, "ENOTSUP");
+    assert.equal(result.status, null);
+    assert.deepEqual([...result.stderr], [128]);
+    assert.equal(writes, 1);
+  }
 });
 
 test("native async collection and stdin writes make independent progress", async () => {

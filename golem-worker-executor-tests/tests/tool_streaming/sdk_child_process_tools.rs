@@ -7,9 +7,11 @@
 //     http://license.golem.cloud/LICENSE
 
 use super::*;
+use golem_common::model::AgentId;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
+use golem_common::model::oplog::LogLevel;
 use golem_service_base::model::agent_secret::AgentSecret;
 use test_r::{test, timeout};
 
@@ -117,6 +119,30 @@ async fn sdk_templates_dispatch_child_processes_to_bound_tools(
                 "echo=0:ping;overflow=ERR_CHILD_PROCESS_STDIO_MAXBUFFER;\
                  abort=error:AbortError,exit:null:SIGTERM;disabled=error"
             );
+            let worker = AgentId {
+                component_id: caller.id,
+                agent_id: agent_id.to_string(),
+            };
+            let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            for (level, expected) in [
+                (LogLevel::Stdout, "stdout:¢€😀�"),
+                (LogLevel::Stderr, "stderr:é🦀�"),
+            ] {
+                let text: String = entries
+                    .iter()
+                    .filter_map(|entry| match &entry.entry {
+                        PublicOplogEntry::Log(log) if log.level == level => {
+                            Some(log.message.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    text,
+                    expected.repeat(2),
+                    "unmodified parent stdio sink: {level:?}"
+                );
+            }
         }
     }
 

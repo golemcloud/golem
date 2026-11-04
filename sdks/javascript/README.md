@@ -25,6 +25,12 @@ holds the tool's output, and `spawn` and inherited channels have no buffer limit
 `maxBuffer` applies to buffered results only: `exec` and `execFile` check it on
 the output they collect, and `spawnSync` pipes cap at it with `ENOBUFS`.
 Synchronous inherited output is forwarded chunk by chunk without collecting it.
+Both synchronous and asynchronous forwarding retain at most three bytes per
+channel to keep a UTF-8 sequence in one parent write, and flush an incomplete
+suffix at EOF. Bytes are not decoded or re-encoded by the adapter: redirected
+byte writers receive the original bytes.
+The runtime's default stdout/stderr sinks remain text-only and decode invalid
+UTF-8 lossily; this does not add binary preservation to those default sinks.
 The runtime's parent stdout/stderr writes are synchronous; a redirected parent
 stream whose `write` returns `false` instead cancels the tool and reports `ENOTSUP`.
 Use `spawn` for destinations that need asynchronous `drain` back-pressure.

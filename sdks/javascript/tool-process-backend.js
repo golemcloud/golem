@@ -74,6 +74,39 @@ function maxBufferOption(value) {
   return Math.min(Math.floor(value), UNBOUNDED);
 }
 
+// Default runtime stdio coerces each Buffer to text. Preserve original bytes,
+// but keep a possible incomplete UTF-8 suffix together for the next write.
+function utf8ChunkBuffer() {
+  let pending = Buffer.alloc(0);
+  return (bytes) => {
+    const ending = bytes === undefined;
+    bytes = ending
+      ? pending
+      : pending.length
+        ? Buffer.concat([pending, bytes])
+        : Buffer.from(bytes);
+    let end = bytes.length;
+    if (!ending && end) {
+      let lead = end - 1;
+      const first = Math.max(0, end - 4);
+      while (lead > first && (bytes[lead] & 0xc0) === 0x80) lead--;
+      const byte = bytes[lead];
+      const width =
+        byte >= 0xc2 && byte <= 0xdf
+          ? 2
+          : byte >= 0xe0 && byte <= 0xef
+            ? 3
+            : byte >= 0xf0 && byte <= 0xf4
+              ? 4
+              : 0;
+      if (end - lead < width) end = lead;
+    }
+    // Copy at most three bytes so the suffix cannot retain a large buffer.
+    pending = Buffer.from(bytes.subarray(end));
+    return bytes.subarray(0, end);
+  };
+}
+
 function routeOutput(runtimeProcess, result, modes, command) {
   for (const [index, channel] of [
     [1, "stdout"],
@@ -694,6 +727,41 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   child.ref = () => child;
   child.unref = () => child;
 
+  const inheritedOutput = {
+    stdout: utf8ChunkBuffer(),
+    stderr: utf8ChunkBuffer(),
+  };
+  const forwardOutput = async (channel, bytes) => {
+    await startup;
+    if (!started) return;
+    const index = channel === "stdout" ? 1 : 2;
+    const inherited = modes[index] === "inherit";
+    const destination = inherited ? runtimeProcess[channel] : child[channel];
+    if (!destination) return;
+    if (inherited) bytes = inheritedOutput[channel](bytes);
+    if (!bytes.length) return;
+    // Await each write, including the inherited channel's final UTF-8 suffix.
+    try {
+      await new Promise((resolve, reject) => {
+        try {
+          destination.write(bytes, (error) =>
+            error ? reject(error) : resolve(),
+          );
+        } catch (error) {
+          // A caller-owned destination threw; the exception is the caller's.
+          rethrowLater(error);
+          resolve();
+        }
+      });
+    } catch (error) {
+      outputError ??= error;
+      try {
+        cancel();
+      } catch (failure) {
+        outputError.cause ??= failure;
+      }
+    }
+  };
   let collection;
   try {
     if (prepared.tag === "invoke") resources.add(prepared.val);
@@ -786,38 +854,7 @@ function spawnTool(host, runtimeProcess, command, args, options) {
         transfer(stdout?.[1]),
         transfer(stderr?.[1]),
         undefined,
-        async (channel, bytes) => {
-          await startup;
-          if (!started) return;
-          const index = channel === "stdout" ? 1 : 2;
-          const destination =
-            modes[index] === "inherit"
-              ? runtimeProcess[channel]
-              : child[channel];
-          if (!destination) return;
-          // Output is forwarded under back-pressure, as from a Node child: the
-          // next read waits until the destination accepted this chunk.
-          try {
-            await new Promise((resolve, reject) => {
-              try {
-                destination.write(bytes, (error) =>
-                  error ? reject(error) : resolve(),
-                );
-              } catch (error) {
-                // A caller-owned destination threw; the exception is the caller's.
-                rethrowLater(error);
-                resolve();
-              }
-            });
-          } catch (error) {
-            outputError ??= error;
-            try {
-              cancel();
-            } catch (failure) {
-              outputError.cause ??= failure;
-            }
-          }
-        },
+        forwardOutput,
       );
       // This marks a local process handle, not remote permission or execution.
       started = true;
@@ -870,6 +907,11 @@ function spawnTool(host, runtimeProcess, command, args, options) {
     try {
       if (collection) {
         const collected = await collection;
+        await Promise.all(
+          ["stdout", "stderr"].map((channel, index) =>
+            modes[index + 1] === "inherit" ? forwardOutput(channel) : undefined,
+          ),
+        );
         terminal ??= project(
           command,
           prepared.val,
@@ -1082,9 +1124,16 @@ export function createToolProcessBackend(host, runtimeProcess) {
       let outputFailure;
       const forward = (channel, index) => {
         if (modes[index] !== "inherit") return undefined;
+        const buffer = utf8ChunkBuffer();
+        let failed = false;
         return (bytes) => {
+          if (failed) return false;
           try {
-            if (runtimeProcess[channel].write(Buffer.from(bytes)) === false) {
+            bytes = buffer(bytes);
+            if (
+              bytes.length &&
+              runtimeProcess[channel].write(bytes) === false
+            ) {
               throw processError(
                 "ENOTSUP",
                 command,
@@ -1093,6 +1142,7 @@ export function createToolProcessBackend(host, runtimeProcess) {
             }
             return true;
           } catch (error) {
+            failed = true;
             outputFailure ??=
               error?.code === "ENOTSUP"
                 ? error
@@ -1104,6 +1154,7 @@ export function createToolProcessBackend(host, runtimeProcess) {
           }
         };
       };
+      const forwarders = [forward("stdout", 1), forward("stderr", 2)];
       try {
         const spec = request.input();
         if (spec.stdin && modes[0] === "inherit") {
@@ -1144,10 +1195,10 @@ export function createToolProcessBackend(host, runtimeProcess) {
           transfer(stdout?.[1]),
           transfer(stderr?.[1]),
           options.timeout > 0 ? BigInt(options.timeout) : undefined,
-          forward("stdout", 1),
-          forward("stderr", 2),
+          ...forwarders,
         );
         completed = true;
+        for (const flush of forwarders) flush?.();
         const result = project(
           command,
           request,

@@ -2208,11 +2208,20 @@ impl Streaming for StreamingImpl {
         mut stdout: OutputStream,
         mut diagnostics: OutputStream,
     ) -> Result<StreamSummary, StreamingError> {
-        if mode == "redaction-terminals" {
-            for byte in MARKER {
+        if mode == "redaction-terminals" || mode == "utf8-terminals" {
+            let (output, error): (&[u8], &[u8]) = if mode == "utf8-terminals" {
+                // Distinct 2/3/4-byte code points and incomplete EOF tails.
+                (
+                    b"stdout:\xc2\xa2\xe2\x82\xac\xf0\x9f\x98\x80\xe2",
+                    b"stderr:\xc3\xa9\xf0\x9f\xa6\x80\xf0\x9f",
+                )
+            } else {
+                (MARKER, b"stderr-visible")
+            };
+            for byte in output {
                 stdout.write(vec![*byte]).await.unwrap();
             }
-            for byte in b"stderr-visible" {
+            for byte in error {
                 diagnostics.write(vec![*byte]).await.unwrap();
             }
             stdout.finish().await.unwrap();
