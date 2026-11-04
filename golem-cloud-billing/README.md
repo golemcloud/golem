@@ -44,8 +44,9 @@ advisory lock, so that replicas migrate one at a time.
 
 In the hosted deployment the app connects with its own role, which owns its schema. The registry
 tables hold API token secrets and agent secrets, so the role can read only the three metering
-tables of the registry, and the app reads all other registry data through the HTTP API. An
-administrator creates the role once:
+tables of the registry. Everything else comes from two calls to the registry HTTP API, both made
+as the signed-in user: `POST /v1/login/oauth2` at sign-in, and `GET /v1/accounts/{account_id}`
+for the account page. An administrator creates the role once:
 
 ```sql
 CREATE ROLE golem_cloud_billing LOGIN PASSWORD '…' CONNECTION LIMIT 10;
