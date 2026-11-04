@@ -66,8 +66,9 @@ times.
 ## Billable overage
 
 `node main.mjs push-usage` sends the billable overage to the meters of Polar once and exits, with
-a nonzero exit code when it fails. A CronJob runs it every hour. It needs only the `GOLEM__DB__*`
-variables and the Polar variables.
+a nonzero exit code when it fails. A CronJob runs it once a day, shortly after midnight UTC, so the
+run on the first day of a month sends the rest of the closed month. It needs only the
+`GOLEM__DB__*` variables and the Polar variables.
 
 The billable overage of an account and month is the usage that a policy revision in
 `allowOverage` received above the monthly amount. The registry reports it as `allowOverageUsage`
