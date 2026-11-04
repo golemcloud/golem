@@ -18,6 +18,8 @@ export interface PostgresConfig {
   readonly password: Redacted.Redacted<string>
   readonly maxConnections: number
   readonly schema: string
+  /** The PostgreSQL schema of the registry tables, from which the app reads the metering tables. */
+  readonly registrySchema: string
   readonly tls: DbTls
 }
 
@@ -52,7 +54,7 @@ const invalid = (message: string): Effect.Effect<never, Config.ConfigError> =>
  * The registry's `GOLEM__DB__CONFIG__SCHEMA` is not read: the billing app keeps its tables in
  * its own schema.
  */
-const postgresConfig: Config.Config<PostgresConfig> = Config.all({
+export const postgresConfig: Config.Config<PostgresConfig> = Config.all({
   type: Config.String("GOLEM__DB__TYPE").pipe(Config.withDefault("Postgres")),
   host: Config.String("GOLEM__DB__CONFIG__HOST"),
   port: Config.Port("GOLEM__DB__CONFIG__PORT").pipe(Config.withDefault(5432)),
@@ -61,6 +63,7 @@ const postgresConfig: Config.Config<PostgresConfig> = Config.all({
   password: Config.Redacted("GOLEM__DB__CONFIG__PASSWORD"),
   maxConnections: Config.Int("GOLEM__DB__CONFIG__MAX_CONNECTIONS").pipe(Config.withDefault(10)),
   schema: Config.String("GOLEM_CLOUD_BILLING_DB_SCHEMA").pipe(Config.withDefault("billing")),
+  registrySchema: Config.String("GOLEM_CLOUD_BILLING_REGISTRY_DB_SCHEMA").pipe(Config.withDefault("public")),
   tls: Config.Literals(["disable", "require", "verify-full"], "GOLEM_CLOUD_BILLING_DB_TLS").pipe(
     Config.withDefault("verify-full")
   )
@@ -71,6 +74,11 @@ const postgresConfig: Config.Config<PostgresConfig> = Config.all({
     }
     if (!schemaName.test(db.schema)) {
       return invalid(`GOLEM_CLOUD_BILLING_DB_SCHEMA must match ${schemaName.source}, got ${db.schema}`)
+    }
+    if (!schemaName.test(db.registrySchema)) {
+      return invalid(
+        `GOLEM_CLOUD_BILLING_REGISTRY_DB_SCHEMA must match ${schemaName.source}, got ${db.registrySchema}`
+      )
     }
     return Effect.succeed(db)
   })
