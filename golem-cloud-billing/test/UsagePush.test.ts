@@ -35,6 +35,14 @@ class FakePolar {
     }
     const { events } = (await request.json()) as { events: Array<IngestedEvent> }
     this.requests.push({ authorization: request.headers.get("authorization"), events })
+    // Polar refuses the whole request when a numeric metadata value is outside ±(2^53 - 1).
+    // JSON.parse rounds a larger integer to at least 2^53, so the check still sees it.
+    const outOfRange = events.some((event) =>
+      Object.values(event.metadata).some((value) => typeof value === "number" && Math.abs(value) > Number.MAX_SAFE_INTEGER)
+    )
+    if (outOfRange) {
+      return Response.json({ detail: "metadata value out of range" }, { status: 422 })
+    }
     if (this.failures > 0) {
       this.failures--
       return Response.json({ detail: "unavailable" }, { status: 503 })
@@ -133,6 +141,23 @@ describe("UsagePush", () => {
     const events = [...polar.stored.values()].filter((event) => event.external_customer_id === accountId)
     expect(events.map((event) => event.metadata.units)).toEqual([0.2, 0.25])
     expect(new Set(events.map((event) => event.external_id)).size).toBe(2)
+  })
+
+  it("splits an increase above the numeric limit of Polar, and sends the events behind it", async () => {
+    const large = await overageAccount()
+    const ordinary = await overageAccount()
+    const limit = BigInt(Number.MAX_SAFE_INTEGER)
+    await registry.attribution(large, 0, { computeFuel: 1_000_000n + limit + 2n }, { period: november })
+    await registry.attribution(ordinary, 0, { computeFuel: 1_500_000n }, { period: november })
+
+    await push(midNovember)
+
+    const events = [...polar.stored.values()].filter((event) => event.external_customer_id === large)
+    expect(events.map((event) => [event.external_id, event.metadata.micro_units])).toEqual([
+      [`${large}:2026-11:compute:${limit}`, Number.MAX_SAFE_INTEGER],
+      [`${large}:2026-11:compute:${limit + 2n}`, 2]
+    ])
+    expect(polar.units(ordinary, "golem.compute")).toBe(0.5)
   })
 
   it("sends an unsent event again with the same ID after Polar fails", async () => {
