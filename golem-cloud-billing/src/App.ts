@@ -8,6 +8,7 @@ import * as Database from "./Database.ts"
 import * as Http from "./Http.ts"
 import * as Polar from "./Polar.ts"
 import * as Registry from "./Registry.ts"
+import * as Settlement from "./Settlement.ts"
 import * as Subscriptions from "./Subscriptions.ts"
 
 /** The web app calls Polar with the token of `BillingConfig`, which can create checkouts and sessions. */
@@ -33,8 +34,7 @@ const httpServer = Layer.unwrap(
   })
 )
 
-export const layer = HttpRouter.serve(Http.routes).pipe(
-  Layer.provide(httpServer),
+export const layer = Layer.mergeAll(HttpRouter.serve(Http.routes).pipe(Layer.provide(httpServer)), Settlement.sweeper).pipe(
   Layer.provide(services),
   Layer.provide(FetchHttpClient.layer),
   Layer.provide(BillingConfig.layer)

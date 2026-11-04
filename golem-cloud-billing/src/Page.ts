@@ -121,10 +121,10 @@ export const signedOutPage = (options: { readonly error: string | undefined }) =
   })
 
 /**
- * The plan of the account: one of the two plans that a subscription switches between, another
- * plan that an administrator gave the account, or `unknown` when the registry call failed.
+ * The plan of the account: one of the plans that a subscription switches between, another plan
+ * that an administrator gave the account, or `unknown` when the registry call failed.
  */
-export type PlanState = "free" | "paid" | "other" | "unknown"
+export type PlanState = "free" | "paid" | "paidCapped" | "other" | "unknown"
 
 export interface SignedInPageOptions {
   readonly email: string
@@ -165,12 +165,18 @@ const planHero = (options: SignedInPageOptions) => {
   }
   switch (options.plan) {
     case "paid":
+    case "paidCapped":
       return html`<span class="eyebrow">Your plan</span>
         <h1>You're on Paid</h1>
         ${renewal(options.subscription)}
         ${
           options.subscription?.status === "past_due"
             ? html`<p class="alert" role="alert">The last payment failed. Update the payment method in Manage billing to keep the Paid plan.</p>`
+            : null
+        }
+        ${
+          options.plan === "paidCapped"
+            ? html`<p class="lead">Paid overage is off. Usage stops at the monthly amounts of Paid.</p>`
             : null
         }
         <div class="actions">

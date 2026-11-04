@@ -1,8 +1,10 @@
 import { Effect, Layer, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
+import pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { BillingConfig } from "../src/BillingConfig.ts"
 import * as Database from "../src/Database.ts"
+import * as Subscriptions from "../src/Subscriptions.ts"
 import * as Metering from "../src/Metering.ts"
 import * as Polar from "../src/Polar.ts"
 import * as UsagePush from "../src/UsagePush.ts"
@@ -68,6 +70,8 @@ class FakePolar {
 describe("UsagePush", () => {
   const registry = new RegistryDatabase()
   let polar: FakePolar
+  /** A pool as the role of the billing app, which owns the tables of the app. */
+  let app: pg.Pool
 
   const push = (now: Date) =>
     Effect.runPromise(
@@ -85,18 +89,59 @@ describe("UsagePush", () => {
       )
     )
 
+  /** Stores a Polar subscription of the account, as the webhooks of the web app do. */
+  const subscribe = async (
+    accountId: string,
+    options: { readonly status?: string; readonly cancelAtPeriodEnd?: boolean; readonly periodEnd?: Date } = {}
+  ) => {
+    await app.query(
+      `INSERT INTO polar_subscriptions
+         (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at)
+       VALUES ($1, $2, 'paid-product', $3, $4, $5, now())
+       ON CONFLICT (subscription_id) DO UPDATE SET
+         status = EXCLUDED.status,
+         current_period_end = EXCLUDED.current_period_end,
+         cancel_at_period_end = EXCLUDED.cancel_at_period_end`,
+      [
+        `sub_${accountId}`,
+        accountId,
+        options.status ?? "active",
+        options.periodEnd ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        options.cancelAtPeriodEnd ?? false
+      ]
+    )
+  }
+
   /** An account in paid overage with a monthly amount of 1 GCU and 1 GB-second. */
-  const overageAccount = async () => {
+  const overageAccount = async (options: { readonly subscribed?: boolean } = {}) => {
     const accountId = await registry.account()
     await registry.revision(accountId, 0, "allow_overage", {
       resolved: { computeFuel: 1_000_000n, memoryGbSeconds: GIB_SECOND },
       period: november
     })
+    if (options.subscribed ?? true) {
+      await subscribe(accountId)
+    }
     return accountId
   }
 
-  beforeAll(() => registry.create(), 60_000)
-  afterAll(() => registry.drop())
+  const heldEvents = async (accountId: string) =>
+    (
+      await app.query<{ event_id: string }>(
+        "SELECT event_id FROM usage_events WHERE account_id = $1 AND held_at IS NOT NULL ORDER BY event_id",
+        [accountId]
+      )
+    ).rows.map((row) => row.event_id)
+
+  beforeAll(async () => {
+    await registry.create()
+    app = new pg.Pool(Database.connectionOptions(registry.config.db))
+    await app.query(Subscriptions.tables)
+  }, 60_000)
+  afterAll(async () => {
+    await app.end()
+    await registry.drop()
+  })
   beforeEach(() => {
     polar = new FakePolar()
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => polar.fetch(input, init))
@@ -189,6 +234,49 @@ describe("UsagePush", () => {
       ["2026-11", 0.1],
       ["2026-11", 0.4]
     ])
+  })
+
+  it("holds the overage of an account without a subscription, and sends only later increases", async () => {
+    const accountId = await overageAccount({ subscribed: false })
+    await registry.attribution(accountId, 0, { computeFuel: 1_500_000n }, { period: november })
+
+    const first = await push(midNovember)
+    const second = await push(midNovember)
+
+    expect([first.held, second.held]).toEqual([1, 0])
+    expect(polar.units(accountId, "golem.compute")).toBe(0)
+    expect(await heldEvents(accountId)).toEqual([`${accountId}:2026-11:compute:500000`])
+
+    await subscribe(accountId)
+    await registry.attribution(accountId, 0, { computeFuel: 250_000n }, { period: november })
+    await push(midNovember)
+
+    expect(polar.units(accountId, "golem.compute")).toBe(0.25)
+  })
+
+  it("holds the overage that reaches the push after a subscription has ended", async () => {
+    const ended = await overageAccount()
+    const ending = await overageAccount()
+    await subscribe(ended, { cancelAtPeriodEnd: true, periodEnd: new Date(Date.now() - 60_000) })
+    await subscribe(ending, { cancelAtPeriodEnd: true, periodEnd: new Date(Date.now() + 60 * 60_000) })
+    await registry.attribution(ended, 0, { computeFuel: 1_500_000n }, { period: november })
+    await registry.attribution(ending, 0, { computeFuel: 1_500_000n }, { period: november })
+
+    await push(midNovember)
+
+    expect(polar.units(ended, "golem.compute")).toBe(0)
+    expect(await heldEvents(ended)).toHaveLength(1)
+    expect(polar.units(ending, "golem.compute")).toBe(0.5)
+  })
+
+  it("sends the overage of a past_due subscription, which Polar bills after the payment", async () => {
+    const accountId = await overageAccount()
+    await subscribe(accountId, { status: "past_due" })
+    await registry.attribution(accountId, 0, { computeFuel: 1_500_000n }, { period: november })
+
+    await push(midNovember)
+
+    expect(polar.units(accountId, "golem.compute")).toBe(0.5)
   })
 
   it("sends nothing when the billable overage goes down", async () => {

@@ -41,10 +41,12 @@ export interface BillingConfigShape {
    * this account `view` and `set-plan` on every account, so the webhooks can change a plan.
    */
   readonly registryBillingToken: Redacted.Redacted<string>
-  /** The plan IDs that a subscription switches between. */
+  /** The plan IDs that a subscription switches between (see `Settlement.ts`). */
   readonly plans: {
     readonly free: string
     readonly paid: string
+    /** The monthly amounts of the paid plan without paid overage (`overage_eligible: false`). */
+    readonly paidCapped: string
   }
   readonly polar: {
     /** The base URL of the Polar API: `https://sandbox-api.polar.sh` or `https://api.polar.sh`. */
@@ -122,7 +124,8 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   registryBillingToken: Config.Redacted("GOLEM_CLOUD_BILLING_REGISTRY_TOKEN"),
   plans: Config.all({
     free: Config.String("GOLEM_CLOUD_BILLING_FREE_PLAN_ID"),
-    paid: Config.String("GOLEM_CLOUD_BILLING_PAID_PLAN_ID")
+    paid: Config.String("GOLEM_CLOUD_BILLING_PAID_PLAN_ID"),
+    paidCapped: Config.String("GOLEM_CLOUD_BILLING_PAID_CAPPED_PLAN_ID")
   }),
   polar: Config.all({
     apiUrl: Config.URL("POLAR_API_URL"),
@@ -136,16 +139,18 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
     if (Redacted.value(config.authSecret).length < 32) {
       return invalid("BETTER_AUTH_SECRET must be at least 32 characters")
     }
-    for (const [name, value] of [
+    const plans = [
       ["GOLEM_CLOUD_BILLING_FREE_PLAN_ID", config.plans.free],
-      ["GOLEM_CLOUD_BILLING_PAID_PLAN_ID", config.plans.paid]
-    ] as const) {
+      ["GOLEM_CLOUD_BILLING_PAID_PLAN_ID", config.plans.paid],
+      ["GOLEM_CLOUD_BILLING_PAID_CAPPED_PLAN_ID", config.plans.paidCapped]
+    ] as const
+    for (const [name, value] of plans) {
       if (!uuid.test(value)) {
         return invalid(`${name} must be a UUID, got ${value}`)
       }
     }
-    if (config.plans.free === config.plans.paid) {
-      return invalid("GOLEM_CLOUD_BILLING_FREE_PLAN_ID and GOLEM_CLOUD_BILLING_PAID_PLAN_ID must differ")
+    if (new Set(plans.map(([, value]) => value)).size !== plans.length) {
+      return invalid(`${plans.map(([name]) => name).join(", ")} must differ`)
     }
     if (!Redacted.value(config.polar.webhookSecret).startsWith("whsec_")) {
       return invalid("POLAR_WEBHOOK_SECRET must start with whsec_")

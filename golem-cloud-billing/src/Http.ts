@@ -78,6 +78,7 @@ export const routes = HttpRouter.use((router) =>
     const planOf = (account: Account | undefined): PlanState => {
       if (account === undefined) return "unknown"
       if (account.planId === config.plans.paid) return "paid"
+      if (account.planId === config.plans.paidCapped) return "paidCapped"
       if (account.planId === config.plans.free) return "free"
       return "other"
     }

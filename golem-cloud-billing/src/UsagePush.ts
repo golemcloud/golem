@@ -1,9 +1,10 @@
 import { Data, Effect, Scope } from "effect"
 import pg from "pg"
 import { type MicroUnits, type Period, toMicroUnits } from "./BillableUsage.ts"
-import { connectionOptions, Database } from "./Database.ts"
+import { connectionOptions, Database, withAdvisoryLock } from "./Database.ts"
 import { Metering, type MeteringError } from "./Metering.ts"
 import { Polar, type PolarError, type PolarEvent } from "./Polar.ts"
+import { billableStatuses, tables as subscriptionTables } from "./Subscriptions.ts"
 
 /**
  * The usage push: sends the billable overage of every account to the meters of Polar.
@@ -15,6 +16,12 @@ import { Polar, type PolarError, type PolarEvent } from "./Polar.ts"
  * Polar receives only the increase. A run first records its events and then sends every event
  * that it has not sent yet. Polar skips an event whose external ID it has already, so a run
  * after a failed send sends the same events again and nothing twice.
+ *
+ * Polar bills an event only while the customer has a billable subscription, and accepts the
+ * other events without billing them. So before it sends, a run holds every unsent event of an
+ * account without a billable subscription in `polar_subscriptions`, or with one that has passed
+ * its scheduled end. A held event is not sent: the warning `unbilled_usage` reports it, and the
+ * row keeps it for audit. `Settlement.ts` keeps such usage small.
  */
 
 /** The event names of the meters of Polar, for each dimension. */
@@ -40,6 +47,8 @@ export interface PushSummary {
   readonly created: number
   /** Events that this run sent, including events of earlier runs that were not sent. */
   readonly sent: number
+  /** Events that this run held, because Polar would not bill them. */
+  readonly held: number
 }
 
 const MICRO_UNITS = 1_000_000
@@ -65,9 +74,12 @@ const usageEventsTable = `
     from_micro_units NUMERIC NOT NULL,
     to_micro_units NUMERIC NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    sent_at TIMESTAMPTZ
+    sent_at TIMESTAMPTZ,
+    held_at TIMESTAMPTZ,
+    CONSTRAINT usage_events_sent_or_held CHECK (sent_at IS NULL OR held_at IS NULL)
   );
-  CREATE INDEX IF NOT EXISTS usage_events_unsent ON usage_events (created_at) WHERE sent_at IS NULL;
+  CREATE INDEX IF NOT EXISTS usage_events_unsent ON usage_events (created_at)
+    WHERE sent_at IS NULL AND held_at IS NULL;
   CREATE INDEX IF NOT EXISTS usage_events_submitted ON usage_events (period, account_id, dimension)`
 
 interface UsageEventRow {
@@ -118,6 +130,10 @@ export const pushUsage = (
 
       yield* advisoryLock(connectionOptions(config), "golem-cloud-billing/usage-push")
       yield* query(usageEventsTable)
+      yield* Effect.tryPromise({
+        try: () => withAdvisoryLock(config, "golem-cloud-billing/migrations", () => pool.query(subscriptionTables)),
+        catch: failure
+      })
 
       let created = 0
       const current = periodOf(now)
@@ -153,12 +169,37 @@ export const pushUsage = (
         }
       }
 
+      const held = yield* query<UsageEventRow>(
+        `UPDATE usage_events e SET held_at = clock_timestamp()
+          WHERE sent_at IS NULL AND held_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM polar_subscriptions s
+               WHERE s.account_id = e.account_id AND s.status = ANY($1)
+                 AND NOT (s.cancel_at_period_end AND coalesce(s.current_period_end <= clock_timestamp(), false)))
+          RETURNING event_id, account_id::text AS account_id, period, dimension,
+                    from_micro_units::text AS from_micro_units, to_micro_units::text AS to_micro_units`,
+        [billableStatuses]
+      )
+      for (const row of held.rows) {
+        yield* Effect.logWarning("Held usage that Polar would not bill").pipe(
+          Effect.annotateLogs({
+            event: "unbilled_usage",
+            golemAccountId: row.account_id,
+            period: row.period,
+            meter: meterEventNames[row.dimension],
+            microUnits: (BigInt(row.to_micro_units) - BigInt(row.from_micro_units)).toString(),
+            eventId: row.event_id
+          })
+        )
+      }
+
       let sent = 0
       for (;;) {
         const unsent = yield* query<UsageEventRow>(
           `SELECT event_id, account_id::text AS account_id, period, dimension,
                   from_micro_units::text AS from_micro_units, to_micro_units::text AS to_micro_units
-             FROM usage_events WHERE sent_at IS NULL ORDER BY created_at, event_id LIMIT ${BATCH_SIZE}`
+             FROM usage_events WHERE sent_at IS NULL AND held_at IS NULL
+            ORDER BY created_at, event_id LIMIT ${BATCH_SIZE}`
         )
         if (unsent.rows.length === 0) {
           break
@@ -180,6 +221,6 @@ export const pushUsage = (
         sent += unsent.rows.length
       }
 
-      return { created, sent }
+      return { created, sent, held: held.rows.length }
     })
   )
