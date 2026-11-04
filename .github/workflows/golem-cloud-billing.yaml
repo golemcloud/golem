@@ -15,6 +15,9 @@ on:
     paths:
       - "golem-cloud-billing/**"
       - ".github/workflows/golem-cloud-billing.yaml"
+      # The app reads the metering tables of the registry, and its tests apply these migrations.
+      # A pull request that changes them runs the tests; a push to main publishes no image for it.
+      - "golem-registry-service/db/migration/postgres/**"
   release:
     types: [published]
 

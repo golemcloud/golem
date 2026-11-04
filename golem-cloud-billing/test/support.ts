@@ -43,6 +43,7 @@ export const testConfig = (): BillingConfigShape => {
       password: Redacted.make(db.password),
       maxConnections: 5,
       schema: `test_${randomUUID().replaceAll("-", "")}`,
+      registrySchema: "public",
       tls: "disable"
     }
   }
