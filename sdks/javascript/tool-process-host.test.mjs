@@ -134,6 +134,65 @@ test("ignored outputs use native discard drains, not zero-sized collectors", () 
   );
 });
 
+test("synchronous inherited chunks reach the parent before collection finishes without limiting the piped channel differently", () => {
+  const f = fixture();
+  const chunk = Buffer.alloc(32 * 1024, 0xab);
+  let received = 0;
+  const backend = createToolProcessBackend(f.host, {
+    env: {},
+    cwd: () => "/workspace",
+    stdout: {
+      write(bytes) {
+        assert.deepEqual(bytes, chunk);
+        received += bytes.length;
+        return true;
+      },
+    },
+  });
+  f.native.collectSync = (_process, _timeout, stdout) => {
+    for (let i = 0; i < 65; i++) {
+      assert.equal(stdout(chunk), true);
+      assert.equal(received, (i + 1) * chunk.length);
+    }
+    return { ...f.terminal, stdout: { bytes: [] } };
+  };
+  const result = backend.spawnSync("streaming", [], {
+    stdio: ["ignore", "inherit", "pipe"],
+    maxBuffer: 1,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 7);
+  assert.equal(result.stdout, null);
+  assert.deepEqual([...result.stderr], [128]);
+  assert.equal(received, 65 * chunk.length);
+});
+
+test("synchronous inherited output refuses a destination that needs asynchronous backpressure", () => {
+  const f = fixture();
+  let writes = 0;
+  const backend = createToolProcessBackend(f.host, {
+    env: {},
+    cwd: () => "/workspace",
+    stdout: {
+      write() {
+        writes++;
+        return false;
+      },
+    },
+  });
+  f.native.collectSync = (_process, _timeout, stdout) => {
+    assert.equal(stdout(Uint8Array.of(7)), false);
+    return { ...f.terminal, stdout: { bytes: [], failure: { tag: "failed" } } };
+  };
+  const result = backend.spawnSync("streaming", [], {
+    stdio: ["ignore", "inherit", "pipe"],
+  });
+  assert.equal(result.error.code, "ENOTSUP");
+  assert.equal(result.status, null);
+  assert.deepEqual([...result.stderr], [128]);
+  assert.equal(writes, 1);
+});
+
 test("native async collection and stdin writes make independent progress", async () => {
   const f = fixture();
   const child = f.backend.spawn("streaming", ["run", "echo"]);

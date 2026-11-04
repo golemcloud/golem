@@ -1079,6 +1079,31 @@ export function createToolProcessBackend(host, runtimeProcess) {
       };
       let future;
       let completed = false;
+      let outputFailure;
+      const forward = (channel, index) => {
+        if (modes[index] !== "inherit") return undefined;
+        return (bytes) => {
+          try {
+            if (runtimeProcess[channel].write(Buffer.from(bytes)) === false) {
+              throw processError(
+                "ENOTSUP",
+                command,
+                "synchronous inherited output cannot wait for drain; use spawn instead",
+              );
+            }
+            return true;
+          } catch (error) {
+            outputFailure ??=
+              error?.code === "ENOTSUP"
+                ? error
+                : Object.assign(
+                    processError("EIO", command, "inherited output failed"),
+                    { cause: error },
+                  );
+            return false;
+          }
+        };
+      };
       try {
         const spec = request.input();
         if (spec.stdin && modes[0] === "inherit") {
@@ -1119,6 +1144,8 @@ export function createToolProcessBackend(host, runtimeProcess) {
           transfer(stdout?.[1]),
           transfer(stderr?.[1]),
           options.timeout > 0 ? BigInt(options.timeout) : undefined,
+          forward("stdout", 1),
+          forward("stderr", 2),
         );
         completed = true;
         const result = project(
@@ -1139,6 +1166,10 @@ export function createToolProcessBackend(host, runtimeProcess) {
             command,
             "deadline exceeded",
           );
+        }
+        if (outputFailure) {
+          result.error = outputFailure;
+          result.status = null;
         }
         return routeOutput(runtimeProcess, result, modes, command);
       } catch (error) {

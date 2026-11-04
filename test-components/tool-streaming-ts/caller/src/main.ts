@@ -41,6 +41,52 @@ async function childProcessToolObservation(): Promise<string> {
 // and the disable switch leaves the command to the default (unsupported) process backend.
 async function childProcessToolEdgeCases(): Promise<string> {
   const echo = spawnSync('streaming', ['optional-streams'], { input: 'ping' });
+  // Inherited sync output must bypass maxBuffer and reach the parent in bounded
+  // chunks, not as one collected buffer after the tool completes.
+  const write = process.stdout.write;
+  const chunkSize = 32 * 1024;
+  const total = 65 * chunkSize;
+  let received = 0;
+  let largest = 0;
+  try {
+    process.stdout.write = ((bytes: Uint8Array) => {
+      largest = Math.max(largest, bytes.length);
+      for (const byte of bytes) {
+        if (byte !== Math.floor(received / chunkSize)) {
+          throw new Error('Inherited output bytes changed');
+        }
+        received++;
+      }
+      return true;
+    }) as typeof write;
+    const inherited = spawnSync('streaming', ['produce', '65', String(chunkSize)], {
+      stdio: ['ignore', 'inherit', 'pipe'],
+      maxBuffer: 1,
+    });
+    if (
+      inherited.error ||
+      inherited.status !== 0 ||
+      inherited.stdout !== null ||
+      received !== total ||
+      largest > chunkSize
+    ) {
+      throw new Error(
+        `Inherited output was not streamed: ${received}/${largest}: ${inherited.error}`,
+      );
+    }
+    process.stdout.write = (() => false) as typeof write;
+    const blocked = spawnSync('streaming', ['produce', '65', String(chunkSize)], {
+      stdio: ['ignore', 'inherit', 'pipe'],
+    });
+    if (
+      (blocked.error as NodeJS.ErrnoException | undefined)?.code !== 'ENOTSUP' ||
+      blocked.status !== null
+    ) {
+      throw new Error(`Sync inherited backpressure was not rejected: ${blocked.error}`);
+    }
+  } finally {
+    process.stdout.write = write;
+  }
   const overflow = await new Promise<string>((resolve) => {
     execFile('streaming', ['produce', '64', '64'], { maxBuffer: 1024 }, (error) =>
       resolve(String((error as { code?: string } | null)?.code)),

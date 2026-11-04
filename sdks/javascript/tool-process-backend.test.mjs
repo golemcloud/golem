@@ -739,7 +739,7 @@ test("ignored stdio supplies EOF and discard targets, never zero-limit collector
   );
   assert.deepEqual(
     f.calls.find(([name]) => name === "collect"),
-    ["collect", undefined, undefined, undefined],
+    ["collect", undefined, undefined, undefined, undefined, undefined],
   );
   assert.deepEqual(f.closed, ["future", "rpc", "prepared"]);
 });

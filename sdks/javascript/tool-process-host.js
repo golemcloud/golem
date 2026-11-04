@@ -134,10 +134,12 @@ export function createToolProcessHost(native) {
           resource(value, (value) => native.disposeProcess(value)),
           {
             cancel,
-            collect: (_stdout, _stderr, timeout) =>
+            collect: (_stdout, _stderr, timeout, stdout, stderr) =>
               native.collectSync(
                 value,
                 timeout === undefined ? undefined : Number(timeout),
+                stdout,
+                stderr,
               ),
             async collectAsync(_stdout, _stderr, _timeout, onOutput) {
               const terminal = Promise.resolve()

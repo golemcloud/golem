@@ -17,7 +17,7 @@ use golem_rust::{
     schema::wit::wire::ToolRpcError,
 };
 use rquickjs::{
-    Class, Ctx, Exception, IntoJs, JsLifetime, Object, TypedArray, Value,
+    Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, TypedArray, Value,
     class::Trace,
     convert::List,
     module::{Declarations, Exports, ModuleDef},
@@ -477,7 +477,11 @@ struct Collected {
     failure: Option<&'static str>,
 }
 
-async fn drain(output: Option<Rc<OutputState>>, future: &host::FutureInvokeResult) -> Collected {
+async fn drain<'js>(
+    output: Option<Rc<OutputState>>,
+    future: &host::FutureInvokeResult,
+    forward: Option<(&Ctx<'js>, &Function<'js>)>,
+) -> Collected {
     let mut result = Collected::default();
     let Some(output) = output else {
         return result;
@@ -489,7 +493,18 @@ async fn drain(output: Option<Rc<OutputState>>, future: &host::FutureInvokeResul
     while let Some(item) = reader.next().await {
         match item {
             Ok(chunk) => {
-                if let Some(max) = output.max {
+                if let Some((ctx, forward)) = forward {
+                    let accepted = TypedArray::new(ctx.clone(), chunk)
+                        .and_then(|chunk| forward.call::<_, bool>((chunk,)));
+                    if !matches!(accepted, Ok(true)) {
+                        if matches!(accepted, Err(rquickjs::Error::Exception)) {
+                            ctx.catch();
+                        }
+                        result.failure = Some("failed");
+                        future.cancel();
+                        break;
+                    }
+                } else if let Some(max) = output.max {
                     let remaining = max - result.bytes.len();
                     result
                         .bytes
@@ -543,10 +558,12 @@ struct Collection {
     timed_out: bool,
 }
 
-async fn collect_inner(
+async fn collect_inner<'js>(
     call: Rc<Call>,
     timeout: Option<u64>,
     collect_outputs: bool,
+    ctx: &Ctx<'js>,
+    forward: [Option<&Function<'js>>; 2],
 ) -> Result<Collection, &'static str> {
     if call.collecting.replace(true) {
         return Err("tool process collection already started");
@@ -574,8 +591,16 @@ async fn collect_inner(
     let outputs = async {
         if collect_outputs {
             futures::join!(
-                drain(call.stdout.clone(), &call.future),
-                drain(call.stderr.clone(), &call.future)
+                drain(
+                    call.stdout.clone(),
+                    &call.future,
+                    forward[0].map(|f| (ctx, f))
+                ),
+                drain(
+                    call.stderr.clone(),
+                    &call.future,
+                    forward[1].map(|f| (ctx, f))
+                )
             )
         } else {
             (Collected::default(), Collected::default())
@@ -702,6 +727,8 @@ fn collect_sync<'js>(
     ctx: Ctx<'js>,
     process: Process,
     timeout: Option<u64>,
+    stdout: Option<Function<'js>>,
+    stderr: Option<Function<'js>>,
 ) -> rquickjs::Result<Object<'js>> {
     let call = process
         .inner
@@ -710,6 +737,8 @@ fn collect_sync<'js>(
         call.clone(),
         timeout,
         true,
+        &ctx,
+        [stdout.as_ref(), stderr.as_ref()],
     ))
     .map_err(|message| error(&ctx, message))?;
     render_collection(ctx, &call, collected)
@@ -720,7 +749,7 @@ async fn collect_async<'js>(ctx: Ctx<'js>, process: Process) -> rquickjs::Result
     let call = process
         .inner
         .ok_or_else(|| error(&ctx, "tool process disposed"))?;
-    let collected = collect_inner(call.clone(), None, false)
+    let collected = collect_inner(call.clone(), None, false, &ctx, [None, None])
         .await
         .map_err(|message| error(&ctx, message))?;
     render_collection(ctx, &call, collected)

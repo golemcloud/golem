@@ -24,6 +24,10 @@ Output is forwarded under back-pressure, as from a Node child: an unread pipe
 holds the tool's output, and `spawn` and inherited channels have no buffer limit.
 `maxBuffer` applies to buffered results only: `exec` and `execFile` check it on
 the output they collect, and `spawnSync` pipes cap at it with `ENOBUFS`.
+Synchronous inherited output is forwarded chunk by chunk without collecting it.
+The runtime's parent stdout/stderr writes are synchronous; a redirected parent
+stream whose `write` returns `false` instead cancels the tool and reports `ENOTSUP`.
+Use `spawn` for destinations that need asynchronous `drain` back-pressure.
 Listener exceptions surface as uncaught exceptions, as in Node; they do not fail
 the child, and `close` is always delivered.
 
