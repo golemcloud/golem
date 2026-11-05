@@ -120,6 +120,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
+figment = { workspace = true, features = ["test"] }
 h2 = { workspace = true }
 libsqlite3-sys = { workspace = true }
 pretty_assertions = { workspace = true }
