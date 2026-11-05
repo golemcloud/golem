@@ -18,6 +18,7 @@ package golem
 
 import golem.host.js.{JsAgentMetadataRuntime, JsComponentId, JsEnvironmentId, JsUuid}
 import golem.host.js.schema.JsSchemaValueTree
+import golem.runtime.rpc.AgentIdentity
 import golem.runtime.rpc.host.AgentHostApi
 import zio.blocks.schema.Schema
 import zio.blocks.schema.json.{JsonCodec, JsonCodecDeriver}
@@ -136,10 +137,10 @@ object HostApi {
     payload: JsSchemaValueTree,
     phantom: Option[UUID]
   ): Either[String, String] =
-    AgentHostApi.makeAgentId(agentTypeName, payload, phantom)
+    AgentIdentity.make(agentTypeName, payload, phantom)
 
   private[golem] def parseAgentIdRaw(agentId: String): Either[String, AgentHostApi.AgentIdParts] =
-    AgentHostApi.parseAgentId(agentId)
+    AgentIdentity.parse(agentId)
 
   /**
    * Parses a Golem agent ID string into its components.
@@ -148,7 +149,7 @@ object HostApi {
    *   Either an error or the parsed parts (type name, phantom UUID)
    */
   def parseAgentId(agentId: String): Either[String, AgentIdParts] =
-    AgentHostApi.parseAgentId(agentId).map { raw =>
+    AgentIdentity.parse(agentId).map { raw =>
       AgentIdParts(agentTypeName = raw.agentTypeName, phantom = raw.phantom)
     }
 
