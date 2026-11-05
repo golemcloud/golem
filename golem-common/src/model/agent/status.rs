@@ -1260,8 +1260,11 @@ impl BinaryDeserializer for DurableStreamSessionIndex {
 }
 
 impl AgentStatusRecord {
-    pub fn has_pending_work(&self) -> bool {
-        !self.pending_invocations.is_empty() || !self.pending_updates.is_empty()
+    pub fn has_pending_work(&self, now: Timestamp) -> bool {
+        self.pending_invocations
+            .iter()
+            .any(|pending| pending.is_due(now))
+            || !self.pending_updates.is_empty()
     }
 }
 

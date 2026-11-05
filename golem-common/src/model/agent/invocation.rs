@@ -640,6 +640,10 @@ pub struct PendingInvocationRef {
 }
 
 impl PendingInvocationRef {
+    pub fn is_due(&self, now: Timestamp) -> bool {
+        self.not_before.is_none_or(|deadline| deadline <= now)
+    }
+
     pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
         self.idempotency_key.as_ref()
     }

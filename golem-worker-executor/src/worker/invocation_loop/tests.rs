@@ -400,7 +400,13 @@ fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
                 selection: FileByteSelection::Full,
                 sender,
             });
-            let selected = SelectedWork::next(&mut queue, status.clone(), None, &mut turn_used);
+            let selected = SelectedWork::next(
+                &mut queue,
+                status.clone(),
+                None,
+                &mut turn_used,
+                Timestamp::now_utc(),
+            );
             if turn % 2 == 0 {
                 assert!(matches!(
                     selected,
@@ -445,20 +451,33 @@ fn filesystem_turns_preserve_initialization_and_control_priority() {
             &mut queue,
             status.clone(),
             Some(&constructor),
-            &mut turn_used
+            &mut turn_used,
+            Timestamp::now_utc()
         ),
         SelectedWork::Durable(_)
     ));
     assert_eq!(queue.len(), 1);
     // Once initialized, listings also consume the filesystem turn.
     assert!(matches!(
-        SelectedWork::next(&mut queue, status.clone(), None, &mut turn_used),
+        SelectedWork::next(
+            &mut queue,
+            status.clone(),
+            None,
+            &mut turn_used,
+            Timestamp::now_utc()
+        ),
         SelectedWork::Resident(_)
     ));
     assert!(turn_used);
     queue.push_front(QueuedWorkerInvocation::SaveSnapshot);
     assert!(matches!(
-        SelectedWork::next(&mut queue, status, None, &mut turn_used),
+        SelectedWork::next(
+            &mut queue,
+            status,
+            None,
+            &mut turn_used,
+            Timestamp::now_utc()
+        ),
         SelectedWork::Resident(QueuedWorkerInvocation::SaveSnapshot)
     ));
     assert!(turn_used);
@@ -467,11 +486,59 @@ fn filesystem_turns_preserve_initialization_and_control_priority() {
             &mut queue,
             Arc::new(AgentStatusRecord::default()),
             None,
-            &mut turn_used
+            &mut turn_used,
+            Timestamp::now_utc()
         ),
         SelectedWork::Idle(_)
     ));
     assert!(!turn_used);
+}
+
+#[test]
+fn future_invocations_do_not_block_ready_work_or_idle() {
+    use super::{AgentStatusRecord, IdempotencyKey, PendingInvocationRef, SelectedWork};
+    let deadline = Timestamp::from(2000);
+    let future = PendingInvocationRef {
+        timestamp: Timestamp::from(1000),
+        not_before: Some(deadline),
+        oplog_index: OplogIndex::from_u64(3),
+        idempotency_key: Some(IdempotencyKey::new("future".into())),
+        manual_update_target_revision: None,
+    };
+    let ready = PendingInvocationRef {
+        not_before: None,
+        oplog_index: OplogIndex::from_u64(4),
+        idempotency_key: Some(IdempotencyKey::new("ready".into())),
+        ..future.clone()
+    };
+    let mut queue = VecDeque::new();
+    let mut turn_used = false;
+    let status = Arc::new(AgentStatusRecord {
+        pending_invocations: vec![future.clone(), ready.clone()],
+        ..Default::default()
+    });
+    assert!(matches!(
+        SelectedWork::next(&mut queue, status, None, &mut turn_used, Timestamp::from(1999)),
+        SelectedWork::Durable(pending) if pending == ready
+    ));
+    let status = Arc::new(AgentStatusRecord {
+        pending_invocations: vec![future.clone()],
+        ..Default::default()
+    });
+    assert!(matches!(
+        SelectedWork::next(
+            &mut queue,
+            status.clone(),
+            None,
+            &mut turn_used,
+            Timestamp::from(1999)
+        ),
+        SelectedWork::Idle(_)
+    ));
+    assert!(matches!(
+        SelectedWork::next(&mut queue, status, None, &mut turn_used, deadline),
+        SelectedWork::Durable(pending) if pending == future
+    ));
 }
 
 #[test]

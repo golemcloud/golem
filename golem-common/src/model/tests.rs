@@ -1263,7 +1263,26 @@ fn agent_status_record_has_pending_work_for_pending_invocations() {
         manual_update_target_revision: Some(ComponentRevision::INITIAL),
     });
 
-    assert!(status.has_pending_work());
+    assert!(status.has_pending_work(Timestamp::now_utc()));
+}
+
+#[test]
+fn scheduled_invocations_become_pending_work_only_when_due() {
+    let deadline = Timestamp::from(2000);
+    let status = AgentStatusRecord {
+        pending_invocations: vec![PendingInvocationRef {
+            timestamp: Timestamp::from(1000),
+            not_before: Some(deadline),
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: Some(IdempotencyKey::fresh()),
+            manual_update_target_revision: None,
+        }],
+        ..Default::default()
+    };
+
+    assert!(!status.has_pending_work(Timestamp::from(1999)));
+    assert!(status.has_pending_work(deadline));
+    assert!(status.has_pending_work(Timestamp::from(2001)));
 }
 
 #[test]
@@ -1277,12 +1296,12 @@ fn agent_status_record_has_pending_work_for_pending_updates() {
         kind: PendingUpdateKind::Automatic,
     });
 
-    assert!(status.has_pending_work());
+    assert!(status.has_pending_work(Timestamp::now_utc()));
 }
 
 #[test]
 fn agent_status_record_has_pending_work_is_false_without_pending_queues() {
-    assert!(!AgentStatusRecord::default().has_pending_work());
+    assert!(!AgentStatusRecord::default().has_pending_work(Timestamp::now_utc()));
 }
 
 #[test]

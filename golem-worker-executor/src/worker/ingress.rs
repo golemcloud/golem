@@ -746,6 +746,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
         self.state_actor.status().await.pending_invocations.clone()
     }
+
+    pub(in crate::worker) async fn has_due_invocations(&self) -> bool {
+        let status = self.state_actor.status().await;
+        let now = Timestamp::now_utc();
+        status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.is_due(now))
+    }
+
     /// Reserved constructor key, also used to recognize initialization before inspecting files.
     pub(in crate::worker) fn initialization_idempotency_key(&self) -> IdempotencyKey {
         IdempotencyKey::new(format!("init-{}", self.agent_id()))

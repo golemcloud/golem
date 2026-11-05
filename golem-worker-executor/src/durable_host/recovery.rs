@@ -865,7 +865,7 @@ pub(in crate::durable_host) fn should_restart_after_shard_assignment_change(
         && (matches!(
             status.status,
             AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying
-        ) || status.has_pending_work())
+        ) || status.has_pending_work(golem_common::model::Timestamp::now_utc()))
 }
 
 pub(in crate::durable_host) fn should_replay_invocation(
