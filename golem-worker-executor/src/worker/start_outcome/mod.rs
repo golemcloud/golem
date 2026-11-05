@@ -277,14 +277,26 @@ pub(crate) fn success_details_of(head: &PendingUpdateRef) -> Option<SnapshotAssi
     }
 }
 
-/// The error of a start whose agent filesystem failed with `error`: a suspension when the quota
-/// of the agent is full, else a runtime error, which the recovery path retries.
+/// A full agent quota suspends the start. Transient filesystem failures require recovery;
+/// invalid initial files, refused sources and permanent restore failures fail the agent.
 pub(crate) fn reconstruction_startup_error(error: &FilesystemError) -> WorkerExecutorError {
     match error {
         FilesystemError::AgentQuota(_) => WorkerExecutorError::Interrupted {
             kind: InterruptKind::Suspend(Timestamp::now_utc()),
         },
-        error => WorkerExecutorError::runtime(error.to_string()),
+        FilesystemError::InitialFileFailed(_)
+        | FilesystemError::InitialFileRefused { .. }
+        | FilesystemError::InitialFileConflict(_) => WorkerExecutorError::InvocationFailed {
+            error: AgentError::InternalError(error.to_string()),
+            stderr: String::new(),
+        },
+        FilesystemError::Baseline(restore) if restore.class != RestoreClass::Transient => {
+            WorkerExecutorError::InvocationFailed {
+                error: AgentError::InternalError(error.to_string()),
+                stderr: String::new(),
+            }
+        }
+        error => WorkerExecutorError::recovery_required(error.to_string()),
     }
 }
 
@@ -307,17 +319,15 @@ pub(crate) fn update_point_filesystem_error(error: &FilesystemError) -> WorkerEx
     }
 }
 
-/// The error that ends a start at the update point for the passed error `error`. The update
-/// stays pending and the start runs again. The update point can be inside a host call of a
+/// An unavailable component service retries the start without completing its callers or a
+/// pending update. The update point can be inside a host call of a
 /// replayed invocation, where only a required recovery stays off the guest's failure path, so the
 /// cause that the outcome table passes because it is transient, an unavailable component service,
 /// retries as a recovery. Every other error, such as the suspension of a full quota, stays as it
 /// is.
-pub(crate) fn update_point_error(error: WorkerExecutorError) -> WorkerExecutorError {
+pub(crate) fn component_startup_error(error: WorkerExecutorError) -> WorkerExecutorError {
     match FetchProblem::of(&error) {
-        FetchProblem::Unavailable => {
-            WorkerExecutorError::recovery_required(format!("the update point failed: {error}"))
-        }
+        FetchProblem::Unavailable => WorkerExecutorError::recovery_required(error.to_string()),
         FetchProblem::NotFound | FetchProblem::Refused(_) | FetchProblem::Other => error,
     }
 }
@@ -473,7 +483,9 @@ impl StartProblem {
             RawStartError::Disabled => Self::Disabled,
             RawStartError::Filesystem(error) => match error {
                 FilesystemError::Baseline(error) => Self::Restore(error.class),
-                FilesystemError::InitialFileConflict(_) => Self::RestoreConflict,
+                FilesystemError::InitialFileConflict(_) | FilesystemError::InitialFileFailed(_) => {
+                    Self::RestoreConflict
+                }
                 FilesystemError::AgentQuota(_) => Self::Quota,
                 FilesystemError::Access(_)
                 | FilesystemError::Sandbox(_)
@@ -516,13 +528,15 @@ impl StartProblem {
             RawStartError::UpdateState(UpdateStateError::Metadata(error)) => {
                 Self::UpdateState(FetchProblem::of(error))
             }
-            // The initial-file rule at the update point fails the update for a conflict and for a
-            // source that the blob storage refuses; the other filesystem errors retry the start,
+            // The initial-file rule at the update point fails the update for a conflict, an invalid
+            // source or a source that the blob storage refuses; other filesystem errors retry the start,
             // as they do at the restore. The update point restores nothing, so a restore error
             // counts as a reconstruction error. `update_point_filesystem_error` gives the error of
             // each passed one.
             RawStartError::UpdateState(UpdateStateError::InitialFiles(error)) => match error {
-                FilesystemError::InitialFileConflict(_) => Self::UpdateState(FetchProblem::Other),
+                FilesystemError::InitialFileConflict(_) | FilesystemError::InitialFileFailed(_) => {
+                    Self::UpdateState(FetchProblem::Other)
+                }
                 FilesystemError::InitialFileRefused { refusal, .. } => {
                     Self::BlobStorageRefused(*refusal)
                 }
@@ -951,11 +965,11 @@ impl RawStartError<'_> {
     }
 
     /// The error of the problem as it is, for the recovery path: a filesystem failure as a
-    /// reconstruction error or a suspension, a disabled baseline as a runtime error, and every
-    /// other raw error unchanged.
+    /// reconstruction error or a suspension, an unavailable component service as a recovery,
+    /// a disabled baseline as a runtime error, and every other raw error unchanged.
     pub(crate) fn passed_through(&self) -> WorkerExecutorError {
         if let Some(error) = self.carried_error() {
-            return error.clone();
+            return component_startup_error(error.clone());
         }
         match self {
             RawStartError::Filesystem(error) | RawStartError::Finish(error) => {

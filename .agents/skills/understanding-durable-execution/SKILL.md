@@ -1324,8 +1324,10 @@ generation's error.
 A failure while creating or preparing the instance is durable health state, not only a resident-worker
 error. The invocation loop commits `Error { kind: Recovery, .. }` before unloading and preserves the
 underlying classification. Infrastructure failures do not advance the agent's semantic retry policy:
-they remain `Retrying` without a limit and retry on the next demand (invoke, resume, scheduler
-activation, or shard reassignment), rather than keeping an executor resident for a scheduled retry.
+they remain `Retrying` without a semantic attempt limit. Known transient startup failures request
+`RecoveryRequired`, so the durable loop backs off and reconstructs automatically while its callers
+wait. Infrastructure errors that stop the loop instead retry on the next demand (invoke, resume,
+scheduler activation, or shard reassignment).
 Invalid components, exports, snapshot baselines, replay divergence, and other permanent failures are terminal.
 An authoritative manual-update or promoted snapshot-assisted baseline that cannot be loaded is
 terminal, because recovery has no compatible replay fallback. A payload download failure is
@@ -2244,8 +2246,10 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
   than a code that asks for a retry, or `PermissionDenied` of the filesystem backend). The install
   loads every source before its first change, so the agent runs on its source revision. The text
   names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`) writes no failed
-  update and retries as a recovery; outside the update point a refused source is a
-  reconstruction error. The guest blob store maps the same refusal to a permanent
+  update and retries as a recovery. At any start, including the source restart after a failed
+  update, a refused source fails the agent and its waiting invocations with the cause.
+  Invalid declarations and missing or corrupt sources (`InitialFileFailed`) are permanent too;
+  they do not share the retryable sandbox-I/O classification. The guest blob store maps the same refusal to a permanent
   `BlobStoreError::PermissionDenied`.
 
 Before loading a pending target, Worker validates its cached metadata with
@@ -2277,6 +2281,14 @@ entry; an archive read returns `UnreadableOplog` instead.
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots, because the files of the
 agent differ from its initial files.
+
+Transient startup failures use `RecoveryRequired`: the durable invocation loop retains its
+startup attempt and pending callers, releases its permit, backs off and reconstructs without a
+manual resume. This includes transient baseline restores, initial-file downloads, filesystem
+reconstruction and component-service unavailability outside an update. A caller can still reach
+its own deadline; the first failed start does not complete it. Permanent component errors and
+deterministic instantiation errors are not converted into recovery retries. Cleanup failures,
+quota suspension, interrupts, shard retirement and ephemeral fail-stop keep their own paths.
 
 Transient causes write no failed update, and the start retries: for every pending column,
 `RestoreClass::Transient`, a reconstruction error, a full quota, an interrupted instantiation and

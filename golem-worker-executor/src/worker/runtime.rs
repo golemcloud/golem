@@ -648,7 +648,7 @@ impl RunningWorker {
                         ))
                         .await;
                     }
-                    None => return Err(error.into()),
+                    None => return Err(start_outcome::component_startup_error(error).into()),
                 },
             }
         };
@@ -686,7 +686,9 @@ impl RunningWorker {
         .await
         {
             Ok(start_filesystem) => start_filesystem,
-            Err(StartFilesystemError::Other(error)) => return Err(error.into()),
+            Err(StartFilesystemError::Other(error)) => {
+                return Err(start_outcome::component_startup_error(error).into());
+            }
             Err(StartFilesystemError::Disabled) => {
                 let action = Self::start_action(
                     &parent,
@@ -714,7 +716,8 @@ impl RunningWorker {
                 parent
                     .component_service()
                     .get_metadata(component_id, Some(component_version_for_replay))
-                    .await?
+                    .await
+                    .map_err(start_outcome::component_startup_error)?
             };
 
         let agent_effective_surface =
@@ -776,7 +779,7 @@ impl RunningWorker {
             )
             .await
             .map_err(|failure| CreateWorkerInstanceError::Failed {
-                error: WorkerExecutorError::runtime(failure.source.to_string()),
+                error: WorkerExecutorError::recovery_required(failure.source.to_string()),
                 filesystem_cleanup_failure: failure.source.cleanup_failed().then(|| {
                     UnloadCleanupFailure::Other(WorkerExecutorError::runtime(
                         failure.source.to_string(),
@@ -854,7 +857,7 @@ impl RunningWorker {
                 return Err(cleanup_reconstructing_agent_filesystem(
                     reconstructing,
                     window,
-                    WorkerExecutorError::runtime(error.to_string()),
+                    start_outcome::reconstruction_startup_error(&error),
                 )
                 .await);
             }
@@ -885,7 +888,7 @@ impl RunningWorker {
                     return Err(cleanup_reconstructing_agent_filesystem(
                         reconstructing,
                         window,
-                        WorkerExecutorError::runtime(error.to_string()),
+                        WorkerExecutorError::recovery_required(error.to_string()),
                     )
                     .await);
                 }
@@ -894,16 +897,18 @@ impl RunningWorker {
             Arc::clone(&parent.owner_runtime_resources),
             reconstruction_generation_handle.clone(),
         );
-        let filesystem_context = match create_filesystem_context(reconstruction_generation_handle)
-            .await
-        {
-            Ok(context) => context,
-            Err(error) => {
-                return Err(
-                    cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
-                );
-            }
-        };
+        let filesystem_context =
+            match create_filesystem_context(reconstruction_generation_handle).await {
+                Ok(context) => context,
+                Err(error) => {
+                    return Err(cleanup_reconstructing_agent_filesystem(
+                        reconstructing,
+                        window,
+                        WorkerExecutorError::recovery_required(error.to_string()),
+                    )
+                    .await);
+                }
+            };
         let install_wallet = async {
             parent
                 .commit_oplog_and_update_state(CommitLevel::Always)

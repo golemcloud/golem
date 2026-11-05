@@ -1061,7 +1061,7 @@ fn a_retried_failure_and_a_lost_shard_write_no_failed_update() {
 
     assert!(matches!(
         decide_now(&role, Some(&head), RawStartError::Filesystem(&transient)),
-        StartAction::Error(WorkerExecutorError::Runtime { .. })
+        StartAction::Error(WorkerExecutorError::RecoveryRequired { .. })
     ));
     assert!(matches!(
         decide_now(&role, Some(&head), RawStartError::Filesystem(&quota)),
@@ -1090,7 +1090,7 @@ fn a_retried_failure_and_a_lost_shard_write_no_failed_update() {
     ));
     assert!(matches!(
         decide_now(&role, Some(&head), RawStartError::TargetFetch(&unavailable)),
-        StartAction::Error(WorkerExecutorError::ComponentServiceUnavailable { .. })
+        StartAction::Error(WorkerExecutorError::RecoveryRequired { .. })
     ));
     assert!(matches!(
         decide(
@@ -1127,7 +1127,7 @@ fn a_transient_target_fetch_retries_every_pending_update() {
     cases.iter().for_each(|(role, head)| {
         assert!(matches!(
             decide_now(role, Some(head), RawStartError::TargetFetch(&unavailable)),
-            StartAction::Error(WorkerExecutorError::ComponentServiceUnavailable { .. })
+            StartAction::Error(WorkerExecutorError::RecoveryRequired { .. })
         ));
         assert!(matches!(
             decide_now(role, Some(head), RawStartError::UpdateState(&metadata)),
@@ -1189,7 +1189,8 @@ fn a_pending_manual_update_whose_restore_fails_for_good_fails_and_other_baseline
         StartAction::Error(WorkerExecutorError::Interrupted {
             kind: InterruptKind::Suspend(_),
         }) => "suspend".to_string(),
-        StartAction::Error(WorkerExecutorError::Runtime { .. }) => "rebuild".to_string(),
+        StartAction::Error(WorkerExecutorError::RecoveryRequired { .. }) => "rebuild".to_string(),
+        StartAction::Error(WorkerExecutorError::InvocationFailed { .. }) => "fail".to_string(),
         other => format!("{other:?}"),
     };
     let attempt = Some(OplogIndex::from_u64(9));
@@ -1214,22 +1215,23 @@ fn a_pending_manual_update_whose_restore_fails_for_good_fails_and_other_baseline
         restore(RestoreClass::DiskFull)
     );
     let rebuild = || "rebuild".to_string();
+    let fail = || "fail".to_string();
     let suspend = || "suspend".to_string();
     let skip = || "skip 10".to_string();
     // (role, error, without a lost shard, with a lost shard)
     let table = [
         ("initial", "access", rebuild(), rebuild()),
         ("initial", "sandbox", rebuild(), rebuild()),
-        ("initial", "conflict", rebuild(), rebuild()),
+        ("initial", "conflict", fail(), fail()),
         ("initial", "quota", suspend(), suspend()),
         ("initial", "capacity", rebuild(), rebuild()),
         ("initial", "restore-transient", rebuild(), rebuild()),
-        ("initial", "restore-fixed", rebuild(), rebuild()),
-        ("initial", "restore-lost", rebuild(), rebuild()),
+        ("initial", "restore-fixed", fail(), fail()),
+        ("initial", "restore-lost", fail(), fail()),
         ("initial", "invalidated", rebuild(), rebuild()),
         ("periodic", "access", rebuild(), rebuild()),
         ("periodic", "sandbox", rebuild(), rebuild()),
-        ("periodic", "conflict", rebuild(), rebuild()),
+        ("periodic", "conflict", fail(), fail()),
         ("periodic", "quota", suspend(), suspend()),
         ("periodic", "capacity", rebuild(), rebuild()),
         ("periodic", "restore-transient", skip(), skip()),
@@ -1269,7 +1271,7 @@ fn a_pending_manual_update_whose_restore_fails_for_good_fails_and_other_baseline
         ("manual-pending", "invalidated", rebuild(), rebuild()),
         ("manual-promoted", "access", rebuild(), rebuild()),
         ("manual-promoted", "sandbox", rebuild(), rebuild()),
-        ("manual-promoted", "conflict", rebuild(), rebuild()),
+        ("manual-promoted", "conflict", fail(), fail()),
         ("manual-promoted", "quota", suspend(), suspend()),
         ("manual-promoted", "capacity", rebuild(), rebuild()),
         ("manual-promoted", "restore-transient", rebuild(), rebuild()),
@@ -1378,9 +1380,9 @@ fn a_restore_into_a_full_disk_fails_a_pending_update_and_says_that_the_disk_is_f
 }
 
 /// The initial-file rule at the update point fails the update for a conflict and for an
-/// initial-file source that the blob storage refuses. A full quota suspends the start, an
+/// initial-file source that is invalid or that the blob storage refuses. A full quota suspends the start, an
 /// initial-file source that the blob storage cannot give now retries as a recovery, and every
-/// other filesystem error, a failed download of an initial file included, retries the start;
+/// other filesystem error retries the start;
 /// none of them writes a failed update.
 #[test]
 fn the_initial_file_rule_at_the_update_point_fails_the_update_for_a_conflict_or_a_refused_source() {
@@ -1404,26 +1406,26 @@ fn the_initial_file_rule_at_the_update_point_fails_the_update_for_a_conflict_or_
         StartAction::Error(WorkerExecutorError::Interrupted {
             kind: InterruptKind::Suspend(_),
         }) => "suspend",
-        StartAction::Error(WorkerExecutorError::Runtime { .. }) => "retry",
         StartAction::Error(WorkerExecutorError::RecoveryRequired { .. }) => "recovery",
         _ => "other",
     };
     type MakeError = fn() -> FilesystemError;
-    let errors: [(MakeError, &str); 8] = [
+    let errors: [(MakeError, &str); 9] = [
         (
             || FilesystemError::InitialFileConflict(Box::new(conflict())),
             "fail",
         ),
         (refused_source, "fail"),
+        (|| FilesystemError::InitialFileFailed(storage()), "fail"),
         (|| FilesystemError::AgentQuota(storage()), "suspend"),
-        (|| FilesystemError::Sandbox(storage()), "retry"),
+        (|| FilesystemError::Sandbox(storage()), "recovery"),
         (
             || FilesystemError::InitialFileUnavailable(storage()),
             "recovery",
         ),
-        (|| FilesystemError::PhysicalCapacity(storage()), "retry"),
-        (|| FilesystemError::Access(AccessError::Revoked), "retry"),
-        (|| FilesystemError::RuntimeInvalidated, "retry"),
+        (|| FilesystemError::PhysicalCapacity(storage()), "recovery"),
+        (|| FilesystemError::Access(AccessError::Revoked), "recovery"),
+        (|| FilesystemError::RuntimeInvalidated, "recovery"),
     ];
 
     cases.iter().for_each(|(role, head)| {
@@ -1487,7 +1489,7 @@ fn the_update_point_retries_only_a_transient_fetch_as_a_recovery() {
         Some(&head),
         RawStartError::UpdateState(error),
     ) {
-        StartAction::Error(error) => update_point_error(error),
+        StartAction::Error(error) => component_startup_error(error),
         other => panic!("expected a passed error, got {other:?}"),
     };
 
@@ -1505,7 +1507,7 @@ fn the_update_point_retries_only_a_transient_fetch_as_a_recovery() {
         passed(&UpdateStateError::InitialFiles(FilesystemError::Sandbox(
             storage()
         ))),
-        WorkerExecutorError::Runtime { .. }
+        WorkerExecutorError::RecoveryRequired { .. }
     ));
     assert!(matches!(
         passed(&UpdateStateError::InitialFiles(
@@ -1516,11 +1518,11 @@ fn the_update_point_retries_only_a_transient_fetch_as_a_recovery() {
         }
     ));
     assert!(matches!(
-        update_point_error(not_found()),
+        component_startup_error(not_found()),
         WorkerExecutorError::ComponentNotFound { .. }
     ));
     assert!(matches!(
-        update_point_error(WorkerExecutorError::runtime("a sandbox failure")),
+        component_startup_error(WorkerExecutorError::runtime("a sandbox failure")),
         WorkerExecutorError::Runtime { .. }
     ));
 }
@@ -1805,20 +1807,24 @@ fn a_pending_baseline_fails_its_own_update_and_a_failed_load_names_its_record() 
     );
 }
 
-/// The start error for every error of the agent filesystem: an agent
-/// quota suspends the start, and every other error fails it with its message.
+/// Transient filesystem errors retry reconstruction, permanent file sources and baselines
+/// fail the agent, and an agent quota suspends the start.
 #[test]
 fn reconstruction_startup_error_for_every_filesystem_error() {
-    let others = [
+    let transient = [
         FilesystemError::Access(AccessError::Revoked),
         FilesystemError::Sandbox(storage()),
         FilesystemError::InitialFileUnavailable(storage()),
-        FilesystemError::InitialFileConflict(Box::new(conflict())),
         FilesystemError::PhysicalCapacity(storage()),
         restore(RestoreClass::Transient),
+        FilesystemError::RuntimeInvalidated,
+    ];
+    let permanent = [
+        refused_source(),
+        FilesystemError::InitialFileFailed(storage()),
+        FilesystemError::InitialFileConflict(Box::new(conflict())),
         restore(RestoreClass::Fixed),
         restore(RestoreClass::Lost),
-        FilesystemError::RuntimeInvalidated,
     ];
 
     assert!(matches!(
@@ -1827,10 +1833,19 @@ fn reconstruction_startup_error_for_every_filesystem_error() {
             kind: InterruptKind::Suspend(_)
         }
     ));
-    others.iter().for_each(|error| {
+    transient.iter().for_each(|error| {
         assert_eq!(
             reconstruction_startup_error(error),
-            WorkerExecutorError::runtime(error.to_string())
+            WorkerExecutorError::recovery_required(error.to_string())
+        );
+    });
+    permanent.iter().for_each(|error| {
+        assert_eq!(
+            reconstruction_startup_error(error),
+            WorkerExecutorError::InvocationFailed {
+                error: AgentError::InternalError(error.to_string()),
+                stderr: String::new(),
+            }
         );
     });
 }
