@@ -2,7 +2,9 @@ name: Golem Cloud billing
 
 # Tests and publishes the hosted billing app in golem-cloud-billing/. Every push to main that
 # changes the app publishes golemservices/golem-cloud-billing:main-<run number>-<short SHA>; a
-# published Golem release publishes golemservices/golem-cloud-billing:v<version>.
+# published Golem release publishes golemservices/golem-cloud-billing:v<version>. A run started by
+# hand publishes golemservices/golem-cloud-billing:test-<run number>-<short SHA> of the selected
+# branch, to test a change on a cluster before the merge.
 
 on:
   push:
@@ -20,6 +22,7 @@ on:
       - "golem-registry-service/db/migration/postgres/**"
   release:
     types: [published]
+  workflow_dispatch:
 
 concurrency:
   group: golem-cloud-billing-${{ github.ref }}
@@ -101,9 +104,10 @@ jobs:
           images: golemservices/golem-cloud-billing
           flavor: |
             latest=false
-          # Flux on the clusters orders the main builds by run number.
+          # Flux on the clusters orders the main builds by run number and selects no test tag.
           tags: |
             type=raw,value=main-${{ github.run_number }}-{{sha}},enable=${{ github.event_name == 'push' }}
+            type=raw,value=test-${{ github.run_number }}-{{sha}},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=ref,event=tag
             type=ref,event=pr
       - name: Build and push image

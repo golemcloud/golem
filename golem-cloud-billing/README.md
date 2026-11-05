@@ -294,4 +294,12 @@ docker build -f docker/Dockerfile -t golem-cloud-billing .
 
 CI (`.github/workflows/golem-cloud-billing.yaml`) publishes `golemservices/golem-cloud-billing`
 with a `main-<run number>-<short SHA>` tag for every change on `main`, and a `v<version>` tag for
-every Golem release.
+every Golem release. To test a branch on a cluster before the merge, start the workflow on that
+branch:
+
+```shell
+gh workflow run golem-cloud-billing.yaml --repo golemcloud/golem --ref <branch>
+```
+
+The run publishes a `test-<run number>-<short SHA>` tag. The image policy of Flux selects only the
+`main` tags, so a test image runs only where a deployment pins its digest.
