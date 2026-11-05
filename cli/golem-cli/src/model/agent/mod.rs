@@ -39,7 +39,8 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId};
-use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogErrorKind;
 use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};
@@ -299,6 +300,22 @@ pub struct AgentMetadata {
 }
 
 impl AgentMetadata {
+    pub fn component_id(&self) -> ComponentId {
+        self.agent_id.component_id
+    }
+
+    pub fn raw_agent_id(&self) -> &str {
+        &self.agent_id.agent_id
+    }
+
+    pub fn agent_type_name(&self) -> Option<AgentTypeName> {
+        ParsedAgentId::parse_agent_type_name(self.raw_agent_id()).ok()
+    }
+
+    pub fn parsed_agent_id(&self, metadata: &ComponentMetadata) -> Option<ParsedAgentId> {
+        ParsedAgentId::parse(self.raw_agent_id(), metadata).ok()
+    }
+
     pub fn from(
         component_name: ComponentName,
         value: golem_client::model::AgentMetadataDto,
