@@ -21,15 +21,34 @@ export interface Subscription {
   readonly cancelAtPeriodEnd: boolean
   /** `modified_at` of the subscription in Polar, or `created_at` before its first change. */
   readonly modifiedAt: Date
+  /** The metered prices of the product: an order item of one of them bills paid overage. */
+  readonly meteredPriceIds: ReadonlyArray<string>
   /**
-   * When the subscription became `past_due`, until it is `active` again. Polar revokes a
-   * subscription that stays unpaid, and the revoked subscription keeps this time.
+   * When a payment of the subscription failed (`past_due_at` of Polar). Polar clears it when a
+   * payment succeeds, and keeps it when it revokes the subscription after the failed retries.
    */
   readonly pastDueAt: Date | undefined
 }
 
-/** A state of a subscription that a webhook reports. `record` keeps `pastDueAt` itself. */
-export type SubscriptionUpdate = Omit<Subscription, "pastDueAt">
+/** The state of a Polar order of a subscription, as the last webhook for it reported it. */
+export interface Order {
+  readonly orderId: string
+  readonly accountId: string
+  readonly subscriptionId: string
+  /** `draft`, `pending` (not paid), `paid`, `refunded`, `partially_refunded` or `void`. */
+  readonly status: string
+  readonly createdAt: Date
+  readonly modifiedAt: Date
+  readonly items: ReadonlyArray<{ readonly productPriceId: string | null; readonly amount: number }>
+}
+
+/** An order that is not paid, with the amount of its items of metered prices, in cents. */
+export interface PendingOrder {
+  readonly orderId: string
+  readonly subscriptionId: string
+  readonly createdAt: Date
+  readonly meteredAmount: number
+}
 
 /** A failed query of the subscription tables. */
 export class SubscriptionsError extends Data.TaggedError("SubscriptionsError")<{
@@ -45,17 +64,30 @@ export interface SubscriptionsShape {
    * Stores the subscription, unless the stored state is newer. Polar can deliver webhooks out of
    * order, so an older state never replaces a newer one.
    */
-  readonly record: (subscription: SubscriptionUpdate) => Effect.Effect<void, SubscriptionsError>
+  readonly record: (subscription: Subscription) => Effect.Effect<void, SubscriptionsError>
+  /** Stores the order, unless the stored state is newer. */
+  readonly recordOrder: (order: Order) => Effect.Effect<void, SubscriptionsError>
   /** The subscriptions of the product that the account has, in every status. */
   readonly ofAccount: (
     accountId: string,
     productId: string
   ) => Effect.Effect<ReadonlyArray<Subscription>, SubscriptionsError>
+  /** The `pending` orders of the subscriptions of the product that the account has. */
+  readonly pendingOrders: (
+    accountId: string,
+    productId: string
+  ) => Effect.Effect<ReadonlyArray<PendingOrder>, SubscriptionsError>
   /**
    * The accounts with a billable subscription of the product that is canceled at the period end,
    * with the period end between `from` and `to`.
    */
   readonly ending: (
+    productId: string,
+    from: Date,
+    to: Date
+  ) => Effect.Effect<ReadonlyArray<string>, SubscriptionsError>
+  /** The accounts with a `pending` order of the product that Polar created between `from` and `to`. */
+  readonly awaitingPayment: (
     productId: string,
     from: Date,
     to: Date
@@ -83,8 +115,8 @@ export class Subscriptions extends Context.Service<Subscriptions, SubscriptionsS
 ) {}
 
 /**
- * The tables of the subscriptions. The usage push also creates them, because it reads
- * `polar_subscriptions` and can run before the web app.
+ * The tables of the subscriptions and their orders. The usage push also creates them, because it
+ * reads `polar_subscriptions` and can run before the web app.
  */
 export const tables = `
   CREATE TABLE IF NOT EXISTS polar_subscriptions (
@@ -95,10 +127,22 @@ export const tables = `
     current_period_end TIMESTAMPTZ,
     cancel_at_period_end BOOLEAN NOT NULL,
     modified_at TIMESTAMPTZ NOT NULL,
+    metered_price_ids TEXT[] NOT NULL,
     past_due_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
   );
   CREATE INDEX IF NOT EXISTS polar_subscriptions_account ON polar_subscriptions (account_id, product_id);
+  CREATE TABLE IF NOT EXISTS polar_orders (
+    order_id TEXT PRIMARY KEY,
+    account_id UUID NOT NULL,
+    subscription_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    modified_at TIMESTAMPTZ NOT NULL,
+    items JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+  );
+  CREATE INDEX IF NOT EXISTS polar_orders_pending ON polar_orders (account_id, created_at) WHERE status = 'pending';
   CREATE TABLE IF NOT EXISTS polar_webhook_deliveries (
     webhook_id TEXT PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -113,6 +157,7 @@ interface SubscriptionRow {
   readonly current_period_end: Date | null
   readonly cancel_at_period_end: boolean
   readonly modified_at: Date
+  readonly metered_price_ids: Array<string>
   readonly past_due_at: Date | null
 }
 
@@ -124,11 +169,12 @@ const fromRow = (row: SubscriptionRow): Subscription => ({
   currentPeriodEnd: row.current_period_end ?? undefined,
   cancelAtPeriodEnd: row.cancel_at_period_end,
   modifiedAt: row.modified_at,
+  meteredPriceIds: row.metered_price_ids,
   pastDueAt: row.past_due_at ?? undefined
 })
 
 const columns = `subscription_id, account_id::text AS account_id, product_id, status, current_period_end,
-                cancel_at_period_end, modified_at, past_due_at`
+                cancel_at_period_end, modified_at, metered_price_ids, past_due_at`
 
 const failure = (error: unknown) =>
   new SubscriptionsError({ reason: error instanceof Error ? error.message : String(error) })
@@ -150,13 +196,12 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
     const query = <R extends object>(text: string, values: ReadonlyArray<unknown> = []) =>
       Effect.tryPromise({ try: () => pool.query<R & pg.QueryResultRow>(text, [...values]), catch: failure })
 
-    // past_due_at keeps the first past_due state until an active state clears it.
-    const record = (subscription: SubscriptionUpdate) =>
+    const record = (subscription: Subscription) =>
       query(
         `INSERT INTO polar_subscriptions
            (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at,
-            past_due_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $4 = 'past_due' THEN $7::timestamptz END)
+            metered_price_ids, past_due_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (subscription_id) DO UPDATE SET
            account_id = EXCLUDED.account_id,
            product_id = EXCLUDED.product_id,
@@ -164,10 +209,8 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
            current_period_end = EXCLUDED.current_period_end,
            cancel_at_period_end = EXCLUDED.cancel_at_period_end,
            modified_at = EXCLUDED.modified_at,
-           past_due_at = CASE
-             WHEN EXCLUDED.status = 'active' THEN NULL
-             ELSE coalesce(polar_subscriptions.past_due_at, EXCLUDED.past_due_at)
-           END,
+           metered_price_ids = EXCLUDED.metered_price_ids,
+           past_due_at = EXCLUDED.past_due_at,
            updated_at = clock_timestamp()
          WHERE polar_subscriptions.modified_at <= EXCLUDED.modified_at`,
         [
@@ -177,7 +220,30 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
           subscription.status,
           subscription.currentPeriodEnd ?? null,
           subscription.cancelAtPeriodEnd,
-          subscription.modifiedAt
+          subscription.modifiedAt,
+          subscription.meteredPriceIds,
+          subscription.pastDueAt ?? null
+        ]
+      ).pipe(Effect.asVoid)
+
+    const recordOrder = (order: Order) =>
+      query(
+        `INSERT INTO polar_orders (order_id, account_id, subscription_id, status, created_at, modified_at, items)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (order_id) DO UPDATE SET
+           status = EXCLUDED.status,
+           modified_at = EXCLUDED.modified_at,
+           items = EXCLUDED.items,
+           updated_at = clock_timestamp()
+         WHERE polar_orders.modified_at <= EXCLUDED.modified_at`,
+        [
+          order.orderId,
+          order.accountId,
+          order.subscriptionId,
+          order.status,
+          order.createdAt,
+          order.modifiedAt,
+          JSON.stringify(order.items)
         ]
       ).pipe(Effect.asVoid)
 
@@ -187,6 +253,29 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
         [accountId, productId]
       ).pipe(Effect.map((result) => result.rows.map(fromRow)))
 
+    // An order of a subscription that no webhook has reported yet has no metered prices to match;
+    // the webhook of that subscription reconciles the plan again.
+    const pendingOrders = (accountId: string, productId: string) =>
+      query<{ order_id: string; subscription_id: string; created_at: Date; metered_amount: string }>(
+        `SELECT o.order_id, o.subscription_id, o.created_at,
+                coalesce((SELECT sum(i.amount)
+                            FROM jsonb_to_recordset(o.items) AS i("productPriceId" text, amount bigint)
+                           WHERE i."productPriceId" = ANY(s.metered_price_ids)), 0)::text AS metered_amount
+           FROM polar_orders o
+           JOIN polar_subscriptions s ON s.subscription_id = o.subscription_id
+          WHERE o.account_id = $1 AND s.product_id = $2 AND o.status = 'pending'`,
+        [accountId, productId]
+      ).pipe(
+        Effect.map((result) =>
+          result.rows.map((row) => ({
+            orderId: row.order_id,
+            subscriptionId: row.subscription_id,
+            createdAt: row.created_at,
+            meteredAmount: Number(row.metered_amount)
+          }))
+        )
+      )
+
     const ending = (productId: string, from: Date, to: Date) =>
       query<{ account_id: string }>(
         `SELECT DISTINCT account_id::text AS account_id
@@ -194,6 +283,15 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
           WHERE product_id = $1 AND status = ANY($2) AND cancel_at_period_end
             AND current_period_end BETWEEN $3 AND $4`,
         [productId, billableStatuses, from, to]
+      ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
+
+    const awaitingPayment = (productId: string, from: Date, to: Date) =>
+      query<{ account_id: string }>(
+        `SELECT DISTINCT o.account_id::text AS account_id
+           FROM polar_orders o
+           JOIN polar_subscriptions s ON s.subscription_id = o.subscription_id
+          WHERE s.product_id = $1 AND o.status = 'pending' AND o.created_at BETWEEN $2 AND $3`,
+        [productId, from, to]
       ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
 
     const latest = (accountId: string, productId: string) =>
@@ -246,7 +344,18 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
           })
       )
 
-    return { record, ofAccount, ending, latest, isDelivered, markDelivered, withAccountLock }
+    return {
+      record,
+      recordOrder,
+      ofAccount,
+      pendingOrders,
+      ending,
+      awaitingPayment,
+      latest,
+      isDelivered,
+      markDelivered,
+      withAccountLock
+    }
   })
 )
 

@@ -172,21 +172,22 @@ const planHero = (options: SignedInPageOptions) => {
           ${portalForm("Manage billing")}
         </div>`
     case "suspended":
-      return options.subscription?.status === "past_due"
-        ? html`<span class="eyebrow">Your plan</span>
+      return html`<span class="eyebrow">Your plan</span>
         <h1>Your account is suspended</h1>
-        <p class="alert" role="alert">The last payment for Paid failed, so the agents of this account are stopped. Update the payment method in Manage billing. After the payment, the account is on Paid again.</p>
+        <p class="alert" role="alert">An invoice for paid overage is not paid, so the agents of this account are stopped. Pay the invoice in Billing. After the payment, the account gets its plan back.</p>
+        <div class="actions">
+          ${portalForm("Pay in Billing")}
+        </div>`
+    case "free":
+      // A new checkout would start a second subscription; the payment of the first one is open.
+      if (options.subscription?.status === "past_due") {
+        return html`<span class="eyebrow">Your plan</span>
+        <h1>You're on Free</h1>
+        <p class="alert" role="alert">The last payment for Paid failed, so the account is on Free. Update the payment method in Manage billing. After the payment, the account is on Paid again.</p>
         <div class="actions">
           ${portalForm("Manage billing")}
         </div>`
-        : html`<span class="eyebrow">Your plan</span>
-        <h1>Your account is suspended</h1>
-        <p class="alert" role="alert">The Paid subscription ended without a payment, so the agents of this account are stopped. Subscribe to Paid again to start them.</p>
-        <div class="actions">
-          ${checkoutForm}
-          ${portalForm("Billing history")}
-        </div>`
-    case "free":
+      }
       return html`<span class="eyebrow">Your plan</span>
         <h1>You're on Free</h1>
         <p class="lead">Paid has larger monthly allowances. Polar handles the payment.</p>

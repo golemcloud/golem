@@ -73,20 +73,25 @@ times.
 
 ## Subscriptions
 
-A subscription of the Polar product `POLAR_PRODUCT_ID` moves the Golem account between three
-plans. The Polar customer has the Golem account ID as its external ID.
+A subscription of the Polar product `POLAR_PRODUCT_ID` and its orders move the Golem account
+between three plans. The Polar customer has the Golem account ID as its external ID.
 
 | Plan | Variable | When |
 | --- | --- | --- |
+| suspended | `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | paid overage is not paid: a `pending` order has an amount for a metered price, and a payment of its subscription failed or the order is older than one hour |
 | paid | `GOLEM_CLOUD_BILLING_PAID_PLAN_ID` | an `active` subscription that does not end within 15 minutes |
-| suspended | `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | the account owes a payment: a `past_due` or `unpaid` subscription, or one that Polar revoked while it was unpaid |
-| free | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID` | otherwise: no subscription, a cancellation, a trial, a pause |
+| free | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID` | otherwise: no subscription, a declined payment of the price alone, a cancellation, a trial, a pause |
 
-The paid plan is prepaid with optional postpay: its price buys the monthly amounts in advance,
-and paid overage is billed after the period. Only the paid plan allows overage. The suspended plan
-has no monthly amounts and `overage_eligible: false`, so the agents of the account stop, and an
-account that owes a payment gets no free usage. On a plan without overage the registry sets the
-account to `hardLimit`. Only the owner can turn paid overage on again
+The paid plan is prepaid with optional postpay. Its price buys the monthly amounts in advance:
+when the payment of the price fails, the account is on the free plan until the payment, as
+without a subscription. Paid overage is billed after the period, for resources that the account
+has used: when that payment fails, the account is suspended until the order is paid, also with a
+new subscription. The suspended plan has no monthly amounts and `overage_eligible: false`, so the
+agents of the account stop. A renewal order that has the next price and the overage of the last
+period counts as overage.
+
+Only the paid plan allows overage. On a plan without overage the registry sets the account to
+`hardLimit`. Only the owner can turn paid overage on again
 (`PUT /v1/accounts/{account_id}/monthly-usage-mode`), also after the account is back on the paid
 plan.
 
@@ -97,18 +102,25 @@ plan.
   until the webhook changes it.
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
-- **Webhooks.** Polar delivers `subscription.*` events to `POST /api/auth/polar/webhooks`. The
-  handler verifies the Standard Webhooks signature with `POLAR_WEBHOOK_SECRET` (403 when it does
-  not match), skips a `webhook-id` that it handled before, and stores the subscription in
-  `polar_subscriptions`. A state never replaces a state with a later `modified_at`, so a late
-  delivery cannot undo a newer one. Then it sets the plan from the table above. A failed payment
-  (`subscription.past_due`) also logs `payment_failed`. Polar revokes a subscription that stays
-  unpaid as `canceled`, like a cancellation, so the table keeps `past_due_at` from the first
-  `past_due` state until an `active` state. An account on any other plan, for example an internal
-  plan that an administrator gave it, keeps it.
-- **Sweep.** A subscription that is canceled at the period end stays `active` until Polar revokes
-  it. Every minute, each replica of the web app moves the accounts whose subscription ends within
-  15 minutes to the free plan.
+- **Webhooks.** Polar delivers `subscription.*`, `order.created`, `order.updated` and `order.paid`
+  events to `POST /api/auth/polar/webhooks`. The handler verifies the Standard Webhooks signature
+  with `POLAR_WEBHOOK_SECRET` (403 when it does not match), skips a `webhook-id` that it handled
+  before, and stores the subscription in `polar_subscriptions` or the order in `polar_orders`. A
+  state never replaces a state with a later `modified_at`, so a late delivery cannot undo a newer
+  one. Then it sets the plan from the table above. A failed payment (`subscription.past_due`) also
+  logs `payment_failed`. An account on any other plan, for example an internal plan that an
+  administrator gave it, keeps it.
+- **Metered prices.** An order item names its price. The subscription lists the prices of its
+  product, so `polar_subscriptions` keeps the IDs of the metered prices, and the handler counts
+  the items of these prices as overage.
+- **Failed payments.** Polar sets `past_due_at` on the subscription when a payment fails, clears
+  it when a payment succeeds, and keeps it when it revokes the subscription after the failed
+  retries. When the last order of a subscription that has ended fails, Polar does not retry it
+  and does not mark the subscription: only the age of the order shows the failure. Polar charges
+  an order when it creates it, so a renewal stays on the paid plan while Polar charges it.
+- **Sweep.** Every minute, each replica of the web app sets the plan of the accounts whose plan
+  changes with the time alone: a subscription that is canceled at the period end and ends within
+  15 minutes, and a `pending` order that is older than one hour.
 - **Order and retries.** An advisory lock per account serializes the webhooks and the sweep of one
   account, also across replicas. When the registry or the database fails, the handler answers 500 and Polar
   delivers the webhook again. A 409 of the registry (the account changed between the read and the
@@ -152,9 +164,8 @@ Polar bills:
   the last paid overage before the end.
 - **Renewal.** Overage that reaches Polar after the period ends goes on the next invoice, at the
   same prices.
-- **Failed payment.** The account is suspended while it owes the payment, also after Polar
-  revokes the subscription. A payment of the same subscription, or a new subscription, moves it
-  back to the paid plan.
+- **Failed payment.** An account that did not pay for its paid overage uses nothing more, so no
+  overage accrues that Polar would not bill.
 - **Trial.** A trial gives the free plan. The paid product has no trial.
 - **Product change.** The app has one paid product, so a subscription does not change its
   product. Polar invoices the usage of the old product at the change; a second product needs a
