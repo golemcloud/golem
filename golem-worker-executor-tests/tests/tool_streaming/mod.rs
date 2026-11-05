@@ -110,10 +110,12 @@ mod matrix_conformance;
 mod middleware_acceptance;
 mod moonbit_exports;
 mod moonbit_sdk_rows_acceptance;
+mod node_tool_processes;
 mod path_policy_acceptance;
 mod python_sidecar;
 mod rdbms_drop;
 mod rust_sdk_gol40_conformance;
+mod sdk_child_process_tools;
 mod snapshot_attachments;
 mod tool_result_delivery;
 mod trapped_leaf_observers;
@@ -156,6 +158,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("python")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("bash")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -17546,8 +17552,9 @@ async fn typescript_guest_recursive_rm_removes_tool_created_output(
 }
 
 /// Node exits once only unreferenced timers remain: the runtime cancels the pending `wait-for` of
-/// the interval after a short wait of its own completed. The next rebuild of the owner replays the
-/// completed body with that cancelled wait.
+/// the interval. A short referenced timer runs first, so that `wait-for` has already recorded its
+/// `now` read, whatever the runtime does once it becomes idle. The next rebuild of the owner
+/// replays the completed body with that cancelled wait.
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -17616,7 +17623,7 @@ async fn builtin_node_unreferenced_timer_is_replayed_after_restart(
         "/workspace",
         vec![
             "-e",
-            "setInterval(() => {}, 60_000).unref(); console.log('done')",
+            "setInterval(() => {}, 60_000).unref(); setTimeout(() => console.log('done'), 5)",
         ],
     )
     .await?;

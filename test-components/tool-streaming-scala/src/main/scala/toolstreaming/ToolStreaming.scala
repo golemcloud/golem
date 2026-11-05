@@ -129,11 +129,15 @@ trait ScalaToolStreamingCaller extends BaseAgent {
   def outputEvidence(mode: String): Future[ScalaOutputEvidence]
   def declaredErrorCompletion(): Future[ScalaOutputEvidence]
   def dualOutputDeclaredError(): Future[ScalaDualOutputEvidence]
+  def child_process_tool_observation(): Future[String]
 }
 
 @agentImplementation()
 final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamingCaller {
   private implicit val ec: ExecutionContext = ExecutionContext.global
+
+  override def child_process_tool_observation(): Future[String] =
+    ChildProcessTool.observation()
 
   override def matrix_core_observation(): Future[MatrixCoreObservation] = {
     val successRequest = MatrixRequest(
