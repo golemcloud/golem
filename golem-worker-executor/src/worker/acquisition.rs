@@ -638,6 +638,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         let _ = sender.send(published);
                         if resolved {
                             worker.retire_if_shard_left_during_construction().await;
+                            if !worker.owner_retirement_requested.is_cancelled() {
+                                worker.register_pending_invocation_wakes().await;
+                            }
                         }
                     };
                     if !invocation_loops.spawn_construction(construction) {

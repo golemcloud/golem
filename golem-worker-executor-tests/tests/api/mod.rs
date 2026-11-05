@@ -8040,6 +8040,189 @@ async fn due_wake_runs_scheduled_invocation_on_unloaded_target(
 
 #[test]
 #[timeout("4m")]
+async fn owner_load_restores_lost_invocation_wake(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use golem_common::model::oplog::PublicAgentInvocation;
+    use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
+    use golem_common::serialization::deserialize;
+    use golem_worker_executor::storage::scheduler::{
+        ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Loses the first wake insert, as if the scheduling call failed between the pending
+    /// commit and the wake insert.
+    #[derive(Debug)]
+    struct LoseFirstWake {
+        inner: Arc<dyn SchedulerStorage + Send + Sync>,
+        lost: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl SchedulerStorage for LoseFirstWake {
+        async fn insert(
+            &self,
+            id: ScheduleId,
+            due: chrono::DateTime<Utc>,
+            shard: ShardId,
+            action: &[u8],
+        ) -> Result<(), SchedulerStorageError> {
+            if matches!(
+                deserialize::<ScheduledAction>(action).unwrap(),
+                ScheduledAction::WakeInvocation { .. }
+            ) && !self.lost.swap(true, Ordering::AcqRel)
+            {
+                return Ok(());
+            }
+            self.inner.insert(id, due, shard, action).await
+        }
+
+        async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+            self.inner.cancel(id).await
+        }
+
+        async fn claim_due(
+            &self,
+            now: chrono::DateTime<Utc>,
+            assignment: &ShardAssignment,
+            limit: u32,
+            ttl: Duration,
+        ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+            self.inner.claim_due(now, assignment, limit, ttl).await
+        }
+
+        async fn count_due(
+            &self,
+            now: chrono::DateTime<Utc>,
+            assignment: &ShardAssignment,
+        ) -> Result<u64, SchedulerStorageError> {
+            self.inner.count_due(now, assignment).await
+        }
+
+        async fn extend_lease(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+            until: chrono::DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.extend_lease(id, owner, until).await
+        }
+
+        async fn ack(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.ack(id, owner).await
+        }
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let lost = Arc::new(AtomicBool::new(false));
+    let overrides = TestExecutorOverrides {
+        wrap_scheduler_storage: Some(Arc::new({
+            let lost = lost.clone();
+            move |inner| {
+                Arc::new(LoseFirstWake {
+                    inner,
+                    lost: lost.clone(),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server_name = "lost-wake-target";
+    let server = agent_id!("ScheduledInvocationServer", server_name);
+    let caller = agent_id!("ScheduledInvocationClient", "lost-wake-owner");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let due = Utc::now() + chrono::Duration::seconds(20);
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "schedule_at",
+            data_value!(server_name.to_string(), due.timestamp() as u64, 0u32),
+        )
+        .await?;
+    assert!(
+        lost.load(Ordering::Acquire),
+        "the first wake insert must be lost"
+    );
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    // Loading the owner before the deadline is the only chance to restore the wake: nothing
+    // invokes the target after this read.
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        0
+    );
+    assert!(
+        Utc::now() < due,
+        "the owner load must precede the scheduled deadline"
+    );
+
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let mut scheduled = None;
+            let mut started = 0;
+            let mut finished = false;
+            let mut current = false;
+            for entry in executor.get_oplog(&target, OplogIndex::INITIAL).await? {
+                match entry.entry {
+                    PublicOplogEntry::PendingAgentInvocation(parameters)
+                        if parameters.not_before.is_some() =>
+                    {
+                        if let PublicAgentInvocation::AgentMethodInvocation(method) =
+                            parameters.invocation
+                        {
+                            scheduled = Some(method.idempotency_key);
+                        }
+                    }
+                    PublicOplogEntry::AgentInvocationStarted(parameters) => {
+                        current = matches!(&parameters.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(method)
+                                if Some(&method.idempotency_key) == scheduled.as_ref());
+                        started += usize::from(current);
+                    }
+                    PublicOplogEntry::AgentInvocationFinished(_) if current => finished = true,
+                    _ => {}
+                }
+            }
+            if finished {
+                assert_eq!(started, 1, "the restored wake must run the invocation once");
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .context("the restored wake did not run the scheduled invocation")??;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        17
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
 async fn local_schedule_rejects_recreated_cached_target(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

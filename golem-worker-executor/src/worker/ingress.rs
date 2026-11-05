@@ -1058,7 +1058,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Oplog timestamps persist milliseconds. Round up so serialization cannot make an
         // invocation runnable before the requested instant, including after reconstruction.
         let millis = scheduled_at.timestamp_millis().max(0) as u64
-            + u64::from(!scheduled_at.timestamp_subsec_nanos().is_multiple_of(1_000_000));
+            + u64::from(
+                !scheduled_at
+                    .timestamp_subsec_nanos()
+                    .is_multiple_of(1_000_000),
+            );
         self.enqueue_worker_invocation_with_effect(
             invocation,
             read_only_cache::InvocationEffect::UnknownAssumeMutating,
@@ -1072,22 +1076,49 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .find(|pending| pending.has_idempotency_key(&key))
             && let Some(deadline) = pending.not_before
         {
-            let scheduled_at = DateTime::from_timestamp_millis(deadline.to_millis() as i64)
-                .expect("persisted invocation deadline is in the chrono range");
-            self.deps
-                .scheduler_service()
-                .schedule_with_id(
-                    schedule_id,
-                    scheduled_at,
-                    ScheduledAction::WakeInvocation {
-                        owned_agent_id: self.owned_agent_id.clone(),
-                        idempotency_key: key,
-                        target_worker_fingerprint: fingerprint,
-                    },
-                )
-                .await;
+            self.register_invocation_wake(key, deadline).await;
         }
         Ok(schedule_id)
+    }
+
+    /// Registers the wakes of every committed future invocation. Scheduler storage keeps an
+    /// existing entry for the same schedule id, so this only restores wakes that were lost
+    /// between the pending commit and the wake insert. A wake registered for an entry cancelled
+    /// meanwhile finds no pending entry at delivery and is acknowledged without effect.
+    pub(in crate::worker) async fn register_pending_invocation_wakes(&self) {
+        if self.agent_mode() != AgentMode::Durable {
+            return;
+        }
+        // Construction publishes before this runs, so deletion may already have stopped the actor.
+        let Ok(Some(status)) = self.state_actor.observe_status().await else {
+            return;
+        };
+        let scheduled = status
+            .pending_invocations
+            .iter()
+            .filter_map(|pending| Some((pending.idempotency_key()?.clone(), pending.not_before?)))
+            .collect::<Vec<_>>();
+        for (key, deadline) in scheduled {
+            self.register_invocation_wake(key, deadline).await;
+        }
+    }
+
+    async fn register_invocation_wake(&self, key: IdempotencyKey, deadline: Timestamp) {
+        let fingerprint = self.initial_worker_metadata.fingerprint;
+        let scheduled_at = DateTime::from_timestamp_millis(deadline.to_millis() as i64)
+            .expect("persisted invocation deadline is in the chrono range");
+        self.deps
+            .scheduler_service()
+            .schedule_with_id(
+                ScheduleId::for_invocation(fingerprint, &key),
+                scheduled_at,
+                ScheduledAction::WakeInvocation {
+                    owned_agent_id: self.owned_agent_id.clone(),
+                    idempotency_key: key,
+                    target_worker_fingerprint: fingerprint,
+                },
+            )
+            .await;
     }
 
     pub(in crate::worker) fn accept_ephemeral_invocation(

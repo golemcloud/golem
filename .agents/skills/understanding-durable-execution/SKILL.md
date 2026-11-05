@@ -138,6 +138,12 @@ incarnation-bound receipt and recorded scheduling owner, commits pending removal
 the wake, and shares the instance mutex with the committed pending-to-started transition. If
 cancellation wins, selected-but-not-started work is skipped without a result; if start wins,
 cancellation returns false. A delayed wake cannot recreate cancelled work.
+When a durable owner finishes construction, it registers the wake of every folded future entry
+again. Scheduler storage keeps an existing entry for the same schedule id, so this only restores a
+wake lost between the pending commit and the wake insert. A cancellation that commits during
+construction can leave a registered wake behind; its delivery finds no pending entry and is
+acknowledged without effect. A lost wake is not recovered while the target stays unloaded or stays
+resident without another construction.
 
 Two persistence steps matter for every crash window: **append** puts an entry in the oplog
 buffer; **commit** makes it recoverable (`commit_oplog_and_update_state(CommitLevel)`). The
