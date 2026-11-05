@@ -1106,6 +1106,7 @@ pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> 
 }
 
 #[cfg(test)]
+#[test_r::sequential]
 mod tests {
     use std::time::Duration;
 
