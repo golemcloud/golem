@@ -7,6 +7,7 @@ import { bind, type IdentityBinding } from "./Client.js"
 import { bind as bindDynamic } from "./DynamicClient.js"
 import { AgentIdentityError } from "./internal/agentIdentityError.js"
 import { rawPhantomId, retainRawPhantomId } from "./internal/agentIdentityState.js"
+import { decodeAgentId, encodeAgentId } from "./internal/agentIdentity.js"
 
 export { AgentIdentityError } from "./internal/agentIdentityError.js"
 
@@ -86,7 +87,7 @@ export const parse = (
     const host = yield* AgentHostClient
     return yield* Effect.try({
       try: () => {
-        const [typeName, constructor, phantom] = host.parseAgentId(encoded)
+        const [typeName, constructor, phantom] = decodeAgentId(host, encoded)
         return create(encoded, typeName, constructor.value, phantom)
       },
       catch: (cause) => new AgentIdentityError(cause),
@@ -102,7 +103,7 @@ export const make = (
     return yield* Effect.try({
       try: () => {
         const phantom = options.phantomId === undefined ? undefined : parseUuid(options.phantomId)
-        const encoded = host.makeAgentId(options.typeName, options.constructorValue, phantom)
+        const encoded = encodeAgentId(host, options.typeName, options.constructorValue, phantom)
         return create(encoded, options.typeName, options.constructorValue, phantom)
       },
       catch: (cause) => new AgentIdentityError(cause),
