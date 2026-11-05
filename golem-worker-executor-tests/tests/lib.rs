@@ -71,6 +71,7 @@ pub mod revert;
 pub mod revert_replay_tail;
 pub mod rpc;
 pub mod scalability;
+pub mod scheduled_durable;
 pub mod scheduled_ephemeral;
 pub mod scheduler_storage;
 mod scheduler_waits;
@@ -113,6 +114,7 @@ pub fn raw_params(
 }
 
 tag_suite!(api, group1);
+tag_suite!(scheduled_durable, group1);
 tag_suite!(scheduled_ephemeral, group1);
 tag_suite!(retry_lifecycle, group1);
 tag_suite!(worker_initialization, group1);

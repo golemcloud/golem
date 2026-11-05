@@ -132,16 +132,21 @@ payload and deadline and repairs the deterministic wake. Completed caller replay
 lookup. Future entries neither block ready work nor require residency or RunningWorkers membership.
 The scheduler stores only a `WakeInvocation` address, fingerprint and key, not another payload.
 Delivery requires the scheduled entry still to exist and be due, then starts an unloaded worker or
-notifies its resident loop. It never appends another invocation. Token cancellation validates the
+notifies its resident loop. It never appends another invocation. The recovery index follows status
+changes, and the entry was future at the last one, so delivery adds a durable target to
+`RunningWorkers` before the start: the wake is acknowledged once the start begins, and a crash
+before `AgentInvocationStarted` must still be recovered. Token cancellation validates the
 incarnation-bound receipt and recorded scheduling owner, commits pending removal before removing
 the wake, and shares the instance mutex with the committed pending-to-started transition. If
 cancellation wins, selected-but-not-started work is skipped without a result; if start wins,
 cancellation returns false. A delayed wake cannot recreate cancelled work.
 An ephemeral target is created at schedule time (`create_demand`, then `schedule_invocation`), so
 its pending entry is committed like a durable target's. Its first start waits for the due wake; an
-ephemeral wake that finds the agent inactive is acknowledged. Token cancellation of a never-started
-ephemeral target also withdraws its constructor reservation; once it has begun, cancellation
-returns false.
+ephemeral wake that finds the agent inactive is acknowledged. Ephemeral targets are not in
+`RunningWorkers` and the wake is acknowledged once the start begins, so an executor lost before the
+start commits `Restart` loses the scheduled invocation, as fail-stop allows. Token cancellation of a
+never-started ephemeral target also withdraws its constructor reservation; once it has begun,
+cancellation returns false.
 When an owner finishes construction, it registers the wake of every folded future entry
 again. Scheduler storage keeps an existing entry for the same schedule id, so this only restores a
 wake lost between the pending commit and the wake insert. A cancellation that commits during

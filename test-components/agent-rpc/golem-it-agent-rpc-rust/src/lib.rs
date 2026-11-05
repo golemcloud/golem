@@ -185,6 +185,42 @@ impl ScheduledInvocationServer for ScheduledInvocationServerImpl {
     }
 }
 
+/// Schedules `inc_global_by(1)` on itself from its constructor, at `seconds` since the epoch
+#[agent_definition]
+pub trait ConstructorSelfScheduler {
+    fn new(name: String, seconds: u64) -> Self;
+    fn inc_global_by(&mut self, value: u64);
+    fn get_global_value(&self) -> u64;
+}
+
+struct ConstructorSelfSchedulerImpl {
+    global: u64,
+}
+
+#[agent_implementation]
+impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
+    fn new(name: String, seconds: u64) -> Self {
+        let mut this = ConstructorSelfSchedulerClient::get(name, seconds);
+        this.schedule_inc_global_by(
+            1,
+            Datetime {
+                seconds: seconds as i64,
+                nanoseconds: 0,
+            },
+        )
+        .expect("failed to schedule an invocation on itself from the constructor");
+        Self { global: 0 }
+    }
+
+    fn inc_global_by(&mut self, value: u64) {
+        self.global += value;
+    }
+
+    fn get_global_value(&self) -> u64 {
+        self.global
+    }
+}
+
 #[agent_definition]
 pub trait ScheduledInvocationClient {
     fn new(name: String) -> Self;

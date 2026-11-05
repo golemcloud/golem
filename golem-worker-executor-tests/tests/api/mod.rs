@@ -7724,6 +7724,17 @@ async fn scheduled_invocation(
                 data_value!(server_agent_name.clone()),
             )
             .await?;
+        // The schedule is accepted only after the target committed it.
+        assert!(
+            executor
+                .get_oplog(&server_worker, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::PendingAgentInvocation(pending)
+                        if pending.not_before.is_some())),
+            "the scheduled invocation must be in the target oplog when schedule returns"
+        );
 
         let mut done = false;
         while !done {

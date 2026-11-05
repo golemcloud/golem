@@ -570,6 +570,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                         "scheduled invocation wake arrived before its committed deadline",
                     ));
                 }
+                // The recovery index follows status changes, and this entry was not yet due at
+                // the last one. The wake is acknowledged once the start begins, so the index must
+                // hold the target first: otherwise a crash before the invocation starts loses it.
+                self.all
+                    .worker_service()
+                    .set_assignment_tracking(owned_agent_id, expected_fingerprint, &status)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
             }
             ExactExistingDelivery::Resume => {}
             ExactExistingDelivery::CompletePromise(promise_id) => {

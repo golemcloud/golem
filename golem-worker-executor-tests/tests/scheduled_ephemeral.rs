@@ -152,18 +152,18 @@ impl SchedulerStorage for DuplicateWakes {
 }
 
 /// The target and invocation key of one schedule call.
-type Schedule = (AgentId, Option<IdempotencyKey>);
+pub(crate) type Schedule = (AgentId, Option<IdempotencyKey>);
 
 /// Records the freshness of every `inc` target creation and the target and key of every schedule.
 /// The first schedule never returns: the call stays pending until the executor is dropped. With
 /// `commit`, it first reaches the target, which commits it; without, the target exists but holds
 /// no scheduled invocation yet.
-struct HoldFirstSchedule {
-    inner: Arc<dyn Rpc>,
-    commit: bool,
-    creations: Arc<Mutex<Vec<InvocationFreshnessDisposition>>>,
-    schedules: Arc<Mutex<Vec<Schedule>>>,
-    held: Arc<tokio::sync::Notify>,
+pub(crate) struct HoldFirstSchedule {
+    pub(crate) inner: Arc<dyn Rpc>,
+    pub(crate) commit: bool,
+    pub(crate) creations: Arc<Mutex<Vec<InvocationFreshnessDisposition>>>,
+    pub(crate) schedules: Arc<Mutex<Vec<Schedule>>>,
+    pub(crate) held: Arc<tokio::sync::Notify>,
 }
 
 #[async_trait]
