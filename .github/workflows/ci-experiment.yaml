@@ -49,6 +49,24 @@ jobs:
           use-cache: 'false'
           rust-targets: wasm32-wasip1 wasm32-wasip2 wasm32-unknown-unknown
           install-cargo-binstall: 'true'
+      - name: Verify pinned and explicit stable Rust targets
+        timeout-minutes: 5
+        run: |
+          # The Scala guest generator explicitly selects stable, bypassing RUSTUP_TOOLCHAIN.
+          rustup target add --toolchain stable wasm32-wasip1 wasm32-wasip2 wasm32-unknown-unknown
+          rustup run "$RUSTUP_TOOLCHAIN" rustc -vV > tmp/experiment-results/rust-pinned.txt
+          rustup run stable rustc -vV > tmp/experiment-results/rust-stable.txt
+          diff -u tmp/experiment-results/rust-pinned.txt tmp/experiment-results/rust-stable.txt
+          printf '#![no_std]\npub fn target_probe() {}\n' > "$RUNNER_TEMP/target-probe.rs"
+          for toolchain in "$RUSTUP_TOOLCHAIN" stable; do
+            for target in wasm32-wasip1 wasm32-wasip2 wasm32-unknown-unknown; do
+              output="$RUNNER_TEMP/target-probe/$toolchain/$target"
+              mkdir -p "$output"
+              rustup run "$toolchain" rustc --crate-type lib --emit metadata \
+                --target "$target" --out-dir "$output" "$RUNNER_TEMP/target-probe.rs"
+              echo "Verified $toolchain / $target"
+            done
+          done
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
