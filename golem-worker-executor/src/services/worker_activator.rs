@@ -32,7 +32,7 @@ use tracing::warn;
 
 /// Work delivered only to the already existing scheduling incarnation.
 pub enum ExactExistingDelivery {
-    Invoke(AgentInvocation),
+    Invoke(Box<AgentInvocation>),
     Resume,
     CompletePromise(PromiseId),
 }
@@ -593,7 +593,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         }
         match delivery {
             ExactExistingDelivery::Invoke(invocation) => {
-                worker.clone().invoke(invocation).await?;
+                worker.clone().invoke(*invocation).await?;
             }
             ExactExistingDelivery::Resume => {}
             ExactExistingDelivery::CompletePromise(promise_id) => {

@@ -314,7 +314,7 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         };
         let AgentInvocation::AgentMethod {
             idempotency_key, ..
-        } = invocation
+        } = *invocation
         else {
             unreachable!()
         };

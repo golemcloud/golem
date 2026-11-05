@@ -407,6 +407,7 @@ impl ReplayState {
     /// active entity body owns the cursor head waits for that body or for cursor progress (see
     /// [`CursorTx::active_body_owning_head`]); any other missing match is decided by
     /// [`CursorTx::decide_missing_start`].
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) async fn claim_start_or_replay_end(
         &self,
         claim: StartClaim,

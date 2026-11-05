@@ -625,7 +625,7 @@ impl SchedulerServiceDefault {
                     .enqueue_exact_existing(
                         &owned_agent_id,
                         target_worker_fingerprint,
-                        ExactExistingDelivery::Invoke(*invocation),
+                        ExactExistingDelivery::Invoke(invocation),
                     )
                     .await
                 {
