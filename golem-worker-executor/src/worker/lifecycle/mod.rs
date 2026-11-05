@@ -307,8 +307,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
-        worker.ensure_component_agent_ingress("update")?;
         let metadata = worker.get_latest_worker_metadata().await;
+        if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+            return Err(WorkerExecutorError::invalid_request(
+                "update is not supported for an external tool owner",
+            ));
+        }
+        worker.ensure_component_agent_ingress("update")?;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
