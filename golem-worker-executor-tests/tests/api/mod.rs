@@ -7797,6 +7797,130 @@ async fn scheduled_invocation(
 }
 
 #[test]
+#[timeout("4m")]
+async fn grpc_schedule_commits_pending_without_loading_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationRequest, InvocationStart, invocation_request, invocation_response,
+    };
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent = agent_id!("ScheduledInvocationServer", "grpc-scheduled");
+    let target = executor.start_agent(&component.id, agent.clone()).await?;
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.worker_is_loaded(&owned).await {
+            executor.stop_worker_if_idle(&owned).await?;
+            tokio::task::yield_now().await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    assert!(!executor.worker_is_loaded(&owned).await);
+    let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint;
+    let key = IdempotencyKey::new("scheduled-key-not-a-uuid".to_string());
+    let future = Utc::now() + chrono::Duration::hours(1);
+
+    // A same-key retry must preserve both the original input and the original deadline.
+    for (at, value) in [(future, 101u64), (future + chrono::Duration::hours(1), 999)] {
+        let (_, input) = data_value!(value).into_parts();
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                agent_id: Some(target.clone().into()),
+                method_name: Some("inc_global_by".to_string()),
+                input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                idempotency_key: Some(key.clone().into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                environment_id: Some(component.environment_id.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+                schedule_at: Some(prost_types::Timestamp {
+                    seconds: at.timestamp(),
+                    nanos: at.timestamp_subsec_nanos() as i32,
+                }),
+                ..Default::default()
+            })),
+        };
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        sender.send(request).await?;
+        let mut responses = executor
+            .client
+            .clone()
+            .invoke_agent_session(tokio_stream::wrappers::ReceiverStream::new(receiver))
+            .await?
+            .into_inner();
+        let mut accepted = false;
+        while let Some(response) = responses.message().await? {
+            match response.response {
+                Some(invocation_response::Response::Accepted(_)) => accepted = true,
+                Some(invocation_response::Response::Rejected(error)) => {
+                    bail!("schedule was rejected: {error:?}")
+                }
+                Some(invocation_response::Response::Finished(completion)) => {
+                    assert!(matches!(
+                        completion.outcome,
+                        Some(golem_api_grpc::proto::golem::worker::invocation_session_completion::Outcome::Success(_))
+                    ), "schedule failed: {completion:?}");
+                }
+                _ => {}
+            }
+        }
+        assert!(accepted);
+        assert!(!executor.worker_is_loaded(&owned).await);
+        drop(sender);
+    }
+    let entries = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let pending = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::PendingAgentInvocation(parameters)
+                if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.idempotency_key == key) => Some(parameters),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(pending.len(), 1);
+    let expected_millis = future.timestamp_millis() as u64
+        + u64::from(!future.timestamp_subsec_nanos().is_multiple_of(1_000_000));
+    assert_eq!(pending[0].not_before.unwrap().to_millis(), expected_millis);
+    let PublicAgentInvocation::AgentMethodInvocation(method) = &pending[0].invocation else {
+        unreachable!()
+    };
+    assert_eq!(
+        method.function_input.clone().into_parts().1,
+        data_value!(101u64).into_parts().1
+    );
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    assert_eq!(
+        executor.get_worker_metadata(&target).await?.fingerprint,
+        fingerprint
+    );
+    let value = executor
+        .invoke_and_await_agent(&component, &agent, "get_global_value", data_value!())
+        .await?;
+    assert_eq!(value.into_typed::<u64>()?, 0);
+    let status = executor.attached_agent_status(&target).await?;
+    assert!(
+        status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&key) && pending.not_before.is_some())
+    );
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 #[timeout("4m")]
 async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(

@@ -991,6 +991,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         invocation_context,
                         principal,
                     },
+                    None,
                 )
                 .await?;
             let status = worker.state_actor.status().await;

@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::worker::*;
+use chrono::{DateTime, Utc};
+use golem_common::model::{ScheduleId, ScheduledAction};
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Invocation entry point. Returns `Finished(...)` on read-only cache hit,
@@ -120,7 +122,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // For ReadOnly the helper returns the epoch captured under the
                 // enqueue lock; using any other epoch could store stale data.
                 let captured = self
-                    .enqueue_worker_invocation_with_effect(invocation, effect)
+                    .enqueue_worker_invocation_with_effect(invocation, effect, None)
                     .await?
                     .0;
                 (ResultOrSubscription::Pending(subscription), captured)
@@ -833,6 +835,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.enqueue_worker_invocation_with_effect(
             invocation,
             read_only_cache::InvocationEffect::UnknownAssumeMutating,
+            None,
         )
         .await
         .map(|(_, oplog_index)| {
@@ -843,6 +846,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         oplog: &Arc<dyn Oplog>,
         invocation: AgentInvocation,
+        not_before: Option<Timestamp>,
     ) -> Result<(Option<IdempotencyKey>, OplogEntry), WorkerExecutorError> {
         let (semantic_key, idempotency_key, invocation_payload, invocation_context) =
             into_pending_invocation_parts(invocation);
@@ -871,7 +875,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok((
             semantic_key,
             OplogEntry::pending_agent_invocation(
-                None,
+                not_before,
                 idempotency_key,
                 payload,
                 invocation_context.trace_id,
@@ -890,6 +894,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: AgentInvocation,
         read_only_cache_effect: read_only_cache::InvocationEffect,
+        not_before: Option<Timestamp>,
     ) -> Result<(Option<u64>, Option<OplogIndex>), WorkerExecutorError> {
         // Carried on the span so the two sides of the hand-off share a searchable
         // key: the execution runs in its own trace, linked rather than nested, so
@@ -936,7 +941,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             let (semantic_idempotency_key, entry) = self
-                .pending_invocation_entry(&self.oplog, invocation)
+                .pending_invocation_entry(&self.oplog, invocation, not_before)
                 .await?;
 
             // Snapshot the epoch for a later read-only cache fill. Keyed admission releases and
@@ -1036,6 +1041,59 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .instrument(span)
         .await
     }
+
+    /// Commits scheduled work without starting the guest. Retrying acceptance repairs its wake
+    /// from the committed entry, so a retry cannot replace the original input or deadline.
+    pub async fn schedule_invocation(
+        &self,
+        invocation: AgentInvocation,
+        scheduled_at: DateTime<Utc>,
+    ) -> Result<ScheduleId, WorkerExecutorError> {
+        if !matches!(invocation, AgentInvocation::ExternalTool { .. }) {
+            self.ensure_component_agent_ingress("scheduled invocation")?;
+        }
+        let key = Self::require_idempotency_key(&invocation)?;
+        let fingerprint = self.initial_worker_metadata.fingerprint;
+        let schedule_id = ScheduleId {
+            id: uuid::Uuid::new_v5(&fingerprint.0, key.value.as_bytes()),
+        };
+        // Oplog timestamps persist milliseconds. Round up so serialization cannot make an
+        // invocation runnable before the requested instant, including after reconstruction.
+        let millis = scheduled_at.timestamp_millis().max(0) as u64
+            + u64::from(!scheduled_at.timestamp_subsec_nanos().is_multiple_of(1_000_000));
+        self.enqueue_worker_invocation_with_effect(
+            invocation,
+            read_only_cache::InvocationEffect::UnknownAssumeMutating,
+            Some(Timestamp::from(millis)),
+        )
+        .await?;
+        let status = self.state_actor.status().await;
+        if let Some(pending) = status
+            .pending_invocations
+            .iter()
+            .find(|pending| pending.has_idempotency_key(&key))
+            && let Some(deadline) = pending.not_before
+        {
+            let invocation = self.hydrate_pending_invocation(pending).await?.invocation;
+            let scheduled_at = DateTime::from_timestamp_millis(deadline.to_millis() as i64)
+                .expect("persisted invocation deadline is in the chrono range");
+            self.deps
+                .scheduler_service()
+                .schedule_with_id(
+                    schedule_id,
+                    scheduled_at,
+                    ScheduledAction::Invoke {
+                        account_id: self.initial_worker_metadata.created_by,
+                        owned_agent_id: self.owned_agent_id.clone(),
+                        invocation: Box::new(invocation),
+                        target_worker_fingerprint: fingerprint,
+                    },
+                )
+                .await;
+        }
+        Ok(schedule_id)
+    }
+
     pub(in crate::worker) fn accept_ephemeral_invocation(
         &self,
         invocation: &AgentInvocation,
