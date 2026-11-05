@@ -3165,6 +3165,23 @@ exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.
 
+Oplog processors have the explicit persisted `OwnerKind::OplogProcessor` and resolved
+`ResolvedOwnerContext::OplogProcessor`. Their Create records durable mode and the owner component,
+but no agent type, canonical key or phantom identity. Internal local delivery and system-only
+remote delivery use dedicated processor admission; the reserved processor namespace is a
+consistency check, not authority. The selected component revision must export the processor
+interface, whether or not it also declares agents. Ordinary agent creation rejects processor
+names and generic non-agent components. No agent constructor is queued for a processor.
+
+Processor batches use the ordinary committed invocation queue, durable results, RunningWorkers
+index and outer-loop reconstruction. Scheduler activation reconstructs only an existing
+incarnation; it cannot recreate a deleted processor through agent admission. Processor owners
+accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
+They retain component-level config, environment defaults, files and permissions, and have no
+attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
+otherwise they use `default_snapshotting`. The delivery protocol retains its recorded target,
+range and key across retries, independently of a rebuilt per-executor processor cache.
+
 ## Permission-card handles
 
 Persistent `derive` and `derive-from-wallet` return the host-tagged `persistent-card` sum:

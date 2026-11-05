@@ -78,6 +78,9 @@ fn agent(name: &str, component_id: ComponentId) -> AgentId {
 fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
         agent_id: agent_id.clone(),
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: OwnerKind::ComponentAgent,
         agent_mode: AgentMode::Ephemeral,
         component_revision: ComponentRevision::new(1).unwrap(),
@@ -843,6 +846,9 @@ fn deep_layers(compressed_levels: usize) -> Layers {
 fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata {
     AgentMetadata {
         agent_id: agent_id.clone(),
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: OwnerKind::ComponentAgent,
         env: vec![],
         environment_id,

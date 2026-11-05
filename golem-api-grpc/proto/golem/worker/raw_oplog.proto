@@ -6,6 +6,7 @@ import "golem/common/account_id.proto";
 import "golem/common/environment.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
+import "golem/component/component_id.proto";
 import "golem/component/plugin.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/public_oplog.proto";
@@ -175,6 +176,9 @@ message RawCreateParameters {
   optional golem.common.UUID instance_id = 12;
   golem.component.AgentMode agent_mode = 13;
   OwnerKind owner_kind = 14;
+  golem.component.ComponentId component_id = 15;
+  optional string agent_type_name = 16;
+  optional string canonical_key = 17;
 }
 
 message RawStartParameters {

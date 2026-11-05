@@ -2,6 +2,7 @@ use super::*;
 use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
+use golem_common::model::agent::OwnerKind;
 use golem_common::model::card::{
     AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
 };
@@ -10675,7 +10676,7 @@ async fn wallet_replay_fixture(
         metadata.environment_id,
         &AgentId {
             component_id: metadata.id,
-            agent_id: "wallet-replay-contract".to_string(),
+            agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
         },
     );
     let oplog = Arc::new(InMemoryOplog::new());
@@ -10684,7 +10685,7 @@ async fn wallet_replay_fixture(
     }
     let baseline = WalletBaseline::new(
         owner_id.clone(),
-        ResolvedOwnerContext::ComponentWorker,
+        ResolvedOwnerContext::OplogProcessor,
         Arc::new(WalletComponentService {
             metadata: metadata.clone(),
             revisions: Default::default(),
@@ -13658,7 +13659,17 @@ fn wallet_test_component(
         environment_name: golem_common::model::environment::EnvironmentName::try_from("test-env")
             .unwrap(),
         component_size: 1,
-        metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
+        metadata: golem_common::model::component_metadata::ComponentMetadata::from_parts(
+            golem_common::base_model::component_metadata::KnownExports {
+                oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".to_string()),
+                ..Default::default()
+            },
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            Default::default(),
+        ),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         object_store_key: "wallet-prefixes".to_string(),
@@ -13678,7 +13689,7 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
         environment_id,
         &AgentId {
             component_id,
-            agent_id: "wallet-prefixes".to_string(),
+            agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
         },
     );
     let metadata = wallet_test_component(component_id, environment_id);
@@ -13723,7 +13734,7 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
     }
     let baseline = WalletBaseline::new(
         owner.clone(),
-        ResolvedOwnerContext::ComponentWorker,
+        ResolvedOwnerContext::OplogProcessor,
         components.clone(),
         &metadata,
         oplog.as_ref(),
@@ -13836,7 +13847,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
         metadata.environment_id,
         &AgentId {
             component_id: metadata.id,
-            agent_id: "snapshot-wallet".to_string(),
+            agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
         },
     );
     let before = stored_test_card(CardId::new());
@@ -13868,7 +13879,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
     }
     let baseline = WalletBaseline::new(
         owner_id.clone(),
-        ResolvedOwnerContext::ComponentWorker,
+        ResolvedOwnerContext::OplogProcessor,
         Arc::new(WalletComponentService {
             metadata: metadata.clone(),
             revisions: Default::default(),
@@ -13945,7 +13956,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
             metadata.environment_id,
             &AgentId {
                 component_id: metadata.id,
-                agent_id: "audit-prefixes".to_string(),
+                agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
             },
         );
         let installed = stored_test_card(CardId::new());
@@ -14003,7 +14014,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
         }
         let baseline = WalletBaseline::new(
             owner_id.clone(),
-            ResolvedOwnerContext::ComponentWorker,
+            ResolvedOwnerContext::OplogProcessor,
             Arc::new(WalletComponentService {
                 metadata: metadata.clone(),
                 revisions: Default::default(),
@@ -14148,14 +14159,14 @@ async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry
             metadata.environment_id,
             &AgentId {
                 component_id: metadata.id,
-                agent_id: "wallet-publication".to_string(),
+                agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
             },
         );
         let oplog = Arc::new(InMemoryOplog::new());
         oplog.add(remove_retry_policy()).await.unwrap();
         let baseline = WalletBaseline::new(
             owner_id.clone(),
-            ResolvedOwnerContext::ComponentWorker,
+            ResolvedOwnerContext::OplogProcessor,
             Arc::new(WalletComponentService {
                 metadata: metadata.clone(),
                 revisions: Default::default(),
@@ -14271,14 +14282,14 @@ async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition
         metadata.environment_id,
         &AgentId {
             component_id: metadata.id,
-            agent_id: "wallet-boundary".to_string(),
+            agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
         },
     );
     let oplog = InMemoryOplog::new();
     oplog.add(remove_retry_policy()).await.unwrap();
     let baseline = WalletBaseline::new(
         owner_id,
-        ResolvedOwnerContext::ComponentWorker,
+        ResolvedOwnerContext::OplogProcessor,
         Arc::new(WalletComponentService {
             metadata: metadata.clone(),
             revisions: Default::default(),

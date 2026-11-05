@@ -73,10 +73,9 @@ use crate::schema::schema_value::SchemaValue;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedOwnerContext {
     Agent(Box<ParsedAgentId>),
-    /// A non-agent component's guest worker, using component-level provision policy.
-    ComponentWorker,
     /// An ephemeral external-tool owner using component-level policy without constructing an agent.
     ComponentBaseline,
+    OplogProcessor,
 }
 
 impl ResolvedOwnerContext {
@@ -93,15 +92,19 @@ impl ResolvedOwnerContext {
                     .map(Self::Agent)
                     .map_err(|error| error.to_string())
             }
-            OwnerKind::ComponentAgent => Ok(Self::ComponentWorker),
+            OwnerKind::ComponentAgent => Err("Component declares no agent types".to_string()),
             OwnerKind::EphemeralExternalTool => Ok(Self::ComponentBaseline),
+            OwnerKind::OplogProcessor if metadata.has_oplog_processor() => Ok(Self::OplogProcessor),
+            OwnerKind::OplogProcessor => {
+                Err("Component declares no oplog processor export".to_string())
+            }
         }
     }
 
     pub fn agent(&self) -> Option<&ParsedAgentId> {
         match self {
             Self::Agent(agent) => Some(agent),
-            Self::ComponentWorker | Self::ComponentBaseline => None,
+            Self::ComponentBaseline | Self::OplogProcessor => None,
         }
     }
 }

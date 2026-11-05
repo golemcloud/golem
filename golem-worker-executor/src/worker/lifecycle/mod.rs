@@ -334,15 +334,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if mode != UpdateMode::Automatic
             && let Ok(target_component_metadata) = deps
                 .component_service()
-                .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
+                .get_metadata(metadata.component_id, Some(target_revision))
                 .await
-            && let Ok(agent_id) = ParsedAgentId::parse(
-                &owned_agent_id.agent_id.agent_id,
-                &target_component_metadata.metadata,
-            )
+            && let Some(agent_type_name) = &metadata.agent_type_name
             && let Some(target_agent_type) = target_component_metadata
                 .metadata
-                .find_agent_type_by_name_ref(&agent_id.agent_type)
+                .find_agent_type_by_name_ref(agent_type_name)
+            && ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, target_agent_type).is_ok()
         {
             let persisted_mode = metadata.agent_mode;
             if target_agent_type.mode != persisted_mode {
@@ -353,7 +351,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     owned_agent_id,
                     persisted_mode,
                     target_revision,
-                    agent_id.agent_type,
+                    agent_type_name,
                     target_agent_type.mode,
                     persisted_mode,
                 )));
@@ -538,15 +536,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let component_metadata = deps
             .component_service()
             .get_metadata(
-                owned_agent_id.agent_id.component_id,
+                metadata.component_id,
                 Some(metadata.last_known_status.component_revision),
             )
             .await?;
-        let agent_type =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
         let grant_id = component_metadata
             .metadata
-            .owner_plugins(metadata.owner_kind, agent_type.as_ref())
+            .owner_plugins(metadata.owner_kind, metadata.agent_type_name.as_ref())
             .and_then(|plugins| {
                 plugins
                     .iter()
@@ -1264,11 +1260,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap_or(status.component_revision);
         let (_, active_component) = self
             .component_service()
-            .get(
-                &self.engine(),
-                self.owned_agent_id.component_id(),
-                active_revision,
-            )
+            .get(&self.engine(), self.component_id(), active_revision)
             .await?;
 
         let selection = self.select_start(status).await?;
@@ -1277,7 +1269,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             active_component.clone()
         } else {
             self.component_service()
-                .get_metadata(self.owned_agent_id.component_id(), Some(replay_revision))
+                .get_metadata(self.component_id(), Some(replay_revision))
                 .await?
         };
 

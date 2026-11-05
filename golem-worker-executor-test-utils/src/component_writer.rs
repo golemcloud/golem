@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use anyhow::{Context, anyhow};
-use golem_common::base_model::component_metadata::{AgentTypeProvisionConfig, KnownExports};
+use golem_common::base_model::component_metadata::{
+    AgentTypeProvisionConfig, ComponentProvisionConfig, KnownExports,
+};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountEmail;
 use golem_common::model::account::AccountId;
@@ -26,6 +28,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::schema::ComponentConfigSchema;
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_service_base::model::component::Component;
 use golem_test_framework::dsl::default_test_agent_initial_permissions_for_account;
@@ -207,6 +210,7 @@ impl FileSystemComponentWriter {
             component_name: component_name.to_string(),
             revision: component_revision,
             agent_type_provision_configs,
+            component_provision_config: ComponentProvisionConfig::default(),
             size,
             memories,
             known_exports,
@@ -591,6 +595,7 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub memories: Vec<LinearMemory>,
     pub known_exports: KnownExports,
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+    pub component_provision_config: ComponentProvisionConfig,
     pub component_name: String,
     pub wasm_filename: String,
     pub wasm_hash: golem_common::model::diff::Hash,
@@ -633,6 +638,10 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.root_package_version,
                 value.agent_types,
                 value.agent_type_provision_configs,
+            )
+            .with_component_config(
+                ComponentConfigSchema::default(),
+                value.component_provision_config,
             ),
             created_at: Default::default(),
             wasm_hash: value.wasm_hash,

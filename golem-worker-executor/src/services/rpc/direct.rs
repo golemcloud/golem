@@ -176,19 +176,29 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         method_parameters: &SchemaValue,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<bool, RpcError> {
+        let mut existing_metadata = None;
         let component_revision = method_validation_revision(freshness_disposition, || async {
-            Ok(Worker::<Ctx>::get_latest_metadata(self, owned_agent_id)
-                .await?
+            existing_metadata = Worker::<Ctx>::get_latest_metadata(self, owned_agent_id).await?;
+            Ok(existing_metadata
+                .as_ref()
                 .map(|metadata| metadata.last_known_status.component_revision))
         })
         .await?;
         let component = self
             .component_service()
-            .get_metadata(owned_agent_id.component_id(), component_revision)
+            .get_metadata(
+                existing_metadata.as_ref().map_or_else(
+                    || owned_agent_id.component_id(),
+                    |metadata| metadata.component_id,
+                ),
+                component_revision,
+            )
             .await?;
-        let parsed_agent_id =
-            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                .map_err(|details| RpcError::ProtocolError { details })?;
+        let parsed_agent_id = match &existing_metadata {
+            Some(metadata) => metadata.parse_agent_id(&component.metadata),
+            None => ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata),
+        }
+        .map_err(|details| RpcError::ProtocolError { details })?;
         validate_agent_method_invocation(
             &component.metadata,
             Some(&parsed_agent_id),
@@ -489,17 +499,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let status = worker.get_last_known_status().await;
         let component = self
             .component_service()
-            .get_metadata(
-                owned_agent_id.component_id(),
-                Some(status.component_revision),
-            )
+            .get_metadata(worker.component_id(), Some(status.component_revision))
             .await?;
         let input_encoded_len = method_parameters.encoded_len();
         let input = decode_invocation_input(method_parameters)
             .map_err(|details| RpcError::ProtocolError { details })?;
-        let parsed_agent_id =
-            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                .map_err(|details| RpcError::ProtocolError { details })?;
+        let parsed_agent_id = worker
+            .get_initial_worker_metadata()
+            .parse_agent_id(&component.metadata)
+            .map_err(|details| RpcError::ProtocolError { details })?;
         if !validate_agent_method_invocation(
             &component.metadata,
             Some(&parsed_agent_id),
