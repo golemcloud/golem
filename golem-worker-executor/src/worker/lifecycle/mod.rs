@@ -15,11 +15,12 @@
 use super::{RetirementReason, Worker};
 use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::agent::ScheduleId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
-use golem_common::model::{AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
+use golem_common::model::{AgentId, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{debug, info, warn};
 
@@ -961,6 +962,57 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
     }
+    /// Cancels only scheduled work recorded for this incarnation and scheduling agent.
+    pub async fn cancel_scheduled_invocation(
+        &self,
+        idempotency_key: IdempotencyKey,
+        schedule_id: ScheduleId,
+        owner: &AgentId,
+    ) -> Result<bool, WorkerExecutorError> {
+        let fingerprint = self.initial_worker_metadata.fingerprint;
+        if ScheduleId::for_invocation(fingerprint, &idempotency_key) != schedule_id {
+            return Ok(false);
+        }
+        let oplog_service = self.deps.oplog_service();
+        let _lifecycle = oplog_service
+            .lock_lifecycle(&self.owned_agent_id.agent_id)
+            .await;
+        let instance_guard = self.lock_non_stopping_worker().await;
+        if instance_guard.ensure_not_deleting().is_err() {
+            return Ok(false);
+        }
+        let identity = self
+            .deps
+            .worker_service()
+            .resolve_agent_identity(&self.owned_agent_id)
+            .await?;
+        if !identity.is_some_and(|identity| identity.fingerprint == fingerprint) {
+            return Ok(false);
+        }
+        let status = self
+            .state_actor
+            .repaired_status()
+            .await
+            .map_err(|refusal| self.refused_by(refusal))?;
+        let Some(pending) = status.pending_invocations.iter().find(|pending| {
+            pending.has_idempotency_key(&idempotency_key) && pending.not_before.is_some()
+        }) else {
+            return Ok(false);
+        };
+        let invocation = self.hydrate_pending_invocation(pending).await?.invocation;
+        if !matches!(invocation.principal(), Some(Principal::Agent(principal)) if &principal.agent_id == owner)
+        {
+            return Ok(false);
+        }
+        self.add_and_commit_oplog_internal(
+            &instance_guard,
+            OplogEntry::cancel_pending_invocation(idempotency_key),
+            Some(WorkerCommand::WorkAvailable),
+        )
+        .await?;
+        Ok(true)
+    }
+
     pub async fn cancel_invocation(
         &self,
         idempotency_key: IdempotencyKey,

@@ -1198,6 +1198,19 @@ impl WorkerProxy for RecordingWorkerProxy {
             .await
     }
 
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
     async fn lookup_invocation_status(
         &self,
         agent_id: &AgentId,
@@ -5337,9 +5350,7 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::{
-        AgentInvocation, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
-    };
+    use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
     use golem_common::serialization::serialize;
     use golem_worker_executor::services::{HasPromiseService, UsesAllDeps};
     use golem_worker_executor::storage::scheduler::SchedulerStorage;
@@ -5357,7 +5368,7 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
             .await
             .map_err(anyhow::Error::msg)?;
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
-    for kind in ["invoke", "resume", "complete-promise"] {
+    for kind in ["wake-invocation", "resume", "complete-promise"] {
         for recreate in [false, true] {
             let counter_id = agent_id!("Counter", format!("stale-{kind}-{recreate}"));
             let worker_id = executor
@@ -5407,18 +5418,10 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
                 .await?;
             let promise = promises.poll(promise_id.clone()).await?;
             let action = match kind {
-                "invoke" => ScheduledAction::Invoke {
-                    account_id: component.account_id,
+                "wake-invocation" => ScheduledAction::WakeInvocation {
                     owned_agent_id: owned.clone(),
                     target_worker_fingerprint: original.fingerprint,
-                    invocation: Box::new(AgentInvocation::AgentMethod {
-                        idempotency_key: IdempotencyKey::fresh(),
-                        method_name: "increment".to_string(),
-                        input: SchemaValue::Record { fields: vec![] },
-                        invocation_context: InvocationContextStack::fresh(),
-                        principal: Principal::anonymous(),
-                        scope_card: None,
-                    }),
+                    idempotency_key: IdempotencyKey::fresh(),
                 },
                 "resume" => ScheduledAction::Resume {
                     agent_created_by: component.account_id,
@@ -7916,6 +7919,511 @@ async fn grpc_schedule_commits_pending_without_loading_target(
             .pending_invocations
             .iter()
             .any(|pending| pending.has_idempotency_key(&key) && pending.not_before.is_some())
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn due_wake_runs_scheduled_invocation_on_unloaded_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server_name = "unloaded-due-wake";
+    let server = agent_id!("ScheduledInvocationServer", server_name);
+    let caller = agent_id!("ScheduledInvocationClient", "unloaded-due-wake-owner");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.worker_is_loaded(&owned).await {
+            executor.stop_worker_if_idle(&owned).await?;
+            tokio::task::yield_now().await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+
+    let due = Utc::now() + chrono::Duration::seconds(3);
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "schedule_at",
+            data_value!(
+                server_name.to_string(),
+                due.timestamp() as u64,
+                due.timestamp_subsec_nanos()
+            ),
+        )
+        .await?;
+    assert!(!executor.worker_is_loaded(&owned).await);
+
+    // Only the wake can start the target: nothing invokes it until the scheduled work finished.
+    let (key, finished) = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let mut key = None;
+            let mut not_before = None;
+            let mut started_at = Vec::new();
+            let mut started = 0;
+            let mut finished = 0;
+            let mut current = false;
+            for entry in executor.get_oplog(&target, OplogIndex::INITIAL).await? {
+                match entry.entry {
+                    PublicOplogEntry::PendingAgentInvocation(parameters)
+                        if parameters.not_before.is_some() =>
+                    {
+                        if let PublicAgentInvocation::AgentMethodInvocation(method) =
+                            parameters.invocation
+                        {
+                            key = Some(method.idempotency_key);
+                            not_before = parameters.not_before;
+                        }
+                    }
+                    PublicOplogEntry::AgentInvocationStarted(parameters) => {
+                        current = matches!(&parameters.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(method)
+                                if Some(&method.idempotency_key) == key.as_ref());
+                        if current {
+                            started += 1;
+                            started_at.push(parameters.timestamp);
+                        }
+                    }
+                    PublicOplogEntry::AgentInvocationFinished(_) if current => {
+                        finished += 1;
+                        current = false;
+                    }
+                    _ => {}
+                }
+            }
+            if finished > 0 {
+                assert_eq!(started, 1);
+                assert!(
+                    started_at[0].to_millis() >= not_before.unwrap().to_millis(),
+                    "the scheduled invocation must not start before its deadline"
+                );
+                break anyhow::Ok((key.unwrap(), finished));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .context("the due wake did not run the scheduled invocation on the unloaded target")??;
+    assert_eq!(finished, 1);
+    assert!(
+        executor
+            .attached_agent_status(&target)
+            .await?
+            .pending_invocations
+            .iter()
+            .all(|pending| !pending.has_idempotency_key(&key))
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        17
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn local_schedule_rejects_recreated_cached_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocation;
+    use golem_worker_executor::services::{HasRpc, UsesAllDeps};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server = agent_id!("ScheduledInvocationServer", "stale-local-schedule");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let original = executor.get_worker_metadata(&target).await?.fingerprint;
+    executor.delete_worker(&target).await?;
+    executor.start_agent(&component.id, server).await?;
+    let successor = executor.get_worker_metadata(&target).await?.fingerprint;
+    assert_ne!(original, successor);
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let key = IdempotencyKey::new("stale-incarnation-schedule".to_string());
+    let result = worker
+        .all()
+        .rpc()
+        .schedule_invocation(
+            &owned,
+            original,
+            AgentInvocation::AgentMethod {
+                idempotency_key: key.clone(),
+                method_name: "inc_global_by".to_string(),
+                input: data_value!(91u64).into_parts().1,
+                invocation_context: InvocationContextStack::fresh(),
+                principal: Principal::anonymous(),
+                scope_card: None,
+            },
+            Utc::now() + chrono::Duration::hours(1),
+            &AuthCtx::System,
+        )
+        .await;
+    let successor_pending = executor
+        .attached_agent_status(&target)
+        .await?
+        .pending_invocations
+        .iter()
+        .any(|pending| pending.has_idempotency_key(&key));
+    assert!(
+        result.is_err() && !successor_pending,
+        "an exact-existing schedule for {original:?} must reject its cached successor {successor:?} without pending work; result={result:?}, successor_pending={successor_pending}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn scheduled_cancellation_linearizes_with_invocation_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use golem_common::model::AgentInvocation;
+    use golem_common::model::agent::AgentPrincipal;
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server = agent_id!("ScheduledInvocationServer", "schedule-start-race");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let owner = executor
+        .start_agent(
+            &component.id,
+            agent_id!("ScheduledInvocationClient", "schedule-race-owner"),
+        )
+        .await?;
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let cancelled_key = IdempotencyKey::new("cancel-before-start".to_string());
+    let started_key = IdempotencyKey::new("start-before-cancel".to_string());
+
+    for (key, value, cancel_wins) in [
+        (cancelled_key.clone(), 71u64, true),
+        (started_key.clone(), 29u64, false),
+    ] {
+        let due = Utc::now() + chrono::Duration::seconds(5);
+        let receipt = worker
+            .schedule_invocation(
+                AgentInvocation::AgentMethod {
+                    idempotency_key: key.clone(),
+                    method_name: "inc_global_by".to_string(),
+                    input: data_value!(value).into_parts().1,
+                    invocation_context: InvocationContextStack::fresh(),
+                    principal: Principal::Agent(AgentPrincipal {
+                        agent_id: owner.clone(),
+                    }),
+                    scope_card: None,
+                },
+                due,
+            )
+            .await?;
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(30),
+                executor.invoke_and_await_agent(
+                    &component,
+                    &server,
+                    "get_global_value",
+                    data_value!(),
+                ),
+            )
+            .await
+            .context("reading the counter before the scheduled deadline timed out")??
+            .into_typed::<u64>()?,
+            0,
+            "the scheduled mutation must not execute before its deadline"
+        );
+        let status = executor.attached_agent_status(&target).await?;
+        let pending = status
+            .pending_invocations
+            .iter()
+            .find(|pending| pending.has_idempotency_key(&key))
+            .expect("the future invocation must remain pending");
+
+        if cancel_wins {
+            let (selected, release_selection) =
+                executor.gate_next_oplog_read(&target, pending.oplog_index);
+            assert!(
+                Utc::now() < due,
+                "the selection gate must precede the deadline"
+            );
+            tokio::time::timeout(Duration::from_secs(30), selected)
+                .await
+                .context("waiting for selected invocation hydration timed out")??;
+            // Hydration has selected the pending item, but cancellation can still remove it.
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_secs(30),
+                    worker.cancel_scheduled_invocation(key.clone(), receipt, &owner),
+                )
+                .await
+                .context("cancelling the selected invocation before Started timed out")??
+            );
+            release_selection.send(()).unwrap();
+        } else {
+            let mut started = executor.gate_next_invocation_started_append(&target).await;
+            assert!(
+                Utc::now() < due,
+                "the Started gate must precede the deadline"
+            );
+            assert!(
+                executor.worker_is_loaded(&owned).await,
+                "the due wake must start work on a resident target"
+            );
+            tokio::time::timeout(Duration::from_secs(30), started.entered())
+                .await
+                .context("waiting for the scheduled invocation's Started append timed out")?;
+            let (blocked_tx, blocked_rx) = tokio::sync::oneshot::channel();
+            let cancel = tokio::spawn({
+                let worker = worker.clone();
+                let owner = owner.clone();
+                async move {
+                    let mut cancellation =
+                        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &owner));
+                    assert!(futures::poll!(&mut cancellation).is_pending());
+                    blocked_tx.send(()).unwrap();
+                    cancellation.await
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(30), blocked_rx)
+                .await
+                .context("waiting for cancellation to block behind Started timed out")??;
+            // The Started append holds the instance lock; cancellation has already tried it.
+            drop(started);
+            assert!(
+                !tokio::time::timeout(Duration::from_secs(30), cancel)
+                    .await
+                    .context("cancellation did not finish after releasing Started")???
+            );
+        }
+
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(30),
+                executor.invoke_and_await_agent(
+                    &component,
+                    &server,
+                    "get_global_value",
+                    data_value!(),
+                ),
+            )
+            .await
+            .context("reading the counter after cancellation/start arbitration timed out")??
+            .into_typed::<u64>()?,
+            if cancel_wins { 0 } else { 29 }
+        );
+
+        let entries = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+        let mut current_key = None;
+        let mut pairs = HashMap::<IdempotencyKey, (usize, usize)>::new();
+        for entry in entries {
+            match entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(parameters) => {
+                    current_key = match parameters.invocation {
+                        PublicAgentInvocation::AgentMethodInvocation(method) => {
+                            pairs.entry(method.idempotency_key.clone()).or_default().0 += 1;
+                            Some(method.idempotency_key)
+                        }
+                        _ => None,
+                    };
+                }
+                PublicOplogEntry::AgentInvocationFinished(_) => {
+                    if let Some(key) = current_key.take() {
+                        pairs.entry(key).or_default().1 += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            pairs.get(&cancelled_key).copied().unwrap_or_default(),
+            (0, 0)
+        );
+        if !cancel_wins {
+            assert_eq!(pairs.get(&started_key), Some(&(1, 1)));
+        }
+    }
+    drop(worker);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent::AgentPrincipal;
+    use golem_common::model::{AgentInvocation, ScheduleId};
+    use golem_worker_executor::services::worker_activator::ExactExistingDelivery;
+    use golem_worker_executor::services::{HasWorkerActivator, UsesAllDeps};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server_name = "guest-schedule-cancellation";
+    let server = agent_id!("ScheduledInvocationServer", server_name);
+    let caller = agent_id!("ScheduledInvocationClient", "schedule-owner");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.worker_is_loaded(&owned).await {
+            executor.stop_worker_if_idle(&owned).await?;
+            tokio::task::yield_now().await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    let due = Utc::now() + chrono::Duration::hours(1);
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "schedule_at",
+            data_value!(server_name.to_string(), due.timestamp() as u64, 0u32),
+        )
+        .await?;
+    assert!(!executor.worker_is_loaded(&owned).await);
+    let status = executor.attached_agent_status(&target).await?;
+    let scheduled = status
+        .pending_invocations
+        .iter()
+        .filter(|pending| pending.not_before.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(scheduled.len(), 1);
+    let key = scheduled[0].idempotency_key().unwrap().clone();
+    assert_eq!(
+        scheduled[0].not_before.unwrap().to_millis(),
+        due.timestamp() as u64 * 1000
+    );
+    let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint;
+    let receipt = ScheduleId::for_invocation(fingerprint, &key);
+    drop(status);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    executor
+        .invoke_and_await_agent(&component, &caller, "cancel_scheduled", data_value!())
+        .await?;
+    assert!(!executor.worker_is_loaded(&owned).await);
+    assert!(
+        executor
+            .attached_agent_status(&target)
+            .await?
+            .pending_invocations
+            .iter()
+            .all(|pending| !pending.has_idempotency_key(&key))
+    );
+    // A wake already fetched before cancellation cannot restore the removed payload.
+    {
+        let worker = executor.active_agent(&owned).await.unwrap().primary();
+        let activator = worker.all().worker_activator();
+        for _ in 0..2 {
+            assert!(
+                !activator
+                    .enqueue_exact_existing(
+                        &owned,
+                        fingerprint,
+                        ExactExistingDelivery::WakeInvocation(key.clone()),
+                    )
+                    .await?
+            );
+        }
+    }
+    assert!(!executor.worker_is_loaded(&owned).await);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        0
+    );
+    executor.delete_worker(&target).await?;
+    drop(executor);
+
+    // Completed caller replay must not look up or recreate the deleted schedule recipient.
+    let executor = start(deps, &context).await?;
+    executor
+        .invoke_and_await_agent(&component, &caller, "get_global_value", data_value!())
+        .await?;
+    assert!(executor.get_worker_metadata(&target).await.is_err());
+    executor.start_agent(&component.id, server.clone()).await?;
+    let successor = executor.get_worker_metadata(&target).await?.fingerprint;
+    assert_ne!(successor, fingerprint);
+    {
+        let worker = executor.active_agent(&owned).await.unwrap().primary();
+        let successor_receipt = worker
+            .schedule_invocation(
+                AgentInvocation::AgentMethod {
+                    idempotency_key: key.clone(),
+                    method_name: "inc_global_by".to_string(),
+                    input: data_value!(91u64).into_parts().1,
+                    invocation_context: InvocationContextStack::fresh(),
+                    principal: Principal::Agent(AgentPrincipal {
+                        agent_id: caller_id,
+                    }),
+                    scope_card: None,
+                },
+                due,
+            )
+            .await?;
+        assert_ne!(successor_receipt, receipt);
+    }
+    executor
+        .invoke_and_await_agent(&component, &caller, "cancel_scheduled", data_value!())
+        .await?;
+    assert!(
+        executor
+            .attached_agent_status(&target)
+            .await?
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&key))
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        0
     );
     Ok(())
 }

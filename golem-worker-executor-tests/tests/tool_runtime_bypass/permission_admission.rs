@@ -1272,7 +1272,7 @@ impl SchedulerStorage for LostInvocationWake {
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
         let decoded = deserialize::<ScheduledAction>(action).unwrap();
-        if matches!(decoded, ScheduledAction::Invoke { .. }) {
+        if matches!(decoded, ScheduledAction::WakeInvocation { .. }) {
             self.attempts
                 .lock()
                 .unwrap()
@@ -1500,34 +1500,20 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
     );
     assert_eq!(
         wakes[0].action, original_action,
-        "the retry must not replace the original invocation"
+        "the retry must retain the original wake identity"
     );
-    let ScheduledAction::Invoke {
+    let ScheduledAction::WakeInvocation {
         target_worker_fingerprint,
         owned_agent_id,
-        invocation,
-        ..
+        idempotency_key,
     } = &wakes[0].action
     else {
-        panic!("the repaired wake must invoke the original owner");
+        panic!("the repaired wake must wake the original owner's pending invocation");
     };
     assert_eq!(*target_worker_fingerprint, fixture.fingerprint);
     assert_eq!(owned_agent_id.agent_id, fixture.owner_id);
-    assert_eq!(invocation.idempotency_key(), Some(&key));
-    assert_eq!(
-        id.id,
-        Uuid::new_v5(&fixture.fingerprint.0, key.value.as_bytes())
-    );
-    let golem_common::model::AgentInvocation::ExternalTool {
-        command_path,
-        input,
-        ..
-    } = invocation.as_ref()
-    else {
-        panic!("the repaired wake must retain the external tool invocation");
-    };
-    assert_eq!(command_path, &original.command_path);
-    assert_eq!(input.as_ref(), &original.input);
+    assert_eq!(idempotency_key, &key);
+    assert_eq!(id, ScheduleId::for_invocation(fixture.fingerprint, &key));
     let after = owner_oplog(&fixture).await?;
     assert_eq!(
         after.iter().map(comparable).collect::<Vec<_>>(),

@@ -111,6 +111,24 @@ where
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError>;
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError>;
+
     async fn create_demand(
         &self,
         owned_agent_id: &OwnedAgentId,

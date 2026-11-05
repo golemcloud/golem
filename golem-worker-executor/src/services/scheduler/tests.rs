@@ -290,14 +290,7 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         _worker_parent: Option<golem_common::model::AgentId>,
         _worker_creation_principal: Principal,
     ) -> Result<(), WorkerExecutorError> {
-        let AgentInvocation::AgentMethod {
-            idempotency_key, ..
-        } = invocation
-        else {
-            unreachable!()
-        };
-        self.executions.lock().unwrap().push(idempotency_key.value);
-        Ok(())
+        panic!("scheduled wakes must not re-enqueue invocation payloads: {invocation:?}")
     }
 
     async fn enqueue_exact_existing(
@@ -309,13 +302,7 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         if target_worker_fingerprint != self.fingerprint {
             return Ok(false);
         }
-        let ExactExistingDelivery::Invoke(invocation) = delivery else {
-            unreachable!()
-        };
-        let AgentInvocation::AgentMethod {
-            idempotency_key, ..
-        } = *invocation
-        else {
+        let ExactExistingDelivery::WakeInvocation(idempotency_key) = delivery else {
             unreachable!()
         };
         self.executions.lock().unwrap().push(idempotency_key.value);
@@ -523,7 +510,7 @@ impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
             return Err(WorkerExecutorError::runtime("injected completion failure"));
         }
         let kind = match delivery {
-            ExactExistingDelivery::Invoke(_) => "invoke",
+            ExactExistingDelivery::WakeInvocation(_) => "wake_invocation",
             ExactExistingDelivery::Resume => "resume",
             ExactExistingDelivery::CompletePromise(id) => {
                 self.promise_service
@@ -1109,10 +1096,9 @@ fn scheduled_action_variants() -> Vec<ScheduledAction> {
             last_oplog_index: OplogIndex::from_u64(42),
             next_after: Duration::from_secs(60),
         },
-        ScheduledAction::Invoke {
-            account_id: AccountId::new(),
+        ScheduledAction::WakeInvocation {
             owned_agent_id: owned_agent_id.clone(),
-            invocation: Box::new(agent_method_invocation()),
+            idempotency_key: IdempotencyKey::fresh(),
             target_worker_fingerprint: AgentFingerprint::new(),
         },
         ScheduledAction::Resume {
@@ -1201,17 +1187,6 @@ fn agent_method_invocation() -> AgentInvocation {
         method_name: "run".to_string(),
         input: SchemaValue::Record { fields: vec![] },
         invocation_context: InvocationContextStack::fresh_rounded(),
-        principal: Principal::anonymous(),
-        scope_card: None,
-    }
-}
-
-fn agent_method_invocation_with_idempotency_key(idempotency_key: String) -> AgentInvocation {
-    AgentInvocation::AgentMethod {
-        idempotency_key: IdempotencyKey::new(idempotency_key),
-        method_name: "run".to_string(),
-        input: SchemaValue::Record { fields: vec![] },
-        invocation_context: InvocationContextStack::fresh(),
         principal: Principal::anonymous(),
         scope_card: None,
     }
@@ -1372,10 +1347,9 @@ async fn scheduled_invoke_uses_active_worker_fingerprint_before_worker_service_l
     for target_worker_fingerprint in [fingerprint, AgentFingerprint::new()] {
         svc.schedule(
             DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
-            ScheduledAction::Invoke {
-                account_id: AccountId::new(),
+            ScheduledAction::WakeInvocation {
                 owned_agent_id: owned_agent_id.clone(),
-                invocation: Box::new(agent_method_invocation()),
+                idempotency_key: IdempotencyKey::fresh(),
                 target_worker_fingerprint,
             },
         )
@@ -1412,10 +1386,9 @@ async fn scheduled_invoke_delivery_failure_is_not_acknowledged() {
     );
     svc.schedule(
         DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
-        ScheduledAction::Invoke {
-            account_id: AccountId::new(),
+        ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("delivery-failure")),
-            invocation: Box::new(agent_method_invocation()),
+            idempotency_key: IdempotencyKey::fresh(),
             target_worker_fingerprint: AgentFingerprint::new(),
         },
     )
@@ -1649,10 +1622,9 @@ async fn scheduled_actions_for_distinct_agents_are_processed_concurrently() {
     for name in ["agent-1", "agent-2"] {
         svc.schedule(
             due_at,
-            ScheduledAction::Invoke {
-                account_id: AccountId::new(),
+            ScheduledAction::WakeInvocation {
                 owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent(name)),
-                invocation: Box::new(agent_method_invocation()),
+                idempotency_key: IdempotencyKey::fresh(),
                 target_worker_fingerprint: fingerprint,
             },
         )
@@ -1696,10 +1668,9 @@ async fn scheduled_actions_for_the_same_agent_are_processed_serially() {
     for _ in 0..2 {
         svc.schedule(
             due_at,
-            ScheduledAction::Invoke {
-                account_id: AccountId::new(),
+            ScheduledAction::WakeInvocation {
                 owned_agent_id: owned_agent_id.clone(),
-                invocation: Box::new(agent_method_invocation()),
+                idempotency_key: IdempotencyKey::fresh(),
                 target_worker_fingerprint: fingerprint,
             },
         )
@@ -1774,14 +1745,9 @@ proptest! {
                     let schedule_id = svc
                         .schedule(
                             due_at,
-                            ScheduledAction::Invoke {
-                                account_id: AccountId::new(),
+                            ScheduledAction::WakeInvocation {
                                 owned_agent_id: owned_agent_id.clone(),
-                                invocation: Box::new(
-                                    agent_method_invocation_with_idempotency_key(
-                                        execution_id.clone(),
-                                    ),
-                                ),
+                                idempotency_key: IdempotencyKey::new(execution_id.clone()),
                                 target_worker_fingerprint: fingerprint,
                             },
                         )
@@ -1958,29 +1924,6 @@ async fn scheduled_ephemeral_invoke_skips_fingerprint_lookup_and_preserves_creat
             Principal::anonymous(),
         ))
     );
-}
-
-#[test]
-fn scheduled_action_constructor_indices_preserve_persisted_compatibility() {
-    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("target"));
-    let resume = ScheduledAction::Resume {
-        agent_created_by: AccountId::new(),
-        owned_agent_id: owned_agent_id.clone(),
-        target_worker_fingerprint: AgentFingerprint::new(),
-    };
-    let ephemeral = ScheduledAction::InvokeEphemeral {
-        account_id: AccountId::new(),
-        owned_agent_id,
-        invocation: Box::new(agent_method_invocation()),
-        component_revision: ComponentRevision::INITIAL,
-        env: vec![],
-        config: vec![],
-        parent: None,
-        creation_principal: Box::new(Principal::anonymous()),
-    };
-
-    assert_eq!(serialize(&resume).unwrap()[2], 3);
-    assert_eq!(serialize(&ephemeral).unwrap()[2], 4);
 }
 
 #[test]
@@ -2324,10 +2267,9 @@ fn exact_actions(
     fingerprint: AgentFingerprint,
 ) -> Vec<ScheduledAction> {
     vec![
-        ScheduledAction::Invoke {
-            account_id: AccountId::new(),
+        ScheduledAction::WakeInvocation {
             owned_agent_id: owned_agent_id.clone(),
-            invocation: Box::new(agent_method_invocation()),
+            idempotency_key: IdempotencyKey::fresh(),
             target_worker_fingerprint: fingerprint,
         },
         ScheduledAction::Resume {
@@ -2381,7 +2323,10 @@ async fn all_exact_deliveries_acknowledge_missing_stale_and_matching_targets() {
             assert_eq!(count.load(Ordering::SeqCst), 3);
             let mut delivered = deliveries.lock().unwrap().clone();
             delivered.sort_unstable();
-            assert_eq!(delivered, vec!["complete_promise", "invoke", "resume"]);
+            assert_eq!(
+                delivered,
+                vec!["complete_promise", "resume", "wake_invocation"]
+            );
             assert!(
                 promise_service
                     .all_completed()

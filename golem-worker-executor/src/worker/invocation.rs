@@ -55,6 +55,55 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
 
+impl<Ctx: WorkerCtx> super::Worker<Ctx> {
+    pub(crate) async fn start_pending_invocation(
+        &self,
+        idempotency_key: IdempotencyKey,
+        payload: golem_common::model::oplog::OplogPayload<
+            golem_common::model::AgentInvocationPayload,
+        >,
+        context: golem_common::model::invocation_context::InvocationContextStack,
+        wallet_pin: golem_common::model::card::InvocationWalletPin,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        use crate::services::oplog::{CommitLevel, OplogOps};
+
+        // The running loop must not wait for a stopping instance to join this loop.
+        let instance = self.instance.lock().await;
+        if !matches!(&*instance, super::WorkerInstance::Running(_))
+            || self.owner_retirement_requested.is_cancelled()
+        {
+            return Ok(None);
+        }
+        let status = self.get_repaired_status().await?;
+        if !status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&idempotency_key))
+        {
+            return Ok(None);
+        }
+        let index = self
+            .oplog
+            .add_agent_invocation_started_from_pending(
+                idempotency_key,
+                payload,
+                context,
+                wallet_pin,
+            )
+            .await
+            .map_err(|err| match err.into_refusal() {
+                Ok(refusal) => self.refused_by(refusal),
+                Err(err) => panic!(
+                    "could not encode agent invocation on {}: {err}",
+                    self.agent_id()
+                ),
+            })?;
+        self.commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
+        Ok(Some(index))
+    }
+}
+
 /// Grows smaller native thread stacks for worker construction and nested invocation futures.
 /// The temporary stack is released after each poll, before the future yields. A poll must not
 /// suspend a Wasmtime fiber while on the temporary stack. Remaining-stack estimation uses native
@@ -100,6 +149,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     let result = invoke_observed(lowered, &mut store, instance, mode).await;
 
     match &result {
+        Ok(InvokeResult::NotStarted) => result,
         Err(_) => {
             record_invocation(was_live_before, "failed");
             result
@@ -164,9 +214,16 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         }
         .instrument(span!(Level::INFO, "on_agent_invocation_started"))
         .await;
-        if let Err(error) = started {
-            store.data_mut().on_agent_invocation_finished().await;
-            return Err(error);
+        match started {
+            Ok(true) => {}
+            Ok(false) => {
+                store.data_mut().on_agent_invocation_finished().await;
+                return Ok(InvokeResult::NotStarted);
+            }
+            Err(error) => {
+                store.data_mut().on_agent_invocation_finished().await;
+                return Err(error);
+            }
         }
     }
 
@@ -1406,6 +1463,8 @@ pub(crate) async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
 
 #[derive(Debug, Clone)]
 pub enum InvokeResult {
+    /// The pending invocation was removed before its start transition.
+    NotStarted,
     /// The invoked function exited with exit code 0
     Exited { consumed_fuel: u64 },
     /// The invoked function has failed
@@ -1499,6 +1558,7 @@ impl InvokeResult {
 
     pub fn consumed_fuel(&self) -> u64 {
         match self {
+            InvokeResult::NotStarted => 0,
             InvokeResult::Exited { consumed_fuel, .. }
             | InvokeResult::Failed { consumed_fuel, .. }
             | InvokeResult::Succeeded { consumed_fuel, .. }

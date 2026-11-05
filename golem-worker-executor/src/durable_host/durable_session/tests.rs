@@ -2804,6 +2804,32 @@ struct AttachedProducerRpc {
 
 #[async_trait::async_trait]
 impl Rpc for AttachedProducerRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: golem_common::model::IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &golem_common::model::AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        Err(RpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        Err(RpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
     async fn control_durable_stream_attachment(
         &self,
         request: golem_common::base_model::durable_stream::StreamAttachmentControlRequest,

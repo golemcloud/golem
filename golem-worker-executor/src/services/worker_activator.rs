@@ -32,7 +32,7 @@ use tracing::warn;
 
 /// Work delivered only to the already existing scheduling incarnation.
 pub enum ExactExistingDelivery {
-    Invoke(Box<AgentInvocation>),
+    WakeInvocation(IdempotencyKey),
     Resume,
     CompletePromise(PromiseId),
 }
@@ -566,20 +566,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         expected_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
-        let principal = match &delivery {
-            ExactExistingDelivery::Invoke(invocation) => invocation
-                .principal()
-                .cloned()
-                .unwrap_or_else(Principal::anonymous),
-            _ => Principal::anonymous(),
-        };
         let worker = match self
             .all
             .active_agents()
             .get_existing_with_fingerprint(
                 &self.all,
                 owned_agent_id,
-                principal,
+                Principal::anonymous(),
                 Some(expected_fingerprint),
             )
             .await
@@ -592,8 +585,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             return Ok(false);
         }
         match delivery {
-            ExactExistingDelivery::Invoke(invocation) => {
-                worker.clone().invoke(*invocation).await?;
+            ExactExistingDelivery::WakeInvocation(key) => {
+                let status = worker.get_last_known_status().await;
+                let now = golem_common::model::Timestamp::now_utc();
+                let pending = status.pending_invocations.iter().find(|pending| {
+                    pending.has_idempotency_key(&key) && pending.not_before.is_some()
+                });
+                let Some(pending) = pending else {
+                    return Ok(false);
+                };
+                if !pending.is_due(now) {
+                    return Err(WorkerExecutorError::runtime(
+                        "scheduled invocation wake arrived before its committed deadline",
+                    ));
+                }
             }
             ExactExistingDelivery::Resume => {}
             ExactExistingDelivery::CompletePromise(promise_id) => {

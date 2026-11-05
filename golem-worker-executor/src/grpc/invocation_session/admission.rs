@@ -20,6 +20,7 @@ use super::{
     Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, build_durable_streaming_request,
     extract_owned_agent_id, from_proto_invocation_context, golem, validate_agent_method_invocation,
 };
+use crate::services::HasActiveAgents;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -294,6 +295,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(invocation_output)
             }
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
+                let pinned_worker = if let (Some(expected), Some(_)) =
+                    (request.expected_callee_fingerprint, schedule_at)
+                {
+                    let expected = golem_common::model::AgentFingerprint(expected.into());
+                    let worker = self
+                        .active_agents()
+                        .get_existing_with_fingerprint(
+                            self,
+                            &owned_agent_id,
+                            principal.clone(),
+                            Some(expected),
+                        )
+                        .await?;
+                    if worker.get_initial_worker_metadata().fingerprint != expected {
+                        return Err(WorkerExecutorError::worker_not_found(
+                            owned_agent_id.agent_id(),
+                        ));
+                    }
+                    Some(worker)
+                } else {
+                    None
+                };
                 let existing_metadata =
                     if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
                         None
@@ -344,9 +367,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
                 match schedule_at {
                     Some(scheduled_time) => {
-                        let (worker, _response_lease) = self
-                            .get_or_create_pending_with_freshness(request, freshness_disposition)
-                            .await?;
+                        let (worker, _response_lease) = match pinned_worker {
+                            Some(worker) => (worker, None),
+                            None => {
+                                self.get_or_create_pending_with_freshness(
+                                    request,
+                                    freshness_disposition,
+                                )
+                                .await?
+                            }
+                        };
                         scope
                             .bind(&worker.tasks)
                             .map_err(WorkerExecutorError::runtime)?;

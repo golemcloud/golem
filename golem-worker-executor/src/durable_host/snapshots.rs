@@ -188,6 +188,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             });
 
         match load_result {
+            Ok(InvokeResult::NotStarted) => {
+                unreachable!("snapshot invocations do not consume pending invocations")
+            }
             Err(error) => Err(ManualLoadResult::Failed(format!(
                 "Manual update failed to load snapshot: {error}"
             ))),

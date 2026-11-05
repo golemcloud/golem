@@ -211,6 +211,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .await;
 
         match result {
+            Ok(InvokeResult::NotStarted) => CommandOutcome::Continue,
             Ok(InvokeResult::Succeeded {
                 result: invocation_result,
                 consumed_fuel,

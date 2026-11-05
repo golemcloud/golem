@@ -85,6 +85,9 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
         let current_agent = self.owned_agent_id().clone();
         let entry = self.table().get(&this)?;
         validate_cancellation_token_owner(entry, &current_agent)?;
+        let recipient = entry.recipient.clone();
+        let invocation_key =
+            golem_common::model::IdempotencyKey::new(entry.metadata.idempotency_key.clone());
         let serialized_schedule_id: SerializableScheduleId = deserialize(&entry.schedule_id)
             .map_err(|err| {
                 anyhow::Error::from(WorkerExecutorError::runtime(format!(
@@ -93,7 +96,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
             })?;
 
         let mut handle =
-            DurableCallSession::<GolemRpcCancellationTokenCancel, NotCancellable>::start(
+            DurableCallSession::<GolemRpcCancellationTokenCancel, NotCancellable>::start_with_agent_authority(
                 self,
                 HostRequestGolemRpcScheduledInvocationCancellation {
                     schedule_id: serialized_schedule_id.clone(),
@@ -110,9 +113,18 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            self.scheduler_service()
-                .cancel(serialized_schedule_id.into_domain())
-                .await;
+            let schedule_id = serialized_schedule_id.into_domain();
+            self.rpc()
+                .cancel_scheduled_invocation(
+                    &recipient,
+                    invocation_key,
+                    schedule_id,
+                    &current_agent.agent_id(),
+                    handle.agent_auth_ctx(),
+                )
+                .await
+                .map_err(|error| handle.trap(anyhow::anyhow!(error)))?;
+            self.scheduler_service().cancel(schedule_id).await;
 
             handle.complete(self, HostResponseGolemRpcUnit {}).await?;
         }
@@ -321,27 +333,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let (idempotency_key, remote_agent_id) = call_target.at(handle.start_index())?;
         let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
 
-        let schedule_id = ScheduleId::from_idempotency_key(&idempotency_key);
-
         let stack = InvocationContextStack::new(
             self.state.invocation_context.trace_id.clone(),
             InvocationContextSpan::external_parent(self.state.current_span_id.clone()),
             self.state.invocation_context.trace_states.clone(),
         );
 
-        let invocation = Box::new(AgentInvocation::AgentMethod {
+        let invocation = AgentInvocation::AgentMethod {
             idempotency_key: idempotency_key.clone(),
             method_name: method_name.clone(),
             input: input_value,
             invocation_context: stack,
             principal: scheduled_invocation_principal(self.owned_agent_id()),
             scope_card: None,
-        });
-        let action = if ephemeral_logical_agent_id.is_some() {
-            ScheduledAction::InvokeEphemeral {
+        };
+        let result = if ephemeral_logical_agent_id.is_some() {
+            let action = ScheduledAction::InvokeEphemeral {
                 account_id: self.created_by(),
                 owned_agent_id: remote_agent_id.clone(),
-                invocation,
+                invocation: Box::new(invocation),
                 component_revision: remote_component_revision,
                 env,
                 config,
@@ -351,7 +361,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         agent_id: self.agent_id().clone(),
                     },
                 )),
-            }
+            };
+            self.scheduler_service()
+                .schedule_with_id(
+                    ScheduleId::from_idempotency_key(&idempotency_key),
+                    scheduled_at,
+                    action,
+                )
+                .await
         } else {
             let target_worker_fingerprint = match ensure_rpc_target_activated(
                 self,
@@ -366,19 +383,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     return Err(handle.trap(err));
                 }
             };
-            ScheduledAction::Invoke {
-                account_id: self.created_by(),
-                owned_agent_id: remote_agent_id.clone(),
-                invocation,
-                target_worker_fingerprint,
-            }
+            self.rpc()
+                .schedule_invocation(
+                    &remote_agent_id,
+                    target_worker_fingerprint,
+                    invocation,
+                    scheduled_at,
+                    handle.agent_auth_ctx(),
+                )
+                .await
+                .map_err(|error| handle.trap(anyhow::anyhow!(error)))?
         };
-
-        let result = self
-            .state
-            .scheduler_service
-            .schedule_with_id(schedule_id, scheduled_at, action)
-            .await;
 
         let schedule_id = SerializableScheduleId::from_domain(result);
 

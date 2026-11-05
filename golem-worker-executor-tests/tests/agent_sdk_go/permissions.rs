@@ -437,6 +437,19 @@ impl WorkerProxy for LocalCardDeliveryProxy {
             .await
     }
 
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &golem_common::model::OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::agent::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
     async fn lookup_invocation_status(
         &self,
         agent_id: &AgentId,

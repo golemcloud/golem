@@ -596,15 +596,12 @@ pub enum ScheduledAction {
         last_oplog_index: OplogIndex,
         next_after: Duration,
     },
-    /// Invoke the given action on the worker. The invocation will only
-    /// be persisted in the oplog when it's actually getting scheduled.
-    ///
+    /// Wakes a scheduled invocation already committed in the target's oplog.
     /// Delivery requires the existing incarnation identified by `target_worker_fingerprint`.
     /// A missing agent or a fingerprint mismatch drops the action without creating an agent.
-    Invoke {
-        account_id: AccountId,
+    WakeInvocation {
         owned_agent_id: OwnedAgentId,
-        invocation: Box<AgentInvocation>,
+        idempotency_key: IdempotencyKey,
         target_worker_fingerprint: AgentFingerprint,
     },
     /// Resume the agent
@@ -643,7 +640,7 @@ impl ScheduledAction {
                 ..
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
-            ScheduledAction::Invoke { owned_agent_id, .. }
+            ScheduledAction::WakeInvocation { owned_agent_id, .. }
             | ScheduledAction::InvokeEphemeral { owned_agent_id, .. }
             | ScheduledAction::ExpireDurableStreamSession { owned_agent_id, .. } => {
                 owned_agent_id.clone()
@@ -662,7 +659,7 @@ impl Display for ScheduledAction {
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => {
                 write!(f, "archive[{owned_agent_id}]")
             }
-            ScheduledAction::Invoke { owned_agent_id, .. }
+            ScheduledAction::WakeInvocation { owned_agent_id, .. }
             | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => {
                 write!(f, "invoke[{owned_agent_id}]")
             }
@@ -688,6 +685,12 @@ pub struct ScheduleId {
 impl ScheduleId {
     pub fn fresh() -> Self {
         Self { id: Uuid::now_v7() }
+    }
+
+    pub fn for_invocation(fingerprint: AgentFingerprint, key: &IdempotencyKey) -> Self {
+        Self {
+            id: Uuid::new_v5(&fingerprint.0, key.value.as_bytes()),
+        }
     }
 
     pub fn from_idempotency_key(key: &IdempotencyKey) -> Self {

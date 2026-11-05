@@ -1054,9 +1054,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let key = Self::require_idempotency_key(&invocation)?;
         let fingerprint = self.initial_worker_metadata.fingerprint;
-        let schedule_id = ScheduleId {
-            id: uuid::Uuid::new_v5(&fingerprint.0, key.value.as_bytes()),
-        };
+        let schedule_id = ScheduleId::for_invocation(fingerprint, &key);
         // Oplog timestamps persist milliseconds. Round up so serialization cannot make an
         // invocation runnable before the requested instant, including after reconstruction.
         let millis = scheduled_at.timestamp_millis().max(0) as u64
@@ -1074,7 +1072,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .find(|pending| pending.has_idempotency_key(&key))
             && let Some(deadline) = pending.not_before
         {
-            let invocation = self.hydrate_pending_invocation(pending).await?.invocation;
             let scheduled_at = DateTime::from_timestamp_millis(deadline.to_millis() as i64)
                 .expect("persisted invocation deadline is in the chrono range");
             self.deps
@@ -1082,10 +1079,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .schedule_with_id(
                     schedule_id,
                     scheduled_at,
-                    ScheduledAction::Invoke {
-                        account_id: self.initial_worker_metadata.created_by,
+                    ScheduledAction::WakeInvocation {
                         owned_agent_id: self.owned_agent_id.clone(),
-                        invocation: Box::new(invocation),
+                        idempotency_key: key,
                         target_worker_fingerprint: fingerprint,
                     },
                 )

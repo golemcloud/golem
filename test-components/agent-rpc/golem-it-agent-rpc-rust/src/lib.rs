@@ -198,6 +198,9 @@ pub trait ScheduledInvocationClient {
     /// Schedule inc_global_by on self 200ms in the future
     fn test3(&mut self);
 
+    fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32);
+    fn cancel_scheduled(&self);
+
     fn inc_global_by(&mut self, value: u64);
     fn get_global_value(&self) -> u64;
 }
@@ -205,6 +208,7 @@ pub trait ScheduledInvocationClient {
 struct ScheduledInvocationClientImpl {
     _name: String,
     global: u64,
+    token: Option<golem_rust::golem_agentic::golem::agent::host::CancellationToken>,
 }
 
 #[agent_implementation]
@@ -213,6 +217,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
         Self {
             _name: name,
             global: 0,
+            token: None,
         }
     }
 
@@ -239,6 +244,28 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
         self_client
             .schedule_inc_global_by(1, scheduled_for)
             .expect("failed to schedule invocation");
+    }
+
+    fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32) {
+        let mut server = ScheduledInvocationServerClient::get(server_agent_name);
+        self.token = Some(
+            server
+                .schedule_cancelable_inc_global_by(
+                    17,
+                    Datetime {
+                        seconds: seconds as i64,
+                        nanoseconds,
+                    },
+                )
+                .expect("failed to schedule cancelable invocation"),
+        );
+    }
+
+    fn cancel_scheduled(&self) {
+        self.token
+            .as_ref()
+            .expect("no scheduled invocation")
+            .cancel();
     }
 
     fn inc_global_by(&mut self, value: u64) {

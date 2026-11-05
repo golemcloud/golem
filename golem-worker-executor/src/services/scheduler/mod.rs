@@ -614,10 +614,9 @@ impl SchedulerServiceDefault {
                 }
                 true
             }
-            ScheduledAction::Invoke {
-                account_id: _,
+            ScheduledAction::WakeInvocation {
                 owned_agent_id,
-                invocation,
+                idempotency_key,
                 target_worker_fingerprint,
             } => {
                 match self
@@ -625,7 +624,7 @@ impl SchedulerServiceDefault {
                     .enqueue_exact_existing(
                         &owned_agent_id,
                         target_worker_fingerprint,
-                        ExactExistingDelivery::Invoke(invocation),
+                        ExactExistingDelivery::WakeInvocation(idempotency_key),
                     )
                     .await
                 {

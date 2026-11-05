@@ -113,7 +113,7 @@ the member, and the next scan requests the delete again. A delete request that a
 queue refuses is counted as a leaked clean-up: the scan still removes the member, and no later
 scan asks again.
 
-Scheduled `Invoke`, `Resume` and `CompletePromise` actions carry the target's fingerprint and
+Scheduled `WakeInvocation`, `Resume` and `CompletePromise` actions carry the target's fingerprint and
 use `WorkerActivator::enqueue_exact_existing`. It checks identity before cold hydration and
 again on the returned worker, covering cached and shared acquisition. Missing or mismatched
 incarnations are logged and acknowledged without creation; acquisition, delivery and startup
@@ -125,6 +125,19 @@ persisted. Duplicate completion notifies with the original stored payload. Ordin
 completion still activates the worker. This guard serializes local deletion/recreation, not
 cross-executor promise writes: promise storage still uses agent ID and oplog index. Deferred
 `InvokeEphemeral` retains its separate creation path.
+
+Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
+returning acceptance, without starting its guest. Local and remote guest calls use the same target
+admission contract, pinned to the activated incarnation. Same-key repair preserves the original
+payload and deadline and repairs the deterministic wake. Completed caller replay does no target
+lookup. Future entries neither block ready work nor require residency or RunningWorkers membership.
+The scheduler stores only a `WakeInvocation` address, fingerprint and key, not another payload.
+Delivery requires the scheduled entry still to exist and be due, then starts an unloaded worker or
+notifies its resident loop. It never appends another invocation. Token cancellation validates the
+incarnation-bound receipt and recorded scheduling owner, commits pending removal before removing
+the wake, and shares the instance mutex with the committed pending-to-started transition. If
+cancellation wins, selected-but-not-started work is skipped without a result; if start wins,
+cancellation returns false. A delayed wake cannot recreate cancelled work.
 
 Two persistence steps matter for every crash window: **append** puts an entry in the oplog
 buffer; **commit** makes it recoverable (`commit_oplog_and_update_state(CommitLevel)`). The
