@@ -102,7 +102,6 @@ pub fn action_kind_label(action: &golem_common::model::ScheduledAction) -> &'sta
         ScheduledAction::CompletePromise { .. } => "complete_promise",
         ScheduledAction::ArchiveOplog { .. } => "archive_oplog",
         ScheduledAction::WakeInvocation { .. } => "wake_invocation",
-        ScheduledAction::InvokeEphemeral { .. } => "invoke",
         ScheduledAction::ExpireDurableStreamSession { .. } => "expire_stream_session",
         ScheduledAction::Resume { .. } => "resume",
     }

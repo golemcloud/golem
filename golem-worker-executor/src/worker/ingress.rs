@@ -1063,12 +1063,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .timestamp_subsec_nanos()
                     .is_multiple_of(1_000_000),
             );
-        self.enqueue_worker_invocation_with_effect(
-            invocation,
-            read_only_cache::InvocationEffect::UnknownAssumeMutating,
-            Some(Timestamp::from(millis)),
-        )
-        .await?;
+        // A same-key retry returns the original receipt, also from an ephemeral agent that has
+        // already begun its execution and accepts nothing new.
+        if self.lookup_invocation_result(&key).await == LookupResult::New {
+            self.enqueue_worker_invocation_with_effect(
+                invocation,
+                read_only_cache::InvocationEffect::UnknownAssumeMutating,
+                Some(Timestamp::from(millis)),
+            )
+            .await?;
+        }
         let status = self.state_actor.status().await;
         if let Some(pending) = status
             .pending_invocations
@@ -1086,13 +1090,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// between the pending commit and the wake insert. A wake registered for an entry cancelled
     /// meanwhile finds no pending entry at delivery and is acknowledged without effect.
     pub(in crate::worker) async fn register_pending_invocation_wakes(&self) {
-        if self.agent_mode() != AgentMode::Durable {
-            return;
-        }
         // Construction publishes before this runs, so deletion may already have stopped the actor.
         let Ok(Some(status)) = self.state_actor.observe_status().await else {
             return;
         };
+        // A begun ephemeral agent never runs its pending work again.
+        if self.agent_mode() == AgentMode::Ephemeral && status.ephemeral_execution_begun {
+            return;
+        }
         let scheduled = status
             .pending_invocations
             .iter()
@@ -1156,6 +1161,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .map_err(|_| WorkerExecutorError::runtime("Filesystem inspection stopped"))?
     }
+    /// Refuses an inspection that would be the first start of an ephemeral agent: it would run
+    /// the constructor before a schedule whose commit the caller may still be repairing.
+    pub(crate) async fn ensure_inspection_may_start(&self) -> Result<(), WorkerExecutorError> {
+        if self.agent_mode() != AgentMode::Ephemeral {
+            return Ok(());
+        }
+        let status = self.state_actor.try_status().await?;
+        if super::invocation_loop::ephemeral_inspection_may_start(
+            &status,
+            &self.initialization_idempotency_key(),
+            Timestamp::now_utc(),
+        ) {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::invalid_request(
+                "Cannot inspect an ephemeral agent before it starts executing",
+            ))
+        }
+    }
+
     pub(in crate::worker) async fn enqueue_filesystem_request(
         self: &Arc<Self>,
         invocation: QueuedWorkerInvocation,

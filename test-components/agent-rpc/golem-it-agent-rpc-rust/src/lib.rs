@@ -3,7 +3,7 @@ use golem_rust::agentic::{AgentStream, Config, spawn_local};
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
 use golem_rust::bindings::golem::api::context::{AttributeValue, current_context, start_span};
 use golem_rust::bindings::wasi::config::store as wasi_config;
-use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
+use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, OutgoingValue, get, set};
 use golem_rust::retry::{NamedPolicy, Policy, set_named_policy};
 use golem_rust::{
     ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid,
@@ -201,6 +201,17 @@ pub trait ScheduledInvocationClient {
     fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32);
     fn cancel_scheduled(&self);
 
+    /// Schedules `inc(hold_ms)` on a new ephemeral target and keeps its cancellation token
+    fn schedule_ephemeral_at(
+        &mut self,
+        target_name: String,
+        hold_ms: u64,
+        seconds: u64,
+        nanoseconds: u32,
+    );
+    /// Constructor and `inc` effect counts of the ephemeral targets named `target_name`
+    fn read_effects(&self, target_name: String) -> (u64, u64);
+
     fn inc_global_by(&mut self, value: u64);
     fn get_global_value(&self) -> u64;
 }
@@ -268,12 +279,91 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
             .cancel();
     }
 
+    fn schedule_ephemeral_at(
+        &mut self,
+        target_name: String,
+        hold_ms: u64,
+        seconds: u64,
+        nanoseconds: u32,
+    ) {
+        let target = ScheduledEphemeralTargetClient::new_phantom(target_name);
+        self.token = Some(
+            target
+                .schedule_cancelable_inc(
+                    hold_ms,
+                    Datetime {
+                        seconds: seconds as i64,
+                        nanoseconds,
+                    },
+                )
+                .expect("failed to schedule cancelable ephemeral invocation")
+                .cancellation_token,
+        );
+    }
+
+    fn read_effects(&self, target_name: String) -> (u64, u64) {
+        (
+            read_effect(&format!("constructed:{target_name}")),
+            read_effect(&format!("inc:{target_name}")),
+        )
+    }
+
     fn inc_global_by(&mut self, value: u64) {
         self.global += value;
     }
 
     fn get_global_value(&self) -> u64 {
         self.global
+    }
+}
+
+const SCHEDULED_EPHEMERAL_EFFECTS: &str = "scheduled-ephemeral-effects";
+
+fn read_effect(key: &str) -> u64 {
+    let bucket = Bucket::open_bucket(SCHEDULED_EPHEMERAL_EFFECTS).unwrap();
+    get(&bucket, key)
+        .unwrap()
+        .map(|value| {
+            String::from_utf8(value.incoming_value_consume_sync().unwrap())
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
+        .unwrap_or(0)
+}
+
+fn record_effect(key: &str) {
+    let next = read_effect(key) + 1;
+    let bucket = Bucket::open_bucket(SCHEDULED_EPHEMERAL_EFFECTS).unwrap();
+    let value = OutgoingValue::new_outgoing_value();
+    value
+        .outgoing_value_write_body_sync(next.to_string().as_bytes())
+        .unwrap();
+    set(&bucket, key, &value).unwrap();
+}
+
+/// Counts its constructor and `inc` runs in key-value storage, which survives the agent.
+#[agent_definition(mode = "ephemeral")]
+pub trait ScheduledEphemeralTarget {
+    fn new(name: String) -> Self;
+    /// Counts the run, then waits `hold_ms` before returning
+    async fn inc(&self, hold_ms: u64);
+}
+
+struct ScheduledEphemeralTargetImpl {
+    name: String,
+}
+
+#[agent_implementation]
+impl ScheduledEphemeralTarget for ScheduledEphemeralTargetImpl {
+    fn new(name: String) -> Self {
+        record_effect(&format!("constructed:{name}"));
+        Self { name }
+    }
+
+    async fn inc(&self, hold_ms: u64) {
+        record_effect(&format!("inc:{}", self.name));
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(hold_ms * 1_000_000).await;
     }
 }
 

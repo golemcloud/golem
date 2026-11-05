@@ -123,8 +123,7 @@ rechecks the stored identity, and persists/notifies through `complete_without_wa
 the guard before starting the pinned worker, and retries startup even when completion was already
 persisted. Duplicate completion notifies with the original stored payload. Ordinary promise
 completion still activates the worker. This guard serializes local deletion/recreation, not
-cross-executor promise writes: promise storage still uses agent ID and oplog index. Deferred
-`InvokeEphemeral` retains its separate creation path.
+cross-executor promise writes: promise storage still uses agent ID and oplog index.
 
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
@@ -138,7 +137,12 @@ incarnation-bound receipt and recorded scheduling owner, commits pending removal
 the wake, and shares the instance mutex with the committed pending-to-started transition. If
 cancellation wins, selected-but-not-started work is skipped without a result; if start wins,
 cancellation returns false. A delayed wake cannot recreate cancelled work.
-When a durable owner finishes construction, it registers the wake of every folded future entry
+An ephemeral target is created at schedule time (`create_demand`, then `schedule_invocation`), so
+its pending entry is committed like a durable target's. Its first start waits for the due wake; an
+ephemeral wake that finds the agent inactive is acknowledged. Token cancellation of a never-started
+ephemeral target also withdraws its constructor reservation; once it has begun, cancellation
+returns false.
+When an owner finishes construction, it registers the wake of every folded future entry
 again. Scheduler storage keeps an existing entry for the same schedule id, so this only restores a
 wake lost between the pending commit and the wake insert. A cancellation that commits during
 construction can leave a registered wake behind; its delivery finds no pending entry and is
@@ -258,7 +262,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 │ outer loop (one iteration = one instance attempt)                   │
 │  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ replay       │
-│    ephemeral:      constructor-only replay, append Restart          │
+│    ephemeral:      Restart gate, then constructor-only replay       │
 │  ──▶ inner loop: pop durable queue, run invocation, persist Finished │
 │  ──▶ instance ends (idle / interrupt / trap / suspend)               │
 │  ──▶ RetryDecision: Immediate | Delayed | ReacquirePermits | None | TryStop │
@@ -292,7 +296,8 @@ replay. Monthly capacity exhaustion retains its specific monthly error, and a mo
 keeps its `Monthly enforcement unavailable` reason. Idle and pre-method suspension remain safe:
 ordinary ephemeral agents keep their outer-loop `TryStop` unchanged;
 ephemeral external-tool owners also treat it as terminal. Startup retries before a Store exists
-remain unchanged. A started method never runs again live.
+remain unchanged, except that a begun ephemeral agent interrupted by `Restart` or `Jump` before its
+Store exists terminates. A started method never runs again live.
 Replay starts from the chosen snapshot baseline
 (see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. A new replay generation
 scans the replayed range for recovery metadata (delivery markers, guest stream observations and
@@ -307,12 +312,27 @@ revoked/reassigned shard, or an oplog write refused on the shard epoch), and ins
 reconstructing, that generation is retired — stopped without writing its status, dropped from
 this executor and never restarted — and the executor that now holds the shard reconstructs it.
 
-Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a
-worker that is executing or holds non-durable in-memory work. A `WarmRunnable` eviction starts the
-worker again in a spawned task (`stop_if_evictable_with_outcome`): the callers of its pending
-invocations already started it and only wait, and the start waits for memory admission. Ephemeral agents are fail-stop:
+Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a worker that is executing or
+holds non-durable in-memory work. A `WarmRunnable` eviction starts the worker again in a spawned
+task (`stop_if_evictable_with_outcome`): the callers of its pending invocations already started it
+and only wait, and the start waits for memory admission. Ephemeral agents are fail-stop:
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
-never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
+never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`). "Started" is durable:
+`Worker::begin_ephemeral_execution` commits a `Restart` entry under the instance mutex before any
+guest code runs, and the status fold keeps `ephemeral_execution_begun` set. A restart or jump of a
+begun ephemeral agent is terminal. An agent that never began and still holds its constructor
+reservation may accept one method if it has none yet (a schedule repair after the target was
+created) and may run one accepted scheduled method cold (`never_started_ephemeral_admission`).
+Before its scheduled deadline the start decision is `NotDue`, and after cancellation withdrew all
+its work it is `Withdrawn`; both fail queued inspection requests instead of keeping them for a later
+start. An inspection (filesystem or wallet) never starts an unloaded ephemeral agent that has not
+begun and has no due method (`ephemeral_inspection_may_start`): it is refused, because starting it
+would run the constructor before a schedule whose commit the caller is still repairing. This is not
+a fence: an outside caller that knows the target's ID can still start it in that window (create
+with wait, resume, update), and the scheduling caller then traps on the inactive target. A start
+requested while a `NotRunnable` start is stopping joins that attempt, so the stop checks the
+decision again and starts the worker if its work became due
+(`restart_if_ephemeral_start_became_runnable`).
 
 ### Monthly admission, interruption, and recovery
 

@@ -56,7 +56,7 @@ use crate::base_model::IdempotencyKey;
 pub use crate::base_model::agent::*;
 pub use crate::base_model::worker::*;
 use crate::model::account::AccountId;
-use crate::model::component::{ComponentId, ComponentRevision};
+use crate::model::component::ComponentId;
 use crate::model::component_metadata::{self, ComponentMetadata};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
@@ -610,18 +610,6 @@ pub enum ScheduledAction {
         owned_agent_id: OwnedAgentId,
         target_worker_fingerprint: AgentFingerprint,
     },
-    /// Invokes a fresh ephemeral agent without pre-creating it. The scheduler uses the checked
-    /// creation path because delivery may be retried after an ambiguous failure.
-    InvokeEphemeral {
-        account_id: AccountId,
-        owned_agent_id: OwnedAgentId,
-        invocation: Box<AgentInvocation>,
-        component_revision: ComponentRevision,
-        env: Vec<(String, String)>,
-        config: Vec<AgentConfigEntryDto>,
-        parent: Option<AgentId>,
-        creation_principal: Box<Principal>,
-    },
     ExpireDurableStreamSession {
         owned_agent_id: OwnedAgentId,
         target_agent_fingerprint: AgentFingerprint,
@@ -641,7 +629,6 @@ impl ScheduledAction {
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
             ScheduledAction::WakeInvocation { owned_agent_id, .. }
-            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. }
             | ScheduledAction::ExpireDurableStreamSession { owned_agent_id, .. } => {
                 owned_agent_id.clone()
             }
@@ -659,8 +646,7 @@ impl Display for ScheduledAction {
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => {
                 write!(f, "archive[{owned_agent_id}]")
             }
-            ScheduledAction::WakeInvocation { owned_agent_id, .. }
-            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => {
+            ScheduledAction::WakeInvocation { owned_agent_id, .. } => {
                 write!(f, "invoke[{owned_agent_id}]")
             }
             ScheduledAction::ExpireDurableStreamSession {
@@ -690,12 +676,6 @@ impl ScheduleId {
     pub fn for_invocation(fingerprint: AgentFingerprint, key: &IdempotencyKey) -> Self {
         Self {
             id: Uuid::new_v5(&fingerprint.0, key.value.as_bytes()),
-        }
-    }
-
-    pub fn from_idempotency_key(key: &IdempotencyKey) -> Self {
-        Self {
-            id: Uuid::parse_str(&key.value).expect("derived idempotency key must be a UUID"),
         }
     }
 }

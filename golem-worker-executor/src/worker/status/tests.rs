@@ -461,6 +461,42 @@ fn any_entry_moves_the_oplog_index() {
     assert_ne!(folded, baseline);
 }
 
+/// The execution-begun bit is set by a `Restart` and survives later folds without one.
+#[test]
+fn restart_sets_ephemeral_execution_begun_permanently() {
+    let retry = RetryConfig::default();
+    let baseline = AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(2),
+        ..AgentStatusRecord::default()
+    };
+    let before = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        baseline,
+        BTreeMap::from([(OplogIndex::from_u64(3), OplogEntry::grow_memory(8))]),
+        &retry,
+    )
+    .unwrap();
+    assert!(!before.ephemeral_execution_begun);
+
+    let begun = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        before,
+        BTreeMap::from([(OplogIndex::from_u64(4), OplogEntry::restart())]),
+        &retry,
+    )
+    .unwrap();
+    assert!(begun.ephemeral_execution_begun);
+
+    let later = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        begun,
+        BTreeMap::from([(OplogIndex::from_u64(5), OplogEntry::grow_memory(8))]),
+        &retry,
+    )
+    .unwrap();
+    assert!(later.ephemeral_execution_begun);
+}
+
 fn export_owner_fingerprint() -> AgentFingerprint {
     AgentFingerprint(uuid::Uuid::from_u128(1))
 }

@@ -533,15 +533,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .switch_to_live()
                     .await?;
 
-                // Appending a Restart marker
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .get_public_state()
-                    .oplog()
-                    .add(OplogEntry::restart())
-                    .await?;
-
+                // The invocation loop committed this start's `Restart` before instantiation.
                 Ok(None)
             } else {
                 replay_decision

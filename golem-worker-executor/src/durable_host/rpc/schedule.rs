@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::execution::known_fresh_dispatch_allowed;
 use super::{
     CancellationTokenEntry, RpcCallTarget, RpcTargetAdmission, WasmRpcEntry, WasmRpcEntryPayload,
     ensure_rpc_target_activated, find_agent_method, invocation_metadata, persist_schedule_denial,
@@ -26,14 +27,15 @@ use crate::durable_host::concurrent::ResolvedCall;
 use crate::preview2::golem::agent::host::CancellationToken;
 use crate::preview2::golem::agent::host::HostCancellationToken;
 use crate::preview2::golem::agent::host::RpcError;
+use crate::services::HasWorker;
+use crate::services::oplog::CommitLevel;
 use crate::services::rpc::RpcError as InternalRpcError;
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::AgentInvocation;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::ScheduleId;
-use golem_common::model::ScheduledAction;
+use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::DurableFunctionType;
@@ -164,7 +166,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ephemeral_logical_agent_id,
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             env,
             config,
         ) = {
@@ -176,7 +177,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 payload.ephemeral_logical_agent_id.clone(),
                 payload.remote_agent_type.clone(),
                 payload.remote_method_streams.clone(),
-                payload.remote_component_revision,
                 env,
                 config,
             )
@@ -306,6 +306,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // index. A live call builds its request when that index is assigned; an incomplete
         // `Start` from a previous run keeps its index, so a repair reproduces the same key and
         // `ScheduleId`.
+        // Only the first live dispatch may create a fresh ephemeral target; a repair may find it.
+        let first_live_dispatch = matches!(call, Either::Left(_));
         let mut handle = match call {
             Either::Left(begun) => {
                 let request_target = call_target.clone();
@@ -348,27 +350,50 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             scope_card: None,
         };
         let result = if ephemeral_logical_agent_id.is_some() {
-            let action = ScheduledAction::InvokeEphemeral {
-                account_id: self.created_by(),
-                owned_agent_id: remote_agent_id.clone(),
-                invocation: Box::new(invocation),
-                component_revision: remote_component_revision,
-                env,
-                config,
-                parent: Some(self.agent_id().clone()),
-                creation_principal: Box::new(Principal::Agent(
-                    golem_common::model::agent::AgentPrincipal {
-                        agent_id: self.agent_id().clone(),
-                    },
-                )),
+            // The scheduled ephemeral target is created now, so the schedule commits in its oplog
+            // and the wake pins this incarnation. The target runs nothing before the deadline.
+            let freshness = if known_fresh_dispatch_allowed(first_live_dispatch, true) {
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await?;
+                InvocationFreshnessDisposition::KnownFresh
+            } else {
+                InvocationFreshnessDisposition::MayExist
             };
-            self.scheduler_service()
-                .schedule_with_id(
-                    ScheduleId::from_idempotency_key(&idempotency_key),
-                    scheduled_at,
-                    action,
+            let span_id = self
+                .table()
+                .get(&this)?
+                .payload
+                .downcast_ref::<WasmRpcEntryPayload>()
+                .unwrap()
+                .span_id
+                .clone();
+            let rpc = self.rpc();
+            let demand = rpc
+                .create_demand(
+                    &remote_agent_id,
+                    &method_name,
+                    self.created_by(),
+                    self.agent_id(),
+                    &env,
+                    self.clone_as_inherited_stack(&span_id),
+                    config,
+                    handle.agent_auth_ctx(),
+                    Some(idempotency_key.clone()),
+                    freshness,
                 )
                 .await
+                .map_err(|error| handle.trap(anyhow::anyhow!(error)))?;
+            rpc.schedule_invocation(
+                &remote_agent_id,
+                demand.fingerprint(),
+                invocation,
+                scheduled_at,
+                handle.agent_auth_ctx(),
+            )
+            .await
+            .map_err(|error| handle.trap(anyhow::anyhow!(error)))?
         } else {
             let target_worker_fingerprint = match ensure_rpc_target_activated(
                 self,

@@ -119,6 +119,9 @@ mod invocation;
 mod permits;
 mod snapshots;
 mod startup;
+pub(in crate::worker) use startup::{
+    EphemeralStart, ephemeral_inspection_may_start, ephemeral_start_decision,
+};
 mod unload;
 
 use commands::apply_delayed_retry_commands_after_unload;
@@ -215,6 +218,9 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     ReacquireMemory,
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
+    /// An ephemeral agent that never started has no due work; it stays unloaded with its
+    /// pending entries.
+    NotRunnable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -594,6 +600,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 CreateInstanceResult::Failed => {
                     // early return, can't retry a failed instance creation
                     self.release_concurrent_agent_permit();
+                    break;
+                }
+                CreateInstanceResult::NotRunnable => {
+                    self.release_concurrent_agent_permit();
+                    self.parent.complete_startup(self.start_attempt, Ok(()));
+                    // Queued inspection requests would otherwise wait for a start that comes at the
+                    // deadline at the earliest, and never once the scheduled work was withdrawn.
+                    self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                        .await;
+                    self.parent
+                        .restart_if_ephemeral_start_became_runnable()
+                        .await;
                     break;
                 }
             };
