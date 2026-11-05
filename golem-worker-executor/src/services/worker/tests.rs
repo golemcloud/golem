@@ -2000,6 +2000,7 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
     };
     status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(

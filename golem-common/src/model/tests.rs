@@ -1257,6 +1257,7 @@ fn agent_status_record_has_pending_work_for_pending_invocations() {
     let mut status = AgentStatusRecord::default();
     status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(ComponentRevision::INITIAL),

@@ -952,6 +952,7 @@ async fn prepare_session(
             assert_eq!(
                 worker
                     .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+                        None,
                         idempotency_key.clone(),
                         payload.clone(),
                         trace_id.clone(),
@@ -1023,6 +1024,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
 
     worker
         .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+            None,
             idempotency_key.clone(),
             payload.clone(),
             context.trace_id.clone(),

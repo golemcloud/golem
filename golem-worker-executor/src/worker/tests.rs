@@ -1372,6 +1372,7 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
     let status = AgentStatusRecord {
         pending_invocations: vec![PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(still_pending.clone()),
             manual_update_target_revision: None,

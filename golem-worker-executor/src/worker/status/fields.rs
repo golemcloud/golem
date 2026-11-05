@@ -54,6 +54,7 @@ pub(super) fn calculate_pending_invocations(
             match entry {
                 OplogEntry::PendingAgentInvocation {
                     timestamp,
+                    not_before,
                     idempotency_key,
                     ..
                 } => {
@@ -70,6 +71,7 @@ pub(super) fn calculate_pending_invocations(
                     };
                     result.push(PendingInvocationRef {
                         timestamp: *timestamp,
+                        not_before: *not_before,
                         oplog_index: *oplog_idx,
                         idempotency_key,
                         manual_update_target_revision,

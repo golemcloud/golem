@@ -212,7 +212,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           walletPin
         )
       ),
-      OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head)),
+      OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head, None)),
       OplogEntry.PendingUpdate(PendingUpdateParameters(ts, BigInt(3), UpdateDescription.AutoUpdate)),
       OplogEntry.SuccessfulUpdate(SuccessfulUpdateParameters(ts, BigInt(3), BigInt(1024), List(pluginDesc))),
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), Some("compile error"))),

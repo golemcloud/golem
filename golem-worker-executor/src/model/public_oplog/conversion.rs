@@ -337,6 +337,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             }
             OplogEntry::PendingAgentInvocation {
                 timestamp,
+                not_before,
                 idempotency_key,
                 payload,
                 trace_id,
@@ -368,6 +369,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::PendingAgentInvocation(
                     PendingAgentInvocationParams {
                         timestamp,
+                        not_before,
                         invocation: public_invocation,
                     },
                 ))

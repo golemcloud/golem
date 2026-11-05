@@ -1812,6 +1812,7 @@ async fn append_prepared_pending(
         .unwrap();
     oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             identity.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -9043,6 +9044,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         .unwrap();
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             identity.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -9683,6 +9685,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         .unwrap();
     let pending_invocation_oplog_index = consumer_oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             consumer.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -10220,6 +10223,7 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
 
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             identity.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -10634,6 +10638,7 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
         .unwrap();
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             session_key.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -10848,6 +10853,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         .unwrap();
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             session_key.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -11372,6 +11378,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         .unwrap();
     let pending_invocation_oplog_index = consumer_oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             consumer.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),

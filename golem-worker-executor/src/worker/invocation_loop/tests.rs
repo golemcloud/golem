@@ -369,6 +369,7 @@ fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
     for update in [false, true] {
         let pending = PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             oplog_index: OplogIndex::from_u64(4),
             idempotency_key: Some(IdempotencyKey::new("method".into())),
             manual_update_target_revision: None,
@@ -426,6 +427,7 @@ fn filesystem_turns_preserve_initialization_and_control_priority() {
     let status = Arc::new(AgentStatusRecord {
         pending_invocations: vec![PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(constructor.clone()),
             manual_update_target_revision: None,

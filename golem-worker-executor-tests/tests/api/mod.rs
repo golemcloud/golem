@@ -4563,6 +4563,7 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
             let old = old.clone();
             async move {
                 old.add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+                    None,
                     IdempotencyKey::fresh(),
                     OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
                     TraceId::generate(),

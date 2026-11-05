@@ -524,6 +524,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::Interrupted { .. } => Entry::Interrupted(RawTimestampOnly {}),
             OplogEntry::Exited { .. } => Entry::Exited(RawTimestampOnly {}),
             OplogEntry::PendingAgentInvocation {
+                not_before,
                 idempotency_key,
                 payload,
                 trace_id,
@@ -531,6 +532,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 invocation_context,
                 ..
             } => Entry::PendingAgentInvocation(RawPendingAgentInvocationParameters {
+                not_before: not_before.map(Into::into),
                 idempotency_key: Some(idempotency_key.into()),
                 payload: Some(oplog_payload_to_proto(payload)?),
                 trace_id: trace_id.to_string(),
@@ -1177,6 +1179,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(OplogEntry::PendingAgentInvocation {
                     timestamp,
+                    not_before: p.not_before.map(Into::into),
                     idempotency_key,
                     payload,
                     trace_id,

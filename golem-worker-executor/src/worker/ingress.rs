@@ -861,6 +861,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok((
             semantic_key,
             OplogEntry::pending_agent_invocation(
+                None,
                 idempotency_key,
                 payload,
                 invocation_context.trace_id,

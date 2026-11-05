@@ -160,6 +160,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     Exited { override (PublicOplogEntry::Exited(ExitedParams { timestamp })) => Ok(Self::Exited(timestamp.into())) }
     PendingAgentInvocation { record PendingAgentInvocationParams => PendingAgentInvocationParameters {
         timestamp: timestamp.into(),
+        not_before: not_before.map(Into::into),
         invocation: invocation.try_into()?,
     } }
     PendingUpdate { record PendingUpdateParams => PendingUpdateParameters {

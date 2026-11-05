@@ -237,7 +237,8 @@ object OplogApi {
 
   final case class PendingAgentInvocationParameters(
     timestamp: ContextApi.DateTime,
-    invocation: AgentInvocation
+    invocation: AgentInvocation,
+    notBefore: Option[ContextApi.DateTime]
   )
 
   sealed trait UpdateDescription extends Product with Serializable
@@ -953,7 +954,11 @@ object OplogApi {
       case other =>
         throw new IllegalArgumentException(s"Unknown AgentInvocation tag: $other")
     }
-    PendingAgentInvocationParameters(timestamp = parseDateTime(raw.timestamp), invocation = agentInv)
+    PendingAgentInvocationParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      invocation = agentInv,
+      notBefore = raw.notBefore.toOption.map(parseDateTime)
+    )
   }
 
   private def parsePendingUpdateParameters(raw: JsPendingUpdateParameters): PendingUpdateParameters = {

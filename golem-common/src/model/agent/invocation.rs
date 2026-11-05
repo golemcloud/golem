@@ -630,6 +630,7 @@ pub struct TimestampedAgentInvocation {
 #[desert(evolution())]
 pub struct PendingInvocationRef {
     pub timestamp: Timestamp,
+    pub not_before: Option<Timestamp>,
     /// Index of the `PendingAgentInvocation` oplog entry holding the full payload.
     pub oplog_index: OplogIndex,
     /// Semantic idempotency key of the invocation. `None` for manual updates.

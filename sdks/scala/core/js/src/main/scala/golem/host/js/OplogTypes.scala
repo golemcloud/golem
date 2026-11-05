@@ -403,8 +403,9 @@ sealed trait JsAgentInvocationFinishedParameters extends js.Object {
 
 @js.native
 sealed trait JsPendingAgentInvocationParameters extends js.Object {
-  def timestamp: JsDatetime         = js.native
-  def invocation: JsAgentInvocation = js.native
+  def timestamp: JsDatetime             = js.native
+  def invocation: JsAgentInvocation     = js.native
+  def notBefore: js.UndefOr[JsDatetime] = js.native
 }
 
 // --- UpdateDescription  –  tagged union ---
