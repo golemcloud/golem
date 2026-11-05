@@ -13,6 +13,7 @@ results_repository="${BENCHMARK_RESULTS_REPOSITORY:-https://github.com/golemclou
 generated_files=(
     test-components/benchmarks/package-lock.json
     test-components/benchmarks/Cargo.lock
+    test-components/tool-streaming/rust-caller/Cargo.lock
 )
 
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
