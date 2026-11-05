@@ -45,8 +45,8 @@ export interface BillingConfigShape {
   readonly plans: {
     readonly free: string
     readonly paid: string
-    /** The monthly amounts of the paid plan without paid overage (`overage_eligible: false`). */
-    readonly paidCapped: string
+    /** No monthly amounts and no overage, so the agents of the account stop. */
+    readonly suspended: string
   }
   readonly polar: {
     /** The base URL of the Polar API: `https://sandbox-api.polar.sh` or `https://api.polar.sh`. */
@@ -125,7 +125,7 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   plans: Config.all({
     free: Config.String("GOLEM_CLOUD_BILLING_FREE_PLAN_ID"),
     paid: Config.String("GOLEM_CLOUD_BILLING_PAID_PLAN_ID"),
-    paidCapped: Config.String("GOLEM_CLOUD_BILLING_PAID_CAPPED_PLAN_ID")
+    suspended: Config.String("GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID")
   }),
   polar: Config.all({
     apiUrl: Config.URL("POLAR_API_URL"),
@@ -142,7 +142,7 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
     const plans = [
       ["GOLEM_CLOUD_BILLING_FREE_PLAN_ID", config.plans.free],
       ["GOLEM_CLOUD_BILLING_PAID_PLAN_ID", config.plans.paid],
-      ["GOLEM_CLOUD_BILLING_PAID_CAPPED_PLAN_ID", config.plans.paidCapped]
+      ["GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID", config.plans.suspended]
     ] as const
     for (const [name, value] of plans) {
       if (!uuid.test(value)) {

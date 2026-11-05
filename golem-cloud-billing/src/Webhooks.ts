@@ -3,7 +3,7 @@ import { Data, Effect, Redacted } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
 import type { RegistryError } from "./Registry.ts"
 import * as Settlement from "./Settlement.ts"
-import { type Subscription, Subscriptions, type SubscriptionsError } from "./Subscriptions.ts"
+import { Subscriptions, type SubscriptionsError, type SubscriptionUpdate } from "./Subscriptions.ts"
 
 type SubscriptionPayload = Extract<webhooks.WebhookPayload, { readonly type: `subscription.${string}` }>
 
@@ -29,7 +29,7 @@ class WebhookIgnored extends Data.TaggedError("WebhookIgnored")<{
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): Subscription => ({
+const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): SubscriptionUpdate => ({
   subscriptionId: data.id,
   accountId,
   productId: data.product_id,

@@ -1,26 +1,32 @@
 import { Effect, Layer, Schedule } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
 import { Registry, type RegistryError } from "./Registry.ts"
-import { billableStatuses, type Subscription, Subscriptions, type SubscriptionsError } from "./Subscriptions.ts"
+import { type Subscription, Subscriptions, type SubscriptionsError } from "./Subscriptions.ts"
 
 /**
- * Settlement: the paid overage of an account reaches Polar while Polar can still bill it.
+ * Settlement: the plan of an account follows what the account has paid.
  *
- * Polar bills a usage event only when the customer has a billable subscription at the time that
- * Polar processes the event. It skips the events that arrive later. The usage push runs every 10
- * minutes and the executors report usage every minute, so the overage of the last minutes before
- * a subscription ends would arrive too late. Polar also does not bill usage during a trial, and
- * a past_due subscription can end without a payment.
+ * The paid plan is prepaid with optional postpay: its price buys the monthly amounts in advance,
+ * and Polar bills the paid overage after the period. Polar bills a usage event only if the
+ * customer has a billable subscription when Polar processes the event, and it skips the events
+ * that arrive later. It bills no usage during a trial.
  *
- * So the account has paid overage only while its subscription is `active` and does not end
- * within `SETTLEMENT_MARGIN_MS`. Otherwise a billable subscription gives the capped plan: the
- * monthly amounts of the paid plan without paid overage. The registry sets an account on a plan
- * without overage to hardLimit, and only the owner can turn paid overage on again.
+ * - `paid`: a subscription is `active` and does not end within `SETTLEMENT_MARGIN_MS`. Only this
+ *   plan has paid overage.
+ * - `suspended`: the account owes a payment. A subscription is `past_due` or `unpaid`, or Polar
+ *   revoked it while it was unpaid. The plan has no monthly amounts and no overage, so the agents
+ *   of the account stop, and the account gets no free usage while it owes the payment.
+ * - `free`: otherwise, also after a cancellation. A subscription that the customer canceled at the
+ *   period end moves the account to free `SETTLEMENT_MARGIN_MS` before the end, so the usage push
+ *   sends the last paid overage while Polar still bills it.
+ *
+ * The registry sets an account on a plan without overage to hardLimit. Only the owner can turn
+ * paid overage on again, also after the account is back on the paid plan.
  */
 
 /**
- * How long before the scheduled end of a subscription the account moves to the capped plan. It
- * is longer than the interval of the usage push and the usage report interval of the executors
+ * How long before the scheduled end of a subscription the account moves to the free plan. It is
+ * longer than the interval of the usage push and the usage report interval of the executors
  * together, so the push sends the last paid overage before the subscription ends.
  */
 export const SETTLEMENT_MARGIN_MS = 15 * 60 * 1000
@@ -28,26 +34,24 @@ export const SETTLEMENT_MARGIN_MS = 15 * 60 * 1000
 /** How long after the end of a subscription the sweep still checks it, for a late webhook. */
 const SWEEP_AFTER_END_MS = 24 * 60 * 60 * 1000
 
-export type ManagedPlan = "free" | "paid" | "paidCapped"
+export type ManagedPlan = "free" | "paid" | "suspended"
 
 const endsWithinMargin = (subscription: Subscription, now: Date): boolean =>
   subscription.cancelAtPeriodEnd &&
   subscription.currentPeriodEnd !== undefined &&
   now.getTime() >= subscription.currentPeriodEnd.getTime() - SETTLEMENT_MARGIN_MS
 
-/**
- * The plan for the subscriptions of an account at `now`:
- *
- * - `paid` when a subscription is `active` and does not end within the settlement margin;
- * - `paidCapped` when a subscription is billable otherwise: `trialing`, `past_due`, or ending;
- * - `free` without a billable subscription.
- */
+const owesPayment = (subscription: Subscription): boolean =>
+  subscription.status === "past_due" ||
+  subscription.status === "unpaid" ||
+  (subscription.status === "canceled" && subscription.pastDueAt !== undefined)
+
+/** The plan for the subscriptions of an account at `now` (see the rules above). */
 export const planFor = (subscriptions: ReadonlyArray<Subscription>, now: Date): ManagedPlan => {
-  const billable = subscriptions.filter((subscription) => billableStatuses.includes(subscription.status))
-  if (billable.some((subscription) => subscription.status === "active" && !endsWithinMargin(subscription, now))) {
+  if (subscriptions.some((subscription) => subscription.status === "active" && !endsWithinMargin(subscription, now))) {
     return "paid"
   }
-  return billable.length > 0 ? "paidCapped" : "free"
+  return subscriptions.some(owesPayment) ? "suspended" : "free"
 }
 
 export interface SettlementShape {

@@ -78,7 +78,7 @@ export const routes = HttpRouter.use((router) =>
     const planOf = (account: Account | undefined): PlanState => {
       if (account === undefined) return "unknown"
       if (account.planId === config.plans.paid) return "paid"
-      if (account.planId === config.plans.paidCapped) return "paidCapped"
+      if (account.planId === config.plans.suspended) return "suspended"
       if (account.planId === config.plans.free) return "free"
       return "other"
     }
@@ -135,7 +135,8 @@ export const routes = HttpRouter.use((router) =>
         const plan = planOf(account)
         // Polar redirects here with the checkout ID after a payment; the webhook that changes the
         // plan can arrive a few seconds later.
-        const checkoutPending = new URL(request.url, config.baseUrl).searchParams.has("checkout_id") && plan === "free"
+        const checkoutPending =
+          new URL(request.url, config.baseUrl).searchParams.has("checkout_id") && (plan === "free" || plan === "suspended")
         return page(
           signedInPage({
             email: user.email,

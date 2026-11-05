@@ -124,7 +124,7 @@ export const signedOutPage = (options: { readonly error: string | undefined }) =
  * The plan of the account: one of the plans that a subscription switches between, another plan
  * that an administrator gave the account, or `unknown` when the registry call failed.
  */
-export type PlanState = "free" | "paid" | "paidCapped" | "other" | "unknown"
+export type PlanState = "free" | "paid" | "suspended" | "other" | "unknown"
 
 export interface SignedInPageOptions {
   readonly email: string
@@ -165,22 +165,26 @@ const planHero = (options: SignedInPageOptions) => {
   }
   switch (options.plan) {
     case "paid":
-    case "paidCapped":
       return html`<span class="eyebrow">Your plan</span>
         <h1>You're on Paid</h1>
         ${renewal(options.subscription)}
-        ${
-          options.subscription?.status === "past_due"
-            ? html`<p class="alert" role="alert">The last payment failed. Update the payment method in Manage billing to keep the Paid plan.</p>`
-            : null
-        }
-        ${
-          options.plan === "paidCapped"
-            ? html`<p class="lead">Paid overage is off. Usage stops at the monthly amounts of Paid.</p>`
-            : null
-        }
         <div class="actions">
           ${portalForm("Manage billing")}
+        </div>`
+    case "suspended":
+      return options.subscription?.status === "past_due"
+        ? html`<span class="eyebrow">Your plan</span>
+        <h1>Your account is suspended</h1>
+        <p class="alert" role="alert">The last payment for Paid failed, so the agents of this account are stopped. Update the payment method in Manage billing. After the payment, the account is on Paid again.</p>
+        <div class="actions">
+          ${portalForm("Manage billing")}
+        </div>`
+        : html`<span class="eyebrow">Your plan</span>
+        <h1>Your account is suspended</h1>
+        <p class="alert" role="alert">The Paid subscription ended without a payment, so the agents of this account are stopped. Subscribe to Paid again to start them.</p>
+        <div class="actions">
+          ${checkoutForm}
+          ${portalForm("Billing history")}
         </div>`
     case "free":
       return html`<span class="eyebrow">Your plan</span>
