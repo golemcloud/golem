@@ -47,7 +47,9 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
+use golem_common::model::agent::{
+    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
+};
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -456,7 +458,7 @@ where
 pub trait WorkerClient: Send + Sync {
     async fn prepare(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -471,7 +473,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn create(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -662,7 +664,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         method_name: Option<String>,
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
@@ -971,7 +973,7 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 impl WorkerClient for WorkerExecutorWorkerClient {
     async fn prepare(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -983,11 +985,13 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let agent_id_clone = agent_id.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
         let fingerprint = self
             .call_worker_executor(
-                agent_id.clone(),
+                target.clone(),
                 "prepare_worker",
                 move |client| {
                     let freshness_disposition =
@@ -1031,7 +1035,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn create(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -1041,11 +1045,13 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let agent_id_clone = agent_id.clone();
         let account_id_clone = account_id;
         let fingerprint = self
             .call_worker_executor(
-                agent_id.clone(),
+                target.clone(),
                 "create_worker",
                 move |worker_executor_client| {
                     let agent_id = agent_id_clone.clone();
@@ -2217,7 +2223,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         method_name: Option<String>,
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
@@ -2232,14 +2238,15 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         principal: golem_api_grpc::proto::golem::component::Principal,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        let agent_id = agent_id.clone();
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let agent_id_clone = agent_id.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
         let attempt_id = uuid::Uuid::new_v4();
 
         let result = self
             .call_worker_executor(
-                agent_id.clone(),
+                target.clone(),
                 "invoke_agent_session",
                 move |worker_executor_client| {
                     let freshness_disposition =
@@ -3317,7 +3324,7 @@ mod rejection_mapping_tests {
     };
     use golem_api_grpc::proto::golem::workerexecutor::v1::*;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+    use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition, Principal};
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::AgentError as OplogAgentError;
@@ -3876,7 +3883,7 @@ mod rejection_mapping_tests {
 
         client
             .invoke_agent(
-                &agent_id,
+                &AgentTarget::Current(agent_id),
                 Some("run".to_string()),
                 Some(SchemaValue {
                     value: Some(schema_value::Value::TupleValue(Default::default())),

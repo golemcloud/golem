@@ -37,7 +37,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, ResolvedOwnerContext};
+use golem_common::model::agent::{
+    AgentMode, AgentTarget, ParsedAgentId, Principal, ResolvedOwnerContext,
+};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::recipient::RecipientPattern;
@@ -9408,7 +9410,8 @@ impl FailingRpc {
 impl Rpc for RecordingRpc {
     async fn create_demand(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -9421,7 +9424,8 @@ impl Rpc for RecordingRpc {
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
-                owned_agent_id,
+                target,
+                environment_id,
                 method_name,
                 self_created_by,
                 self_agent_id,
@@ -9437,7 +9441,8 @@ impl Rpc for RecordingRpc {
 
     async fn invoke_and_await(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
@@ -9455,7 +9460,8 @@ impl Rpc for RecordingRpc {
         }
         self.inner
             .invoke_and_await(
-                owned_agent_id,
+                target,
+                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 method_name,
@@ -9473,7 +9479,8 @@ impl Rpc for RecordingRpc {
 
     async fn invoke(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
@@ -9487,7 +9494,8 @@ impl Rpc for RecordingRpc {
     ) -> Result<(), ServiceRpcError> {
         self.inner
             .invoke(
-                owned_agent_id,
+                target,
+                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 method_name,
@@ -9507,7 +9515,8 @@ impl Rpc for RecordingRpc {
 impl Rpc for FailingRpc {
     async fn create_demand(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -9520,7 +9529,8 @@ impl Rpc for FailingRpc {
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
-                owned_agent_id,
+                target,
+                environment_id,
                 method_name,
                 self_created_by,
                 self_agent_id,
@@ -9536,7 +9546,8 @@ impl Rpc for FailingRpc {
 
     async fn invoke_and_await(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
@@ -9560,7 +9571,8 @@ impl Rpc for FailingRpc {
         } else {
             self.inner
                 .invoke_and_await(
-                    owned_agent_id,
+                    target,
+                    environment_id,
                     idempotency_key,
                     freshness_disposition,
                     method_name,
@@ -9579,7 +9591,8 @@ impl Rpc for FailingRpc {
 
     async fn invoke(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
@@ -9593,7 +9606,8 @@ impl Rpc for FailingRpc {
     ) -> Result<(), ServiceRpcError> {
         self.inner
             .invoke(
-                owned_agent_id,
+                target,
+                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 method_name,

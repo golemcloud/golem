@@ -68,6 +68,13 @@ use crate::schema::render::cli_text::value_to_cli_text;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 
+/// An invocation or creation address before it resolves to a concrete owner.
+/// `Current` retains today's structural addressing and creation semantics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AgentTarget {
+    Current(AgentId),
+}
+
 /// Resolved execution-owner context. Consumers must branch on this value
 /// instead of treating failure to parse an agent id as component-wide access.
 #[derive(Debug, Clone, PartialEq)]
