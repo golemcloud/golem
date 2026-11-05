@@ -1116,6 +1116,7 @@ mod tests {
         WorkerServiceConfig, make_worker_service_config_loader,
     };
     use crate::mcp::session::{McpSessionStorageConfig, McpSqliteStorageConfig};
+    use figment::Jail;
     use figment::providers::{Format, Toml};
     use golem_common::SafeDisplay;
     use golem_common::config::RedisConfig;
@@ -1390,6 +1391,67 @@ mod tests {
             error.contains("route_resolver.trusted_ingress_addresses"),
             "{error}"
         );
+    }
+
+    /// Writes the worker-service configuration file into the jail's working directory, where
+    /// the loader expects it, as in the service image.
+    fn with_worker_service_config_file(jail: &mut Jail) -> figment::Result<()> {
+        jail.create_dir("config")?;
+        jail.create_file(
+            super::CONFIG_FILE_NAME,
+            include_str!("../config/worker-service.toml"),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_ingress_addresses_are_read_from_the_environment() {
+        Jail::expect_with(|jail| {
+            with_worker_service_config_file(jail)?;
+            jail.set_env(
+                "GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
+                r#"["172.18.128.0/19","172.18.160.0/19","172.18.192.0/19"]"#,
+            );
+
+            let config: WorkerServiceConfig =
+                make_worker_service_config_loader().figment().extract()?;
+
+            assert_eq!(
+                config.route_resolver.trusted_ingress_addresses,
+                vec![
+                    "172.18.128.0/19".parse::<ipnet::IpNet>().unwrap(),
+                    "172.18.160.0/19".parse().unwrap(),
+                    "172.18.192.0/19".parse().unwrap(),
+                ]
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn trusted_ingress_address_without_prefix_length_in_the_environment_is_rejected() {
+        Jail::expect_with(|jail| {
+            with_worker_service_config_file(jail)?;
+            jail.set_env(
+                "GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
+                r#"["10.0.0.1"]"#,
+            );
+
+            let error = make_worker_service_config_loader()
+                .figment()
+                .extract::<WorkerServiceConfig>()
+                .expect_err("a bare address must not load")
+                .to_string();
+
+            // Figment names keys from environment variables in upper case.
+            assert!(
+                error
+                    .to_lowercase()
+                    .contains("route_resolver.trusted_ingress_addresses"),
+                "{error}"
+            );
+            Ok(())
+        });
     }
 
     #[test]
