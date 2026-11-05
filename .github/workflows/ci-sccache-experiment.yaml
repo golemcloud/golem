@@ -1,0 +1,62 @@
+name: Changed-commit sccache experiment
+
+on:
+  push:
+    branches: [ci/main-only-experiment]
+    paths:
+      - .github/workflows/ci-sccache-experiment.yaml
+      - .github/scripts/ci-sccache-experiment.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changed-commit-sccache-experiment
+  cancel-in-progress: false
+
+jobs:
+  native:
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record allocation and host
+        run: |
+          mkdir -p tmp/sccache-results
+          date +%s > tmp/sccache-results/allocation-start
+          git rev-parse HEAD > tmp/sccache-results/source-sha
+          { lscpu; free -h; df -h; } > tmp/sccache-results/host.txt
+      - name: Install matched toolchain
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          { rustc +1.99.1 -vV; cargo +1.99.1 --version; } > tmp/sccache-results/toolchains.txt
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
+      - name: Install pinned sccache and native build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qqy --no-install-recommends build-essential libcurl4-openssl-dev libssl-dev libexpat1-dev zlib1g-dev time
+          curl -fLsS --retry 2 https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-unknown-linux-musl.tar.gz -o "$RUNNER_TEMP/sccache.tar.gz"
+          echo "aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd  $RUNNER_TEMP/sccache.tar.gz" | sha256sum -c
+          tar xzf "$RUNNER_TEMP/sccache.tar.gz" -C "$RUNNER_TEMP"
+          sudo install "$RUNNER_TEMP/sccache-v0.19.0-x86_64-unknown-linux-musl/sccache" /usr/local/bin/sccache
+          { sccache --version; cargo make --version; } >> tmp/sccache-results/toolchains.txt
+          python3 -m pip install --user --break-system-packages PyYAML==6.0.3
+      - name: Measure independently primed source transitions
+        run: python3 -u .github/scripts/ci-sccache-experiment.py
+      - name: Record total allocation
+        if: always()
+        run: date +%s > tmp/sccache-results/allocation-end
+      - name: Preserve measurements and failures
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: sccache-experiment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/sccache-results
+          if-no-files-found: error
+          retention-days: 14
