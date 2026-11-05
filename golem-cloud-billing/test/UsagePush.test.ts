@@ -8,7 +8,7 @@ import * as Subscriptions from "../src/Subscriptions.ts"
 import * as Metering from "../src/Metering.ts"
 import * as Polar from "../src/Polar.ts"
 import * as UsagePush from "../src/UsagePush.ts"
-import { RegistryDatabase } from "./registry.ts"
+import { closePool, RegistryDatabase } from "./registry.ts"
 
 const polarUrl = "https://polar.test"
 const polarToken = "polar-test-token"
@@ -140,7 +140,7 @@ describe("UsagePush", () => {
     await app.query(Subscriptions.tables)
   }, 60_000)
   afterAll(async () => {
-    await app.end()
+    await closePool(app)
     await registry.drop()
   })
   beforeEach(() => {
