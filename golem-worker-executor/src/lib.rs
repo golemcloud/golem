@@ -1114,10 +1114,8 @@ async fn create_worker_executor_impl<
     let scheduler_service = SchedulerServiceDefault::new(
         scheduler_storage,
         shard_service.clone(),
-        promise_service.clone(),
         Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
         oplog_service.clone(),
-        worker_service.clone(),
         golem_config.scheduler.refresh_interval,
         golem_config.scheduler.claim_batch_size,
         golem_config.scheduler.lease_ttl,

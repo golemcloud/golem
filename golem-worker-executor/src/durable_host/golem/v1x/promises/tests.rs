@@ -100,6 +100,14 @@ impl PromiseService for FlakyPromiseService {
         self.inner.complete(promise_id, data).await
     }
 
+    async fn complete_without_wakeup(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.inner.complete_without_wakeup(promise_id, data).await
+    }
+
     async fn cleanup(&self) {
         self.inner.cleanup().await
     }
