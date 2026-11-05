@@ -284,7 +284,7 @@ tap = "1.0.1"
 tar = "0.4.46"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "3.0.12", default-features = true }
+test-r = { version = "3.0.14", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "mysql", ] }
 textwrap = { version = "0.16.1", default-features = false, features = ["unicode-linebreak", "unicode-width"] }
