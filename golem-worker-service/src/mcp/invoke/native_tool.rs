@@ -7,10 +7,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use futures::StreamExt;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::{
-    InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRequest, StreamCancel,
-    StreamCancelReason, StreamCancelRole, ToolByteStreamRole, input_stream_item,
-    invocation_request, invocation_response, invocation_session_completion,
-    invocation_session_result,
+    InputStreamItem, InvocationAccepted, InvocationRequest, StreamDirection, StreamEnd,
+    StreamTerminalAuthor, ToolByteStreamRole, input_stream_item, invocation_request,
+    invocation_response, invocation_session_completion, invocation_session_result,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{OwnerKind, Principal};
@@ -19,6 +18,7 @@ use golem_common::model::card::{
     PermissionTarget,
     owner::{AgentOwnerLeafPattern, AgentOwnerPattern},
 };
+use golem_common::model::durable_stream::{StreamError, StreamTerminal};
 use golem_common::model::invocation_session_public::{PublicNativeToolTarget, PublicTypedValue};
 use golem_common::model::oplog::PublicExternalToolResult;
 use golem_common::model::tool::{SerializableToolError, SerializableToolRpcError};
@@ -187,9 +187,12 @@ async fn collect_session(
                 let durable_stream_id = mapping.handle.as_ref()?.stream_id;
                 let bytes = stdin.as_ref()?;
                 let request = if input_position == bytes.len() {
-                    invocation_request::Request::InputEnd(InputStreamEnd {
-                        transport_stream_id: stream, sequence: input_position as u64,
-                        durable_stream_id, epoch: a.epoch,
+                    invocation_request::Request::StreamEnd(StreamEnd {
+                        transport_stream_id: stream, producer_sequence: input_position as u64,
+                        durable_stream_id, epoch: a.epoch, durable_offset: vec![],
+                        direction: StreamDirection::Input as i32,
+                        authored_by: StreamTerminalAuthor::Guest as i32,
+                        outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
                     })
                 } else {
                     invocation_request::Request::InputItem(InputStreamItem {
@@ -249,26 +252,17 @@ async fn collect_session(
                                 _ => return Err(invalid("native output frame has an unknown stream")),
                             }
                         }
-                        Some(invocation_response::Response::OutputEnd(end)) => {
+                        Some(invocation_response::Response::StreamEnd(end)) => {
+                            let terminal = StreamTerminal::try_from(end.outcome.ok_or_else(|| invalid("native terminal has no outcome"))?).map_err(invalid)?;
+                            let error = match &terminal {
+                                StreamTerminal::Finished => None,
+                                _ => Some(format!("{terminal:?}")),
+                            };
                             match accepted.as_ref().and_then(|a| a.stream_mappings.iter().find(|m| m.transport_stream_id == end.transport_stream_id)).and_then(|m| m.tool_byte_stream_role).and_then(|role| ToolByteStreamRole::try_from(role).ok()) {
-                                Some(ToolByteStreamRole::Stdout) => stdout_done = true,
-                                Some(ToolByteStreamRole::Stderr) => stderr_done = true,
+                                Some(ToolByteStreamRole::Stdin) if end.direction == StreamDirection::Input as i32 => input_done = true,
+                                Some(ToolByteStreamRole::Stdout) if end.direction == StreamDirection::Output as i32 => { stdout_done = true; stdout_error = error; },
+                                Some(ToolByteStreamRole::Stderr) if end.direction == StreamDirection::Output as i32 => { stderr_done = true; stderr_error = error; },
                                 _ => return Err(invalid("native output end has an unknown stream")),
-                            }
-                        }
-                        Some(invocation_response::Response::OutputError(error)) => {
-                            match accepted.as_ref().and_then(|a| a.stream_mappings.iter().find(|m| m.transport_stream_id == error.transport_stream_id)).and_then(|m| m.tool_byte_stream_role).and_then(|role| ToolByteStreamRole::try_from(role).ok()) {
-                                Some(ToolByteStreamRole::Stdout) => { stdout_done = true; stdout_error = Some(error.details); }
-                                Some(ToolByteStreamRole::Stderr) => { stderr_done = true; stderr_error = Some(error.details); }
-                                _ => return Err(invalid("native output error has an unknown stream")),
-                            }
-                        }
-                        Some(invocation_response::Response::StreamCancel(cancel)) => {
-                            match accepted.as_ref().and_then(|a| a.stream_mappings.iter().find(|m| m.transport_stream_id == cancel.transport_stream_id)).and_then(|m| m.tool_byte_stream_role).and_then(|role| ToolByteStreamRole::try_from(role).ok()) {
-                                Some(ToolByteStreamRole::Stdin) => input_done = true,
-                                Some(ToolByteStreamRole::Stdout) => { stdout_done = true; stdout_error = Some("stdout cancelled".to_string()); }
-                                Some(ToolByteStreamRole::Stderr) => { stderr_done = true; stderr_error = Some("stderr cancelled".to_string()); }
-                                None => return Err(invalid("native cancellation has an unknown stream")),
                             }
                         }
                         Some(invocation_response::Response::InputAck(_)) => input_in_flight = false,
@@ -311,7 +305,7 @@ async fn collect_session(
                                 && !input_done
                         })
                         .map(|m| m.transport_stream_id),
-                    StreamCancelRole::InputProducer,
+                    StreamDirection::Input,
                 ),
                 (
                     accepted
@@ -322,7 +316,7 @@ async fn collect_session(
                                 && !stdout_done
                         })
                         .map(|m| m.transport_stream_id),
-                    StreamCancelRole::OutputConsumer,
+                    StreamDirection::Output,
                 ),
                 (
                     accepted
@@ -333,7 +327,7 @@ async fn collect_session(
                                 && !stderr_done
                         })
                         .map(|m| m.transport_stream_id),
-                    StreamCancelRole::OutputConsumer,
+                    StreamDirection::Output,
                 ),
             ] {
                 if let Some(stream) = stream {
@@ -345,22 +339,28 @@ async fn collect_session(
                         .and_then(|h| h.stream_id);
                     let _ = sender
                         .send(InvocationRequest {
-                            request: Some(invocation_request::Request::StreamCancel(
-                                StreamCancel {
-                                    transport_stream_id: stream,
-                                    producer_sequence: if role == StreamCancelRole::InputProducer {
-                                        input_position as u64
-                                    } else {
-                                        0
-                                    },
-                                    role: role as i32,
-                                    reason: StreamCancelReason::Cancelled as i32,
-                                    details: None,
-                                    durable_stream_id,
-                                    epoch: accepted.epoch,
-                                    durable_offset: vec![],
+                            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+                                transport_stream_id: stream,
+                                producer_sequence: if role == StreamDirection::Input {
+                                    input_position as u64
+                                } else {
+                                    0
                                 },
-                            )),
+                                direction: role as i32,
+                                authored_by: StreamTerminalAuthor::Guest as i32,
+                                outcome: Some(
+                                    if role == StreamDirection::Input {
+                                        StreamTerminal::Failed(StreamError::Abandoned)
+                                    } else {
+                                        StreamTerminal::ConsumerCancelled { details: None }
+                                    }
+                                    .try_into()
+                                    .unwrap(),
+                                ),
+                                durable_stream_id,
+                                epoch: accepted.epoch,
+                                durable_offset: vec![],
+                            })),
                         })
                         .await;
                 }
@@ -584,7 +584,7 @@ mod tests {
 
         let mut cancelled = Vec::new();
         while let Ok(request) = receiver.try_recv() {
-            if let invocation_request::Request::StreamCancel(cancel) = request.request.unwrap() {
+            if let invocation_request::Request::StreamEnd(cancel) = request.request.unwrap() {
                 cancelled.push(cancel.transport_stream_id);
             }
         }
@@ -710,18 +710,19 @@ mod tests {
     }
 
     fn output_end(transport_stream_id: u64, sequence: u64) -> invocation_response::Response {
-        invocation_response::Response::OutputEnd(
-            golem_api_grpc::proto::golem::worker::OutputStreamEnd {
-                transport_stream_id,
-                producer_sequence: sequence,
-                durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
-                    high_bits: 0,
-                    low_bits: transport_stream_id,
-                }),
-                durable_offset: durable_offset(sequence),
-                epoch: 1,
-            },
-        )
+        invocation_response::Response::StreamEnd(StreamEnd {
+            transport_stream_id,
+            producer_sequence: sequence,
+            direction: StreamDirection::Output as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
+            durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
+                high_bits: 0,
+                low_bits: transport_stream_id,
+            }),
+            durable_offset: durable_offset(sequence),
+            epoch: 1,
+        })
     }
 
     #[test]
@@ -729,7 +730,6 @@ mod tests {
     async fn stdout_is_drained_before_stdin_and_after_structured_result() {
         use golem_api_grpc::proto::golem::worker::{
             InvocationResponse, InvocationSessionCompletion, InvocationSessionResult,
-            OutputStreamEnd,
         };
         let (mut session, accepted) = byte_session(true);
         let (requests, mut input) = mpsc::channel::<InvocationRequest>(1);
@@ -774,15 +774,15 @@ mod tests {
                         ))
                         .await;
                     }
-                    invocation_request::Request::InputEnd(end) => {
-                        assert_eq!(end.sequence, received.len() as u64);
+                    invocation_request::Request::StreamEnd(end) => {
+                        assert_eq!(end.producer_sequence, received.len() as u64);
                         send(invocation_response::Response::InputAck(
                             golem_api_grpc::proto::golem::worker::InputStreamAck {
                                 transport_stream_id: 70,
-                                highest_contiguous_sequence: end.sequence,
+                                highest_contiguous_sequence: end.producer_sequence,
                                 logical_item_count: 1,
                                 durable_stream_id: end.durable_stream_id,
-                                resulting_offset: durable_offset(end.sequence + 1),
+                                resulting_offset: durable_offset(end.producer_sequence + 1),
                                 epoch: 1,
                                 ..Default::default()
                             },
@@ -811,9 +811,12 @@ mod tests {
             ))
             .await;
             send(output_frame(vec![99], 4)).await;
-            send(invocation_response::Response::OutputEnd(OutputStreamEnd {
+            send(invocation_response::Response::StreamEnd(StreamEnd {
                 transport_stream_id: 71,
                 producer_sequence: 5,
+                direction: StreamDirection::Output as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
                 durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
                     high_bits: 0,
                     low_bits: 71,
@@ -919,13 +922,13 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.message.contains("16 MiB"), "{error:?}");
-        let invocation_request::Request::StreamCancel(cancel) =
+        let invocation_request::Request::StreamEnd(cancel) =
             receiver.recv().await.unwrap().request.unwrap()
         else {
             panic!("expected cancellation")
         };
         assert_eq!(cancel.transport_stream_id, 71);
-        assert_eq!(cancel.role, StreamCancelRole::OutputConsumer as i32);
+        assert_eq!(cancel.direction, StreamDirection::Output as i32);
     }
 
     #[test]
@@ -956,7 +959,7 @@ mod tests {
         assert!(error.message.contains("stderr exceeds"), "{error:?}");
         let mut cancelled = vec![];
         while let Ok(request) = receiver.try_recv() {
-            let invocation_request::Request::StreamCancel(cancel) = request.request.unwrap() else {
+            let invocation_request::Request::StreamEnd(cancel) = request.request.unwrap() else {
                 panic!("expected cancellation")
             };
             cancelled.push(cancel.transport_stream_id);

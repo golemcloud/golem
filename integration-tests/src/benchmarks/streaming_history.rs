@@ -287,7 +287,7 @@ fn validate_direct_output(
     }
     let Some((
         sequence,
-        golem_common::model::invocation_session_public::PublicOutputStreamOutcome::Ok,
+        golem_common::model::invocation_session_public::PublicStreamOutcome::Finished,
     )) = &output.terminal
     else {
         anyhow::bail!("expected exactly one successful output terminal");

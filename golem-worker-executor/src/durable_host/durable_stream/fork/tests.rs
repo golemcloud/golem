@@ -16,15 +16,16 @@ use crate::durable_host::durable_stream::{
 use crate::services::worker_fork::lineage::StreamForkLineage;
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, LocalStreamReaderId,
-    SessionStreamRole, StreamEndRecord, StreamEndResult, StreamItemsPayload, StreamItemsRecord,
-    StreamRecordReference, StreamRegistrationInvocation, StreamRootKind,
-    StreamSessionFinishedRecord, StreamSessionMapping, StreamSourceKind, StreamTerminalAuthor,
+    SessionStreamRole, StreamItemsPayload, StreamItemsRecord, StreamRecordReference,
+    StreamRegistrationInvocation, StreamRootKind, StreamSessionFinishedRecord,
+    StreamSessionMapping, StreamSourceKind, StreamTerminal, StreamTerminalAuthor,
+    StreamTerminalOrigin, StreamTerminalRecord,
 };
 use golem_common::base_model::durable_stream::{
     ExternalProducerId, StreamAttachmentActivatedRecord, StreamAttachmentPreparedRecord,
     StreamBindingRecord, StreamCascadeDependentResult, StreamConsumerItemValueRecord,
-    StreamConsumerTerminal, StreamConsumerTerminalRecord, StreamOffset,
-    StreamSessionMappingUpdateRecord, StreamSessionRecord, StreamSourceUnavailableRecord,
+    StreamConsumerTerminalRecord, StreamOffset, StreamSessionMappingUpdateRecord,
+    StreamSessionRecord, StreamSourceUnavailableRecord,
 };
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
 use golem_common::model::OwnedAgentId;
@@ -1315,10 +1316,10 @@ fn fork_cut_is_marker_time_partial_transition_and_discards_nested_suffix() {
         (8, LocalStreamId(OplogIndex::from_u64(5)), 0),
     ] {
         let event = index
-            .apply_end(
+            .apply_terminal(
                 OplogIndex::from_u64(oplog_index),
                 None,
-                StreamEndRecord {
+                StreamTerminalRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     stream_id,
                     sequence,
@@ -1326,8 +1327,9 @@ fn fork_cut_is_marker_time_partial_transition_and_discards_nested_suffix() {
                         OplogIndex::from_u64(oplog_index),
                         0,
                     ),
-                    result: StreamEndResult::Ok,
+                    terminal: StreamTerminal::Finished,
                     authored_by: StreamTerminalAuthor::Protocol,
+                    origin: StreamTerminalOrigin::Source,
                 },
                 identity.fingerprint,
             )
@@ -1438,10 +1440,10 @@ fn fork_cut_preserves_unrelated_completed_stream_and_clears_live_state() {
     for (oplog_index, stream_id) in [(7, first.stream_id), (8, second.stream_id)] {
         let local_stream_id = index.local_stream_id(stream_id).unwrap();
         let event = index
-            .apply_end(
+            .apply_terminal(
                 OplogIndex::from_u64(oplog_index),
                 None,
-                StreamEndRecord {
+                StreamTerminalRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     stream_id: local_stream_id,
                     sequence: 0,
@@ -1449,8 +1451,9 @@ fn fork_cut_preserves_unrelated_completed_stream_and_clears_live_state() {
                         OplogIndex::from_u64(oplog_index),
                         0,
                     ),
-                    result: StreamEndResult::Ok,
+                    terminal: StreamTerminal::Finished,
                     authored_by: StreamTerminalAuthor::Protocol,
+                    origin: StreamTerminalOrigin::Source,
                 },
                 identity.fingerprint,
             )
@@ -1493,7 +1496,7 @@ fn fork_cut_preserves_unrelated_completed_stream_and_clears_live_state() {
     );
     assert_eq!(
         terminal.payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     );
     assert!(!index.streams[&first_next.stream_id].terminal);
     assert!(index.registrations.contains_key(&first.stream_id));
@@ -1599,7 +1602,8 @@ fn fork_cut_preserves_foreign_dependency_journals_and_clears_live_authority() {
                 },
                 source_offset: StreamOffset::new(OplogIndex::from_u64(9), 0),
                 consumer_read_ordinal: 3,
-                terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+                authored_by: StreamTerminalAuthor::Guest,
+                terminal: StreamTerminal::Finished,
             }),
             identity.environment_id,
             &identity.agent_id,

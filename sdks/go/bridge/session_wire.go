@@ -435,7 +435,111 @@ func decodeBinary(data []byte) (binaryFrame, error) {
 	return f, nil
 }
 
-var cancelReasons = []string{
-	"cancelled", "consumer-drop", "transport-detached", "source-unavailable",
-	"producer-deleted", "invocation-failed", "protocol-error",
+// streamEnd validates the directional terminal before any session state changes.
+func (m message) streamEnd(server bool) (string, error, error) {
+	if err := m.members("stream-end", []string{"channel", "direction", "outcome", "sequence"}, "cursorToken"); err != nil {
+		return "", nil, err
+	}
+	if !server && m.has("cursorToken") {
+		return "", nil, protocolErrorf("client stream-end must not carry a cursor")
+	}
+	if _, err := m.channel(); err != nil {
+		return "", nil, err
+	}
+	if _, err := m.u64("sequence"); err != nil {
+		return "", nil, err
+	}
+	if m.has("cursorToken") && string(m["cursorToken"]) != "null" {
+		if _, err := m.token("cursorToken"); err != nil {
+			return "", nil, err
+		}
+	}
+	direction, err := m.str("direction")
+	if err != nil || (direction != "input" && direction != "output") {
+		return "", nil, protocolErrorf("invalid stream direction %q", direction)
+	}
+	outcome, err := m.object("outcome")
+	if err != nil {
+		return "", nil, err
+	}
+	kind, err := outcome.str("kind")
+	if err != nil {
+		return "", nil, err
+	}
+	consumer := kind == "consumer-cancelled"
+	if (server && direction == "input" && !consumer) || (!server && consumer != (direction == "output")) {
+		return "", nil, protocolErrorf("invalid stream-end direction and outcome")
+	}
+	var end error
+	switch kind {
+	case "finished":
+		err = outcome.membersOnly("stream outcome", []string{"kind"})
+	case "consumer-cancelled":
+		err = outcome.membersOnly("stream outcome", []string{"kind"}, "details")
+		var details *string
+		if err == nil && outcome.has("details") && string(outcome["details"]) != "null" {
+			var text string
+			text, err = outcome.str("details")
+			details = &text
+		}
+		end = &StreamCancelled{Details: details}
+	case "failed":
+		if err = outcome.membersOnly("stream outcome", []string{"kind", "error"}); err == nil {
+			var failure message
+			if failure, err = outcome.object("error"); err == nil {
+				end, err = failure.streamFailure()
+			}
+		}
+	default:
+		err = protocolErrorf("invalid stream outcome %q", kind)
+	}
+	return direction, end, err
+}
+
+func (m message) streamFailure() (*StreamError, error) {
+	kind, err := m.str("kind")
+	if err != nil {
+		return nil, err
+	}
+	failure := &StreamError{Kind: StreamErrorKind(kind)}
+	switch failure.Kind {
+	case StreamErrorCancelled, StreamErrorAbandoned:
+		err = m.membersOnly("stream error", []string{"kind"})
+	case StreamErrorTrapped, StreamErrorInterrupted, StreamErrorResourceExhausted:
+		if err = m.membersOnly("stream error", []string{"kind", "message"}); err == nil {
+			failure.Message, err = m.str("message")
+			if string(m["message"]) == "null" {
+				err = protocolErrorf("stream error message must be a string")
+			}
+		}
+	case StreamErrorFailed:
+		if err = m.membersOnly("stream error", []string{"kind", "value"}); err != nil {
+			break
+		}
+		var typed message
+		if typed, err = m.object("value"); err != nil {
+			break
+		}
+		if err = typed.membersOnly("typed stream failure", []string{"graph", "value"}); err != nil {
+			break
+		}
+		if failure.Graph, err = schema.UnmarshalWireGraph(typed["graph"]); err != nil {
+			break
+		}
+		if failure.Value, err = schema.UnmarshalWireValue(typed["value"]); err != nil {
+			break
+		}
+		if err = schema.NewRef(failure.Graph).Validate(failure.Value); err != nil {
+			break
+		}
+		_, err = mapStreams(failure.Value, func(schema.StreamValue) (schema.SchemaValue, error) {
+			return nil, protocolErrorf("stream failures cannot contain stream references")
+		})
+	default:
+		err = protocolErrorf("invalid stream error %q", kind)
+	}
+	if err != nil {
+		return nil, protocolErrorf("invalid stream failure: %v", err)
+	}
+	return failure, nil
 }

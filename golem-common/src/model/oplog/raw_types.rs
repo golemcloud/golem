@@ -62,11 +62,17 @@ pub struct AttributeMap(pub HashMap<String, AttributeValue>);
 #[desert(evolution())]
 pub enum DurableStreamEventSummary {
     Registered,
-    Items { item_count: u64 },
-    End { outcome: DurableStreamOutcome },
-    Cancelled,
+    Items {
+        item_count: u64,
+    },
+    Terminal {
+        outcome: DurableStreamTerminalOutcome,
+        origin: crate::model::durable_stream::StreamTerminalOrigin,
+    },
     SessionResult,
-    SessionFinished { outcome: DurableStreamOutcome },
+    SessionFinished {
+        outcome: DurableStreamOutcome,
+    },
     SessionCancellation,
     SessionExpired,
 }
@@ -78,6 +84,14 @@ pub enum DurableStreamOutcome {
     Error,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum DurableStreamTerminalOutcome {
+    Finished,
+    Failed,
+    ConsumerCancelled,
+}
+
 impl DurableStreamEventSummary {
     pub fn items(record: &crate::model::durable_stream::StreamItemsRecord) -> Self {
         Self::Items {
@@ -85,15 +99,16 @@ impl DurableStreamEventSummary {
         }
     }
 
-    pub fn end(record: &crate::model::durable_stream::StreamEndRecord) -> Self {
-        Self::End {
-            outcome: if matches!(
-                record.result,
-                crate::model::durable_stream::StreamEndResult::Ok
-            ) {
-                DurableStreamOutcome::Success
-            } else {
-                DurableStreamOutcome::Error
+    pub fn terminal(record: &crate::model::durable_stream::StreamTerminalRecord) -> Self {
+        use crate::model::durable_stream::StreamTerminal;
+        Self::Terminal {
+            origin: record.origin,
+            outcome: match &record.terminal {
+                StreamTerminal::Finished => DurableStreamTerminalOutcome::Finished,
+                StreamTerminal::Failed(_) => DurableStreamTerminalOutcome::Failed,
+                StreamTerminal::ConsumerCancelled { .. } => {
+                    DurableStreamTerminalOutcome::ConsumerCancelled
+                }
             },
         }
     }

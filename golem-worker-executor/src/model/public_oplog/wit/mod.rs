@@ -68,10 +68,9 @@ use golem_common::model::oplog::public_oplog_entry::{
     PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanOutcome,
     PublicSpanStarted, RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams,
     ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, ToolAttachmentControlParams,
-    ToolAttachmentReadParams,
+    SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams,
+    StreamRegisteredParams, StreamSessionParams, StreamTerminalParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
 };
 
 use golem_common::model::oplog::{
@@ -124,8 +123,24 @@ fn durable_stream_summary_to_wit(
     match value {
         S::Registered => oplog::DurableStreamEventSummary::Registered,
         S::Items { item_count } => oplog::DurableStreamEventSummary::Items(item_count),
-        S::End { outcome: value } => oplog::DurableStreamEventSummary::End(outcome(value)),
-        S::Cancelled => oplog::DurableStreamEventSummary::Cancelled,
+        S::Terminal {
+            outcome: value,
+            origin,
+        } => {
+            use golem_common::model::durable_stream::StreamTerminalOrigin as O;
+            use golem_common::model::oplog::DurableStreamTerminalOutcome as T;
+            oplog::DurableStreamEventSummary::Terminal(oplog::DurableStreamTerminalSummary {
+                origin: match origin {
+                    O::Source => oplog::StreamTerminalOrigin::Source,
+                    O::Control => oplog::StreamTerminalOrigin::Control,
+                },
+                outcome: match value {
+                    T::Finished => oplog::DurableStreamTerminalOutcome::Finished,
+                    T::Failed => oplog::DurableStreamTerminalOutcome::Failed,
+                    T::ConsumerCancelled => oplog::DurableStreamTerminalOutcome::ConsumerCancelled,
+                },
+            })
+        }
         S::SessionResult => oplog::DurableStreamEventSummary::SessionResult,
         S::SessionFinished { outcome: value } => {
             oplog::DurableStreamEventSummary::SessionFinished(outcome(value))
@@ -146,10 +161,21 @@ fn durable_stream_summary_from_wit(
     match value {
         oplog::DurableStreamEventSummary::Registered => S::Registered,
         oplog::DurableStreamEventSummary::Items(count) => S::Items { item_count: count },
-        oplog::DurableStreamEventSummary::End(value) => S::End {
-            outcome: outcome(value),
-        },
-        oplog::DurableStreamEventSummary::Cancelled => S::Cancelled,
+        oplog::DurableStreamEventSummary::Terminal(value) => {
+            use golem_common::model::durable_stream::StreamTerminalOrigin as O;
+            use golem_common::model::oplog::DurableStreamTerminalOutcome as T;
+            S::Terminal {
+                origin: match value.origin {
+                    oplog::StreamTerminalOrigin::Source => O::Source,
+                    oplog::StreamTerminalOrigin::Control => O::Control,
+                },
+                outcome: match value.outcome {
+                    oplog::DurableStreamTerminalOutcome::Finished => T::Finished,
+                    oplog::DurableStreamTerminalOutcome::Failed => T::Failed,
+                    oplog::DurableStreamTerminalOutcome::ConsumerCancelled => T::ConsumerCancelled,
+                },
+            }
+        }
         oplog::DurableStreamEventSummary::SessionResult => S::SessionResult,
         oplog::DurableStreamEventSummary::SessionFinished(value) => S::SessionFinished {
             outcome: outcome(value),

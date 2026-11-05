@@ -15,7 +15,8 @@
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use async_broadcast::{Receiver, RecvError, Sender, TrySendError, broadcast};
 use golem_common::base_model::durable_stream::{
-    MAX_LIVE_JOIN_BUFFER_SIZE, MAX_LIVE_READERS_PER_STREAM, MIN_LIVE_JOIN_BUFFER_SIZE, StreamOffset,
+    MAX_LIVE_JOIN_BUFFER_SIZE, MAX_LIVE_READERS_PER_STREAM, MIN_LIVE_JOIN_BUFFER_SIZE, StreamError,
+    StreamOffset, StreamTerminal, StreamTerminalAuthor,
 };
 use std::collections::HashMap;
 use std::future::Future;
@@ -609,12 +610,34 @@ pub(crate) struct LiveStreamEvent<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LiveStreamEventPayload<T> {
     Item(T),
-    End,
-    Error(String),
-    ClassifiedError {
-        kind: HostFailureKind,
-        message: String,
+    Terminal {
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StreamTerminalError {
+    pub(crate) authored_by: StreamTerminalAuthor,
+    pub(crate) terminal: StreamTerminal,
+}
+
+impl std::fmt::Display for StreamTerminalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "stream terminated: {:?}", self.terminal)
+    }
+}
+
+impl std::error::Error for StreamTerminalError {}
+
+impl StreamTerminalError {
+    pub(crate) fn into_trap(self) -> anyhow::Error {
+        let message = self.to_string();
+        anyhow::Error::new(self).context(ClassifiedHostError {
+            kind: HostFailureKind::Permanent,
+            message,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -679,12 +702,16 @@ impl<T: Clone> LiveStreamPublisher<T> {
     }
 
     pub(crate) async fn publish_end(&self) -> Result<u64, LiveStreamPublishError> {
-        self.publish_terminal(LiveStreamEventPayload::End).await
+        self.publish_terminal(StreamTerminalAuthor::Guest, StreamTerminal::Finished)
+            .await
     }
 
     pub(crate) async fn publish_error(&self, error: String) -> Result<u64, LiveStreamPublishError> {
-        self.publish_terminal(LiveStreamEventPayload::Error(error))
-            .await
+        self.publish_terminal(
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Trapped(error)),
+        )
+        .await
     }
 
     pub(crate) async fn publish_host_error(
@@ -692,29 +719,45 @@ impl<T: Clone> LiveStreamPublisher<T> {
         error: anyhow::Error,
         ordinary_message: String,
     ) -> Result<u64, LiveStreamPublishError> {
-        let payload = error
+        let typed_terminal = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<StreamTerminalError>())
+            .cloned();
+        if let Some(terminal) = typed_terminal {
+            return self
+                .publish_terminal(terminal.authored_by, terminal.terminal)
+                .await;
+        }
+        let classified = error
             .chain()
             .find_map(|cause| cause.downcast_ref::<ClassifiedHostError>())
-            .map_or_else(
-                || LiveStreamEventPayload::Error(ordinary_message),
-                |classified| LiveStreamEventPayload::ClassifiedError {
-                    kind: classified.kind,
-                    message: classified.message.clone(),
-                },
-            );
-        self.publish_terminal(payload).await
+            .map(|classified| classified.message.clone());
+        let terminal = classified.map_or_else(
+            || StreamTerminal::Failed(StreamError::Trapped(ordinary_message)),
+            |message| StreamTerminal::Failed(StreamError::Interrupted(message)),
+        );
+        self.publish_terminal(StreamTerminalAuthor::Host, terminal)
+            .await
     }
 
-    async fn publish_terminal(
+    pub(crate) async fn publish_terminal(
         &self,
-        payload: LiveStreamEventPayload<T>,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<u64, LiveStreamPublishError> {
         let mut state = self.state.lock().await;
         if state.terminated {
             return Err(LiveStreamPublishError::Terminated);
         }
         let offset = state.next_offset;
-        self.send_event(LiveStreamEvent { offset, payload }).await?;
+        self.send_event(LiveStreamEvent {
+            offset,
+            payload: LiveStreamEventPayload::Terminal {
+                authored_by,
+                terminal,
+            },
+        })
+        .await?;
         state.terminated = true;
         Ok(offset)
     }
@@ -899,10 +942,14 @@ mod tests {
     use super::{
         DurableLiveStreamBus, DurableLiveStreamBusError, DurableLiveStreamEvent,
         LiveStreamBusCreateError, LiveStreamEvent, LiveStreamEventPayload, LiveStreamPublishError,
-        live_output_stream_bus, live_stream_bus,
+        StreamTerminalError, live_output_stream_bus, live_stream_bus,
     };
+    use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use golem_common::base_model::OplogIndex;
-    use golem_common::base_model::durable_stream::StreamOffset;
+    use golem_common::base_model::durable_stream::{
+        StreamError, StreamOffset, StreamTerminal, StreamTerminalAuthor,
+    };
+    use golem_schema::schema::IntoTypedSchemaValue;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
@@ -1387,7 +1434,10 @@ mod tests {
             },
             LiveStreamEvent {
                 offset: 2,
-                payload: LiveStreamEventPayload::End,
+                payload: LiveStreamEventPayload::Terminal {
+                    authored_by: StreamTerminalAuthor::Guest,
+                    terminal: StreamTerminal::Finished,
+                },
             },
         ];
         let mut primary_events = Vec::new();
@@ -1564,10 +1614,134 @@ mod tests {
         ));
         assert!(matches!(
             primary.recv().await.unwrap().payload,
-            LiveStreamEventPayload::Error(error) if error == "failed"
+            LiveStreamEventPayload::Terminal {
+                authored_by: StreamTerminalAuthor::Host,
+                terminal: StreamTerminal::Failed(StreamError::Trapped(error)),
+            } if error == "failed"
         ));
         drop(primary);
         assert!(!cancelled.load(Ordering::Acquire));
+    }
+
+    #[test]
+    async fn host_retry_classification_does_not_change_terminal_identity() {
+        let mut terminals = Vec::new();
+        for kind in [HostFailureKind::Transient, HostFailureKind::Permanent] {
+            let (publisher, primary) = live_stream_bus::<u8>(1, || {}).unwrap();
+            let mut primary = primary.activate();
+            publisher
+                .publish_host_error(
+                    anyhow::Error::new(ClassifiedHostError {
+                        kind,
+                        message: "source unavailable".into(),
+                    })
+                    .context("outer host error"),
+                    "ordinary diagnostic".into(),
+                )
+                .await
+                .unwrap();
+            terminals.push(primary.recv().await.unwrap().payload);
+        }
+        assert_eq!(terminals[0], terminals[1]);
+        assert_eq!(
+            terminals[0],
+            LiveStreamEventPayload::Terminal {
+                authored_by: StreamTerminalAuthor::Host,
+                terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                    "source unavailable".into()
+                )),
+            }
+        );
+    }
+
+    #[test]
+    async fn typed_terminal_crosses_error_context_without_reclassification() {
+        for terminal in [
+            StreamTerminal::Finished,
+            StreamTerminal::Failed(StreamError::Failed(
+                (f32::from_bits(0x7fc0_0001), -0.0f64)
+                    .into_typed_schema_value()
+                    .unwrap(),
+            )),
+            StreamTerminal::Failed(StreamError::Trapped("trap".into())),
+            StreamTerminal::Failed(StreamError::Cancelled),
+            StreamTerminal::Failed(StreamError::Abandoned),
+            StreamTerminal::Failed(StreamError::ResourceExhausted("memory".into())),
+            StreamTerminal::ConsumerCancelled {
+                details: Some("reader stopped".into()),
+            },
+        ] {
+            for authored_by in [
+                StreamTerminalAuthor::Guest,
+                StreamTerminalAuthor::Host,
+                StreamTerminalAuthor::Protocol,
+            ] {
+                let (publisher, primary) = live_stream_bus::<u8>(1, || {}).unwrap();
+                let mut primary = primary.activate();
+                publisher
+                    .publish_host_error(
+                        anyhow::Error::new(StreamTerminalError {
+                            authored_by,
+                            terminal: terminal.clone(),
+                        })
+                        .context(ClassifiedHostError {
+                            kind: HostFailureKind::Permanent,
+                            message: "must not replace terminal".into(),
+                        }),
+                        "must not replace terminal".into(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    primary.recv().await.unwrap().payload,
+                    LiveStreamEventPayload::Terminal {
+                        authored_by,
+                        terminal: terminal.clone()
+                    }
+                );
+                assert_eq!(
+                    publisher.publish_end().await,
+                    Err(LiveStreamPublishError::Terminated)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_reader_traps_are_permanent_without_losing_the_terminal() {
+        use crate::model::TrapType;
+        use golem_common::model::agent::AgentMode;
+        use golem_common::model::oplog::AgentError;
+        for terminal in [
+            StreamTerminal::Failed(StreamError::Cancelled),
+            StreamTerminal::Failed(StreamError::Interrupted("source unavailable".into())),
+            StreamTerminal::ConsumerCancelled { details: None },
+        ] {
+            let error = StreamTerminalError {
+                authored_by: StreamTerminalAuthor::Host,
+                terminal: terminal.clone(),
+            }
+            .into_trap();
+            assert_eq!(
+                error
+                    .downcast_ref::<StreamTerminalError>()
+                    .unwrap()
+                    .terminal,
+                terminal
+            );
+            let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+                &error,
+                OplogIndex::INITIAL,
+                AgentMode::Durable,
+            );
+            assert!(matches!(
+                trap,
+                TrapType::Error {
+                    error: AgentError::PermanentError(_),
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]

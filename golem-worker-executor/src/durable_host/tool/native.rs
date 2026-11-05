@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::attachment::{AttachmentStreamProducer, AttachmentStreamRead};
 use super::{
     Accessor, AccessorTask, Arc, AttachmentController, ByteStreamFailure, DurabilityHost,
     DurableInputEndpoint, DurableStreamHandle, DurableWorkerCtx, EntityBodyFinalization,
@@ -21,16 +22,104 @@ use super::{
     NativeToolInvocation, NativeToolKey, NativeToolTask, Resource, RetainedEntityStore,
     RetainedNativeContext, SchemaGraph, SchemaType, SchemaValueStream,
     SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
-    SessionError, SessionStreamRole, StreamReader, StreamSession, ToolAttachmentCounterparty,
-    ToolBodyStdin, ToolCallDispatch, ToolCallStdin, ToolCallTarget, ToolInvocationAttempt,
-    ToolInvocationInput, ToolInvocationOutput, ToolOutputWriterEntry, ToolSidecarInvocation, Weak,
-    WorkerCtx, WorkerCtxExecutable, WorkerExecutorError, accounted_byte_output_stream_pair,
-    admit_tool_response_secret_holds, anyhow, cleanup_failed_tool_dispatch, close_stdin,
-    create_native_underlying_stdin, create_output_attachment, dispatch_tool_attempt, durability,
-    encode_tool_operation_terminal, encode_tool_terminal, first_output_limit_error, mcp,
-    native_output_handles, operation, reject_output, spawn_tool_execution,
-    tool_rpc_for_current_owner, validate_native_tool_output,
+    SessionError, SessionStreamRole, StreamSession, ToolAttachmentCounterparty, ToolBodyStdin,
+    ToolCallDispatch, ToolCallStdin, ToolCallTarget, ToolInvocationAttempt, ToolInvocationInput,
+    ToolInvocationOutput, ToolOutputWriterEntry, ToolSidecarInvocation, Weak, WorkerCtx,
+    WorkerCtxExecutable, WorkerExecutorError, admit_tool_response_secret_holds, anyhow,
+    cleanup_failed_tool_dispatch, close_stdin, create_native_underlying_stdin,
+    create_output_attachment, dispatch_tool_attempt, durability, encode_tool_operation_terminal,
+    encode_tool_terminal, first_output_limit_error, mcp, native_output_handles, operation,
+    reject_output, spawn_tool_execution, tool_rpc_for_current_owner, validate_native_tool_output,
 };
+use crate::durable_host::stream_bus::{LiveStreamPublishError, LiveStreamPublisher};
+use crate::durable_host::stream_transport::{
+    FrontendInterrupt, SourceLifecycle, accounted_relay_stream_pair,
+};
+use crate::worker::suspension::RuntimeSource;
+use golem_schema::schema::SchemaValue;
+
+struct NativeOutputRelay {
+    source: AttachmentStreamProducer,
+    publisher: LiveStreamPublisher<SchemaValue>,
+    lifecycle: Arc<SourceLifecycle>,
+    runtime_source: Option<RuntimeSource>,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    interrupt: FrontendInterrupt,
+    finished: bool,
+}
+
+impl NativeOutputRelay {
+    async fn run(mut self) -> anyhow::Result<()> {
+        let mut activity = self
+            .runtime_source
+            .as_ref()
+            .map(RuntimeSource::external_activity);
+        let relay = async {
+            loop {
+                let read = std::future::poll_fn(|cx| self.source.poll_read(cx));
+                let item = match (&mut activity, &self.runtime_source) {
+                    (Some(activity), Some(source)) => activity.receive(source, read).await,
+                    _ => read.await,
+                }
+                .map_err(anyhow::Error::from)?;
+                if (self.runtime_teardown)() {
+                    return Ok(false);
+                }
+                let publication = match item {
+                    AttachmentStreamRead::Chunk { bytes, .. } => {
+                        let mut result = Ok(0);
+                        for byte in bytes {
+                            result = self.publisher.publish_item(SchemaValue::U8(byte)).await;
+                            if result.is_err() {
+                                break;
+                            }
+                        }
+                        result.map(|_| false)
+                    }
+                    AttachmentStreamRead::Failure { failure, .. } => {
+                        let terminal = AttachmentStreamProducer::failure_terminal(failure);
+                        self.publisher
+                            .publish_terminal(terminal.authored_by, terminal.terminal)
+                            .await
+                            .map(|_| true)
+                    }
+                    AttachmentStreamRead::Terminal {
+                        result: wasmtime::component::StreamResult::Cancelled,
+                        ..
+                    } => return Ok(false),
+                    AttachmentStreamRead::Terminal { .. } => {
+                        self.publisher.publish_end().await.map(|_| true)
+                    }
+                };
+                match publication {
+                    Ok(false) => {}
+                    Ok(true) | Err(LiveStreamPublishError::Closed) => return Ok(true),
+                    Err(error) => anyhow::bail!("failed to relay tool output: {error:?}"),
+                }
+            }
+        };
+        let completed = tokio::select! {
+            biased;
+            _ = self.lifecycle.cancelled() => false,
+            kind = &mut self.interrupt => return Err(kind.into()),
+            result = relay => result?,
+        };
+        if completed {
+            self.finished = true;
+            self.lifecycle.finish();
+        }
+        Ok(())
+    }
+}
+
+impl Drop for NativeOutputRelay {
+    fn drop(&mut self) {
+        // Store loss leaves output reconstruction to the attachment's durable history.
+        if !self.finished {
+            self.lifecycle.abort();
+        }
+    }
+}
 
 pub(super) async fn invoke_native_tool<Ctx: WorkerCtx>(
     worker: Arc<crate::worker::Worker<Ctx>>,
@@ -512,7 +601,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             };
             let (output, consumer) =
                 create_output_attachment(accessor, false).map_err(wasmtime::Error::from_anyhow)?;
-            let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
+            let (endpoint, relay) = accessor.with(|mut access| -> wasmtime::Result<_> {
                 let capacity = access.get().live_stream_event_capacity();
                 let runtime_teardown = native_output_runtime_teardown_probe(
                     access.get().stream_runtime_teardown_probe(),
@@ -524,20 +613,24 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     .runtime_suspension
                     .as_ref()
                     .map(|runtime| runtime.source());
-                let (sink, stream) = accounted_byte_output_stream_pair(
-                    capacity,
-                    runtime_teardown,
+                let (publisher, endpoint) =
+                    accounted_relay_stream_pair(capacity, runtime_source.clone())
+                        .map_err(wasmtime::Error::msg)?;
+                let relay = NativeOutputRelay {
+                    source: consumer.into_stream_producer(),
+                    publisher,
+                    lifecycle: endpoint.lifecycle(),
                     runtime_source,
+                    runtime_teardown,
                     interrupt,
-                )
-                .map_err(wasmtime::Error::msg)?;
-                let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
-                reader.pipe(&mut access, sink)?;
-                stream
-                    .take_host_endpoint::<LiveStreamEndpoint>()
-                    .map_err(wasmtime::Error::msg)
+                    finished: false,
+                };
+                Ok((endpoint, relay))
             })?;
-            Ok((Some(output), Some((streams.clone(), handle, endpoint))))
+            Ok((
+                Some(output),
+                Some((streams.clone(), handle, endpoint, relay)),
+            ))
         };
         let (stdout, stdout_drain) = create_output(stdout_handle)?;
         let (stderr, stderr_drain) = create_output(stderr_handle)?;
@@ -622,17 +715,24 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             };
             Ok::<_, anyhow::Error>(response)
         };
-        let drain = |drain: Option<(StreamSession, DurableStreamHandle, LiveStreamEndpoint)>| async move {
-            if let Some((streams, handle, endpoint)) = drain {
-                streams
-                    .drain_registered_output(
-                        handle,
-                        endpoint,
-                        Arc::new(SchemaGraph::empty()),
-                        SchemaType::u8(),
-                    )
-                    .await
-                    .map_err(SessionError::into_trap)?;
+        let drain = |drain: Option<(
+            StreamSession,
+            DurableStreamHandle,
+            LiveStreamEndpoint,
+            NativeOutputRelay,
+        )>| async move {
+            if let Some((streams, handle, endpoint, relay)) = drain {
+                tokio::try_join!(relay.run(), async {
+                    streams
+                        .drain_registered_output(
+                            handle,
+                            endpoint,
+                            Arc::new(SchemaGraph::empty()),
+                            SchemaType::u8(),
+                        )
+                        .await
+                        .map_err(SessionError::into_trap)
+                })?;
             }
             Ok::<_, anyhow::Error>(())
         };

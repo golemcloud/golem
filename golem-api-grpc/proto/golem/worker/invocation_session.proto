@@ -140,11 +140,51 @@ message InputStreamItem {
   uint64 epoch = 6;
 }
 
-message InputStreamEnd {
+message StreamEnd {
   uint64 transport_stream_id = 1;
-  uint64 sequence = 2;
+  uint64 producer_sequence = 2;
   golem.common.UUID durable_stream_id = 3;
-  uint64 epoch = 4;
+  bytes durable_offset = 4;
+  uint64 epoch = 5;
+  StreamDirection direction = 6;
+  StreamTerminal outcome = 7;
+  StreamTerminalAuthor authored_by = 8;
+}
+
+enum StreamDirection {
+  STREAM_DIRECTION_UNSPECIFIED = 0;
+  STREAM_DIRECTION_INPUT = 1;
+  STREAM_DIRECTION_OUTPUT = 2;
+}
+
+enum StreamTerminalAuthor {
+  STREAM_TERMINAL_AUTHOR_UNSPECIFIED = 0;
+  STREAM_TERMINAL_AUTHOR_GUEST = 1;
+  STREAM_TERMINAL_AUTHOR_HOST = 2;
+  STREAM_TERMINAL_AUTHOR_PROTOCOL = 3;
+}
+
+message StreamTerminal {
+  oneof terminal {
+    golem.common.Empty finished = 1;
+    StreamError failed = 2;
+    StreamConsumerCancelled consumer_cancelled = 3;
+  }
+}
+
+message StreamConsumerCancelled {
+  optional string details = 1;
+}
+
+message StreamError {
+  oneof error {
+    golem.schema.TypedSchemaValue failed = 1;
+    string trapped = 2;
+    golem.common.Empty cancelled = 3;
+    golem.common.Empty abandoned = 4;
+    string interrupted = 5;
+    string resource_exhausted = 6;
+  }
 }
 
 message OutputStreamItem {
@@ -157,54 +197,6 @@ message OutputStreamItem {
   repeated DurableStreamMapping new_stream_mappings = 7;
   bytes packed_u8 = 8;
   uint64 logical_item_count = 9;
-}
-
-message OutputStreamEnd {
-  uint64 transport_stream_id = 1;
-  uint64 producer_sequence = 2;
-  golem.common.UUID durable_stream_id = 3;
-  bytes durable_offset = 4;
-  uint64 epoch = 5;
-}
-
-message OutputStreamError {
-  uint64 transport_stream_id = 1;
-  uint64 producer_sequence = 2;
-  string details = 3;
-  golem.common.UUID durable_stream_id = 4;
-  bytes durable_offset = 5;
-  uint64 epoch = 6;
-}
-
-enum StreamCancelRole {
-  STREAM_CANCEL_ROLE_UNSPECIFIED = 0;
-  STREAM_CANCEL_ROLE_INPUT_PRODUCER = 1;
-  STREAM_CANCEL_ROLE_INPUT_CONSUMER = 2;
-  STREAM_CANCEL_ROLE_OUTPUT_PRODUCER = 3;
-  STREAM_CANCEL_ROLE_OUTPUT_CONSUMER = 4;
-  STREAM_CANCEL_ROLE_SYSTEM = 5;
-}
-
-enum StreamCancelReason {
-  STREAM_CANCEL_REASON_UNSPECIFIED = 0;
-  STREAM_CANCEL_REASON_CANCELLED = 1;
-  STREAM_CANCEL_REASON_TRANSPORT = 2;
-  STREAM_CANCEL_REASON_PROTOCOL = 3;
-  STREAM_CANCEL_REASON_SOURCE_UNAVAILABLE = 4;
-  STREAM_CANCEL_REASON_PRODUCER_DELETING = 5;
-  STREAM_CANCEL_REASON_CONSUMER_DROP = 6;
-  STREAM_CANCEL_REASON_INVOCATION_FAILED = 7;
-}
-
-message StreamCancel {
-  uint64 transport_stream_id = 1;
-  uint64 producer_sequence = 2;
-  StreamCancelRole role = 3;
-  StreamCancelReason reason = 4;
-  optional string details = 5;
-  golem.common.UUID durable_stream_id = 6;
-  uint64 epoch = 7;
-  bytes durable_offset = 8;
 }
 
 message InputStreamAck {
@@ -314,8 +306,7 @@ message InvocationRequest {
     InvocationStart start = 1;
     ResumeAttach resume_attach = 2;
     InputStreamItem input_item = 3;
-    InputStreamEnd input_end = 4;
-    StreamCancel stream_cancel = 5;
+    StreamEnd stream_end = 4;
   }
 }
 
@@ -325,10 +316,8 @@ message InvocationResponse {
     InvocationRejected rejected = 2;
     InvocationSessionResult result = 3;
     OutputStreamItem output_item = 4;
-    OutputStreamEnd output_end = 5;
-    OutputStreamError output_error = 6;
+    StreamEnd stream_end = 5;
     InputStreamAck input_ack = 7;
-    StreamCancel stream_cancel = 8;
     AttachmentRevoked attachment_revoked = 9;
     InvocationSessionCompletion finished = 10;
   }

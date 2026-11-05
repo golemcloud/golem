@@ -42,6 +42,11 @@ use golem_common::model::durable_stream::{
     StreamSessionInvocationResultRecord, StreamSessionPreparedRecord, StreamSessionRecord,
     StreamSessionResumeAttemptRecord,
 };
+#[cfg(test)]
+use golem_common::model::durable_stream::{
+    StreamCancellationRequest, StreamEndpointSide, StreamError, StreamTerminal,
+    StreamTerminalAuthor,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::OplogPayload;
@@ -169,9 +174,14 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
         consumer_invocation: key.idempotency_key.clone(),
         source: StreamRecordReference::Foreign(handle),
         epoch: 3,
-        role: StreamCancelRole::OutputConsumer,
-        reason: StreamCancelReason::Cancelled,
-        details: Some("external cancellation".into()),
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                "external cancellation".into(),
+            )),
+        },
     };
     append_session(
         oplog.as_ref(),
@@ -373,9 +383,14 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         consumer_invocation: key.idempotency_key.clone(),
         source: StreamRecordReference::Foreign(mapping.handle.clone()),
         epoch: 1,
-        role: StreamCancelRole::OutputConsumer,
-        reason: StreamCancelReason::Cancelled,
-        details: Some("committed external cancellation".into()),
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                "committed external cancellation".into(),
+            )),
+        },
     };
     oplog.commit(CommitLevel::Always).await.unwrap();
     let probe =
@@ -495,7 +510,8 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         ConsumerAttachmentStatus::Active
     );
     let mut changed = intent.clone();
-    changed.details = Some("unrecorded cancellation".into());
+    changed.cancellation.terminal =
+        StreamTerminal::Failed(StreamError::Interrupted("unrecorded cancellation".into()));
     assert_eq!(
         probe
             .committed_cancellation_status(&attachment, &mapping, &changed)
@@ -2215,7 +2231,8 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
             reader_id: readers[0],
             source_offset: StreamOffset::new(OplogIndex::from_u64(100), 0),
             consumer_read_ordinal: 0,
-            terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+            authored_by: golem_common::base_model::durable_stream::StreamTerminalAuthor::Guest,
+            terminal: StreamTerminal::Finished,
         }),
     )
     .await;

@@ -15,6 +15,25 @@
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 
+/// The producer's failure, independent of a reader dropping its stream.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[serde(rename_all = "kebab-case")]
+#[schema(named = "golem.core.StreamError")]
+pub enum StreamError {
+    Failed(crate::schema::TypedSchemaValue),
+    Trapped(String),
+    /// An invocation cancellation request was recorded and honoured.
+    Cancelled,
+    /// The producing invocation completed with its writer still open.
+    Abandoned,
+    Interrupted(String),
+    ResourceExhausted(String),
+}
+
+/// A clean producer end or its failure; consumer cancellation is not an outcome.
+pub type StreamOutcome = Result<(), StreamError>;
+
 /// Native counterpart of `golem:core/types@2.0.0::uuid`.
 pub type Uuid = uuid::Uuid;
 

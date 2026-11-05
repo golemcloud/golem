@@ -886,19 +886,8 @@ impl TextOutput for PublicOplogEntry {
                     typed_schema_value_to_string(&params.record)
                 ));
             }
-            PublicOplogEntry::StreamEnd(params) => {
-                logln(format_message_highlight("STREAM END"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}record:            {}",
-                    typed_schema_value_to_string(&params.record)
-                ));
-            }
-            PublicOplogEntry::StreamCancel(params) => {
-                logln(format_message_highlight("STREAM CANCEL"));
+            PublicOplogEntry::StreamTerminal(params) => {
+                logln(format_message_highlight("STREAM TERMINAL"));
                 logln(format!(
                     "{pad}at:                {}",
                     format_id(&params.timestamp)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::index::{resource_exhausted_error_context, validate_terminal_sequence};
+use super::index::validate_terminal_sequence;
 use super::*;
 
 impl DurableStreamStore {
@@ -41,9 +41,8 @@ impl DurableStreamStore {
             self.cancel_open(
                 None,
                 handle.stream_id,
-                StreamCancelRole::InputProducer,
-                StreamCancelReason::Cancelled,
-                None,
+                StreamTerminalAuthor::Host,
+                StreamTerminal::Failed(StreamError::Interrupted("unbound RPC input".into())),
             )
             .await?;
             self.notify_session_records_changed(None);
@@ -58,22 +57,25 @@ impl DurableStreamStore {
         stream_id: StreamId,
         sequence: u64,
     ) -> Result<(), StreamStoreError> {
-        let result = StreamEndResult::ErrorContext(resource_exhausted_error_context()?);
+        let terminal = StreamTerminal::Failed(StreamError::ResourceExhausted(
+            "stream resource limit exceeded".into(),
+        ));
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let local_stream_id = index.local_stream_id(stream_id)?;
         context.begin_durable_effect();
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
-                vec![DurableStreamOplogRecord::End(
+                vec![DurableStreamOplogRecord::Terminal(
                     entity_parent_start_index,
-                    StreamEndRecord {
+                    StreamTerminalRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         stream_id: local_stream_id,
                         sequence,
                         offset: StreamOffset::new(oplog_index, 0),
-                        authored_by: StreamTerminalAuthor::Protocol,
-                        result,
+                        authored_by: StreamTerminalAuthor::Host,
+                        origin: StreamTerminalOrigin::Control,
+                        terminal,
                     },
                 )]
             }))
@@ -83,7 +85,7 @@ impl DurableStreamStore {
         let (oplog_index, entry) = entries
             .pop()
             .expect("resource exhaustion terminal batch returned no oplog entry");
-        let OplogEntry::StreamEnd {
+        let OplogEntry::StreamTerminal {
             entity_parent_start_index,
             record,
             ..
@@ -96,7 +98,7 @@ impl DurableStreamStore {
             .download_payload(record)
             .await
             .map_err(StreamStoreError::Oplog)?;
-        let event = index.apply_end(
+        let event = index.apply_terminal(
             oplog_index,
             entity_parent_start_index,
             record,
@@ -117,21 +119,13 @@ impl DurableStreamStore {
         context: Option<&StreamWriteContext>,
         stream_id: StreamId,
         sequence: u64,
-        result: StreamEndResult,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
-        let memory = match &result {
-            StreamEndResult::ErrorContext(bytes) => bytes.len(),
-            _ => 0,
-        };
+        let memory = terminal_retained_bytes(&terminal)?;
         self.run_owned(context, memory, move |owner, context| async move {
             owner
-                .end_authored(
-                    &context,
-                    stream_id,
-                    sequence,
-                    result,
-                    StreamTerminalAuthor::Guest,
-                )
+                .end_authored(&context, stream_id, sequence, terminal, authored_by)
                 .await
         })
         .await
@@ -142,12 +136,20 @@ impl DurableStreamStore {
         context: &StreamWriteContext,
         stream_id: StreamId,
         sequence: u64,
-        result: StreamEndResult,
+        terminal: StreamTerminal,
         authored_by: StreamTerminalAuthor,
     ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
         let index = self.index_for_terminal([], stream_id).await?;
-        self.end_authored_locked(context, index, stream_id, sequence, result, authored_by)
-            .await
+        self.end_authored_locked(
+            context,
+            index,
+            stream_id,
+            sequence,
+            terminal,
+            authored_by,
+            StreamTerminalOrigin::Source,
+        )
+        .await
     }
 
     #[tracing::instrument(
@@ -161,15 +163,17 @@ impl DurableStreamStore {
         mut index: MutexGuard<'_, ProducerStreamIndex>,
         stream_id: StreamId,
         sequence: u64,
-        result: StreamEndResult,
+        terminal: StreamTerminal,
         authored_by: StreamTerminalAuthor,
+        origin: StreamTerminalOrigin,
     ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
         match replay_terminal(
             &index,
             stream_id,
             sequence,
-            &CommittedProducerStreamEventPayload::End(result.clone()),
+            &CommittedProducerStreamEventPayload::Terminal(terminal.clone()),
             authored_by,
+            origin,
         )? {
             TerminalReplayDecision::Append => {}
             TerminalReplayDecision::Replayed(event) => {
@@ -191,7 +195,7 @@ impl DurableStreamStore {
                 });
             }
             TerminalReplayDecision::Fenced(event) => {
-                let error = StreamStoreError::FencedByTerminal(event.payload.clone());
+                let error = StreamStoreError::FencedByTerminal(Box::new(event.clone()));
                 drop(index);
                 self.publish_repair(Some(context), stream_id, vec![event])
                     .await?;
@@ -222,15 +226,16 @@ impl DurableStreamStore {
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
-                vec![DurableStreamOplogRecord::End(
+                vec![DurableStreamOplogRecord::Terminal(
                     entity_parent_start_index,
-                    StreamEndRecord {
+                    StreamTerminalRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         stream_id: local_stream_id,
                         sequence,
                         offset: StreamOffset::new(oplog_index, 0),
                         authored_by,
-                        result,
+                        origin,
+                        terminal,
                     },
                 )]
             }))
@@ -240,7 +245,7 @@ impl DurableStreamStore {
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream end batch returned no oplog entry");
-        let OplogEntry::StreamEnd {
+        let OplogEntry::StreamTerminal {
             entity_parent_start_index,
             record,
             ..
@@ -253,7 +258,7 @@ impl DurableStreamStore {
             .download_payload(record)
             .await
             .map_err(StreamStoreError::Oplog)?;
-        let event = index.apply_end(
+        let event = index.apply_terminal(
             oplog_index,
             entity_parent_start_index,
             record,
@@ -282,7 +287,7 @@ impl DurableStreamStore {
     #[tracing::instrument(
         name = "durable_stream.cancel",
         skip_all,
-        fields(stream_id = %stream_id, sequence, role = ?role, reason = ?reason)
+        fields(stream_id = %stream_id, sequence)
     )]
     async fn commit_cancel_locked(
         &self,
@@ -290,21 +295,18 @@ impl DurableStreamStore {
         mut index: MutexGuard<'_, ProducerStreamIndex>,
         stream_id: StreamId,
         sequence: u64,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<PendingCommittedCancellation, StreamStoreError> {
-        let payload = CommittedProducerStreamEventPayload::Cancel {
-            role,
-            reason,
-            details: details.clone(),
-        };
+        reject_finished_cancellation(&terminal)?;
+        let payload = CommittedProducerStreamEventPayload::Terminal(terminal.clone());
         match replay_terminal(
             &index,
             stream_id,
             sequence,
             &payload,
-            StreamTerminalAuthor::Protocol,
+            authored_by,
+            StreamTerminalOrigin::Control,
         )? {
             TerminalReplayDecision::Append => {}
             TerminalReplayDecision::Replayed(event) => {
@@ -312,12 +314,12 @@ impl DurableStreamStore {
                 let publication =
                     self.enqueue_events(Some(context), stream_id, vec![event.clone()], true)?;
                 drop(index);
-                self.cancel_source(stream_id);
+                if event.terminal_origin == Some(StreamTerminalOrigin::Control) {
+                    self.cancel_source(stream_id);
+                }
                 return Ok(PendingCommittedCancellation {
                     stream_id,
                     sequence,
-                    role,
-                    reason,
                     publication,
                     event,
                     outcome: Ok(ProducerWriteOutcome {
@@ -327,16 +329,16 @@ impl DurableStreamStore {
                 });
             }
             TerminalReplayDecision::Fenced(event) => {
-                let error = StreamStoreError::FencedByTerminal(event.payload.clone());
+                let error = StreamStoreError::FencedByTerminal(Box::new(event.clone()));
                 let publication =
                     self.enqueue_events(Some(context), stream_id, vec![event.clone()], true)?;
                 drop(index);
-                self.cancel_source(stream_id);
+                if event.terminal_origin == Some(StreamTerminalOrigin::Control) {
+                    self.cancel_source(stream_id);
+                }
                 return Ok(PendingCommittedCancellation {
                     stream_id,
                     sequence,
-                    role,
-                    reason,
                     publication,
                     event,
                     outcome: Err(error),
@@ -351,17 +353,16 @@ impl DurableStreamStore {
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
-                vec![DurableStreamOplogRecord::Cancel(
+                vec![DurableStreamOplogRecord::Terminal(
                     entity_parent_start_index,
-                    StreamCancelRecord {
+                    StreamTerminalRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         stream_id: local_stream_id,
                         sequence,
                         offset: StreamOffset::new(oplog_index, 0),
-                        authored_by: StreamTerminalAuthor::Protocol,
-                        role,
-                        reason,
-                        details,
+                        authored_by,
+                        origin: StreamTerminalOrigin::Control,
+                        terminal,
                     },
                 )]
             }))
@@ -371,7 +372,7 @@ impl DurableStreamStore {
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream cancellation batch returned no oplog entry");
-        let OplogEntry::StreamCancel {
+        let OplogEntry::StreamTerminal {
             entity_parent_start_index,
             record,
             ..
@@ -384,7 +385,7 @@ impl DurableStreamStore {
             .download_payload(record)
             .await
             .map_err(StreamStoreError::Oplog)?;
-        let event = index.apply_cancel(
+        let event = index.apply_terminal(
             oplog_index,
             entity_parent_start_index,
             record,
@@ -399,8 +400,6 @@ impl DurableStreamStore {
         Ok(PendingCommittedCancellation {
             stream_id,
             sequence,
-            role,
-            reason,
             publication,
             event,
             outcome: Ok(ProducerWriteOutcome {
@@ -425,8 +424,6 @@ impl DurableStreamStore {
                 stream_id = %pending.stream_id,
                 sequence = pending.sequence,
                 durable_offset = %offset,
-                role = ?pending.role,
-                reason = ?pending.reason,
                 replayed = outcome.replayed,
                 "Durable stream cancellation committed"
             );
@@ -439,16 +436,16 @@ impl DurableStreamStore {
         &self,
         context: Option<&StreamWriteContext>,
         stream_id: StreamId,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<Option<PendingCommittedCancellation>, StreamStoreError> {
+        reject_finished_cancellation(&terminal)?;
         self.run_lifecycle(
             context,
-            details.as_ref().map_or(0, String::len),
+            terminal_retained_bytes(&terminal)?,
             move |owner, context| async move {
                 owner
-                    .commit_cancel_open_owned(&context, stream_id, role, reason, details)
+                    .commit_cancel_open_owned(&context, stream_id, authored_by, terminal)
                     .await
             },
         )
@@ -459,24 +456,27 @@ impl DurableStreamStore {
         &self,
         context: &StreamWriteContext,
         stream_id: StreamId,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<Option<PendingCommittedCancellation>, StreamStoreError> {
-        let index = self
-            .index_for([ProducerMetadataKey::Stream(stream_id)])
-            .await?;
+        let index = self.index_for_terminal([], stream_id).await?;
         let stream = index
             .streams
             .get(&stream_id)
             .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         if stream.terminal {
+            let control = stream
+                .terminal_event
+                .as_ref()
+                .is_some_and(|event| event.terminal_origin == Some(StreamTerminalOrigin::Control));
             drop(index);
-            self.cancel_source(stream_id);
+            if control {
+                self.cancel_source(stream_id);
+            }
             return Ok(None);
         }
         let sequence = stream.next_sequence;
-        self.commit_cancel_locked(context, index, stream_id, sequence, role, reason, details)
+        self.commit_cancel_locked(context, index, stream_id, sequence, authored_by, terminal)
             .await
             .map(Some)
     }
@@ -486,16 +486,16 @@ impl DurableStreamStore {
         self: &Arc<Self>,
         context: Option<&StreamWriteContext>,
         stream_id: StreamId,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<(), StreamStoreError> {
+        reject_finished_cancellation(&terminal)?;
         self.run_lifecycle(
             context,
-            details.as_ref().map_or(0, String::len),
+            terminal_retained_bytes(&terminal)?,
             move |owner, context| async move {
                 owner
-                    .cancel_open_owned(&context, stream_id, role, reason, details)
+                    .cancel_open_owned(&context, stream_id, authored_by, terminal)
                     .await
             },
         )
@@ -506,12 +506,11 @@ impl DurableStreamStore {
         &self,
         context: &StreamWriteContext,
         stream_id: StreamId,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<(), StreamStoreError> {
         if let Some(pending) = self
-            .commit_cancel_open(Some(context), stream_id, role, reason, details)
+            .commit_cancel_open(Some(context), stream_id, authored_by, terminal)
             .await?
         {
             self.publish_committed_cancellation(Some(context), pending)
@@ -525,18 +524,23 @@ impl DurableStreamStore {
         &self,
         stream_id: StreamId,
         sequence: u64,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
+        reject_finished_cancellation(&terminal)?;
         self.run_owned(
             None,
-            details.as_ref().map_or(0, String::len),
+            terminal_retained_bytes(&terminal)?,
             move |owner, context| async move {
                 let index = owner.index_for_terminal([], stream_id).await?;
                 let pending = owner
                     .commit_cancel_locked(
-                        &context, index, stream_id, sequence, role, reason, details,
+                        &context,
+                        index,
+                        stream_id,
+                        sequence,
+                        authored_by,
+                        terminal,
                     )
                     .await?;
                 owner
@@ -595,19 +599,20 @@ impl DurableStreamStore {
         }
     }
 
-    /// Appends a protocol-authored end to one stream unless it already has a terminal.
+    /// Appends a terminal to one stream unless it already has a terminal.
     pub async fn end_open(
         &self,
         context: Option<&StreamWriteContext>,
         stream_id: StreamId,
-        result: StreamEndResult,
+        authored_by: StreamTerminalAuthor,
+        origin: StreamTerminalOrigin,
+        terminal: StreamTerminal,
     ) -> Result<(), StreamStoreError> {
-        let memory = match &result {
-            StreamEndResult::ErrorContext(bytes) => bytes.len(),
-            _ => 0,
-        };
+        let memory = terminal_retained_bytes(&terminal)?;
         self.run_lifecycle(context, memory, move |owner, context| async move {
-            owner.end_open_owned(&context, stream_id, result).await
+            owner
+                .end_open_owned(&context, stream_id, authored_by, origin, terminal)
+                .await
         })
         .await
     }
@@ -616,7 +621,9 @@ impl DurableStreamStore {
         &self,
         context: &StreamWriteContext,
         stream_id: StreamId,
-        result: StreamEndResult,
+        authored_by: StreamTerminalAuthor,
+        origin: StreamTerminalOrigin,
+        terminal: StreamTerminal,
     ) -> Result<(), StreamStoreError> {
         let index = self
             .index_for([ProducerMetadataKey::Stream(stream_id)])
@@ -634,8 +641,9 @@ impl DurableStreamStore {
             index,
             stream_id,
             sequence,
-            result,
-            StreamTerminalAuthor::Protocol,
+            terminal,
+            authored_by,
+            origin,
         )
         .await?;
         Ok(())
@@ -654,27 +662,22 @@ fn replay_terminal(
     sequence: u64,
     expected_payload: &CommittedProducerStreamEventPayload,
     expected_author: StreamTerminalAuthor,
+    expected_origin: StreamTerminalOrigin,
 ) -> Result<TerminalReplayDecision, StreamStoreError> {
     let stream = index
         .streams
         .get(&stream_id)
         .ok_or(StreamStoreError::UnknownStream(stream_id))?;
-    if let Some(event) = &stream.terminal_event
-        && event.producer_sequence == sequence
-    {
+    if let Some(event) = &stream.terminal_event {
         if event.is_terminal()
+            && event.producer_sequence == sequence
             && event.terminal_author == Some(expected_author)
+            && event.terminal_origin == Some(expected_origin)
             && &event.payload == expected_payload
         {
             return Ok(TerminalReplayDecision::Replayed(event.clone()));
         }
-        if event.is_terminal()
-            && event.terminal_author == Some(StreamTerminalAuthor::Protocol)
-            && expected_author == StreamTerminalAuthor::Guest
-        {
-            return Ok(TerminalReplayDecision::Fenced(event.clone()));
-        }
-        return Err(StreamStoreError::EventConflict);
+        return Ok(TerminalReplayDecision::Fenced(event.clone()));
     }
     if sequence < stream.next_sequence {
         return Err(StreamStoreError::EventConflict);
@@ -695,12 +698,26 @@ fn validate_new_terminal(
 }
 
 pub(super) fn fenced_by_terminal(stream: &IndexedProducerStream) -> StreamStoreError {
-    StreamStoreError::FencedByTerminal(
+    StreamStoreError::FencedByTerminal(Box::new(
         stream
             .terminal_event
             .as_ref()
             .expect("terminal stream has no terminal event")
-            .payload
             .clone(),
-    )
+    ))
+}
+
+pub(super) fn terminal_retained_bytes(
+    terminal: &StreamTerminal,
+) -> Result<usize, StreamStoreError> {
+    golem_common::serialization::serialize(terminal)
+        .map(|bytes| bytes.len())
+        .map_err(StreamStoreError::Oplog)
+}
+
+fn reject_finished_cancellation(terminal: &StreamTerminal) -> Result<(), StreamStoreError> {
+    if matches!(terminal, StreamTerminal::Finished) {
+        return Err(StreamStoreError::EventConflict);
+    }
+    Ok(())
 }

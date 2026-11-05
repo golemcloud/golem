@@ -19,7 +19,43 @@
 /// its reconnect window: `endpoint` is the WebSocket URL, `window_ms` the
 /// window, and `last_cause` the last failure, such as the HTTP status of a
 /// refused upgrade, a retryable rejection, or a connection error.
+/// `StreamFailed` retains the producer's typed failure. `ConsumerCancelled`
+/// carries the optional diagnostic from a consumer terminal.
 pub(all) suberror BridgeError {
   BridgeError(String)
   Unreachable(endpoint~ : String, window_ms~ : Int, last_cause~ : String)
+  StreamFailed(StreamFailure)
+  ConsumerCancelled(String?)
 } derive(Debug, Eq)
+
+///|
+/// The producer's terminal failure. Failed retains the complete typed value,
+/// including its schema graph, so callers can inspect application errors.
+pub(all) enum StreamFailure {
+  Failed(graph~ : Json, value~ : Json)
+  Trapped(String)
+  Cancelled
+  Abandoned
+  Interrupted(String)
+  ResourceExhausted(String)
+} derive(Debug, Eq)
+
+///|
+pub impl Show for BridgeError with fn output(self, logger) {
+  match self {
+    BridgeError(message) => logger.write_string(message)
+    Unreachable(endpoint~, window_ms~, last_cause~) =>
+      logger.write_string(
+        "Unreachable \{endpoint} after \{window_ms} ms: \{last_cause}",
+      )
+    StreamFailed(failure) =>
+      logger.write_string("Stream failed: \{@debug.to_string(failure)}")
+    ConsumerCancelled(details) => {
+      logger.write_string("Stream consumer cancelled")
+      match details {
+        Some(details) => logger.write_string(": \{details}")
+        None => ()
+      }
+    }
+  }
+}

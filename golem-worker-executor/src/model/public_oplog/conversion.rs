@@ -835,26 +835,13 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         .map_err(|e| e.to_string())?,
                 }))
             }
-            OplogEntry::StreamEnd {
+            OplogEntry::StreamTerminal {
                 timestamp, record, ..
             } => {
                 let record = oplog_service
                     .download_payload(owned_agent_id, agent_mode, record)
                     .await?;
-                Ok(PublicOplogEntry::StreamEnd(StreamEndParams {
-                    timestamp,
-                    record: record
-                        .into_typed_schema_value()
-                        .map_err(|e| e.to_string())?,
-                }))
-            }
-            OplogEntry::StreamCancel {
-                timestamp, record, ..
-            } => {
-                let record = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, record)
-                    .await?;
-                Ok(PublicOplogEntry::StreamCancel(StreamCancelParams {
+                Ok(PublicOplogEntry::StreamTerminal(StreamTerminalParams {
                     timestamp,
                     record: record
                         .into_typed_schema_value()

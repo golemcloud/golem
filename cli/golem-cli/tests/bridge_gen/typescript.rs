@@ -1667,8 +1667,8 @@ wss.on('connection', (socket) => socket.once('message', (raw) => {
       },
     }));
     socket.send(JSON.stringify({
-      version: 1, type: 'outputStreamEnd', channel: 2, sequence: '0',
-      cursorToken: 'cursor-end', outcome: { kind: 'ok' },
+      version: 1, type: 'stream-end', channel: 2, direction: 'output', sequence: '0',
+      cursorToken: 'cursor-end', outcome: { kind: 'finished' },
     }));
     finish(socket);
   } else {
