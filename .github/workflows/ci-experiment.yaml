@@ -7,6 +7,12 @@ on:
       - .github/workflows/ci-experiment.yaml
       - .github/scripts/ci-experiment.py
   workflow_dispatch:
+    inputs:
+      scope:
+        description: CLI concurrency comparison or complete ordinary coverage
+        type: choice
+        options: [cli, full]
+        default: cli
 
 permissions:
   contents: read
@@ -19,8 +25,9 @@ concurrency:
 jobs:
   linux:
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 720
+    timeout-minutes: ${{ inputs.scope == 'full' && 720 || 480 }}
     env:
+      EXPERIMENT_SCOPE: ${{ inputs.scope || 'cli' }}
       GH_TOKEN: ${{ github.token }}
       CARGO_BUILD_JOBS: 20
       WASI_SDK_VERSION: '25'
@@ -80,10 +87,13 @@ jobs:
         run: |
           python3 .github/scripts/ci-experiment.py --inventory > tmp/experiment-results/inventory.json
           { rustc -vV; cargo --version; node --version; go version; moon version; java -version; } > tmp/experiment-results/toolchains.txt 2>&1
-      - name: Cold single-worker full cycle
+      - name: Cold single-worker priming
         id: cold
         continue-on-error: true
-        run: python3 -u .github/scripts/ci-experiment.py --cycle cold --test-retries 2
+        run: |
+          phase=cli-prime
+          if [ "$EXPERIMENT_SCOPE" = full ]; then phase=all; fi
+          python3 -u .github/scripts/ci-experiment.py --cycle cold --phase "$phase" --test-retries 2
       - name: Checkpoint cold measurements
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v6
@@ -92,13 +102,17 @@ jobs:
           path: tmp/experiment-results
           if-no-files-found: error
           retention-days: 14
-      - name: Warm single-worker full cycle
+      - name: Warm single-worker baseline
         id: warm
         if: ${{ !cancelled() && steps.cold.outcome == 'success' }}
         continue-on-error: true
         run: |
-          rm -rf tmp/experiment-products tmp/test-components-wasm
-          python3 -u .github/scripts/ci-experiment.py --cycle warm --test-retries 2
+          if [ "$EXPERIMENT_SCOPE" = full ]; then
+            rm -rf tmp/experiment-products tmp/test-components-wasm
+            python3 -u .github/scripts/ci-experiment.py --cycle warm --test-retries 2
+          else
+            python3 -u .github/scripts/ci-experiment.py --cycle warm --phase cli
+          fi
       - name: Checkpoint warm measurements
         if: ${{ !cancelled() && steps.warm.outcome != 'skipped' }}
         uses: actions/upload-artifact@v6
@@ -109,20 +123,11 @@ jobs:
           retention-days: 14
       - name: Check CLI baseline completed successfully
         id: cli-baseline
-        if: ${{ !cancelled() && steps.warm.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.cold.outcome == 'success' && (steps.warm.outcome == 'success' || steps.warm.outcome == 'failure') }}
         run: |
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          root = Path('tmp/experiment-results')
-          inventory = json.loads((root / 'inventory.json').read_text())
-          baseline = json.loads((root / 'warm/all-0.json').read_text())
-          expected = {s['id'] for s in inventory['stages'] if s['id'].startswith('it-cli')}
-          passed = {s['id'] for s in baseline['stages'] if s['status'] == 'passed'}
-          eligible = bool(expected) and bool(baseline.get('finished_at')) and expected <= passed
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              print(f'eligible={str(eligible).lower()}', file=output)
-          PY
+          phase=cli
+          if [ "$EXPERIMENT_SCOPE" = full ]; then phase=all; fi
+          python3 .github/scripts/ci-experiment.py --check-cli-baseline "tmp/experiment-results/warm/$phase-0.json"
       - name: Warm CLI comparison with six test threads
         id: cli6
         if: ${{ !cancelled() && steps.cli-baseline.outputs.eligible == 'true' }}
@@ -149,6 +154,40 @@ jobs:
         if: ${{ !cancelled() && steps.cli-headroom.outputs.eligible == 'true' }}
         continue-on-error: true
         run: python3 -u .github/scripts/ci-experiment.py --cycle warm-cli8 --phase cli --cli-test-threads 8
+      - name: Verify bounded promise-await test
+        id: promise-timeout
+        if: ${{ !cancelled() && steps.cold.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 12
+        env:
+          CI: 'true'
+          PROFILE: dev-ci
+          CARGO_INCREMENTAL: 'false'
+          CARGO_BUILD_JOBS: 10
+          RUST_LOG: info
+          RUST_BACKTRACE: '1'
+          QUIET: 'true'
+          GOLEM_BUILTIN_ARTIFACTS_PREBUILT: '1'
+        run: |
+          export PATH="$PWD/target/debug:$PATH"
+          mkdir -p tmp/experiment-results/promise-timeout
+          status=0
+          for backend in postgres sqlite; do
+            cargo-test-r run --package integration-tests --test integration "agent_promise_await_$backend" -- \
+              --nocapture --test-threads=1 --report-time --format ctrf \
+              --logfile "$PWD/tmp/experiment-results/promise-timeout/$backend.json" \
+              > "tmp/experiment-results/promise-timeout/$backend.log" 2>&1 || status=1
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          reports = list(Path('tmp/experiment-results/promise-timeout').glob('*.json'))
+          assert len(reports) == 2, 'expected one report per database backend'
+          for path in reports:
+              summary = json.loads(path.read_text())['results']['summary']
+              assert summary['tests'] == summary['passed'] == 1, (path, summary)
+          PY
+          exit "$status"
       - name: Record allocation end
         if: always()
         run: |
@@ -167,11 +206,13 @@ jobs:
         run: |
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
           root = Path('tmp/experiment-results')
+          full = os.environ['EXPERIMENT_SCOPE'] == 'full'
           for cycle, phase, outcome in (
-              ('cold', 'all', '${{ steps.cold.outcome }}'),
-              ('warm', 'all', '${{ steps.warm.outcome }}'),
+              ('cold', 'all' if full else 'cli-prime', '${{ steps.cold.outcome }}'),
+              ('warm', 'all' if full else 'cli', '${{ steps.warm.outcome }}'),
               ('warm-cli6', 'cli', '${{ steps.cli6.outcome }}'),
               ('warm-cli8', 'cli', '${{ steps.cli8.outcome }}'),
           ):
@@ -180,9 +221,11 @@ jobs:
               assert outcome == 'success', f'{cycle}: {outcome}'
               report = json.loads((root / cycle / f'{phase}-0.json').read_text())
               assert report['fully_green'], f'{cycle}: initial failures retained; not fully green'
+          assert '${{ steps.promise-timeout.outcome }}' == 'success', 'promise-await validation did not pass'
           PY
 
   macos:
+    if: ${{ inputs.scope == 'full' }}
     runs-on: blacksmith-6vcpu-macos-latest
     timeout-minutes: 120
     env:

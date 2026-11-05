@@ -189,6 +189,38 @@ def inventory(workflow, chunks):
     return stages
 
 
+def select_stages(stages, phase, workers=1, shard=0):
+    cli_closure = set(CLI_JOBS)
+    for stage in reversed(stages):
+        if stage["job"] in cli_closure:
+            cli_closure.update(dependencies(stage["definition"]))
+    selected = [
+        s
+        for s in stages
+        if phase == "all"
+        or (phase == "cli-prime" and s["job"] in cli_closure)
+        or (phase == "cli" and s["job"] in CLI_JOBS)
+        or (
+            phase in {"prepare", "checks"}
+            and (s["job"] in PREPARE) == (phase == "prepare")
+        )
+    ]
+    if phase == "checks":
+        selected = [s for i, s in enumerate(selected) if i % workers == shard]
+    return selected
+
+
+def cli_baseline_eligible(report, stages):
+    expected = {s["id"] for s in stages if s["job"] in CLI_JOBS}
+    passed = {s["id"] for s in report.get("stages", []) if s["status"] == "passed"}
+    return (
+        bool(expected)
+        and bool(report.get("finished_at"))
+        and report.get("cli_test_threads") == 4
+        and expected <= passed
+    )
+
+
 def commands(stage, context, cli_test_threads=4):
     """Translate only setup/publication boundaries; preserve validation commands."""
     job = stage["job"]
@@ -370,6 +402,13 @@ def run(args):
         )
     )
     stages = inventory(workflow, chunks)
+    if args.check_cli_baseline:
+        path = Path(args.check_cli_baseline)
+        report = json.loads(path.read_text()) if path.is_file() else {}
+        eligible = cli_baseline_eligible(report, stages)
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            print(f"eligible={str(eligible).lower()}", file=output)
+        return 0
     context = {
         "github": {
             "workspace": str(ROOT),
@@ -415,18 +454,7 @@ def run(args):
     evidence.mkdir(parents=True, exist_ok=True)
     products = ROOT / "tmp/experiment-products"
     products.mkdir(parents=True, exist_ok=True)
-    selected = [
-        s
-        for s in stages
-        if args.phase == "all"
-        or (args.phase == "cli" and s["job"] in CLI_JOBS)
-        or (
-            args.phase in {"prepare", "checks"}
-            and (s["job"] in PREPARE) == (args.phase == "prepare")
-        )
-    ]
-    if args.phase == "checks":
-        selected = [s for i, s in enumerate(selected) if i % args.workers == args.shard]
+    selected = select_stages(stages, args.phase, args.workers, args.shard)
     report = {
         "source_sha": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -452,6 +480,9 @@ def run(args):
             "started_at": time.time(),
         }
         report["stages"].append(result)
+        deadline = (
+            time.monotonic() + stage["definition"].get("timeout-minutes", 360) * 60
+        )
         report_path = evidence / f"{args.phase}-{args.shard}.json"
         report_path.write_text(json.dumps(report, indent=2))
         needs = dependencies(stage["definition"])
@@ -504,15 +535,27 @@ def run(args):
                         f"::group::{args.cycle} {stage['id']} — {name}{suffix}",
                         flush=True,
                     )
+                    timeout = max(
+                        0,
+                        min(
+                            step.get("timeout-minutes", 90) * 60,
+                            deadline - time.monotonic(),
+                        ),
+                    )
                     observation = execute(
                         render(step["run"], stage_context),
                         step_env,
                         ROOT
                         / render(step.get("working-directory", "."), stage_context),
                         log,
-                        step.get("timeout-minutes", 90) * 60,
+                        timeout,
                     )
-                    observation.update(name=name, attempt=attempt, log=log.name)
+                    observation.update(
+                        name=name,
+                        attempt=attempt,
+                        log=log.name,
+                        timeout_seconds=timeout,
+                    )
                     result["steps"].append(observation)
                     for j, path in enumerate(ROOT.glob("**/target/ctrf*.json")):
                         shutil.move(path, stage_dir / f"ctrf-{i}-{attempt}-{j}.json")
@@ -588,8 +631,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inventory", action="store_true")
     parser.add_argument("--cycle", default="cold")
+    parser.add_argument("--check-cli-baseline", metavar="REPORT")
     parser.add_argument(
-        "--phase", choices=("all", "prepare", "checks", "cli"), default="all"
+        "--phase",
+        choices=("all", "prepare", "checks", "cli-prime", "cli"),
+        default="all",
     )
     parser.add_argument("--cli-test-threads", type=int, choices=(4, 6, 8), default=4)
     parser.add_argument("--test-retries", type=int, choices=(0, 1, 2), default=0)

@@ -52,6 +52,55 @@ class ExperimentInventoryTests(unittest.TestCase):
         self.assertEqual(sum(s["job"] == "it" for s in self.stages), 14)
         self.assertEqual(sum(s["job"] == "it-cli" for s in self.stages), 7)
 
+    def test_cli_priming_retains_transitive_prerequisites_without_other_checks(self):
+        selected = experiment.select_stages(self.stages, "cli-prime")
+        seen = set(experiment.EXCLUDED)
+        for stage in selected:
+            self.assertLessEqual(
+                set(experiment.dependencies(stage["definition"])), seen
+            )
+            seen.add(stage["job"])
+        self.assertEqual(
+            {s["job"] for s in selected},
+            {
+                "builtin-artifacts",
+                "build-service-tests",
+                "build-cli-test-bins",
+                "build-golem-ts",
+                "build-golem-effect",
+                "build-golem-scala",
+                "build-test-components",
+                "merge-test-components",
+                *experiment.CLI_JOBS,
+            },
+        )
+        self.assertEqual(sum(s["job"] == "build-test-components" for s in selected), 2)
+        self.assertEqual(len(experiment.select_stages(self.stages, "cli")), 9)
+
+    def test_cli_baseline_is_independent_but_requires_complete_clean_cli_results(self):
+        report = {
+            "finished_at": 100,
+            "cli_test_threads": 4,
+            "success": False,
+            "fully_green": False,
+            "stages": [
+                {"id": s["id"], "status": "passed"}
+                for s in experiment.select_stages(self.stages, "cli")
+            ]
+            + [{"id": "it/integration-tests-group1", "status": "failed"}],
+        }
+        self.assertTrue(experiment.cli_baseline_eligible(report, self.stages))
+        for status in ("failed", "blocked", "running", "passed_after_retry"):
+            changed = copy.deepcopy(report)
+            changed["stages"][0]["status"] = status
+            self.assertFalse(experiment.cli_baseline_eligible(changed, self.stages))
+        for field, value in (("finished_at", None), ("cli_test_threads", 6)):
+            changed = {**report, field: value}
+            self.assertFalse(experiment.cli_baseline_eligible(changed, self.stages))
+        self.assertFalse(experiment.cli_baseline_eligible({}, self.stages))
+        report["stages"].pop(0)
+        self.assertFalse(experiment.cli_baseline_eligible(report, self.stages))
+
     def test_fixtures_are_built_not_only_compiler_identified(self):
         for stage in self.stages:
             if stage["job"] != "build-test-components":
@@ -150,7 +199,7 @@ class ExperimentInventoryTests(unittest.TestCase):
 
 
 class ExperimentRetryTests(unittest.TestCase):
-    def simulate(self, outcomes, retries):
+    def simulate(self, outcomes, retries, elapsed_per_attempt=0, stage_timeout=360):
         stages = [
             {
                 "id": job,
@@ -158,6 +207,7 @@ class ExperimentRetryTests(unittest.TestCase):
                 "matrix": {},
                 "definition": {
                     "needs": needs,
+                    "timeout-minutes": stage_timeout,
                     "steps": [{"name": "Run tests", "run": "test-command"}],
                 },
             }
@@ -167,6 +217,7 @@ class ExperimentRetryTests(unittest.TestCase):
             )
         ]
         observations = iter(enumerate(outcomes))
+        clock = [0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workflow = root / ".github/workflows/ci.yaml"
@@ -175,6 +226,7 @@ class ExperimentRetryTests(unittest.TestCase):
 
             def execute(command, env, cwd, log, timeout):
                 index, (code, output) = next(observations)
+                clock[0] += elapsed_per_attempt
                 log.write_text(output)
                 report = root / "target/ctrf.json"
                 report.parent.mkdir(exist_ok=True)
@@ -189,6 +241,7 @@ class ExperimentRetryTests(unittest.TestCase):
                 cli_test_threads=4,
                 test_retries=retries,
                 inventory=False,
+                check_cli_baseline=None,
             )
             with (
                 patch.object(experiment, "ROOT", root),
@@ -201,6 +254,9 @@ class ExperimentRetryTests(unittest.TestCase):
                 ),
                 patch.object(experiment.subprocess, "run"),
                 patch.object(experiment.time, "sleep"),
+                patch.object(
+                    experiment.time, "monotonic", side_effect=lambda: clock[0]
+                ),
                 patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
             ):
                 code = experiment.run(args)
@@ -263,6 +319,19 @@ class ExperimentRetryTests(unittest.TestCase):
                     [s["status"] for s in report["stages"]], ["failed", "blocked"]
                 )
                 self.assertEqual(len(report["stages"][0]["steps"]), attempts)
+
+    def test_retry_uses_remaining_stage_budget_not_a_fresh_timeout(self):
+        code, report, _ = self.simulate(
+            [(1, "test result: FAILED; 1 failed"), (124, "timed out")],
+            retries=2,
+            elapsed_per_attempt=40,
+            stage_timeout=1,
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            [s["timeout_seconds"] for s in report["stages"][0]["steps"]], [60, 20]
+        )
+        self.assertEqual([s["status"] for s in report["stages"]], ["failed", "blocked"])
 
 
 if __name__ == "__main__":
