@@ -14197,6 +14197,8 @@ components:
       - producers
       - memories
       - componentProvisionConfig
+      - agentTypeIds
+      - toolTypeIds
       - agentMethodStreams
       properties:
         knownExports:
@@ -14235,6 +14237,21 @@ components:
           default: []
           items:
             $ref: '#/components/schemas/AgentTypeSchema'
+        agentTypeIds:
+          type: object
+          description: Registry-assigned identities, separate from guest declarations.
+          additionalProperties:
+            type: integer
+            format: uint32
+            title: Environment-local identity shared by agent types and tools. Zero is reserved.
+            example: 1
+        toolTypeIds:
+          type: object
+          additionalProperties:
+            type: integer
+            format: uint32
+            title: Environment-local identity shared by agent types and tools. Zero is reserved.
+            example: 1
         agentMethodStreams:
           type: object
           description: Server-derived streaming classification for each declared agent method.
@@ -14643,9 +14660,15 @@ components:
         RegisteredAgentType with deployment specific information
         Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
       required:
+      - typeId
       - agentType
       - implementedBy
       properties:
+        typeId:
+          type: integer
+          format: uint32
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          example: 1
         agentType:
           $ref: '#/components/schemas/AgentTypeSchema'
         implementedBy:
@@ -14656,6 +14679,7 @@ components:
       type: object
       title: DeployedRegisteredTool
       required:
+      - typeId
       - deploymentRevision
       - definition
       - source
@@ -14664,6 +14688,11 @@ components:
       - metadataVersion
       - metadataDigest
       properties:
+        typeId:
+          type: integer
+          format: uint32
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          example: 1
         deploymentRevision:
           type: integer
           format: uint64

@@ -24462,6 +24462,21 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentTypeSchema'
+        agentTypeIds:
+          description: Registry-assigned identities, separate from guest declarations.
+          type: object
+          additionalProperties:
+            example: 1
+            title: Environment-local identity shared by agent types and tools. Zero is reserved.
+            type: integer
+            format: uint32
+        toolTypeIds:
+          type: object
+          additionalProperties:
+            example: 1
+            title: Environment-local identity shared by agent types and tools. Zero is reserved.
+            type: integer
+            format: uint32
         agentMethodStreams:
           description: Server-derived streaming classification for each declared agent method.
           type: object
@@ -24494,6 +24509,8 @@ components:
       - producers
       - memories
       - componentProvisionConfig
+      - agentTypeIds
+      - toolTypeIds
       - agentMethodStreams
     ComponentProvisionConfig:
       title: ComponentProvisionConfig
@@ -24794,6 +24811,11 @@ components:
         Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
       type: object
       properties:
+        typeId:
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          type: integer
+          format: uint32
         agentType:
           $ref: '#/components/schemas/AgentTypeSchema'
         implementedBy:
@@ -24801,12 +24823,18 @@ components:
         webhookPrefixAuthorityAndPath:
           type: string
       required:
+      - typeId
       - agentType
       - implementedBy
     DeployedRegisteredTool:
       title: DeployedRegisteredTool
       type: object
       properties:
+        typeId:
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          type: integer
+          format: uint32
         deploymentRevision:
           type: integer
           format: uint64
@@ -24828,6 +24856,7 @@ components:
           type: string
           format: hash
       required:
+      - typeId
       - deploymentRevision
       - definition
       - source

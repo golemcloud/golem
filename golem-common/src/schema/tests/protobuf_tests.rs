@@ -201,9 +201,8 @@ fn agent_type_schema_proto_round_trip() {
     assert_eq!(schema, back);
 }
 
-#[test]
-fn registered_agent_type_schema_proto_round_trip() {
-    let registered = RegisteredAgentTypeSchema {
+fn sample_registered_agent_type_schema() -> RegisteredAgentTypeSchema {
+    RegisteredAgentTypeSchema {
         agent_type: sample_agent_type_schema(),
         implemented_by: RegisteredAgentTypeImplementer {
             component_id: ComponentId(Uuid::nil()),
@@ -212,11 +211,50 @@ fn registered_agent_type_schema_proto_round_trip() {
             account_id: AccountId(Uuid::from_u128(0x1234)),
             account_email: AccountEmail::new("test@golem.cloud"),
         },
-    };
+    }
+}
+
+#[test]
+fn registered_agent_type_schema_proto_round_trip() {
+    let registered = sample_registered_agent_type_schema();
     let proto: golem_api_grpc::proto::golem::registry::RegisteredAgentTypeSchema =
         registered.clone().into();
     let back: RegisteredAgentTypeSchema = proto.try_into().expect("decode");
     assert_eq!(registered, back);
+}
+
+#[test]
+fn registered_agent_type_proto_round_trip() {
+    let schema = sample_registered_agent_type_schema();
+    let registered = crate::model::agent::RegisteredAgentType {
+        type_id: crate::model::type_id::TypeId::try_from(0x1234_5678u32).unwrap(),
+        agent_type: schema.agent_type,
+        implemented_by: schema.implemented_by,
+    };
+    let proto: golem_api_grpc::proto::golem::registry::RegisteredAgentType =
+        registered.clone().into();
+    assert_eq!(proto.type_id, 0x1234_5678);
+    let mut invalid = proto.clone();
+    invalid.type_id = 0;
+    assert!(crate::model::agent::RegisteredAgentType::try_from(invalid).is_err());
+    let back: crate::model::agent::RegisteredAgentType = proto.try_into().expect("decode");
+    assert_eq!(registered, back);
+}
+
+#[test]
+fn deployed_registered_agent_type_preserves_type_id() {
+    let schema = sample_registered_agent_type_schema();
+    let type_id = crate::model::type_id::TypeId::try_from(0x1234_5678u32).unwrap();
+    let deployed = crate::model::agent::DeployedRegisteredAgentType {
+        type_id,
+        agent_type: schema.agent_type.clone(),
+        implemented_by: schema.implemented_by.clone(),
+        webhook_prefix_authority_and_path: Some("example.com/webhook".to_string()),
+    };
+    let registered: crate::model::agent::RegisteredAgentType = deployed.into();
+    assert_eq!(registered.type_id, type_id);
+    assert_eq!(registered.agent_type, schema.agent_type);
+    assert_eq!(registered.implemented_by, schema.implemented_by);
 }
 
 #[test]

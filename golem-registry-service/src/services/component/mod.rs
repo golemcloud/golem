@@ -34,9 +34,11 @@ use golem_common::model::card::{
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::diff::DIFF_MODEL_VERSION;
 use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
+use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::model::component::Component;
@@ -119,7 +121,13 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model()?)
+        let mut component = record.try_into_model()?;
+        let type_ids = self
+            .deployment_service
+            .list_environment_type_ids(environment.id)
+            .await?;
+        component.metadata = with_environment_type_ids(&component.metadata, &type_ids);
+        Ok(component)
     }
 
     pub async fn get_all_deployed_component_versions(
@@ -152,10 +160,17 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        let components = records
+        let mut components = records
             .into_iter()
             .map(|r| r.try_into_model())
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
+        let type_ids = self
+            .deployment_service
+            .list_environment_type_ids(environment.id)
+            .await?;
+        for component in &mut components {
+            component.metadata = with_environment_type_ids(&component.metadata, &type_ids);
+        }
 
         Ok(components)
     }
@@ -188,7 +203,13 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model()?)
+        let mut component = record.try_into_model()?;
+        let type_ids = self
+            .deployment_service
+            .list_environment_type_ids(environment.id)
+            .await?;
+        component.metadata = with_environment_type_ids(&component.metadata, &type_ids);
+        Ok(component)
     }
 
     pub async fn list_initial_permission_card_ids_by_account(
@@ -492,6 +513,33 @@ impl ComponentService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))
     }
+}
+
+fn with_environment_type_ids(
+    metadata: &ComponentMetadata,
+    type_ids: &[(TypeIdKind, String, TypeId)],
+) -> ComponentMetadata {
+    let mut agent_type_ids = std::collections::BTreeMap::new();
+    let mut tool_type_ids = std::collections::BTreeMap::new();
+    for (kind, name, id) in type_ids {
+        match kind {
+            TypeIdKind::AgentType => {
+                if let Some(agent) = metadata
+                    .agent_types()
+                    .iter()
+                    .find(|agent| agent.type_name.0 == *name)
+                {
+                    agent_type_ids.insert(agent.type_name.clone(), *id);
+                }
+            }
+            TypeIdKind::Tool => {
+                if let Some(tool) = metadata.tools().keys().find(|tool| tool.as_str() == name) {
+                    tool_type_ids.insert(tool.clone(), *id);
+                }
+            }
+        }
+    }
+    metadata.with_type_ids(agent_type_ids, tool_type_ids)
 }
 
 fn authorize_component_permission(

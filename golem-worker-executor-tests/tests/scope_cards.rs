@@ -3043,6 +3043,7 @@ async fn tool_card_derivations_freeze_aliases_across_reconstruction(
             .registered_tools
             .get_mut(&ToolName::try_from("tool").unwrap())
             .unwrap()
+            .registration
             .definition
             .commands
             .nodes[0]

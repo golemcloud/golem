@@ -26,8 +26,8 @@ use crate::model::json::NormalizedJsonValue;
 use crate::model::mcp_import::{McpImport, McpImportAuth, McpInlineCredentialKind};
 use crate::model::security_scheme::SecuritySchemeName;
 use crate::model::tool::{
-    ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingInput,
-    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    ConfigKeyScope, HostToolId, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolRegistration, ToolSource,
 };
 use crate::model::tool_middleware::{
     RegisteredToolMiddleware, ToolMiddlewareMergeMode, ToolMiddlewareSource,
@@ -443,8 +443,8 @@ fn registered_tool(
     name: &str,
     source: ToolSource,
     release_id: Option<ToolReleaseId>,
-) -> RegisteredTool {
-    RegisteredTool {
+) -> ToolRegistration {
+    ToolRegistration {
         deployment_revision: DeploymentRevision::INITIAL,
         release_id,
         definition: Tool {

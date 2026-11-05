@@ -606,9 +606,9 @@ impl Default for ComponentConfigSchema {
     }
 }
 
-/// Schema-model form of a registered agent type. Mirrors the legacy
-/// `RegisteredAgentType`, with `agent_type` replaced by [`AgentTypeSchema`].
-/// Used by the MCP export path (`CompiledMcp`).
+/// ID-free projection of an agent declaration and its implementer for discovery
+/// and MCP export. Registry-assigned identities belong to the canonical
+/// `RegisteredAgentType` and component metadata, not this projection.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
