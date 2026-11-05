@@ -19,6 +19,7 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/identity"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
@@ -130,13 +131,12 @@ func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) (Cl
 	// Resolve the id up front: it is wanted for error messages, and a failure
 	// here means the constructor parameters are wrong — better to surface that
 	// now than as an opaque not-found on the first call.
-	resolved := host.MakeAgentId(name, ctor, o.phantomID)
-	if resolved.IsErr() {
-		return Client[Id]{}, fmt.Errorf("golem: Get %s: %w", name, agentErrorToGo(resolved.Err()))
-	}
-	created := host.WasmRpcCreate(name, ctor, o.phantomID, agentConfig)
-	if created.IsErr() {
-		return Client[Id]{}, rpcErrorToGo(name, "<constructor>", created.Err())
+	connected, failure := identity.Construct(name, ctor, o.phantomID, agentConfig)
+	if failure != nil {
+		if failure.Stage == identity.ConstructStage {
+			return Client[Id]{}, fmt.Errorf("golem: Get %s: %w", name, agentErrorToGo(failure.AgentError))
+		}
+		return Client[Id]{}, rpcErrorToGo(name, "<constructor>", failure.RPCError)
 	}
 
 	phantomID := None[UUID]()
@@ -144,9 +144,9 @@ func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) (Cl
 		phantomID = Some(uuidFromWit(o.phantomID.Some()))
 	}
 	return Client[Id]{
-		rpc:       created.Ok(),
+		rpc:       connected.RPC,
 		agentType: name,
-		agentID:   resolved.Ok(),
+		agentID:   connected.AgentID,
 		phantomID: phantomID,
 	}, nil
 }
@@ -200,22 +200,20 @@ func bindTypedClient[Id any](d *definitions, name, agentID string) (Client[Id], 
 // bindClient addresses the agent agentID names. The host parses the id and
 // reports a target that is not deployed; nothing else about it is checked here.
 func bindClient[Id any](agentID string) (Client[Id], error) {
-	res := host.ParseAgentId(agentID)
-	if res.IsErr() {
-		return Client[Id]{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, agentErrorToGo(res.Err()))
+	connected, failure := identity.Connect(agentID)
+	if failure != nil {
+		if failure.Stage == identity.ParseStage {
+			return Client[Id]{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, agentErrorToGo(failure.AgentError))
+		}
+		return Client[Id]{}, rpcErrorToGo(failure.TypeName, "<bind>", failure.RPCError)
 	}
-	t := res.Ok()
 	phantomID := None[UUID]()
-	if t.F2.IsSome() {
-		phantomID = Some(uuidFromWit(t.F2.Some()))
-	}
-	created := host.WasmRpcCreate(t.F0, t.F1.Value, t.F2, nil)
-	if created.IsErr() {
-		return Client[Id]{}, rpcErrorToGo(t.F0, "<bind>", created.Err())
+	if connected.PhantomID.IsSome() {
+		phantomID = Some(uuidFromWit(connected.PhantomID.Some()))
 	}
 	return Client[Id]{
-		rpc:       created.Ok(),
-		agentType: t.F0,
+		rpc:       connected.RPC,
+		agentType: connected.TypeName,
 		agentID:   agentID,
 		phantomID: phantomID,
 	}, nil
@@ -235,11 +233,11 @@ func makeTypedAgentID[Id any](d *definitions, name string, id Id, phantom Option
 	if u, has := phantom.Get(); has {
 		p = witTypes.Some(uuidToWit(u))
 	}
-	res := host.MakeAgentId(name, ctor, p)
-	if res.IsErr() {
-		return "", fmt.Errorf("golem: %s: %w", name, agentErrorToGo(res.Err()))
+	resolved, failure := identity.Render(name, ctor, p)
+	if failure != nil {
+		return "", fmt.Errorf("golem: %s: %w", name, agentErrorToGo(failure.AgentError))
 	}
-	return res.Ok(), nil
+	return resolved, nil
 }
 
 // NewPhantom allocates a fresh phantom instance of the target agent and returns
