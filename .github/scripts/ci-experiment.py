@@ -8,6 +8,8 @@ explicitly replaced; unknown jobs, actions, and expressions fail the inventory.
 import argparse
 import ast
 import copy
+import ctypes
+import hashlib
 import json
 import os
 import re
@@ -318,7 +320,137 @@ PY
             raise ValueError(f"Unclassified step in {job}: {step}")
 
 
+def cache_fingerprints(root):
+    return {
+        str(path.relative_to(root)): [
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            path.stat().st_mtime_ns,
+        ]
+        for path in root.glob("**/target/debug/.fingerprint/*/invoked.timestamp")
+    }
+
+
+def interrupt(*_):
+    raise KeyboardInterrupt
+
+
+def adopt_orphans():
+    # Detached test dependencies must remain owned after their launcher exits.
+    if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "Cannot enable child subreaper")
+
+
+def processes():
+    result = {}
+    for path in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            text = path.read_text()
+            fields = text[text.rindex(")") + 2 :].split()
+            result[int(path.parent.name)] = {
+                "parent": int(fields[1]),
+                "state": fields[0],
+                "start": fields[19],
+            }
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    return result
+
+
+def descendants(pid, table):
+    owned = {pid}
+    while True:
+        found = owned | {p for p, info in table.items() if info["parent"] in owned}
+        if found == owned:
+            return owned - {pid}
+        owned = found
+
+
+def terminate_children(leaders):
+    handlers = {
+        s: signal.signal(s, signal.SIG_IGN) for s in (signal.SIGTERM, signal.SIGINT)
+    }
+    try:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            deadline = time.monotonic() + 3
+            while True:
+                for process in leaders:
+                    process.poll()
+                table = processes()
+                owned = descendants(os.getpid(), table)
+                for pid in owned:
+                    try:
+                        if table[pid]["state"] == "Z":
+                            if pid not in {p.pid for p in leaders}:
+                                os.waitpid(pid, os.WNOHANG)
+                        elif (
+                            processes().get(pid, {}).get("start") == table[pid]["start"]
+                        ):
+                            os.kill(pid, sig)
+                    except (ProcessLookupError, ChildProcessError):
+                        pass
+                if not owned:
+                    return
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.1)
+        if descendants(os.getpid(), processes()):
+            raise RuntimeError("Owned test processes survived bounded cleanup")
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+
+
+def host_sample(cwd):
+    memory = dict(
+        line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines()
+    )
+    total = int(memory["MemTotal"].split()[0])
+    available = int(memory["MemAvailable"].split()[0])
+    group = Path("/sys/fs/cgroup")
+    for line in Path("/proc/self/cgroup").read_text().splitlines():
+        if line.startswith("0::"):
+            candidate = group / line[3:].lstrip("/")
+            if candidate.exists():
+                group = candidate
+    for parent in (group, *group.parents):
+        if not parent.is_relative_to("/sys/fs/cgroup"):
+            break
+        if (parent / "memory.max").exists():
+            limit = (parent / "memory.max").read_text().strip()
+            if limit != "max":
+                total = min(total, int(limit) // 1024)
+                available = min(
+                    available,
+                    max(0, int(limit) - int((parent / "memory.current").read_text()))
+                    // 1024,
+                )
+    disk = shutil.disk_usage(cwd)
+    return {
+        "memory_used_kib": int(memory["MemTotal"].split()[0])
+        - int(memory["MemAvailable"].split()[0]),
+        "memory_available_kib": available,
+        "memory_total_kib": total,
+        "swap_used_kib": int(memory["SwapTotal"].split()[0])
+        - int(memory["SwapFree"].split()[0]),
+        "disk_used_bytes": disk.used,
+        "disk_free_bytes": disk.free,
+        "disk_total_bytes": disk.total,
+        "cpu_ticks": [
+            int(n) for n in Path("/proc/stat").read_text().splitlines()[0].split()[1:]
+        ],
+        "pressure": {
+            name: Path(f"/proc/pressure/{name}").read_text()
+            for name in ("cpu", "memory", "io")
+            if Path(f"/proc/pressure/{name}").exists()
+        },
+        "oom_events": (group / "memory.events").read_text()
+        if (group / "memory.events").exists()
+        else "",
+    }
+
+
 def execute(command, env, cwd, log, timeout):
+    adopt_orphans()
     started = time.monotonic()
     samples = []
     with log.open("w") as output:
@@ -342,30 +474,17 @@ def execute(command, env, cwd, log, timeout):
         )
         try:
             while True:
-                memory = dict(
-                    line.split(":", 1)
-                    for line in Path("/proc/meminfo").read_text().splitlines()
-                )
                 samples.append(
                     {
                         "seconds": time.monotonic() - started,
-                        "memory_used_kib": int(memory["MemTotal"].split()[0])
-                        - int(memory["MemAvailable"].split()[0]),
-                        "disk_used_bytes": shutil.disk_usage(cwd).used,
-                        "cpu_ticks": [
-                            int(n)
-                            for n in Path("/proc/stat")
-                            .read_text()
-                            .splitlines()[0]
-                            .split()[1:]
-                        ],
+                        **host_sample(cwd),
                     }
                 )
                 remaining = timeout - (time.monotonic() - started)
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)
                 try:
-                    result = process.wait(timeout=min(15, remaining))
+                    result = process.wait(timeout=min(5, remaining))
                     break
                 except subprocess.TimeoutExpired:
                     if len(samples) % 8 == 0:
@@ -376,15 +495,7 @@ def execute(command, env, cwd, log, timeout):
         except subprocess.TimeoutExpired:
             result = 124
         finally:
-            # Terminate descendants owned by this command, not unrelated services.
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-                process.wait(timeout=10)
-            except ProcessLookupError:
-                pass
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
+            terminate_children([process])
     return {
         "exit_code": result,
         "seconds": time.monotonic() - started,
@@ -455,6 +566,39 @@ def run(args):
     products = ROOT / "tmp/experiment-products"
     products.mkdir(parents=True, exist_ok=True)
     selected = select_stages(stages, args.phase, args.workers, args.shard)
+    if getattr(args, "stage", None):
+        wanted = set(args.stage)
+        if wanted - {s["id"] for s in selected}:
+            raise ValueError(f"Unknown selected stage: {wanted}")
+        selected = [s for s in selected if s["id"] in wanted]
+    clippy_root = getattr(args, "clippy_workspace", None)
+    if clippy_root:
+        clippy_root = Path(clippy_root).resolve()
+        if (
+            ROOT == clippy_root
+            or ROOT in clippy_root.parents
+            or clippy_root in ROOT.parents
+        ):
+            raise ValueError("Clippy and suite workspaces must be disjoint")
+        source_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=clippy_root, text=True
+        ).strip()
+        if (
+            source_sha
+            != subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+            ).strip()
+        ):
+            raise ValueError("Clippy and suite source SHAs differ")
+        clippy = [s for s in selected if s["job"] == "check-clippy-and-format"]
+        if clippy:
+            selected = [s for s in selected if s not in clippy]
+            index = next(
+                i
+                for i, s in enumerate(selected)
+                if s["id"] == "it/integration-tests-group2"
+            )
+            selected[index:index] = clippy
     report = {
         "source_sha": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -470,7 +614,16 @@ def run(args):
     }
     failures = set()
     for stage in selected:
-        stage_context = {**context, "matrix": stage["matrix"]}
+        stage_root = (
+            clippy_root
+            if clippy_root and stage["job"] == "check-clippy-and-format"
+            else ROOT
+        )
+        stage_context = {
+            **context,
+            "github": {**context["github"], "workspace": str(stage_root)},
+            "matrix": stage["matrix"],
+        }
         stage_dir = evidence / stage["id"].replace("/", "--")
         stage_dir.mkdir(exist_ok=True)
         result = {
@@ -478,7 +631,10 @@ def run(args):
             "steps": [],
             "status": "running",
             "started_at": time.time(),
+            "workspace": str(stage_root),
         }
+        if stage["job"] == "check-clippy-and-format":
+            result["cache_before"] = cache_fingerprints(stage_root)
         report["stages"].append(result)
         deadline = (
             time.monotonic() + stage["definition"].get("timeout-minutes", 360) * 60
@@ -491,8 +647,10 @@ def run(args):
             failures.add(stage["job"])
         else:
             # Restore tracked source without removing compiler/dependency caches.
-            subprocess.run(["git", "restore", "--worktree", "."], cwd=ROOT, check=True)
-            for path in ROOT.glob("**/target/ctrf*.json"):
+            subprocess.run(
+                ["git", "restore", "--worktree", "."], cwd=stage_root, check=True
+            )
+            for path in stage_root.glob("**/target/ctrf*.json"):
                 path.unlink()
             if stage["job"] == "build-test-components":
                 shutil.rmtree(ROOT / "tmp/test-components-wasm", ignore_errors=True)
@@ -510,7 +668,8 @@ def run(args):
                     for k, v in stage["definition"].get("env", {}).items()
                 },
             }
-            env["PATH"] = f"{ROOT}/target/debug:{env['PATH']}"
+            env["PATH"] = f"{stage_root}/target/debug:{env['PATH']}"
+            env["GITHUB_WORKSPACE"] = str(stage_root)
             # GITHUB_ENV/PATH writes are scoped to the logical stage, not the host job.
             for key in ("GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT"):
                 env[key] = str(stage_dir / key)
@@ -545,7 +704,7 @@ def run(args):
                     observation = execute(
                         render(step["run"], stage_context),
                         step_env,
-                        ROOT
+                        stage_root
                         / render(step.get("working-directory", "."), stage_context),
                         log,
                         timeout,
@@ -557,7 +716,7 @@ def run(args):
                         timeout_seconds=timeout,
                     )
                     result["steps"].append(observation)
-                    for j, path in enumerate(ROOT.glob("**/target/ctrf*.json")):
+                    for j, path in enumerate(stage_root.glob("**/target/ctrf*.json")):
                         shutil.move(path, stage_dir / f"ctrf-{i}-{attempt}-{j}.json")
                     report_path.write_text(json.dumps(report, indent=2))
                     print(
@@ -595,7 +754,10 @@ def run(args):
                 )
             with (stage_dir / "source.diff").open("w") as output:
                 subprocess.run(
-                    ["git", "diff", "--binary"], cwd=ROOT, stdout=output, check=True
+                    ["git", "diff", "--binary"],
+                    cwd=stage_root,
+                    stdout=output,
+                    check=True,
                 )
             if result["status"] in {"passed", "passed_after_retry"}:
                 if stage["job"] == "build-cli-test-bins":
@@ -612,6 +774,8 @@ def run(args):
                     for path in (products / "fixtures").glob("*.wasm"):
                         shutil.copy2(path, ROOT / "test-components" / path.name)
         result["finished_at"] = time.time()
+        if stage["job"] == "check-clippy-and-format":
+            result["cache_after"] = cache_fingerprints(stage_root)
         report["updated_at"] = time.time()
         (evidence / f"{args.phase}-{args.shard}.json").write_text(
             json.dumps(report, indent=2)
@@ -641,4 +805,12 @@ if __name__ == "__main__":
     parser.add_argument("--test-retries", type=int, choices=(0, 1, 2), default=0)
     parser.add_argument("--workers", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--shard", type=int, default=0)
-    raise SystemExit(run(parser.parse_args()))
+    parser.add_argument("--workspace", type=Path)
+    parser.add_argument("--clippy-workspace", type=Path)
+    parser.add_argument("--stage", action="append")
+    args = parser.parse_args()
+    if args.workspace:
+        ROOT = args.workspace.resolve()
+    # Cancellation must unwind execute's owned-process cleanup.
+    signal.signal(signal.SIGTERM, interrupt)
+    raise SystemExit(run(args))

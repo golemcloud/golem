@@ -15,6 +15,11 @@ SPEC = importlib.util.spec_from_file_location(
 )
 experiment = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(experiment)
+OVERLAP_SPEC = importlib.util.spec_from_file_location(
+    "overlap", Path(__file__).with_name("ci-overlap-experiment.py")
+)
+overlap = importlib.util.module_from_spec(OVERLAP_SPEC)
+OVERLAP_SPEC.loader.exec_module(overlap)
 
 
 class ExperimentInventoryTests(unittest.TestCase):
@@ -332,6 +337,176 @@ class ExperimentRetryTests(unittest.TestCase):
             [s["timeout_seconds"] for s in report["stages"][0]["steps"]], [60, 20]
         )
         self.assertEqual([s["status"] for s in report["stages"]], ["failed", "blocked"])
+
+
+class OverlapGateTests(unittest.TestCase):
+    def reports(self):
+        stages = [
+            {
+                "id": name,
+                "status": "passed",
+                "steps": [{"log": "00.log", "attempt": 0, "seconds": seconds}],
+            }
+            for name, seconds in (
+                (overlap.CLIPPY, 120),
+                (overlap.SERVICES[0], 110),
+                (overlap.SERVICES[1], 40),
+            )
+        ]
+        report = {
+            "source_sha": "same-source",
+            "finished_at": 10,
+            "success": True,
+            "fully_green": True,
+            "test_retries": 0,
+            "cli_test_threads": 4,
+            "stages": stages,
+        }
+        return copy.deepcopy(report), report
+
+    def test_only_complete_clean_matched_warm_baseline_is_eligible(self):
+        cold, warm = self.reports()
+        expected = [s["id"] for s in warm["stages"]]
+        cold["fully_green"] = False
+        cold["stages"][0]["status"] = "passed_after_retry"
+        self.assertTrue(overlap.complete_baseline(cold, warm, expected))
+        for field, value in (
+            ("fully_green", False),
+            ("success", False),
+            ("finished_at", None),
+            ("test_retries", 1),
+            ("cli_test_threads", 6),
+            ("source_sha", "other"),
+        ):
+            with self.subTest(field=field):
+                self.assertFalse(
+                    overlap.complete_baseline(cold, {**warm, field: value}, expected)
+                )
+        for status in ("failed", "blocked", "running", "passed_after_retry"):
+            changed = copy.deepcopy(warm)
+            changed["stages"][1]["status"] = status
+            self.assertFalse(overlap.complete_baseline(cold, changed, expected))
+        for stages in (warm["stages"][:-1], [warm["stages"][0]] * 3):
+            self.assertFalse(
+                overlap.complete_baseline(cold, {**warm, "stages": stages}, expected)
+            )
+
+    def test_value_boundary_inventory_reconciliation_and_retry_evidence(self):
+        cold, warm = self.reports()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "inventory.json").write_text(
+                json.dumps({"stages": [{"id": s["id"]} for s in warm["stages"]]})
+            )
+            for cycle, report in (("cold", cold), ("warm", warm)):
+                for stage in report["stages"]:
+                    directory = root / cycle / stage["id"].replace("/", "--")
+                    directory.mkdir(parents=True)
+                    if stage["id"] == overlap.CLIPPY:
+                        continue
+                    (directory / "ctrf-0-0-0.json").write_text(
+                        json.dumps(
+                            {
+                                "results": {
+                                    "summary": {"tests": 1},
+                                    "tests": [
+                                        {"name": stage["id"], "status": "passed"}
+                                    ],
+                                }
+                            }
+                        )
+                    )
+                (root / cycle / "all-0.json").write_text(json.dumps(report))
+            # An earlier failed attempt must not contaminate the recovered final inventory.
+            stage = cold["stages"][1]
+            stage["steps"].append({"log": "00-retry1.log", "attempt": 1, "seconds": 2})
+            directory = root / "cold" / stage["id"].replace("/", "--")
+            (directory / "ctrf-0-1-0.json").write_text(
+                (directory / "ctrf-0-0-0.json").read_text()
+            )
+            (directory / "ctrf-0-0-0.json").write_text(
+                json.dumps(
+                    {
+                        "results": {
+                            "summary": {"tests": 1},
+                            "tests": [{"name": "initial failure", "status": "failed"}],
+                        }
+                    }
+                )
+            )
+            (root / "cold/all-0.json").write_text(json.dumps(cold))
+            with (
+                patch.object(overlap, "RESULTS", root),
+                patch.dict(os.environ, {"GITHUB_OUTPUT": str(root / "output")}),
+            ):
+                overlap.gate()
+                self.assertTrue(
+                    json.loads((root / "overlap-gate.json").read_text())["eligible"]
+                )
+                warm["stages"][0]["steps"][0]["seconds"] = 119.99
+                (root / "warm/all-0.json").write_text(json.dumps(warm))
+                overlap.gate()
+                self.assertFalse(
+                    json.loads((root / "overlap-gate.json").read_text())["eligible"]
+                )
+                changed = (
+                    root
+                    / "warm"
+                    / overlap.SERVICES[0].replace("/", "--")
+                    / "ctrf-0-0-0.json"
+                )
+                changed.unlink()
+                with self.assertRaisesRegex(ValueError, "inventory differs"):
+                    overlap.gate()
+
+    def test_two_equally_reduced_replays_do_not_validate_the_baseline(self):
+        _, warm = self.reports()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "warm").mkdir()
+            (root / "warm/all-0.json").write_text(json.dumps(warm))
+            (root / "overlap-gate.json").write_text('{"eligible":true}')
+            (root / "allocation-start").write_text(str(int(overlap.time.time())))
+            for cycle in ("warm", "serial-slice", "overlap"):
+                for stage in warm["stages"]:
+                    directory = root / cycle
+                    if stage["id"] == overlap.CLIPPY:
+                        if cycle == "warm":
+                            continue
+                        directory /= "clippy-results"
+                        stages = [dict(stage, cache_before={})]
+                    else:
+                        stages = warm["stages"][1:]
+                    directory.mkdir(parents=True, exist_ok=True)
+                    (directory / "all-0.json").write_text(
+                        json.dumps({**warm, "stages": stages})
+                    )
+                    reports = directory / stage["id"].replace("/", "--")
+                    reports.mkdir()
+                    tests = [{"name": "shared-test", "status": "passed"}]
+                    if cycle == "warm":
+                        tests.append(
+                            {"name": "missing-from-both-replays", "status": "passed"}
+                        )
+                    (reports / "ctrf-0-0-0.json").write_text(
+                        json.dumps(
+                            {
+                                "results": {
+                                    "summary": {"tests": len(tests)},
+                                    "tests": tests,
+                                }
+                            }
+                        )
+                    )
+            with (
+                patch.object(overlap, "RESULTS", root),
+                patch.object(
+                    overlap.subprocess, "check_output", return_value="same-source"
+                ),
+                patch.object(overlap, "run_slice"),
+                self.assertRaisesRegex(ValueError, "admitted warm test inventory"),
+            ):
+                overlap.slices(root / "clippy")
 
 
 if __name__ == "__main__":
