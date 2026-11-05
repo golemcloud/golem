@@ -20,9 +20,10 @@ const startServices = (config: BillingConfigShape) =>
     )
   )
 
-/** The tables of Better Auth and of the Polar subscriptions, in the order of their names. */
+/** The tables of Better Auth and of the Polar subscriptions and orders, in the order of their names. */
 const appTables = [
   "account",
+  "polar_orders",
   "polar_subscriptions",
   "polar_webhook_deliveries",
   "session",

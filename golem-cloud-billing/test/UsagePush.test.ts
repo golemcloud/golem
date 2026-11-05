@@ -96,8 +96,9 @@ describe("UsagePush", () => {
   ) => {
     await app.query(
       `INSERT INTO polar_subscriptions
-         (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at)
-       VALUES ($1, $2, 'paid-product', $3, $4, $5, now())
+         (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at,
+          metered_price_ids)
+       VALUES ($1, $2, 'paid-product', $3, $4, $5, now(), '{}')
        ON CONFLICT (subscription_id) DO UPDATE SET
          status = EXCLUDED.status,
          current_period_end = EXCLUDED.current_period_end,

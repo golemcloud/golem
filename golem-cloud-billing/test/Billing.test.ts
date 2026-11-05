@@ -25,6 +25,12 @@ import {
   webhookSecret
 } from "./support.ts"
 
+const MINUTE = 60 * 1000
+const DAY = 24 * 60 * MINUTE
+const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "UTC" })
+const fixedPriceId = "price_fixed"
+const meteredPriceId = "price_compute"
+
 describe("Polar billing", () => {
   let config: BillingConfigShape
   let pool: pg.Pool
@@ -54,7 +60,9 @@ describe("Polar billing", () => {
 
   afterEach(async () => {
     const schema = config.db.schema
-    await pool.query(`TRUNCATE "${schema}"."user", "${schema}".polar_subscriptions, "${schema}".polar_webhook_deliveries CASCADE`)
+    await pool.query(
+      `TRUNCATE "${schema}"."user", "${schema}".polar_subscriptions, "${schema}".polar_orders, "${schema}".polar_webhook_deliveries CASCADE`
+    )
   })
 
   const signedIn = async () => {
@@ -72,10 +80,39 @@ describe("Polar billing", () => {
     current_period_end: "2026-12-04T10:00:00Z",
     cancel_at_period_end: false,
     product_id: polarProductId,
+    product: {
+      id: polarProductId,
+      prices: [
+        { id: fixedPriceId, amount_type: "fixed" },
+        { id: meteredPriceId, amount_type: "metered_unit" }
+      ]
+    },
     customer_id: "cus_1",
     customer: { id: "cus_1", external_id: accountId },
     ...overrides
   })
+
+  /** A renewal order of `sub_1`: the price of the next period and, by default, paid overage. */
+  const order = (accountId: string, overrides: Record<string, unknown> = {}) => ({
+    id: "order_1",
+    status: "pending",
+    paid: false,
+    created_at: new Date().toISOString(),
+    modified_at: null,
+    billing_reason: "subscription_cycle",
+    customer_id: "cus_1",
+    customer: { id: "cus_1", external_id: accountId },
+    product_id: polarProductId,
+    subscription_id: "sub_1",
+    items: [
+      { product_price_id: fixedPriceId, amount: 2000 },
+      { product_price_id: meteredPriceId, amount: 345 }
+    ],
+    ...overrides
+  })
+
+  const priceOnly = { items: [{ product_price_id: fixedPriceId, amount: 2000 }] }
+  const paidLater = { status: "paid", paid: true, modified_at: new Date(Date.now() + MINUTE).toISOString() }
 
   /** Delivers a webhook as Polar does: Standard Webhooks headers, signed with the secret. */
   const deliver = (
@@ -107,9 +144,6 @@ describe("Polar billing", () => {
   /** One run of the sweep of the web app at `now`. */
   const sweep = (now: Date) => services.runPromise(Effect.flatMap(Settlement.make, (settlement) => settlement.sweep(now)))
 
-  const MINUTE = 60 * 1000
-  const DAY = 24 * 60 * MINUTE
-  const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "UTC" })
 
   describe("checkout and customer portal", () => {
     it("starts a checkout of the paid product for the Golem account", async () => {
@@ -282,45 +316,97 @@ describe("Polar billing", () => {
       expect(upstreams.planChanges()).toEqual([])
     })
 
-    it("suspends the account while a payment fails, and moves it back to Paid after the payment", async () => {
+    it("moves the account to Free when the payment of the price alone fails, and back after the payment", async () => {
       const { jar, accountId } = await signedIn()
 
       await deliver("subscription.active", subscription(accountId))
+      await deliver("order.created", order(accountId, priceOnly))
       const response = await deliver(
         "subscription.past_due",
-        subscription(accountId, { status: "past_due", modified_at: "2026-12-04T10:00:00Z" })
+        subscription(accountId, { status: "past_due", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" })
       )
 
       expect(response.status).toBe(200)
-      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       const html = await page(jar)
-      expect(html).toContain("Your account is suspended")
+      expect(html).toContain("You're on Free")
       expect(html).toContain("The last payment for Paid failed")
-      expect(html).toContain(`action="/billing/portal"`)
+      expect(html).not.toContain(`action="/billing/checkout"`)
 
+      await deliver("order.paid", order(accountId, { ...priceOnly, ...paidLater }))
       await deliver("subscription.active", subscription(accountId, { modified_at: "2026-12-05T10:00:00Z" }))
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
     })
 
-    it("keeps the account suspended when Polar revokes a subscription that was not paid", async () => {
+    it("suspends the account when an order with overage is not paid, until the order is paid", async () => {
       const { jar, accountId } = await signedIn()
 
       await deliver("subscription.active", subscription(accountId))
-      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", modified_at: "2026-12-04T10:00:00Z" }))
-      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2026-12-25T10:00:00Z" }))
+      await deliver("order.created", order(accountId))
+      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" }))
 
       expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
       const html = await page(jar)
-      expect(html).toContain("ended without a payment")
-      expect(html).toContain(`action="/billing/checkout"`)
+      expect(html).toContain("Your account is suspended")
+      expect(html).toContain("An invoice for paid overage is not paid")
+      expect(html).toContain(`action="/billing/portal"`)
+
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, { status: "canceled", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-25T10:00:00Z" })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+
+      await deliver("order.paid", order(accountId, paidLater))
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
     })
 
-    it("moves the account to Free when a subscription that was paid again is revoked", async () => {
+    it("keeps a new subscription suspended while an order with overage is not paid", async () => {
       const accountId = randomUUID()
 
-      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", modified_at: "2026-12-04T10:00:00Z" }))
-      await deliver("subscription.active", subscription(accountId, { modified_at: "2026-12-05T10:00:00Z" }))
-      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2027-01-04T10:00:00Z" }))
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("order.created", order(accountId))
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, { status: "canceled", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-25T10:00:00Z" })
+      )
+      await deliver("subscription.active", subscription(accountId, { id: "sub_2", modified_at: "2026-12-26T10:00:00Z" }))
+
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+    })
+
+    it("keeps the paid plan while Polar charges a renewal with overage", async () => {
+      const accountId = randomUUID()
+
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("order.created", order(accountId))
+
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+      expect(upstreams.planChanges()).toHaveLength(1)
+    })
+
+    it("suspends the account when the last order of an ended subscription stays unpaid", async () => {
+      const accountId = randomUUID()
+      const createdAt = new Date()
+
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2026-12-04T10:00:00Z" }))
+      await deliver("order.created", order(accountId, { created_at: createdAt.toISOString(), billing_reason: "subscription_cycle" }))
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+
+      await sweep(new Date(createdAt.getTime() + Settlement.ORDER_PAYMENT_GRACE_MS - MINUTE))
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+
+      await sweep(new Date(createdAt.getTime() + Settlement.ORDER_PAYMENT_GRACE_MS + MINUTE))
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+    })
+
+    it("ignores an order of another product", async () => {
+      const accountId = randomUUID()
+
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("order.created", order(accountId, { product_id: randomUUID(), created_at: "2026-11-01T10:00:00Z" }))
+      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" }))
 
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
     })
