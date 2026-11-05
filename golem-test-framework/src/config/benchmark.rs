@@ -391,11 +391,15 @@ impl BenchmarkTestDependencies {
             Level::INFO
         };
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
+        // Spawned contexts use fresh databases and exclusive service ports. Blob data from
+        // the previous context is unreachable and must not accumulate across the suite.
+        let blob_root = PathBuf::from("/tmp/ittest-local-object-store/golem");
+        match tokio::fs::remove_dir_all(&blob_root).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("Failed to clear benchmark blob storage {blob_root:?}: {error}"),
+        }
+        let blob_storage = Arc::new(FileSystemBlobStorage::new(&blob_root).await.unwrap());
         let initial_agent_files_service =
             Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
