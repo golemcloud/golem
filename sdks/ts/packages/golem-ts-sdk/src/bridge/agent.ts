@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-import { makeAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
+import { WasmRpc } from 'golem:agent/host@2.0.0';
+import { connectRemoteAgent, type RemoteAgentCreation } from '../internal/agentIdentity';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import type {
   CancellationToken,
@@ -78,14 +79,6 @@ export interface AgentConfigEntry {
   readonly path: readonly string[];
   readonly value: TypedSchemaValue;
 }
-
-type RemoteAgentCreation = (
-  agentTypeName: string,
-  constructorTree: ReturnType<typeof schemaValueToWit>,
-  phantomId: Uuid | undefined,
-  config: Array<{ path: string[]; value: ReturnType<typeof typedSchemaValueToWit> }>,
-  agentId: string,
-) => WasmRpc;
 
 function isRpcError(error: unknown): error is RpcError {
   if (error === null || typeof error !== 'object') return false;
@@ -313,18 +306,13 @@ function resolveRemoteAgentWith(
   mode: 'durable' | 'ephemeral',
   create: RemoteAgentCreation,
 ): RemoteAgentHandle {
-  const constructorTree = schemaValueToWit(constructorValue);
-  const agentId =
-    mode === 'ephemeral' ? agentTypeName : makeAgentId(agentTypeName, constructorTree, phantomId);
-  const rpc = create(
+  const { agentId, rpc } = connectRemoteAgent(
     agentTypeName,
-    constructorTree,
+    constructorValue,
     phantomId,
-    configEntries.map((entry) => ({
-      path: [...entry.path],
-      value: typedSchemaValueToWit(entry.value),
-    })),
-    agentId,
+    configEntries,
+    mode,
+    create,
   );
   const remote = remoteTransport(
     rpc,
