@@ -13,7 +13,6 @@ import {
   internalPlanId,
   makeApp,
   makeServices,
-  paidCappedPlanId,
   paidPlanId,
   polarProductId,
   polarWebToken,
@@ -21,6 +20,7 @@ import {
   registryBillingToken,
   request,
   signInWithGitHub,
+  suspendedPlanId,
   testConfig,
   webhookSecret
 } from "./support.ts"
@@ -244,7 +244,7 @@ describe("Polar billing", () => {
       expect(await page(jar)).toContain(`ends on ${longDate.format(end)}`)
     })
 
-    it("moves the account to the capped plan when its subscription ends within the settlement margin", async () => {
+    it("moves a canceled subscription to the free plan within the settlement margin before its end", async () => {
       const { jar, accountId } = await signedIn()
       const end = new Date(Date.now() + DAY)
       await deliver(
@@ -256,8 +256,8 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
 
       await sweep(new Date(end.getTime() - Settlement.SETTLEMENT_MARGIN_MS + MINUTE))
-      expect(upstreams.planOf(accountId).planId).toBe(paidCappedPlanId)
-      expect(await page(jar)).toContain("Paid overage is off")
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+      expect(await page(jar)).toContain("You're on Free")
 
       await sweep(new Date(end.getTime() - MINUTE))
       expect(upstreams.planChanges()).toHaveLength(2)
@@ -282,7 +282,7 @@ describe("Polar billing", () => {
       expect(upstreams.planChanges()).toEqual([])
     })
 
-    it("caps the paid plan while a payment fails, and lifts the cap after the payment", async () => {
+    it("suspends the account while a payment fails, and moves it back to Paid after the payment", async () => {
       const { jar, accountId } = await signedIn()
 
       await deliver("subscription.active", subscription(accountId))
@@ -292,22 +292,46 @@ describe("Polar billing", () => {
       )
 
       expect(response.status).toBe(200)
-      expect(upstreams.planOf(accountId).planId).toBe(paidCappedPlanId)
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
       const html = await page(jar)
-      expect(html).toContain("You're on Paid")
-      expect(html).toContain("The last payment failed")
-      expect(html).toContain("Paid overage is off")
+      expect(html).toContain("Your account is suspended")
+      expect(html).toContain("The last payment for Paid failed")
+      expect(html).toContain(`action="/billing/portal"`)
 
       await deliver("subscription.active", subscription(accountId, { modified_at: "2026-12-05T10:00:00Z" }))
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
     })
 
-    it("caps the paid plan during a trial, which Polar does not bill usage for", async () => {
+    it("keeps the account suspended when Polar revokes a subscription that was not paid", async () => {
+      const { jar, accountId } = await signedIn()
+
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", modified_at: "2026-12-04T10:00:00Z" }))
+      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2026-12-25T10:00:00Z" }))
+
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+      const html = await page(jar)
+      expect(html).toContain("ended without a payment")
+      expect(html).toContain(`action="/billing/checkout"`)
+    })
+
+    it("moves the account to Free when a subscription that was paid again is revoked", async () => {
+      const accountId = randomUUID()
+
+      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", modified_at: "2026-12-04T10:00:00Z" }))
+      await deliver("subscription.active", subscription(accountId, { modified_at: "2026-12-05T10:00:00Z" }))
+      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2027-01-04T10:00:00Z" }))
+
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+    })
+
+    it("gives a trial the free plan, because Polar bills no usage during a trial", async () => {
       const accountId = randomUUID()
 
       await deliver("subscription.created", subscription(accountId, { status: "trialing" }))
 
-      expect(upstreams.planOf(accountId).planId).toBe(paidCappedPlanId)
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+      expect(upstreams.planChanges()).toEqual([])
     })
 
     it("leaves a plan that an administrator gave the account", async () => {

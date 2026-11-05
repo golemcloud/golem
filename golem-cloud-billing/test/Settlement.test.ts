@@ -19,6 +19,7 @@ const subscription = (overrides: Partial<Subscription> = {}): Subscription => ({
   currentPeriodEnd: new Date("2026-12-04T10:00:00Z"),
   cancelAtPeriodEnd: false,
   modifiedAt: new Date("2026-11-04T10:00:00Z"),
+  pastDueAt: undefined,
   ...overrides
 })
 
@@ -30,16 +31,19 @@ describe("planFor", () => {
     ["no subscription", "free", []],
     ["an active subscription", "paid", [subscription()]],
     ["a subscription that ends after the settlement margin", "paid", [endingIn(SETTLEMENT_MARGIN_MS + MINUTE)]],
-    ["a subscription that ends within the settlement margin", "paidCapped", [endingIn(SETTLEMENT_MARGIN_MS - MINUTE)]],
-    ["a subscription past its scheduled end", "paidCapped", [endingIn(-MINUTE)]],
-    ["a past_due subscription", "paidCapped", [subscription({ status: "past_due" })]],
-    ["a trialing subscription", "paidCapped", [subscription({ status: "trialing" })]],
+    ["a subscription that ends within the settlement margin", "free", [endingIn(SETTLEMENT_MARGIN_MS - MINUTE)]],
+    ["a subscription past its scheduled end", "free", [endingIn(-MINUTE)]],
+    ["a past_due subscription", "suspended", [subscription({ status: "past_due", pastDueAt: now })]],
+    ["an unpaid subscription", "suspended", [subscription({ status: "unpaid" })]],
+    ["a subscription that Polar revoked while it was unpaid", "suspended", [subscription({ status: "canceled", pastDueAt: now })]],
     ["a canceled subscription", "free", [subscription({ status: "canceled" })]],
+    ["a trialing subscription", "free", [subscription({ status: "trialing" })]],
+    ["a paused subscription", "free", [subscription({ status: "paused" })]],
     ["an incomplete subscription", "free", [subscription({ status: "incomplete" })]],
     [
-      "a canceled and a new active subscription",
+      "an unpaid revoked and a new active subscription",
       "paid",
-      [subscription({ status: "canceled" }), subscription({ subscriptionId: "sub_2" })]
+      [subscription({ status: "canceled", pastDueAt: now }), subscription({ subscriptionId: "sub_2" })]
     ]
   ] as const)("%s gives the plan %s", (_, plan, subscriptions) => {
     expect(planFor(subscriptions, now)).toBe(plan)

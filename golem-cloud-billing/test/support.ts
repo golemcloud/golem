@@ -15,7 +15,7 @@ export const authSecret = "test-secret-that-is-at-least-32-characters-long"
 export const registryBillingToken = "golem_billing_token"
 export const freePlanId = "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10"
 export const paidPlanId = "9a1f3c2e-5b7d-4e8f-a6c4-2d1e0b9f8a73"
-export const paidCappedPlanId = "3e8b1d47-0c2a-4f96-b5e1-7a9d2c4f6b08"
+export const suspendedPlanId = "3e8b1d47-0c2a-4f96-b5e1-7a9d2c4f6b08"
 /** A plan that an administrator gave the account; subscriptions do not change it. */
 export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"
 export const polarApiUrl = "https://sandbox-api.polar.test"
@@ -51,7 +51,7 @@ export const testConfig = (): BillingConfigShape => {
     registryUrl: new URL(registryUrl),
     publicApiUrl: new URL("https://release.dev-api.golem.cloud"),
     registryBillingToken: Redacted.make(registryBillingToken),
-    plans: { free: freePlanId, paid: paidPlanId, paidCapped: paidCappedPlanId },
+    plans: { free: freePlanId, paid: paidPlanId, suspended: suspendedPlanId },
     polar: {
       apiUrl: new URL(polarApiUrl),
       accessToken: Redacted.make(polarWebToken),

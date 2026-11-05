@@ -21,7 +21,15 @@ export interface Subscription {
   readonly cancelAtPeriodEnd: boolean
   /** `modified_at` of the subscription in Polar, or `created_at` before its first change. */
   readonly modifiedAt: Date
+  /**
+   * When the subscription became `past_due`, until it is `active` again. Polar revokes a
+   * subscription that stays unpaid, and the revoked subscription keeps this time.
+   */
+  readonly pastDueAt: Date | undefined
 }
+
+/** A state of a subscription that a webhook reports. `record` keeps `pastDueAt` itself. */
+export type SubscriptionUpdate = Omit<Subscription, "pastDueAt">
 
 /** A failed query of the subscription tables. */
 export class SubscriptionsError extends Data.TaggedError("SubscriptionsError")<{
@@ -37,7 +45,7 @@ export interface SubscriptionsShape {
    * Stores the subscription, unless the stored state is newer. Polar can deliver webhooks out of
    * order, so an older state never replaces a newer one.
    */
-  readonly record: (subscription: Subscription) => Effect.Effect<void, SubscriptionsError>
+  readonly record: (subscription: SubscriptionUpdate) => Effect.Effect<void, SubscriptionsError>
   /** The subscriptions of the product that the account has, in every status. */
   readonly ofAccount: (
     accountId: string,
@@ -87,6 +95,7 @@ export const tables = `
     current_period_end TIMESTAMPTZ,
     cancel_at_period_end BOOLEAN NOT NULL,
     modified_at TIMESTAMPTZ NOT NULL,
+    past_due_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
   );
   CREATE INDEX IF NOT EXISTS polar_subscriptions_account ON polar_subscriptions (account_id, product_id);
@@ -104,6 +113,7 @@ interface SubscriptionRow {
   readonly current_period_end: Date | null
   readonly cancel_at_period_end: boolean
   readonly modified_at: Date
+  readonly past_due_at: Date | null
 }
 
 const fromRow = (row: SubscriptionRow): Subscription => ({
@@ -113,8 +123,12 @@ const fromRow = (row: SubscriptionRow): Subscription => ({
   status: row.status,
   currentPeriodEnd: row.current_period_end ?? undefined,
   cancelAtPeriodEnd: row.cancel_at_period_end,
-  modifiedAt: row.modified_at
+  modifiedAt: row.modified_at,
+  pastDueAt: row.past_due_at ?? undefined
 })
+
+const columns = `subscription_id, account_id::text AS account_id, product_id, status, current_period_end,
+                cancel_at_period_end, modified_at, past_due_at`
 
 const failure = (error: unknown) =>
   new SubscriptionsError({ reason: error instanceof Error ? error.message : String(error) })
@@ -136,11 +150,13 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
     const query = <R extends object>(text: string, values: ReadonlyArray<unknown> = []) =>
       Effect.tryPromise({ try: () => pool.query<R & pg.QueryResultRow>(text, [...values]), catch: failure })
 
-    const record = (subscription: Subscription) =>
+    // past_due_at keeps the first past_due state until an active state clears it.
+    const record = (subscription: SubscriptionUpdate) =>
       query(
         `INSERT INTO polar_subscriptions
-           (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+           (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at,
+            past_due_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $4 = 'past_due' THEN $7::timestamptz END)
          ON CONFLICT (subscription_id) DO UPDATE SET
            account_id = EXCLUDED.account_id,
            product_id = EXCLUDED.product_id,
@@ -148,6 +164,10 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
            current_period_end = EXCLUDED.current_period_end,
            cancel_at_period_end = EXCLUDED.cancel_at_period_end,
            modified_at = EXCLUDED.modified_at,
+           past_due_at = CASE
+             WHEN EXCLUDED.status = 'active' THEN NULL
+             ELSE coalesce(polar_subscriptions.past_due_at, EXCLUDED.past_due_at)
+           END,
            updated_at = clock_timestamp()
          WHERE polar_subscriptions.modified_at <= EXCLUDED.modified_at`,
         [
@@ -163,10 +183,7 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
 
     const ofAccount = (accountId: string, productId: string) =>
       query<SubscriptionRow>(
-        `SELECT subscription_id, account_id::text AS account_id, product_id, status, current_period_end,
-                cancel_at_period_end, modified_at
-           FROM polar_subscriptions
-          WHERE account_id = $1 AND product_id = $2`,
+        `SELECT ${columns} FROM polar_subscriptions WHERE account_id = $1 AND product_id = $2`,
         [accountId, productId]
       ).pipe(Effect.map((result) => result.rows.map(fromRow)))
 
@@ -181,8 +198,7 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
 
     const latest = (accountId: string, productId: string) =>
       query<SubscriptionRow>(
-        `SELECT subscription_id, account_id::text AS account_id, product_id, status, current_period_end,
-                cancel_at_period_end, modified_at
+        `SELECT ${columns}
            FROM polar_subscriptions
           WHERE account_id = $1 AND product_id = $2
           ORDER BY modified_at DESC

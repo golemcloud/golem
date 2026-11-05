@@ -76,14 +76,17 @@ times.
 A subscription of the Polar product `POLAR_PRODUCT_ID` moves the Golem account between three
 plans. The Polar customer has the Golem account ID as its external ID.
 
-| Plan | Variable | Overage | When |
-| --- | --- | --- | --- |
-| free | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID` | no | no billable subscription |
-| paid | `GOLEM_CLOUD_BILLING_PAID_PLAN_ID` | yes | an `active` subscription that does not end within 15 minutes |
-| paid, capped | `GOLEM_CLOUD_BILLING_PAID_CAPPED_PLAN_ID` | no | a `trialing` or `past_due` subscription, or one that ends within 15 minutes |
+| Plan | Variable | When |
+| --- | --- | --- |
+| paid | `GOLEM_CLOUD_BILLING_PAID_PLAN_ID` | an `active` subscription that does not end within 15 minutes |
+| suspended | `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | the account owes a payment: a `past_due` or `unpaid` subscription, or one that Polar revoked while it was unpaid |
+| free | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID` | otherwise: no subscription, a cancellation, a trial, a pause |
 
-The capped plan has the monthly amounts of the paid plan and `overage_eligible: false`, so the
-registry sets an account on it to `hardLimit`. Only the owner can turn paid overage on again
+The paid plan is prepaid with optional postpay: its price buys the monthly amounts in advance,
+and paid overage is billed after the period. Only the paid plan allows overage. The suspended plan
+has no monthly amounts and `overage_eligible: false`, so the agents of the account stop, and an
+account that owes a payment gets no free usage. On a plan without overage the registry sets the
+account to `hardLimit`. Only the owner can turn paid overage on again
 (`PUT /v1/accounts/{account_id}/monthly-usage-mode`), also after the account is back on the paid
 plan.
 
@@ -99,11 +102,13 @@ plan.
   not match), skips a `webhook-id` that it handled before, and stores the subscription in
   `polar_subscriptions`. A state never replaces a state with a later `modified_at`, so a late
   delivery cannot undo a newer one. Then it sets the plan from the table above. A failed payment
-  (`subscription.past_due`) also logs `payment_failed`. An account on any other plan, for example
-  an internal plan that an administrator gave it, keeps it.
+  (`subscription.past_due`) also logs `payment_failed`. Polar revokes a subscription that stays
+  unpaid as `canceled`, like a cancellation, so the table keeps `past_due_at` from the first
+  `past_due` state until an `active` state. An account on any other plan, for example an internal
+  plan that an administrator gave it, keeps it.
 - **Sweep.** A subscription that is canceled at the period end stays `active` until Polar revokes
   it. Every minute, each replica of the web app moves the accounts whose subscription ends within
-  15 minutes to the capped plan.
+  15 minutes to the free plan.
 - **Order and retries.** An advisory lock per account serializes the webhooks and the sweep of one
   account, also across replicas. When the registry or the database fails, the handler answers 500 and Polar
   delivers the webhook again. A 409 of the registry (the account changed between the read and the
@@ -142,13 +147,15 @@ Polar also does not bill usage during a trial, and invoices the usage of a `past
 subscription only after the payment. The plans above keep the paid overage inside the time that
 Polar bills:
 
-- **Cancellation.** The account loses paid overage 15 minutes before the scheduled end. The
+- **Cancellation.** The account moves to the free plan 15 minutes before the scheduled end. The
   executors report usage every minute and the usage push runs every 10 minutes, so the push sends
   the last paid overage before the end.
 - **Renewal.** Overage that reaches Polar after the period ends goes on the next invoice, at the
   same prices.
-- **Failed payment and trial.** The account has no paid overage while its subscription is
-  `past_due` or `trialing`.
+- **Failed payment.** The account is suspended while it owes the payment, also after Polar
+  revokes the subscription. A payment of the same subscription, or a new subscription, moves it
+  back to the paid plan.
+- **Trial.** A trial gives the free plan. The paid product has no trial.
 - **Product change.** The app has one paid product, so a subscription does not change its
   product. Polar invoices the usage of the old product at the change; a second product needs a
   push before that change.
@@ -225,7 +232,7 @@ code 1.
 | `BETTER_AUTH_SECRET` | | At least 32 characters. Signs cookies and encrypts tokens. |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | | GitHub OAuth app with the callback URL `<BETTER_AUTH_URL>/api/auth/callback/github`. |
 | `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view` and `set-plan` on every account through a permission share (see [Subscriptions](#subscriptions)). |
-| `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_CAPPED_PLAN_ID` | | The plans that a subscription switches between (see [Subscriptions](#subscriptions)). |
+| `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`, `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | | The plans that a subscription switches between (see [Subscriptions](#subscriptions)). |
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
 | `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` and `customer_sessions:write`; `push-usage` needs `events:write`. Each gets its own token. |
 | `POLAR_PRODUCT_ID` | | The Polar product of the paid plan. |
