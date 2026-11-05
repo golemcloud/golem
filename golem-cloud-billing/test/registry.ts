@@ -29,6 +29,29 @@ export interface Period {
   readonly month: number
 }
 
+/**
+ * Ends the pool and waits until each of its clients has closed its connection. `pool.end()`
+ * resolves before that. A forced `DROP DATABASE` can stop a backend that has not yet read the
+ * Terminate message of its client, and the pool then raises the FATAL error as an unhandled
+ * `error` event.
+ */
+export const closePool = async (pool: pg.Pool): Promise<void> => {
+  let open = pool.totalCount
+  const closed = new Promise<void>((resolve) => {
+    if (open === 0) {
+      resolve()
+    }
+    pool.on("remove", () => {
+      open -= 1
+      if (open === 0) {
+        resolve()
+      }
+    })
+  })
+  await pool.end()
+  await closed
+}
+
 const usageKeyOf = (period: Period) => `${period.year}-${String(period.month).padStart(2, "0")}`
 
 /**
@@ -77,8 +100,9 @@ export class RegistryDatabase {
     )
   }
 
+  /** Drops the database. Every other pool that connects to it must be closed with `closePool` first. */
   async drop(): Promise<void> {
-    await this.admin.end()
+    await closePool(this.admin)
     await this.server.query(`DROP DATABASE IF EXISTS "${this.database}" WITH (FORCE)`)
     await this.server.query(`DROP ROLE IF EXISTS "${this.role}"`)
     await this.server.end()
