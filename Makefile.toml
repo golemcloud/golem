@@ -535,6 +535,8 @@ dependencies = [
     "check-rustfmt",
     "check-clippy-dev-tools",
     "check-rustfmt-dev-tools",
+    "check-clippy-javascript-tool-process-bridge",
+    "check-rustfmt-javascript-tool-process-bridge",
 ]
 
 [tasks.check-rustfmt]
@@ -562,6 +564,28 @@ args = [
     "clippy",
     "--manifest-path",
     "dev-tools/Cargo.toml",
+    "--all-targets",
+    "--",
+    "--no-deps",
+    "-Dwarnings",
+]
+
+# The JavaScript tool-process bridge is a standalone guest crate that only builds for wasm32-wasip2.
+[tasks.check-rustfmt-javascript-tool-process-bridge]
+description = "Runs rustfmt checks on the JavaScript tool-process bridge without applying any fix"
+command = "cargo"
+args = ["fmt", "--manifest-path", "sdks/javascript/tool-process-bridge/Cargo.toml", "--", "--check"]
+
+[tasks.check-clippy-javascript-tool-process-bridge]
+description = "Runs clippy checks on the JavaScript tool-process bridge without applying any fix"
+command = "cargo"
+args = [
+    "clippy",
+    "--manifest-path",
+    "sdks/javascript/tool-process-bridge/Cargo.toml",
+    "--locked",
+    "--target",
+    "wasm32-wasip2",
     "--all-targets",
     "--",
     "--no-deps",
@@ -1125,7 +1149,7 @@ dependencies = ["merge-openapi", "diff-openapi", "check-docs-openapi"]
 
 [tasks.unit-tests-and-checks]
 description = "Runs unit tests and source drift checks in one cargo-make invocation"
-dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-builtin-artifacts", "check-wit", "unit-tests"]
+dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-builtin-artifacts", "check-wit", "test-javascript-tool-process-backend", "unit-tests"]
 
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
@@ -2379,6 +2403,11 @@ exec --fail-on-error cargo deny check sources
 cd ../..
 '''
 
+[tasks.test-javascript-tool-process-backend]
+description = "Tests the JavaScript tool-process adapter and native transport facade"
+command = "node"
+args = ["--test", "sdks/javascript/tool-process-backend.test.mjs", "sdks/javascript/tool-process-host.test.mjs", "sdks/javascript/tool-process-template.test.mjs"]
+
 [tasks.builtin-javascript-typescript-build]
 private = true
 script_runner = "@duckscript"
@@ -3043,7 +3072,7 @@ exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin b
 [tasks.run-benchmark-suite-orb]
 description = "Builds and runs the nightly spawned benchmark suite in an Amp orb"
 script_runner = "@duckscript"
-env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.13" }
+env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.15" }
 script = '''
 exec --fail-on-error docker info
 exec --fail-on-error cargo make --profile ci build-release
