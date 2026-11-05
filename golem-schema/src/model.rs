@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 /// The producer's failure, independent of a reader dropping its stream.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[allow(clippy::large_enum_variant)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[serde(rename_all = "kebab-case")]
 #[schema(named = "golem.core.StreamError")]
