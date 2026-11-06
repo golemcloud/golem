@@ -253,10 +253,6 @@ const overageNoticeHtml = (notice: OverageNotice | undefined) => {
   }
 }
 
-/**
- * The paid-overage switch of a paid account, with the overage prices. Without the switch, only
- * the notice of the last post of the form shows.
- */
 /** How a meter of the current month shows its amounts: the unit, and a conversion from the meter. */
 interface UsageMeter {
   readonly label: string
@@ -372,9 +368,11 @@ const overageBilling = (subscription: Subscription | undefined): string => {
 
 const usageSection = (limits: AccountLimits, prices: OveragePrices, subscription: Subscription | undefined) => {
   const monthly = limits.monthly
-  if (monthly === undefined) return null
+  if (monthly === undefined) {
+    return html`<p class="muted">Golem did not return the usage of this month. Reload the page to try again.</p>`
+  }
   const total = meterKeys.reduce((sum, key) => sum + overageCost(usageMeters[key], monthly[key], prices), 0)
-  return html`<h3>Usage this month (UTC)</h3>
+  return html`<p class="muted">This month (UTC), against the monthly allowance of the plan.</p>
         ${
           total > 0
             ? html`<p class="notice">Paid overage so far this month: about ${money(total)} plus tax, at the prices below. ${overageBilling(subscription)}</p>`
@@ -385,22 +383,26 @@ const usageSection = (limits: AccountLimits, prices: OveragePrices, subscription
         </dl>`
 }
 
-const overageCard = (options: SignedInPageOptions) => {
+/**
+ * The usage of the month against the allowance of a paid account, and its paid-overage switch with
+ * the overage prices. Without the card, only the notice of the last post of the overage form shows.
+ */
+const usageCard = (options: SignedInPageOptions) => {
   if (options.plan !== "paid" || options.checkoutPending || options.limits?.overageAllowedByPlan !== true) {
     return overageNoticeHtml(options.overageNotice)
   }
   const on = options.limits.monthlyUsageMode === "allowOverage"
   const prices = options.overagePrices
-  return html`<section class="card overage" aria-labelledby="overage-heading">
-        <h2 id="overage-heading">Paid overage</h2>
+  return html`<section class="card usage-card" aria-labelledby="usage-heading">
+        <h2 id="usage-heading">Monthly usage</h2>
+        ${usageSection(options.limits, prices, options.subscription)}
+        <h3>Paid overage</h3>
         ${overageNoticeHtml(options.overageNotice)}
         <p>${
           on
             ? "On. When the account has used its monthly allowance, its agents keep running, and the usage above the allowance is billed at these prices."
             : "Off. When the account has used its monthly allowance, its agents stop until the next month."
         }</p>
-        ${usageSection(options.limits, prices, options.subscription)}
-        <h3>Overage prices</h3>
         <dl class="facts prices">
           <div><dt>Compute</dt><dd>$${prices.perMillionGcu} per million GCU</dd></div>
           <div><dt>Memory</dt><dd>$${prices.perGbHour} per GB-hour</dd></div>
@@ -426,7 +428,7 @@ export const signedInPage = (options: SignedInPageOptions) =>
     body: html`      <section class="hero">
         ${planHero(options)}
       </section>
-      ${overageCard(options)}
+      ${usageCard(options)}
       <div class="grid">
         <section class="card" aria-labelledby="account-heading">
           <h2 id="account-heading">Account</h2>
