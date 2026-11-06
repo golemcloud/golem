@@ -31,10 +31,34 @@ export type Account = typeof Account.Type
 export const MonthlyUsageMode = Schema.Literals(["hardLimit", "allowOverage"])
 export type MonthlyUsageMode = typeof MonthlyUsageMode.Type
 
-/** The fields of the registry service's `AccountResourcePolicy` that the billing app reads. */
+/**
+ * One meter of the current UTC month: `metering` is `enabled`, `disabled` or `unknown` (no report
+ * yet), and the amounts are in the unit of the meter.
+ */
+export const MonthlyLimit = Schema.Struct({
+  metering: Schema.String,
+  resolvedMonthlyAmount: Schema.optional(Schema.Number),
+  usage: Schema.optional(Schema.Number),
+  /** The usage above the monthly amount that accrued with paid overage on. */
+  allowOverageUsage: Schema.optional(Schema.Number)
+})
+export type MonthlyLimit = typeof MonthlyLimit.Type
+
+/**
+ * The fields of the registry service's `AccountResourcePolicy` that the billing app reads. The
+ * usage is optional, so that a usage report the app cannot read never hides the overage switch.
+ */
 export const AccountLimits = Schema.Struct({
   monthlyUsageMode: MonthlyUsageMode,
-  overageAllowedByPlan: Schema.Boolean
+  overageAllowedByPlan: Schema.Boolean,
+  monthly: Schema.optional(
+    Schema.Struct({
+      computeGcu: MonthlyLimit,
+      memoryGbSeconds: MonthlyLimit,
+      durableStorageGbMonth: MonthlyLimit,
+      ephemeralStorageGbMonth: MonthlyLimit
+    })
+  )
 })
 export type AccountLimits = typeof AccountLimits.Type
 
