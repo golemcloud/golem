@@ -2556,6 +2556,9 @@ paths:
       - RegistryService
       - Account
       summary: Delete an account.
+      description: |-
+        The delete fails with 409 while the account has a deletion hold. The error lists the
+        reasons of the holds.
       operationId: delete_account
       parameters:
       - in: path
@@ -3025,6 +3028,241 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/TokenWithSecret'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/accounts/{account_id}/deletion-holds:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      summary: List the deletion holds of an account.
+      description: While an account has a deletion hold, the account cannot be deleted.
+      operationId: list_account_deletion_holds
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_AccountDeletionHold'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/accounts/{account_id}/deletion-holds/{holder_account_id}:
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Place a deletion hold on an account.
+      description: |-
+        The holder is the account of the caller. When the holder has a hold on the account
+        already, the reason replaces the reason of that hold.
+      operationId: place_account_deletion_hold
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: holder_account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AccountDeletionHoldCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AccountDeletionHold'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Account
+      summary: Remove a deletion hold from an account.
+      description: Removing a hold that does not exist succeeds.
+      operationId: remove_account_deletion_hold
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: holder_account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -23377,6 +23615,37 @@ components:
       - name
       - email
       - roles
+    AccountDeletionHold:
+      title: AccountDeletionHold
+      description: |-
+        A deletion hold: while an account has one, the registry refuses to delete it. The holder
+        is the account that placed the hold, and only the holder removes it.
+      type: object
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        holderAccountId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - accountId
+      - holderAccountId
+      - reason
+      - createdAt
+    AccountDeletionHoldCreation:
+      title: AccountDeletionHoldCreation
+      type: object
+      properties:
+        reason:
+          type: string
+      required:
+      - reason
     AccountResourcePolicy:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
@@ -27161,6 +27430,16 @@ components:
         required:
         - tag
         - value
+    Page_AccountDeletionHold:
+      title: Page_AccountDeletionHold
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountDeletionHold'
+      required:
+      - values
     Page_AccountSummaryReport:
       title: Page_AccountSummaryReport
       type: object

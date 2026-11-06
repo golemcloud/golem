@@ -14,12 +14,13 @@
 
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateAccountError,
-    RegistryServiceCreatePermissionShareError, RegistryServiceGetAccountByEmailError,
-    RegistryServiceSetAccountPlanError,
+    RegistryServiceCreatePermissionShareError, RegistryServiceDeleteAccountError,
+    RegistryServiceGetAccountByEmailError, RegistryServicePlaceAccountDeletionHoldError,
+    RegistryServiceRemoveAccountDeletionHoldError, RegistryServiceSetAccountPlanError,
 };
 use golem_client::model::AccountUpdate;
 use golem_common::model::account::{
-    AccountCreation, AccountEmail, AccountRevision, AccountSetPlan,
+    AccountCreation, AccountDeletionHoldCreation, AccountEmail, AccountRevision, AccountSetPlan,
 };
 use golem_common::model::account_usage::StorageResourceLimitValue;
 use golem_common::model::permission_share::{
@@ -310,4 +311,141 @@ async fn owner_cannot_share_set_plan_on_the_own_account(
     );
 
     Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deletion_hold_refuses_account_delete_until_removed(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let owner = deps.user().await?;
+    let holder = deps.user().await?;
+
+    let admin_client = deps.registry_service().client(&admin.token).await;
+    let owner_client = deps.registry_service().client(&owner.token).await;
+    let holder_client = deps.registry_service().client(&holder.token).await;
+
+    admin_client
+        .create_permission_share(
+            &admin.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: holder.account_email.clone(),
+                name: PermissionShareName(format!("deletion-hold-{}", Uuid::new_v4())),
+                data: account_share(
+                    &owner.account_email,
+                    &holder.account_email,
+                    &["view", "hold-deletion"],
+                ),
+            },
+        )
+        .await?;
+
+    let reason = "The account has an active subscription.".to_string();
+    let hold = holder_client
+        .place_account_deletion_hold(
+            &owner.account_id.0,
+            &holder.account_id.0,
+            &AccountDeletionHoldCreation {
+                reason: reason.clone(),
+            },
+        )
+        .await?;
+    assert_eq!(hold.account_id, owner.account_id);
+    assert_eq!(hold.holder_account_id, holder.account_id);
+    assert_eq!(hold.reason, reason);
+
+    {
+        let holds = owner_client
+            .list_account_deletion_holds(&owner.account_id.0)
+            .await?;
+        assert_eq!(holds.values, vec![hold.clone()]);
+    }
+
+    let account = owner_client.get_account(&owner.account_id.0).await?;
+    {
+        let result = owner_client
+            .delete_account(&owner.account_id.0, account.revision.into())
+            .await;
+        let_assert_conflict_with_reason(result, &reason);
+    }
+
+    {
+        let result = owner_client
+            .remove_account_deletion_hold(&owner.account_id.0, &holder.account_id.0)
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceRemoveAccountDeletionHoldError::Error403(_)
+            ))
+        ));
+    }
+
+    {
+        let result = owner_client
+            .place_account_deletion_hold(
+                &owner.account_id.0,
+                &holder.account_id.0,
+                &AccountDeletionHoldCreation {
+                    reason: "replaced by the owner".to_string(),
+                },
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServicePlaceAccountDeletionHoldError::Error403(_)
+            ))
+        ));
+    }
+
+    admin_client
+        .remove_account_deletion_hold(&owner.account_id.0, &holder.account_id.0)
+        .await?;
+    holder_client
+        .remove_account_deletion_hold(&owner.account_id.0, &holder.account_id.0)
+        .await?;
+
+    owner_client
+        .delete_account(&owner.account_id.0, account.revision.into())
+        .await?;
+
+    {
+        let result = holder_client
+            .place_account_deletion_hold(
+                &owner.account_id.0,
+                &holder.account_id.0,
+                &AccountDeletionHoldCreation { reason },
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServicePlaceAccountDeletionHoldError::Error404(_)
+            ))
+        ));
+    }
+
+    Ok(())
+}
+
+fn let_assert_conflict_with_reason(
+    result: Result<
+        golem_client::model::Empty,
+        golem_client::Error<RegistryServiceDeleteAccountError>,
+    >,
+    reason: &str,
+) {
+    match result {
+        Err(golem_client::Error::Item(RegistryServiceDeleteAccountError::Error409(body))) => {
+            assert_eq!(body.code, "ACCOUNT_DELETION_HELD");
+            assert!(
+                body.error.contains(reason),
+                "the error must name the reason of the hold: {}",
+                body.error
+            );
+        }
+        other => panic!("expected 409 ACCOUNT_DELETION_HELD, got {other:?}"),
+    }
 }

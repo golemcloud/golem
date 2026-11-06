@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::model::account::{
-    AccountBySecretRecord, AccountExtRevisionRecord, AccountRevisionRecord,
+    AccountBySecretRecord, AccountDeletionHoldRecord, AccountExtRevisionRecord,
+    AccountRevisionRecord,
 };
 use crate::repo::account_usage::DbAccountUsageRepo;
 use crate::repo::card::DbCardRepo;
@@ -76,6 +77,25 @@ pub trait AccountRepo: Send + Sync {
         &self,
         secret: &str,
     ) -> Result<Option<AccountBySecretRecord>, AccountRepoError>;
+
+    /// Places the deletion hold of the holder, or replaces the reason of its existing hold.
+    /// Returns `None` when the account does not exist or is deleted.
+    async fn place_deletion_hold(
+        &self,
+        hold: AccountDeletionHoldRecord,
+    ) -> Result<Option<AccountDeletionHoldRecord>, AccountRepoError>;
+
+    /// Removes the deletion hold of the holder, if the account has one.
+    async fn remove_deletion_hold(
+        &self,
+        account_id: Uuid,
+        holder_account_id: Uuid,
+    ) -> Result<(), AccountRepoError>;
+
+    async fn list_deletion_holds(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<AccountDeletionHoldRecord>, AccountRepoError>;
 }
 
 pub struct LoggedAccountRepo<Repo: AccountRepo> {
@@ -163,6 +183,35 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     ) -> Result<Option<AccountBySecretRecord>, AccountRepoError> {
         self.repo.get_by_secret(secret).await
     }
+
+    async fn place_deletion_hold(
+        &self,
+        hold: AccountDeletionHoldRecord,
+    ) -> Result<Option<AccountDeletionHoldRecord>, AccountRepoError> {
+        let span = Self::span_account_id(hold.account_id);
+        self.repo.place_deletion_hold(hold).instrument(span).await
+    }
+
+    async fn remove_deletion_hold(
+        &self,
+        account_id: Uuid,
+        holder_account_id: Uuid,
+    ) -> Result<(), AccountRepoError> {
+        self.repo
+            .remove_deletion_hold(account_id, holder_account_id)
+            .instrument(Self::span_account_id(account_id))
+            .await
+    }
+
+    async fn list_deletion_holds(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<AccountDeletionHoldRecord>, AccountRepoError> {
+        self.repo
+            .list_deletion_holds(account_id)
+            .instrument(Self::span_account_id(account_id))
+            .await
+    }
 }
 
 pub struct DbAccountRepo<DBP: Pool> {
@@ -185,6 +234,52 @@ impl<DBP: Pool> DbAccountRepo<DBP> {
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
+    }
+}
+
+impl DbAccountRepo<PostgresPool> {
+    /// Locks the live account until the transaction ends, so that a concurrent delete waits for
+    /// the transaction and then sees its deletion hold. Returns false when the account does not
+    /// exist or is deleted.
+    async fn lock_live_account_for_hold_in_tx(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> Result<bool, AccountRepoError> {
+        let account: Option<(Uuid,)> = tx
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT account_id
+                    FROM accounts
+                    WHERE account_id = $1
+                      AND deleted_at IS NULL
+                    FOR SHARE
+                "# })
+                .bind(account_id),
+            )
+            .await?;
+        Ok(account.is_some())
+    }
+}
+
+impl DbAccountRepo<SqlitePool> {
+    /// SQLite has no row locks and allows one write transaction at a time. Returns false when
+    /// the account does not exist or is deleted.
+    async fn lock_live_account_for_hold_in_tx(
+        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> Result<bool, AccountRepoError> {
+        let account: Option<(Uuid,)> = tx
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT account_id
+                    FROM accounts
+                    WHERE account_id = $1
+                      AND deleted_at IS NULL
+                "# })
+                .bind(account_id),
+            )
+            .await?;
+        Ok(account.is_some())
     }
 }
 
@@ -390,6 +485,23 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
                     .ok_or(AccountRepoError::ConcurrentModification)?;
 
+                // The update above locks the account row. A transaction that places a hold
+                // locks the row too, so its hold is visible here, or it waits for this
+                // transaction and then finds the account deleted.
+                let holds: Vec<AccountDeletionHoldRecord> = tx
+                    .fetch_all_as(
+                        sqlx::query_as(indoc! {r#"
+                            SELECT account_id, holder_account_id, reason, created_at, updated_at
+                            FROM account_deletion_holds
+                            WHERE account_id = $1
+                            ORDER BY created_at, holder_account_id
+                        "#})
+                            .bind(revision.account_id)
+                    ).await?;
+                if !holds.is_empty() {
+                    return Err(AccountRepoError::DeletionHeld(holds));
+                }
+
                 let change_event =
                     NewRegistryChangeEvent::account_tokens_invalidated(revision.account_id);
                 DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
@@ -480,6 +592,78 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
             )
             .await?;
 
+        Ok(result)
+    }
+
+    async fn place_deletion_hold(
+        &self,
+        hold: AccountDeletionHoldRecord,
+    ) -> Result<Option<AccountDeletionHoldRecord>, AccountRepoError> {
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, "place_deletion_hold", |tx| {
+                async move {
+                    if !Self::lock_live_account_for_hold_in_tx(tx, hold.account_id).await? {
+                        return Ok(None);
+                    }
+                    let record: AccountDeletionHoldRecord = tx
+                        .fetch_one_as(
+                            sqlx::query_as(indoc! {r#"
+                                INSERT INTO account_deletion_holds
+                                    (account_id, holder_account_id, reason, created_at, updated_at)
+                                VALUES ($1, $2, $3, $4, $5)
+                                ON CONFLICT (account_id, holder_account_id)
+                                DO UPDATE SET reason = $3, updated_at = $5
+                                RETURNING account_id, holder_account_id, reason, created_at, updated_at
+                            "#})
+                            .bind(hold.account_id)
+                            .bind(hold.holder_account_id)
+                            .bind(hold.reason)
+                            .bind(hold.created_at)
+                            .bind(hold.updated_at),
+                        )
+                        .await?;
+                    Ok::<_, AccountRepoError>(Some(record))
+                }
+                .boxed()
+            })
+            .await
+    }
+
+    async fn remove_deletion_hold(
+        &self,
+        account_id: Uuid,
+        holder_account_id: Uuid,
+    ) -> Result<(), AccountRepoError> {
+        self.db_pool
+            .with_rw(METRICS_SVC_NAME, "remove_deletion_hold")
+            .execute(
+                sqlx::query(indoc! {r#"
+                    DELETE FROM account_deletion_holds
+                    WHERE account_id = $1 AND holder_account_id = $2
+                "#})
+                .bind(account_id)
+                .bind(holder_account_id),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn list_deletion_holds(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<AccountDeletionHoldRecord>, AccountRepoError> {
+        let result = self
+            .with_ro("list_deletion_holds")
+            .fetch_all_as(
+                sqlx::query_as(indoc! {r#"
+                    SELECT account_id, holder_account_id, reason, created_at, updated_at
+                    FROM account_deletion_holds
+                    WHERE account_id = $1
+                    ORDER BY created_at, holder_account_id
+                "#})
+                .bind(account_id),
+            )
+            .await?;
         Ok(result)
     }
 }
