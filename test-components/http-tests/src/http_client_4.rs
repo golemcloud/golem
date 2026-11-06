@@ -1,4 +1,6 @@
 use golem_rust::retry::{NamedPolicy, Policy, Predicate, Props, with_named_policy_async};
+use golem_rust::wasip3::http::types;
+use golem_rust::wasip3::wit_bindgen::rt::async_support::{FutureReader, FutureWriter};
 use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
@@ -139,6 +141,27 @@ pub trait HttpClient4 {
     /// (`HttpRequestBodySize`), which must replay identically.
     async fn post_with_short_body_transmission_error(&self) -> String;
 
+    /// Passes an outgoing upload future through another request's consume-body.
+    async fn transfer_upload_completion(&mut self) -> String;
+
+    /// Transfers an upload completion between resources inside a custom operation.
+    async fn transfer_upload_completion_in_custom_operation(&mut self) -> String;
+
+    /// Retains a response after cancelling its completion read, optionally keeping the reader.
+    async fn retain_response_after_cancelling_completion(&mut self, retain_reader: bool) -> String;
+
+    /// Transfers an unconsumed response completion to a recipient and cancels its read.
+    async fn retain_response_after_cancelling_recipient_completion(
+        &mut self,
+        retain_reader: bool,
+    ) -> String;
+
+    /// Releases the response retained by the preceding invocation.
+    async fn release_retained_response(&mut self) -> String;
+
+    /// Cancels an upload read, then drops its reader after the upload completes.
+    async fn cancel_upload_completion(&mut self) -> String;
+
     /// Sends a raw wasip3 GET over `https` to a plain-HTTP server, which fails
     /// the TLS handshake with a permanent (non-retried) `ErrorCode`. The error
     /// returned by `client::send` is stored in agent state and returned.
@@ -207,6 +230,9 @@ async fn do_get_for_quota_wait(url: String) -> Result<String, String> {
 struct HttpClient4Impl {
     last_send_error: Option<String>,
     last_full_response: Option<String>,
+    retained_response: Option<types::Response>,
+    retained_completion: Option<FutureReader<Result<(), types::ErrorCode>>>,
+    retained_trailers: Option<FutureWriter<Result<Option<types::Trailers>, types::ErrorCode>>>,
 }
 
 #[agent_implementation]
@@ -215,6 +241,9 @@ impl HttpClient4 for HttpClient4Impl {
         Self {
             last_send_error: None,
             last_full_response: None,
+            retained_response: None,
+            retained_completion: None,
+            retained_trailers: None,
         }
     }
 
@@ -400,6 +429,134 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn post_with_short_body_transmission_error(&self) -> String {
         do_post_with_short_body_transmission_error().await
+    }
+
+    async fn transfer_upload_completion(&mut self) -> String {
+        let result = do_transfer_upload_completion().await;
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn transfer_upload_completion_in_custom_operation(&mut self) -> String {
+        use golem_rust::durability::{Durability, DurableFunctionType};
+
+        let result = Durability::<String, String>::new(
+            "http-tests",
+            "transfer-upload-completion",
+            DurableFunctionType::WriteRemote,
+            &(),
+        )
+        .run_infallible_async(do_transfer_upload_completion)
+        .await;
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn retain_response_after_cancelling_completion(&mut self, retain_reader: bool) -> String {
+        use golem_rust::wasip3::http::types;
+        use golem_rust::wasip3::wit_future;
+        use std::future::{Future, IntoFuture};
+        use std::task::Poll;
+
+        let post = do_post_request().await;
+        let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+        // Dropping a writer starts a background write. Keep it idle with the response,
+        // so this test retains resources, not an unfinished guest operation.
+        self.retained_trailers = Some(trailers_tx);
+        let (response, completion) = types::Response::new(types::Fields::new(), None, trailers_rx);
+        let mut read = Box::pin(completion.into_future());
+        futures_util::future::poll_fn(|cx| match read.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("retained response completed before release: {result:?}"),
+        })
+        .await;
+        let completion = read
+            .as_mut()
+            .cancel()
+            .expect_err("the retained response completion read must cancel");
+        drop(read);
+        if retain_reader {
+            self.retained_completion = Some(completion);
+        } else {
+            drop(completion);
+        }
+        self.retained_response = Some(response);
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(0).await;
+        let result = format!("{post};retained-response");
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn retain_response_after_cancelling_recipient_completion(
+        &mut self,
+        retain_reader: bool,
+    ) -> String {
+        use golem_rust::wasip3::wit_future;
+        use std::future::{Future, IntoFuture};
+        use std::task::Poll;
+
+        let post = do_post_request().await;
+        let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+        // Keep the source writer idle: dropping it would start a guest background write.
+        self.retained_trailers = Some(trailers_tx);
+        let (response, completion) = types::Response::new(types::Fields::new(), None, trailers_rx);
+        let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+        drop(trailers_tx);
+        let (recipient, completion_recipient) =
+            types::Response::new(types::Fields::new(), None, trailers_rx);
+        let (body, trailers) = types::Response::consume_body(recipient, completion);
+        drop(body);
+        drop(trailers);
+        let mut read = Box::pin(completion_recipient.into_future());
+        futures_util::future::poll_fn(|cx| match read.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("recipient completed before source release: {result:?}"),
+        })
+        .await;
+        let completion = read
+            .as_mut()
+            .cancel()
+            .expect_err("the recipient completion read must cancel");
+        drop(read);
+        if retain_reader {
+            self.retained_completion = Some(completion);
+        } else {
+            drop(completion);
+        }
+        self.retained_response = Some(response);
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(0).await;
+        let result = format!("{post};retained-response");
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn release_retained_response(&mut self) -> String {
+        use golem_rust::wasip3::http::types;
+        use golem_rust::wasip3::wit_future;
+
+        let response = self.retained_response.take().expect("no retained response");
+        let (result_tx, result_rx) = wit_future::new(|| Err(types::ErrorCode::HttpProtocolError));
+        drop(result_tx);
+        let (body, trailers) = types::Response::consume_body(response, result_rx);
+        drop(body);
+        drop(trailers);
+        if let Some(completion) = self.retained_completion.take() {
+            assert!(matches!(
+                completion.await,
+                Err(types::ErrorCode::HttpProtocolError)
+            ));
+        }
+        drop(self.retained_trailers.take());
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(0).await;
+        let result = "released-response".to_string();
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn cancel_upload_completion(&mut self) -> String {
+        let result = do_cancel_upload_completion().await;
+        self.last_full_response = Some(result.clone());
+        result
     }
 
     async fn send_with_permanent_error(&mut self) -> String {
@@ -714,6 +871,123 @@ async fn do_post_with_short_body_transmission_error() -> String {
         Err(err) => format!("Err({err:?})"),
     };
     format!("send={send} transmit={transmit_result:?}")
+}
+
+async fn do_transfer_upload_completion() -> String {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::{clocks::monotonic_clock, wit_future};
+    use std::future::{Future, IntoFuture};
+    use std::task::Poll;
+
+    let port = std::env::var("PORT").unwrap();
+    // Keep requests alive after dropping their readers, then allocate more readers.
+    // A recycled future handle must not alias the retained request's delivery state.
+    let mut retained_requests = Vec::new();
+    for _ in 0..16 {
+        let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+        drop(trailers_tx);
+        let (request, transmit) =
+            types::Request::new(types::Fields::new(), None, trailers_rx, None);
+        drop(transmit);
+        retained_requests.push(request);
+    }
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    drop(trailers_tx);
+    let (request, transmit) = types::Request::new(types::Fields::new(), None, trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/upload")).unwrap();
+    let mut read = Box::pin(transmit.into_future());
+    futures_util::future::poll_fn(|cx| match read.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(result) => panic!("upload completed before send: {result:?}"),
+    })
+    .await;
+    let transmit = read
+        .as_mut()
+        .cancel()
+        .expect_err("the unsent upload read must cancel");
+    drop(read);
+    let response = client::send(request).await.unwrap();
+    assert_eq!(response.get_status_code(), 200);
+    drop(response);
+
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    drop(trailers_tx);
+    let (recipient, forwarded) = types::Request::new(types::Fields::new(), None, trailers_rx, None);
+    let (body, trailers) = types::Request::consume_body(recipient, transmit);
+    drop(body);
+    drop(trailers);
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    drop(trailers_tx);
+    let (recipient, forwarded_response) =
+        types::Response::new(types::Fields::new(), None, trailers_rx);
+    let (body, trailers) = types::Response::consume_body(recipient, forwarded);
+    drop(body);
+    drop(trailers);
+    let result = forwarded_response.await;
+    drop(retained_requests);
+    monotonic_clock::wait_for(0).await;
+    format!("transferred={result:?}")
+}
+
+async fn do_cancel_upload_completion() -> String {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::{clocks::monotonic_clock, wit_future, wit_stream};
+    use std::future::{Future, IntoFuture};
+    use std::task::Poll;
+
+    let port = std::env::var("PORT").unwrap();
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) =
+        types::Request::new(types::Fields::new(), Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/upload")).unwrap();
+    let mut read = Box::pin(transmit.into_future());
+    futures_util::future::poll_fn(|cx| match read.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(result) => panic!("upload completed before send: {result:?}"),
+    })
+    .await;
+    let transmit = read
+        .as_mut()
+        .cancel()
+        .expect_err("the unsent upload read must cancel");
+    drop(read);
+
+    let (response, ()) = (async { client::send(request).await.unwrap() }, async {
+        assert!(
+            body_tx
+                .write_all(b"cancel-upload".to_vec())
+                .await
+                .is_empty()
+        );
+        drop(body_tx);
+        let _ = trailers_tx.write(Ok(None)).await;
+    })
+        .join()
+        .await;
+    assert_eq!(response.get_status_code(), 200);
+    drop(response);
+    let permission = wasi_fetch::Client::new()
+        .get(&format!("http://localhost:{port}/upload-cancel-permission"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(permission.status().as_u16(), 200);
+    drop(permission);
+    drop(transmit);
+    monotonic_clock::wait_for(0).await;
+    "cancelled-upload".to_string()
 }
 
 async fn do_send_with_permanent_error() -> String {
