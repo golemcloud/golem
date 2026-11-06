@@ -16,6 +16,12 @@ export const registryBillingToken = "golem_billing_token"
 export const freePlanId = "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10"
 export const paidPlanId = "9a1f3c2e-5b7d-4e8f-a6c4-2d1e0b9f8a73"
 export const suspendedPlanId = "3e8b1d47-0c2a-4f96-b5e1-7a9d2c4f6b08"
+export const overagePrices = {
+  perMillionGcu: "0.0112",
+  perGbHour: "0.045",
+  perDurableGbMonth: "0.27",
+  perEphemeralGbMonth: "0.24"
+}
 /** A plan that an administrator gave the account; subscriptions do not change it. */
 export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"
 export const polarApiUrl = "https://sandbox-api.polar.test"
@@ -52,6 +58,7 @@ export const testConfig = (): BillingConfigShape => {
     publicApiUrl: new URL("https://release.dev-api.golem.cloud"),
     registryBillingToken: Redacted.make(registryBillingToken),
     plans: { free: freePlanId, paid: paidPlanId, suspended: suspendedPlanId },
+    overagePrices,
     polar: {
       apiUrl: new URL(polarApiUrl),
       accessToken: Redacted.make(polarWebToken),
@@ -148,6 +155,8 @@ export class FakeUpstreams {
   billingShare = true
   /** The number of plan changes that fail with 409 before one succeeds. */
   planConflicts = 0
+  /** The monthly usage mode of each account ID; an account starts in `hardLimit`. */
+  readonly usageModes = new Map<string, "hardLimit" | "allowOverage">()
 
   /** The Golem account of the access token of `identity`, created on first use. */
   accountOf(identity: GitHubIdentity = this.github): RegistryAccount {
@@ -251,7 +260,7 @@ export class FakeUpstreams {
         })
       }
       default: {
-        const match = /^\/v1\/accounts\/([0-9a-f-]{36})(\/plan)?$/.exec(url.pathname)
+        const match = /^\/v1\/accounts\/([0-9a-f-]{36})(\/plan|\/limits|\/monthly-usage-mode)?$/.exec(url.pathname)
         if (url.origin !== registryUrl || match === null) {
           return new Response(`No fake for ${route}`, { status: 599 })
         }
@@ -263,7 +272,38 @@ export class FakeUpstreams {
           // The billing token sees every account, also one that never signed in to the app.
           return isOwner || isBilling ? Response.json(this.accountJson(accountId)) : new Response(null, { status: 404 })
         }
-        if (match[2] !== undefined && request.method === "PUT") {
+        if (match[2] === "/limits" && request.method === "GET") {
+          return isOwner
+            ? Response.json({
+                accountId,
+                monthlyUsageMode: this.usageModes.get(accountId) ?? "hardLimit",
+                overageAllowedByPlan: this.planOf(accountId).planId === paidPlanId
+              })
+            : new Response(null, { status: 404 })
+        }
+        if (match[2] === "/monthly-usage-mode" && request.method === "PUT") {
+          // Only the owner can enter paid-overage mode, and only on a plan with paid overage.
+          if (!isOwner) {
+            return Response.json({ code: "FORBIDDEN" }, { status: 403 })
+          }
+          const { mode } = body as { mode: "hardLimit" | "allowOverage" }
+          const current = this.usageModes.get(accountId) ?? "hardLimit"
+          if (mode === current) {
+            return Response.json({ errors: ["unchanged"], code: "MONTHLY_USAGE_MODE_UNCHANGED" }, { status: 400 })
+          }
+          if (mode === "allowOverage" && this.planOf(accountId).planId !== paidPlanId) {
+            return Response.json({ errors: ["not eligible"], code: "MONTHLY_USAGE_MODE_NOT_ELIGIBLE" }, { status: 400 })
+          }
+          this.usageModes.set(accountId, mode)
+          return Response.json({
+            actorAccountId: accountId,
+            changedAt: new Date().toISOString(),
+            source: "owner",
+            previousMode: current,
+            newMode: mode
+          })
+        }
+        if (match[2] === "/plan" && request.method === "PUT") {
           if (isOwner) {
             return Response.json({ code: "FORBIDDEN" }, { status: 403 })
           }
@@ -282,6 +322,10 @@ export class FakeUpstreams {
           }
           plan.planId = update.plan
           plan.revision++
+          // The registry sets an account on a plan without paid overage to hardLimit.
+          if (update.plan !== paidPlanId) {
+            this.usageModes.set(accountId, "hardLimit")
+          }
           return Response.json(this.accountJson(accountId))
         }
         return new Response(`No fake for ${route}`, { status: 599 })
@@ -291,6 +335,12 @@ export class FakeUpstreams {
 
   registryLogins(): Array<RecordedRequest> {
     return this.requests.filter((request) => request.url.href.startsWith(`${registryUrl}/v1/login/oauth2`))
+  }
+
+  usageModeChanges(): Array<RecordedRequest> {
+    return this.requests.filter(
+      (request) => request.method === "PUT" && request.url.pathname.endsWith("/monthly-usage-mode")
+    )
   }
 
   planChanges(): Array<RecordedRequest> {
@@ -339,7 +389,7 @@ export const request = async (
       method,
       headers: { cookie: jar.header(), ...headers },
       redirect: "manual",
-      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+      ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) })
     })
   )
   jar.update(response)

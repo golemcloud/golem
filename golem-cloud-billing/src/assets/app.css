@@ -303,6 +303,32 @@ main {
   font-size: 0.85em;
 }
 
+.notice {
+  margin-bottom: 1rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+.overage {
+  margin-top: 3rem;
+}
+
+.overage + .grid {
+  margin-top: 1.25rem;
+}
+
+.overage .actions {
+  margin-bottom: 0.75rem;
+}
+
+.prices {
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  margin-bottom: 1rem;
+}
+
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

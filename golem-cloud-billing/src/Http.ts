@@ -4,9 +4,16 @@ import { Cookies, HttpEffect, HttpMiddleware, HttpRouter, HttpServerRequest, Htt
 import { Auth } from "./Auth.ts"
 import { BillingConfig } from "./BillingConfig.ts"
 import { Database } from "./Database.ts"
-import { cliBootstrapCommand, type PlanState, type SafeHtml, signedInPage, signedOutPage } from "./Page.ts"
+import {
+  cliBootstrapCommand,
+  type OverageNotice,
+  type PlanState,
+  type SafeHtml,
+  signedInPage,
+  signedOutPage
+} from "./Page.ts"
 import { Polar } from "./Polar.ts"
-import { type Account, Registry } from "./Registry.ts"
+import { type Account, type AccountLimits, Registry } from "./Registry.ts"
 import { type Subscription, Subscriptions } from "./Subscriptions.ts"
 import * as Webhooks from "./Webhooks.ts"
 
@@ -47,6 +54,9 @@ const toWebHeaders = (request: HttpServerRequest.HttpServerRequest): Headers =>
   new globalThis.Headers(Object.entries(request.headers))
 
 const crossOrigin = () => HttpServerResponse.text("Cross-origin request", { status: 403 })
+
+const overageNoticeOf = (value: string | null): OverageNotice | undefined =>
+  value === "on" || value === "off" || value === "not-eligible" ? value : undefined
 
 /**
  * The IP address of the browser, for the local currency of the checkout: the first address of
@@ -133,10 +143,21 @@ export const routes = HttpRouter.use((router) =>
             )
           )
         const plan = planOf(account)
+        const params = new URL(request.url, config.baseUrl).searchParams
         // Polar redirects here with the checkout ID after a payment; the webhook that changes the
         // plan can arrive a few seconds later.
-        const checkoutPending =
-          new URL(request.url, config.baseUrl).searchParams.has("checkout_id") && (plan === "free" || plan === "suspended")
+        const checkoutPending = params.has("checkout_id") && (plan === "free" || plan === "suspended")
+        const limits: AccountLimits | undefined =
+          plan === "paid"
+            ? yield* registry.getLimits(user.golemToken, user.golemAccountId).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Cannot read the monthly usage mode").pipe(
+                    Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                    Effect.as(undefined)
+                  )
+                )
+              )
+            : undefined
         return page(
           signedInPage({
             email: user.email,
@@ -145,7 +166,10 @@ export const routes = HttpRouter.use((router) =>
             plan,
             subscription,
             checkoutPending,
-            cliCommand
+            cliCommand,
+            limits,
+            overagePrices: config.overagePrices,
+            overageNotice: overageNoticeOf(params.get("overage"))
           })
         )
       }).pipe(
@@ -203,6 +227,38 @@ export const routes = HttpRouter.use((router) =>
           }).pipe(
             Effect.catch((error) =>
               Effect.logError("Cannot start the checkout").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
+            )
+          )
+        : Effect.succeed(crossOrigin())
+    )
+
+    // The registry accepts the change of the monthly usage mode only with the token of the owner,
+    // and records it as the consent of the owner, so the form uses the token of the session.
+    yield* router.add("POST", "/billing/overage", (request) =>
+      isSameOrigin(request)
+        ? Effect.gen(function* () {
+            const signedIn = yield* getSignedIn(toWebHeaders(request))
+            if (Option.isNone(signedIn)) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const mode = new URLSearchParams(yield* request.text).get("mode")
+            if (mode !== "allowOverage" && mode !== "hardLimit") {
+              return HttpServerResponse.text("Unknown mode", { status: 400, headers: securityHeaders })
+            }
+            const user = signedIn.value
+            const change = yield* registry.setMonthlyUsageMode(user.golemToken, user.golemAccountId, mode)
+            yield* Effect.logInfo("Changed the monthly usage mode").pipe(
+              Effect.annotateLogs({ golemAccountId: user.golemAccountId, mode, change })
+            )
+            const notice: OverageNotice =
+              change === "notEligible" ? "not-eligible" : mode === "allowOverage" ? "on" : "off"
+            return HttpServerResponse.redirect(`/?overage=${notice}`, { status: 303 })
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Cannot change the monthly usage mode").pipe(
                 Effect.annotateLogs({ error: error.message }),
                 Effect.as(errorPage)
               )
