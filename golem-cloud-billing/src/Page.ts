@@ -355,14 +355,29 @@ const usageItem = (meter: UsageMeter, limit: MonthlyLimit, prices: OveragePrices
           </div>`
 }
 
-const usageSection = (limits: AccountLimits, prices: OveragePrices) => {
+/**
+ * When Polar bills the paid overage. The product has no meter cycle of its own, so Polar bills
+ * the usage of a period on the order at the end of the period: the renewal, or the last order of a
+ * subscription that ends.
+ */
+const overageBilling = (subscription: Subscription | undefined): string => {
+  if (subscription?.currentPeriodEnd === undefined) {
+    return "Polar bills it on the next invoice."
+  }
+  const date = longDate.format(subscription.currentPeriodEnd)
+  return subscription.cancelAtPeriodEnd
+    ? `Polar bills it on the last invoice, when the subscription ends on ${date}.`
+    : `Polar bills it on the invoice of ${date}, with the next month of the plan.`
+}
+
+const usageSection = (limits: AccountLimits, prices: OveragePrices, subscription: Subscription | undefined) => {
   const monthly = limits.monthly
   if (monthly === undefined) return null
   const total = meterKeys.reduce((sum, key) => sum + overageCost(usageMeters[key], monthly[key], prices), 0)
   return html`<h3>Usage this month (UTC)</h3>
         ${
           total > 0
-            ? html`<p class="notice">Paid overage this month: about ${money(total)} plus tax, at the prices below. It is billed on the next invoice.</p>`
+            ? html`<p class="notice">Paid overage so far this month: about ${money(total)} plus tax, at the prices below. ${overageBilling(subscription)}</p>`
             : null
         }
         <dl class="facts usage">
@@ -384,7 +399,7 @@ const overageCard = (options: SignedInPageOptions) => {
             ? "On. When the account has used its monthly allowance, its agents keep running, and the usage above the allowance is billed at these prices."
             : "Off. When the account has used its monthly allowance, its agents stop until the next month."
         }</p>
-        ${usageSection(options.limits, prices)}
+        ${usageSection(options.limits, prices, options.subscription)}
         <h3>Overage prices</h3>
         <dl class="facts prices">
           <div><dt>Compute</dt><dd>$${prices.perMillionGcu} per million GCU</dd></div>
