@@ -338,6 +338,12 @@ main {
   margin-bottom: 1.5rem;
 }
 
+.usage .overage-amount {
+  margin-top: 0.4rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .usage progress {
   display: block;
   width: 100%;

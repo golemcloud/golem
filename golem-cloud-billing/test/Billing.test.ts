@@ -340,8 +340,8 @@ describe("Polar billing", () => {
       const html = await page(jar)
 
       expect(html).toContain("Usage this month (UTC)")
-      expect(html).toContain("2.5M of 100M GCU · 3%")
-      expect(html).toContain("250 of 912.5 GB-hours · 27%")
+      expect(html).toContain("2.5M of 100M GCU included · 3%")
+      expect(html).toContain("250 of 912.5 GB-hours included · 27%")
       expect(html).toContain(`max="100000000" value="2500000"`)
       expect(html).toContain("Not metered")
       expect(html).toContain("No usage reported this month")
@@ -363,9 +363,23 @@ describe("Polar billing", () => {
 
       const html = await page(jar)
 
-      expect(html).toContain("100M of 100M GCU · 100%")
+      expect(html).toContain("100M of 100M GCU included · 100%")
       expect(html).toContain(`class="full"`)
-      expect(html).toContain("and 1.5M GCU of paid overage")
+      expect(html).toContain("+ 1.5M GCU of paid overage · $0.02")
+      expect(html).toContain("Paid overage this month: about $0.02 plus tax")
+    })
+
+    it("shows a small usage with significant digits, not as 0", async () => {
+      const { jar } = await paidAccount()
+      upstreams.monthly = {
+        ...(upstreams.monthly as object),
+        memoryGbSeconds: { metering: "enabled", resolvedMonthlyAmount: 3_285_000, usage: 3.6, allowOverageUsage: 0, unit: "GB-seconds" }
+      }
+
+      const html = await page(jar)
+
+      expect(html).toContain("0.001 of 912.5 GB-hours included · &lt;1%")
+      expect(html).not.toContain("Paid overage this month")
     })
 
     it("shows the switch when the registry reports no usage", async () => {
