@@ -72,11 +72,31 @@ export interface SubscriptionsShape {
     accountId: string,
     productId: string
   ) => Effect.Effect<ReadonlyArray<Subscription>, SubscriptionsError>
-  /** The `pending` orders of the subscriptions of the product that the account has. */
+  /**
+   * The `pending` orders of the subscriptions of the product that the account has, or of every
+   * product when `productId` is undefined.
+   */
   readonly pendingOrders: (
     accountId: string,
-    productId: string
+    productId: string | undefined
   ) => Effect.Effect<ReadonlyArray<PendingOrder>, SubscriptionsError>
+  /**
+   * Whether the usage push recorded paid overage of the account that no order bills yet: a usage
+   * event that is not held and is newer than the newest order of the account. Polar bills a sent
+   * event on the next order of the subscription, and the push sends an unsent event at its next run.
+   */
+  readonly unbilledUsage: (accountId: string) => Effect.Effect<boolean, SubscriptionsError>
+  /**
+   * The accounts whose deletion hold can change with the time alone: a billable subscription of
+   * the product that is canceled at the period end, with the period end after `since`, and usage
+   * events that the usage push recorded, sent or held after `since`, without a billable
+   * subscription that continues. A held event no longer counts as unbilled, so it can remove the
+   * hold.
+   */
+  readonly holdCandidates: (
+    productId: string,
+    since: Date
+  ) => Effect.Effect<ReadonlyArray<string>, SubscriptionsError>
   /**
    * The accounts with a billable subscription of the product that is canceled at the period end,
    * with the period end between `from` and `to`.
@@ -115,8 +135,10 @@ export class Subscriptions extends Context.Service<Subscriptions, SubscriptionsS
 ) {}
 
 /**
- * The tables of the subscriptions and their orders. The usage push also creates them, because it
- * reads `polar_subscriptions` and can run before the web app.
+ * The tables of the app besides the tables of Better Auth: the subscriptions and their orders,
+ * the usage events of the usage push, and the deleted accounts that the cleanup has finished.
+ * The web app, the usage push and the cleanup each create them, because each reads tables that
+ * another one writes and can run first.
  */
 export const tables = `
   CREATE TABLE IF NOT EXISTS polar_subscriptions (
@@ -147,7 +169,37 @@ export const tables = `
     webhook_id TEXT PRIMARY KEY,
     event_type TEXT NOT NULL,
     delivered_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+  );
+  CREATE TABLE IF NOT EXISTS usage_events (
+    event_id TEXT PRIMARY KEY,
+    account_id UUID NOT NULL,
+    period TEXT NOT NULL,
+    dimension TEXT NOT NULL,
+    from_micro_units NUMERIC NOT NULL,
+    to_micro_units NUMERIC NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    sent_at TIMESTAMPTZ,
+    held_at TIMESTAMPTZ,
+    CONSTRAINT usage_events_sent_or_held CHECK (sent_at IS NULL OR held_at IS NULL)
+  );
+  CREATE INDEX IF NOT EXISTS usage_events_unsent ON usage_events (created_at)
+    WHERE sent_at IS NULL AND held_at IS NULL;
+  CREATE INDEX IF NOT EXISTS usage_events_submitted ON usage_events (period, account_id, dimension);
+  CREATE INDEX IF NOT EXISTS usage_events_account ON usage_events (account_id);
+  CREATE TABLE IF NOT EXISTS deleted_account_cleanups (
+    account_id UUID PRIMARY KEY,
+    polar_customer_deleted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
   )`
+
+/**
+ * The usage events of account $1 that no order bills yet: not held, and sent (or recorded, when
+ * not sent yet) after the creation of the newest order of the account.
+ */
+const unbilledUsageEvents = `
+  usage_events e
+  WHERE e.account_id = $1 AND e.held_at IS NULL
+    AND coalesce(e.sent_at, e.created_at) > coalesce(
+          (SELECT max(o.created_at) FROM polar_orders o WHERE o.account_id = $1), '-infinity'::timestamptz)`
 
 interface SubscriptionRow {
   readonly subscription_id: string
@@ -180,13 +232,11 @@ const failure = (error: unknown) =>
   new SubscriptionsError({ reason: error instanceof Error ? error.message : String(error) })
 
 /**
- * Creates the tables after Auth has created the schema of the app, under the lock of the
- * migrations, so that replicas that start together do not race.
+ * Creates the tables under the lock of the migrations, so that replicas that start together do
+ * not race, and returns the queries.
  */
-export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Database> = Layer.effect(
-  Subscriptions,
+const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
   Effect.gen(function* () {
-    yield* Auth
     const { pool, config } = yield* Database
     yield* Effect.tryPromise({
       try: () => withAdvisoryLock(config, "golem-cloud-billing/migrations", () => pool.query(tables)),
@@ -255,7 +305,7 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
 
     // An order of a subscription that no webhook has reported yet has no metered prices to match;
     // the webhook of that subscription reconciles the plan again.
-    const pendingOrders = (accountId: string, productId: string) =>
+    const pendingOrders = (accountId: string, productId: string | undefined) =>
       query<{ order_id: string; subscription_id: string; created_at: Date; metered_amount: string }>(
         `SELECT o.order_id, o.subscription_id, o.created_at,
                 coalesce((SELECT sum(i.amount)
@@ -263,8 +313,8 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
                            WHERE i."productPriceId" = ANY(s.metered_price_ids)), 0)::text AS metered_amount
            FROM polar_orders o
            JOIN polar_subscriptions s ON s.subscription_id = o.subscription_id
-          WHERE o.account_id = $1 AND s.product_id = $2 AND o.status = 'pending'`,
-        [accountId, productId]
+          WHERE o.account_id = $1 AND ($2::text IS NULL OR s.product_id = $2) AND o.status = 'pending'`,
+        [accountId, productId ?? null]
       ).pipe(
         Effect.map((result) =>
           result.rows.map((row) => ({
@@ -275,6 +325,27 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
           }))
         )
       )
+
+    const unbilledUsage = (accountId: string) =>
+      query<{ unbilled: boolean }>(`SELECT EXISTS (SELECT 1 FROM ${unbilledUsageEvents}) AS unbilled`, [
+        accountId
+      ]).pipe(Effect.map((result) => result.rows[0]?.unbilled === true))
+
+    const holdCandidates = (productId: string, since: Date) =>
+      query<{ account_id: string }>(
+        `SELECT account_id::text AS account_id
+           FROM polar_subscriptions
+          WHERE product_id = $1 AND status = ANY($2) AND cancel_at_period_end AND current_period_end > $3
+         UNION
+         SELECT e.account_id::text AS account_id
+           FROM usage_events e
+          WHERE greatest(e.created_at, e.sent_at, e.held_at) > $3
+            AND NOT EXISTS (
+              SELECT 1 FROM polar_subscriptions s
+               WHERE s.account_id = e.account_id AND s.product_id = $1 AND s.status = ANY($2)
+                 AND NOT s.cancel_at_period_end)`,
+        [productId, billableStatuses, since]
+      ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
 
     const ending = (productId: string, from: Date, to: Date) =>
       query<{ account_id: string }>(
@@ -349,6 +420,8 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
       recordOrder,
       ofAccount,
       pendingOrders,
+      unbilledUsage,
+      holdCandidates,
       ending,
       awaitingPayment,
       latest,
@@ -357,5 +430,19 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
       withAccountLock
     }
   })
+
+/** The subscriptions of the web app. It creates the tables after Auth has created the schema of the app. */
+export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Database> = Layer.effect(
+  Subscriptions,
+  Effect.gen(function* () {
+    yield* Auth
+    return yield* make
+  })
+)
+
+/** The subscriptions of a command that runs without the web app, in the schema that an operator created. */
+export const commandLayer: Layer.Layer<Subscriptions, SubscriptionsError, Database> = Layer.effect(
+  Subscriptions,
+  make
 )
 

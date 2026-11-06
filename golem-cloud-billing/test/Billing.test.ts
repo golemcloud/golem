@@ -4,10 +4,11 @@ import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
 import * as Settlement from "../src/Settlement.ts"
+import { closePool, RegistryDatabase } from "./registry.ts"
 import {
   baseUrl,
+  billingAccountId,
   CookieJar,
-  dropSchema,
   FakeUpstreams,
   freePlanId,
   internalPlanId,
@@ -21,7 +22,6 @@ import {
   request,
   signInWithGitHub,
   suspendedPlanId,
-  testConfig,
   webhookSecret
 } from "./support.ts"
 
@@ -32,26 +32,30 @@ const fixedPriceId = "price_fixed"
 const meteredPriceId = "price_compute"
 
 describe("Polar billing", () => {
+  // The registry tables in `public` with the grants of the hosted deployment: the app reads
+  // whether an account is deleted and its usage mode.
+  const registry = new RegistryDatabase()
   let config: BillingConfigShape
   let pool: pg.Pool
   let app: ReturnType<typeof makeApp>
   let services: ReturnType<typeof makeServices>
   let upstreams: FakeUpstreams
 
-  beforeAll(() => {
-    config = testConfig()
+  beforeAll(async () => {
+    await registry.create()
+    config = registry.config
     pool = queryPool(config)
     app = makeApp(config)
     services = makeServices(config)
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => upstreams.fetch(input, init))
-  })
+  }, 60_000)
 
   afterAll(async () => {
     vi.unstubAllGlobals()
     await app.dispose()
     await services.dispose()
-    await dropSchema(pool, config.db.schema)
-    await pool.end()
+    await closePool(pool)
+    await registry.drop()
   })
 
   beforeEach(() => {
@@ -61,7 +65,8 @@ describe("Polar billing", () => {
   afterEach(async () => {
     const schema = config.db.schema
     await pool.query(
-      `TRUNCATE "${schema}"."user", "${schema}".polar_subscriptions, "${schema}".polar_orders, "${schema}".polar_webhook_deliveries CASCADE`
+      `TRUNCATE "${schema}"."user", "${schema}".polar_subscriptions, "${schema}".polar_orders,
+         "${schema}".polar_webhook_deliveries, "${schema}".usage_events CASCADE`
     )
   })
 
@@ -604,7 +609,7 @@ describe("Polar billing", () => {
       expect(upstreams.planChanges()).toEqual([])
     })
 
-    it("leaves a plan that an administrator gave the account", async () => {
+    it("leaves a plan that an administrator gave the account, and holds its deletion all the same", async () => {
       const accountId = randomUUID()
       upstreams.planOf(accountId).planId = internalPlanId
 
@@ -613,10 +618,13 @@ describe("Polar billing", () => {
       expect(response.status).toBe(200)
       expect(upstreams.planOf(accountId).planId).toBe(internalPlanId)
       expect(upstreams.planChanges()).toEqual([])
+      expect(upstreams.deletionHolds.has(accountId)).toBe(true)
     })
 
     it("answers 500 when the registry refuses the billing account, so Polar delivers again", async () => {
-      const accountId = randomUUID()
+      // The account exists and is not deleted: the registry hides it because the permission share
+      // of the billing account is missing.
+      const accountId = await registry.account()
       upstreams.billingShare = false
 
       const failed = await deliver("subscription.active", subscription(accountId), { id: "msg_retry" })
@@ -664,6 +672,140 @@ describe("Polar billing", () => {
 
       expect(response.status).toBe(200)
       expect(upstreams.planChanges()).toEqual([])
+    })
+
+    it("answers 200 to a webhook of a deleted account and keeps its subscription", async () => {
+      const accountId = await registry.account()
+      await registry.deleteAccount(accountId)
+      upstreams.deletedAccounts.add(accountId)
+
+      const response = await deliver("subscription.revoked", subscription(accountId, { status: "canceled" }))
+
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe("handled")
+      expect(upstreams.planChanges()).toEqual([])
+      expect(upstreams.holdChanges()).toEqual([])
+      const stored = await pool.query("SELECT status FROM polar_subscriptions WHERE account_id = $1", [accountId])
+      expect(stored.rows).toEqual([{ status: "canceled" }])
+    })
+  })
+
+  describe("deletion hold", () => {
+    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Paid. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period.`
+    const unbilledHold =
+      "Golem Cloud billing: The account has paid overage that Polar has not billed yet. Polar bills it on the next invoice of the subscription. Delete the account after that invoice is paid."
+    const unpaidHold = `Golem Cloud billing: An invoice for paid overage is not paid. Pay it in Manage billing at ${baseUrl}.`
+
+    /** A usage event of the usage push, sent `ago` milliseconds before now unless `held`. */
+    const usageEvent = async (accountId: string, ago: number, options: { readonly held?: boolean } = {}) => {
+      await pool.query(
+        `INSERT INTO usage_events
+           (event_id, account_id, period, dimension, from_micro_units, to_micro_units, created_at, sent_at, held_at)
+         VALUES ($1, $2, '2026-11', 'compute', 0, 5, $3, $4, $5)`,
+        [
+          `${accountId}:2026-11:compute:${randomUUID()}`,
+          accountId,
+          new Date(Date.now() - ago - MINUTE),
+          options.held ? null : new Date(Date.now() - ago),
+          options.held ? new Date(Date.now() - ago) : null
+        ]
+      )
+    }
+
+    it("holds the account of an active subscription as the billing account, and frees it after the cancellation", async () => {
+      const accountId = randomUUID()
+
+      await deliver("subscription.active", subscription(accountId))
+
+      expect(upstreams.deletionHolds.get(accountId)).toBe(subscriptionHold)
+      const [placed] = upstreams.holdChanges()
+      expect(placed!.method).toBe("PUT")
+      expect(placed!.url.pathname).toBe(`/v1/accounts/${accountId}/deletion-holds/${billingAccountId}`)
+      expect(placed!.headers.get("authorization")).toBe(`Bearer ${registryBillingToken}`)
+
+      await deliver(
+        "subscription.updated",
+        subscription(accountId, { cancel_at_period_end: true, modified_at: "2026-11-05T10:00:00Z" })
+      )
+
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+      expect(upstreams.holdChanges().at(-1)!.method).toBe("DELETE")
+    })
+
+    it("keeps the hold after the cancellation while paid overage is on, and for the margin after it is off", async () => {
+      const accountId = await registry.account()
+      await registry.usageMode(accountId, "allow_overage", new Date(Date.now() - DAY))
+      const end = new Date(Date.now() + 30 * DAY)
+
+      await deliver(
+        "subscription.updated",
+        subscription(accountId, { cancel_at_period_end: true, current_period_end: end.toISOString() })
+      )
+      expect(upstreams.deletionHolds.get(accountId)).toContain("Paid overage is on")
+
+      const off = new Date()
+      await registry.usageMode(accountId, "hard_limit", off)
+      await sweep(new Date(off.getTime() + MINUTE))
+      expect(upstreams.deletionHolds.get(accountId)).toBe(
+        "Golem Cloud billing: Paid overage was on less than 15 minutes ago, and its last usage is not recorded yet. Try again in 15 minutes."
+      )
+
+      await sweep(new Date(off.getTime() + Settlement.SETTLEMENT_MARGIN_MS + MINUTE))
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+    })
+
+    it("holds an ended subscription while sent overage waits for its order, and while the order is unpaid", async () => {
+      const accountId = randomUUID()
+      await deliver("subscription.active", subscription(accountId))
+      await usageEvent(accountId, MINUTE)
+
+      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2026-12-04T10:00:00Z" }))
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unbilledHold)
+
+      await deliver("order.created", order(accountId))
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unpaidHold)
+
+      await deliver("order.paid", order(accountId, paidLater))
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+    })
+
+    it("frees an ended subscription when the usage push holds the overage that Polar would not bill", async () => {
+      const accountId = randomUUID()
+      await deliver("subscription.active", subscription(accountId))
+      const eventId = `${accountId}:2026-11:compute:5`
+      await pool.query(
+        `INSERT INTO usage_events (event_id, account_id, period, dimension, from_micro_units, to_micro_units)
+         VALUES ($1, $2, '2026-11', 'compute', 0, 5)`,
+        [eventId, accountId]
+      )
+      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2026-12-04T10:00:00Z" }))
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unbilledHold)
+
+      await pool.query("UPDATE usage_events SET held_at = clock_timestamp() WHERE event_id = $1", [eventId])
+      await sweep(new Date())
+
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+    })
+
+    it("does not count overage that an order already bills", async () => {
+      const accountId = randomUUID()
+      await usageEvent(accountId, 2 * MINUTE)
+      await usageEvent(accountId, DAY, { held: true })
+
+      await deliver("order.paid", order(accountId, { status: "paid", paid: true }))
+
+      expect(upstreams.holdChanges().map((change) => change.method)).toEqual(["DELETE"])
+    })
+
+    it("lists every reason in one hold", async () => {
+      const accountId = randomUUID()
+      await deliver("subscription.active", subscription(accountId))
+
+      await deliver("order.created", order(accountId))
+
+      expect(upstreams.deletionHolds.get(accountId)).toBe(
+        `${subscriptionHold} ${unpaidHold.replace("Golem Cloud billing: ", "")}`
+      )
     })
   })
 })

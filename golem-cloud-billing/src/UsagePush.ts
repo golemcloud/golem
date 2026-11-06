@@ -65,23 +65,6 @@ const previous = ({ year, month }: Period): Period => (month === 1 ? { year: yea
 
 const periodKey = (period: Period): string => `${period.year}-${String(period.month).padStart(2, "0")}`
 
-const usageEventsTable = `
-  CREATE TABLE IF NOT EXISTS usage_events (
-    event_id TEXT PRIMARY KEY,
-    account_id UUID NOT NULL,
-    period TEXT NOT NULL,
-    dimension TEXT NOT NULL,
-    from_micro_units NUMERIC NOT NULL,
-    to_micro_units NUMERIC NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    sent_at TIMESTAMPTZ,
-    held_at TIMESTAMPTZ,
-    CONSTRAINT usage_events_sent_or_held CHECK (sent_at IS NULL OR held_at IS NULL)
-  );
-  CREATE INDEX IF NOT EXISTS usage_events_unsent ON usage_events (created_at)
-    WHERE sent_at IS NULL AND held_at IS NULL;
-  CREATE INDEX IF NOT EXISTS usage_events_submitted ON usage_events (period, account_id, dimension)`
-
 interface UsageEventRow {
   readonly event_id: string
   readonly account_id: string
@@ -129,7 +112,6 @@ export const pushUsage = (
         Effect.tryPromise({ try: () => pool.query<R>(text, [...values]), catch: failure })
 
       yield* advisoryLock(connectionOptions(config), "golem-cloud-billing/usage-push")
-      yield* query(usageEventsTable)
       yield* Effect.tryPromise({
         try: () => withAdvisoryLock(config, "golem-cloud-billing/migrations", () => pool.query(subscriptionTables)),
         catch: failure

@@ -4,9 +4,9 @@ The billing app of the hosted Golem Cloud. Users sign in with GitHub, subscribe 
 through Polar.sh, and manage the subscription in the customer portal of Polar. Self-hosted Golem
 does not use it.
 
-The app calls the HTTP API of the registry service, and reads three metering tables of the
-registry (see [Billable overage](#billable-overage)). It uses nothing else in Golem, and the
-registry knows nothing about the app. In the hosted deployment both use the same PostgreSQL
+The app calls the HTTP API of the registry service, and reads three metering tables and a few
+account columns of the registry (see [Database](#database)). It uses nothing else in Golem, and
+the registry knows nothing about the app. In the hosted deployment both use the same PostgreSQL
 database: the registry keeps its tables in `public`, and the app keeps its tables in its own
 schema.
 
@@ -38,7 +38,12 @@ landing page shows the error.
 
 Account linking is off: a GitHub identity signs in only to the user that it created, also when
 another identity has its verified email. The hook refuses a user with more than one GitHub account,
-and a Golem account other than the one in `user.golem_account_id`.
+and a Golem account other than the one in `user.golem_account_id`. After a delete, the registry
+gives the GitHub identity a new Golem account at the next login, and the hook still refuses the
+user of the deleted account. The cleanup (see [Deleted accounts](#deleted-accounts)) deletes the
+Polar customer of the deleted account and then the user, and the next sign-in creates a new user
+for the new account. So the checkout of the new account starts only after the old Polar customer
+is gone.
 
 ## Database
 
@@ -47,13 +52,23 @@ creates its tables there. On startup the app applies the Better Auth migrations 
 advisory lock, so that replicas migrate one at a time.
 
 In the hosted deployment the app connects with its own role, which owns its schema. The registry
-tables hold API token secrets and agent secrets, so the role can read only the three metering
-tables of the registry. Everything else comes from the registry HTTP API. As the signed-in user,
-the app calls `POST /v1/login/oauth2` at sign-in and `GET /v1/accounts/{account_id}` for the
-account page. As the billing account, the webhooks call `GET /v1/accounts/{account_id}` and
-`PUT /v1/accounts/{account_id}/plan` (see [Subscriptions](#subscriptions)). The app also keeps
-two tables of its own: `polar_subscriptions` and `polar_webhook_deliveries`. An administrator
-creates the role once:
+tables hold API token secrets and agent secrets, so the role can read only these registry data:
+
+- the three metering tables (see [Billable overage](#billable-overage)),
+- `accounts (account_id, deleted_at)`: the registry answers 404 both for a deleted account and for
+  an account that the billing account cannot see, and only this column tells them apart,
+- `account_monthly_usage_modes (account_id, mode, changed_at)`: whether paid overage is on (see
+  [Deletion hold](#deletion-hold)).
+
+The other columns of the two account tables, for example the email, stay out of reach. Everything
+else comes from the registry HTTP API. As the signed-in user, the app calls
+`POST /v1/login/oauth2` at sign-in and `GET /v1/accounts/{account_id}` for the account page. As
+the billing account, the webhooks and the sweep call `GET /v1/me/token`,
+`GET /v1/accounts/{account_id}`, `PUT /v1/accounts/{account_id}/plan`, and `PUT` and `DELETE`
+`/v1/accounts/{account_id}/deletion-holds/{holder_account_id}` (see
+[Subscriptions](#subscriptions)). The app also keeps tables of its own: `polar_subscriptions`,
+`polar_orders`, `polar_webhook_deliveries`, `usage_events` and `deleted_account_cleanups`. An
+administrator creates the role once:
 
 ```sql
 CREATE ROLE golem_cloud_billing LOGIN PASSWORD '…' CONNECTION LIMIT 10;
@@ -62,6 +77,8 @@ GRANT CONNECT ON DATABASE <database> TO golem_cloud_billing;
 GRANT USAGE ON SCHEMA public TO golem_cloud_billing;
 GRANT SELECT ON public.account_usage_stats, public.account_monthly_policy_revisions,
   public.account_monthly_policy_attribution TO golem_cloud_billing;
+GRANT SELECT (account_id, deleted_at) ON public.accounts TO golem_cloud_billing;
+GRANT SELECT (account_id, mode, changed_at) ON public.account_monthly_usage_modes TO golem_cloud_billing;
 ```
 
 When the schema does not exist, the app creates it, which needs the CREATE privilege on the
@@ -107,9 +124,11 @@ plan.
   with `POLAR_WEBHOOK_SECRET` (403 when it does not match), skips a `webhook-id` that it handled
   before, and stores the subscription in `polar_subscriptions` or the order in `polar_orders`. A
   state never replaces a state with a later `modified_at`, so a late delivery cannot undo a newer
-  one. Then it sets the plan from the table above. A failed payment (`subscription.past_due`) also
-  logs `payment_failed`. An account on any other plan, for example an internal plan that an
-  administrator gave it, keeps it.
+  one. Then it sets the [deletion hold](#deletion-hold) and the plan from the table above. A failed
+  payment (`subscription.past_due`) also logs `payment_failed`. An account on any other plan, for
+  example an internal plan that an administrator gave it, keeps it, and gets the deletion hold all
+  the same. An event of an account that the registry deleted is stored and answers 200, without a
+  change of the plan or the hold, so that deleted accounts do not make Polar disable the endpoint.
 - **Metered prices.** An order item names its price. The subscription lists the prices of its
   product, so `polar_subscriptions` keeps the IDs of the metered prices, and the handler counts
   the items of these prices as overage.
@@ -118,17 +137,20 @@ plan.
   retries. When the last order of a subscription that has ended fails, Polar does not retry it
   and does not mark the subscription: only the age of the order shows the failure. Polar charges
   an order when it creates it, so a renewal stays on the paid plan while Polar charges it.
-- **Sweep.** Every minute, each replica of the web app sets the plan of the accounts whose plan
-  changes with the time alone: a subscription that is canceled at the period end and ends within
-  15 minutes, and a `pending` order that is older than one hour.
+- **Sweep.** Every minute, each replica of the web app sets the plan and the deletion hold of the
+  accounts whose plan or hold changes with the time alone: a subscription that is canceled at the
+  period end, a `pending` order that is older than one hour, and usage events that the usage push
+  recorded, sent or held in the last 24 hours for an account without a subscription that
+  continues.
 - **Order and retries.** An advisory lock per account serializes the webhooks and the sweep of one
   account, also across replicas. When the registry or the database fails, the handler answers 500 and Polar
-  delivers the webhook again. A 409 of the registry (the account changed between the read and the
-  write) makes the handler read the account again.
+  delivers the webhook again. A 404 of the registry for an account that is not deleted also
+  answers 500: the permission share of the billing account is missing. A 409 of the registry (the
+  account changed between the read and the write) makes the handler read the account again.
 
 The plan of a customer is not up to its owner: the registry refuses `set-plan` on the own account.
-The app changes plans with the token of a separate billing account
-(`GOLEM_CLOUD_BILLING_REGISTRY_TOKEN`). An administrator gives that account the two permissions
+The app changes plans and deletion holds with the token of a separate billing account
+(`GOLEM_CLOUD_BILLING_REGISTRY_TOKEN`). An administrator gives that account the three permissions
 once, with a permission share from the administrator account
 (`POST /v1/accounts/<administrator account ID>/permission-shares` with an administrator token):
 
@@ -139,7 +161,8 @@ once, with a permission share from the administrator account
   "data": {
     "lowerPositive": [
       "account(*) @ <email of the billing account> : view :",
-      "account(*) @ <email of the billing account> : set-plan :"
+      "account(*) @ <email of the billing account> : set-plan :",
+      "account(*) @ <email of the billing account> : hold-deletion :"
     ],
     "lowerNegative": [],
     "upperPositive": [],
@@ -148,8 +171,10 @@ once, with a permission share from the administrator account
 }
 ```
 
-`set-plan` needs `view`, because the registry reads the account before it changes the plan. The
-token of the billing account can change plans and read accounts, and nothing else.
+`set-plan` and `hold-deletion` need `view`, because the registry reads the account first. A holder
+places and removes only its own deletion hold, so the owner of an account cannot remove the hold
+of the billing account. The token of the billing account can read accounts, change plans and set
+its deletion holds, and nothing else.
 
 ### Settlement
 
@@ -173,6 +198,28 @@ Polar bills:
 
 The usage push does not send an event that Polar would not bill (see
 [Billable overage](#billable-overage)).
+
+### Deletion hold
+
+Golem does not charge early: Polar bills paid overage on the next order. So the registry must not
+delete an account while the account owes paid overage or can still run some up. The app places a
+deletion hold on the account through the registry (`Settlement.holdFor`) while any of these is
+true, and removes it when none is:
+
+| Reason | When |
+| --- | --- |
+| `subscription` | a billable subscription (`active`, `trialing` or `past_due`) is not canceled at the period end |
+| `overageOn` | a billable subscription exists and paid overage is on |
+| `overageRecentlyOn` | a billable subscription exists and paid overage was on less than 15 minutes ago, so the usage push may not have its last usage yet |
+| `unbilledUsage` | a usage event that is not held is newer than the newest order of the account: Polar bills it only on the next order |
+| `unpaidOverage` | a `pending` order has an amount for a metered price |
+
+The registry refuses `DELETE /v1/accounts/{account_id}` with 409 while the account has a hold, and
+shows the reason text to the person, for example in `golem-cli account delete`. The text starts
+with `Golem Cloud billing:` and has one sentence for each reason that tells the person what to do:
+cancel the subscription, turn paid overage off, wait for the invoice, or pay it. So a person who
+cancels, has no paid overage in the period and has paid overage off can delete the account at
+once. The rest of the paid period is not refunded.
 
 ## Billable overage
 
@@ -222,6 +269,28 @@ increase as an integer) and `period` (`YYYY-MM`). The Polar meters sum `units`.
 A failed run, also one with a missing setting, logs one JSON line with the cause and exits with
 code 1.
 
+## Deleted accounts
+
+`node main.mjs cleanup-deleted-accounts` runs once and exits, with a nonzero exit code when a call
+to Polar fails. A CronJob runs it. It needs only the `GOLEM__DB__*` variables and the Polar
+variables, with a Polar token that has only `customers:write`.
+
+For each account in `user.golem_account_id` or `polar_subscriptions` that the registry deleted, it:
+
+1. checks that the account owes no paid overage (the reasons `unbilledUsage` and `unpaidOverage`
+   of [Deletion hold](#deletion-hold)). An account that owes keeps its Polar customer and its user,
+   and each run logs the warning `deleted_account_owes`;
+2. deletes the Polar customer with `DELETE /v1/customers/external/{external_id}`. Polar cancels
+   its subscriptions at once, with no refund, and clears its external ID. A 404 counts as
+   deleted. The table `deleted_account_cleanups` records the account, so later runs do
+   not call Polar for it again;
+3. deletes the Better Auth user of the account, with its sessions and GitHub accounts.
+
+The subscriptions, orders and usage events of the account stay. A person who signs up again with
+the same GitHub identity gets a new Golem account at once. The billing app refuses its sign-in
+until the cleanup has deleted the user of the deleted account (see
+[Identity bridge](#identity-bridge)), which takes up to one interval of the CronJob.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -234,7 +303,7 @@ code 1.
 | `GOLEM__DB__CONFIG__MAX_CONNECTIONS` | `10` | Size of the connection pool. |
 | `GOLEM__DB__TYPE` | `Postgres` | Must be `Postgres` when set. |
 | `GOLEM_CLOUD_BILLING_DB_SCHEMA` | `billing` | Schema of the app's tables. |
-| `GOLEM_CLOUD_BILLING_REGISTRY_DB_SCHEMA` | `public` | Schema of the registry tables, for the metering tables. |
+| `GOLEM_CLOUD_BILLING_REGISTRY_DB_SCHEMA` | `public` | Schema of the registry tables, for the metering and account tables. |
 | `GOLEM_CLOUD_BILLING_DB_TLS` | `verify-full` | `disable`, `require` (TLS without certificate verification) or `verify-full`. `verify-full` also trusts the certificates in `NODE_EXTRA_CA_CERTS`, for example the Amazon RDS CA bundle. |
 | `GOLEM_CLOUD_BILLING_HTTP_PORT` | `8080` | HTTP port. |
 | `GOLEM_CLOUD_BILLING_REGISTRY_URL` | | Registry service API that the app calls, for example `http://registry-service:8081`. |
@@ -242,11 +311,11 @@ code 1.
 | `BETTER_AUTH_URL` | | Public origin of the app, for example `https://billing.golem.cloud`. |
 | `BETTER_AUTH_SECRET` | | At least 32 characters. Signs cookies and encrypts tokens. |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | | GitHub OAuth app with the callback URL `<BETTER_AUTH_URL>/api/auth/callback/github`. |
-| `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view` and `set-plan` on every account through a permission share (see [Subscriptions](#subscriptions)). |
+| `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view`, `set-plan` and `hold-deletion` on every account through a permission share (see [Subscriptions](#subscriptions)). |
 | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`, `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | | The plans that a subscription switches between (see [Subscriptions](#subscriptions)). |
 | `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH` | | The overage prices that the paid plan shows next to the paid-overage switch, in USD, as decimal numbers such as `0.045`. Polar bills with the metered prices of the product, so these values must match the product. A change needs a restart, not a new image. |
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
-| `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` and `customer_sessions:write`; `push-usage` needs `events:write`. Each gets its own token. |
+| `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` and `customer_sessions:write`, `push-usage` needs `events:write`, and `cleanup-deleted-accounts` needs `customers:write`. Each gets its own token. |
 | `POLAR_PRODUCT_ID` | | The Polar product of the paid plan. |
 | `POLAR_WEBHOOK_SECRET` | | The secret that Polar signs the webhooks with (`whsec_...`). |
 
@@ -276,8 +345,10 @@ pnpm build   # bundles src/main.ts and its dependencies into dist/main.mjs
 
 The tests need a PostgreSQL server and read its address from the libpq variables. Each test file
 creates its own schema and drops it afterwards. GitHub, the registry service API and Polar are
-faked. The metering tests create a database with all registry migrations of
-`../golem-registry-service/db/migration/postgres`, so the user needs CREATEDB and CREATEROLE.
+faked. The tests that read registry tables (billing, identity bridge, metering, usage push and
+cleanup) create a database with all registry migrations of
+`../golem-registry-service/db/migration/postgres` and the grants of the hosted deployment, so the
+user needs CREATEDB and CREATEROLE.
 
 ```shell
 docker run -d --name billing-pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17-alpine

@@ -14,6 +14,12 @@ export const meteringTables = [
   "account_monthly_policy_attribution"
 ]
 
+/** The registry columns that the database role of the billing app can read, for each table. */
+export const accountColumns: Readonly<Record<string, ReadonlyArray<string>>> = {
+  accounts: ["account_id", "deleted_at"],
+  account_monthly_usage_modes: ["account_id", "mode", "changed_at"]
+}
+
 export interface Dimensions {
   readonly computeFuel?: bigint
   readonly memoryGbSeconds?: bigint
@@ -98,6 +104,9 @@ export class RegistryDatabase {
     await this.admin.query(
       `GRANT SELECT ON ${meteringTables.map((table) => `public.${table}`).join(", ")} TO "${this.role}"`
     )
+    for (const [table, columns] of Object.entries(accountColumns)) {
+      await this.admin.query(`GRANT SELECT (${columns.join(", ")}) ON public.${table} TO "${this.role}"`)
+    }
   }
 
   /** Drops the database. Every other pool that connects to it must be closed with `closePool` first. */
@@ -116,6 +125,23 @@ export class RegistryDatabase {
       [id, `${id}@example.com`]
     )
     return id
+  }
+
+  /** Deletes the account as the registry does: it sets `deleted_at` and keeps the row. */
+  async deleteAccount(accountId: string): Promise<void> {
+    await this.admin.query("UPDATE accounts SET deleted_at = now(), updated_at = now() WHERE account_id = $1", [
+      accountId
+    ])
+  }
+
+  /** Sets the monthly usage mode of the account, changed at `changedAt`. */
+  async usageMode(accountId: string, mode: "hard_limit" | "allow_overage", changedAt: Date): Promise<void> {
+    await this.admin.query(
+      `INSERT INTO account_monthly_usage_modes (account_id, mode, revision, changed_by, changed_at)
+       VALUES ($1, $2, 1, $1, $3::timestamptz AT TIME ZONE 'UTC')
+       ON CONFLICT (account_id) DO UPDATE SET mode = EXCLUDED.mode, changed_at = EXCLUDED.changed_at`,
+      [accountId, mode, changedAt]
+    )
   }
 
   async revision(
