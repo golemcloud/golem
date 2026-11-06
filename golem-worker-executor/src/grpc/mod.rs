@@ -79,7 +79,7 @@ use golem_common::metrics::api::{
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, TypedAgentConfigEntry,
+    AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, TypedAgentConfigEntry,
 };
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
@@ -249,6 +249,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         agent_id: impl AsRef<AgentId>,
     ) -> Result<(), WorkerExecutorError> {
         self.shard_service().check_admission(agent_id.as_ref())
+    }
+
+    async fn canonicalize_agent_target(
+        &self,
+        environment_id: EnvironmentId,
+        target: &AgentTarget,
+    ) -> Result<OwnedAgentId, WorkerExecutorError> {
+        match target {
+            AgentTarget::Current(agent_id) => {
+                self.canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, agent_id))
+                    .await
+            }
+        }
     }
 
     /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the

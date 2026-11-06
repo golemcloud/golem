@@ -19,7 +19,7 @@ use super::{
 };
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::Principal;
-use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::{AgentConfigEntryDto, AgentTarget};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -27,7 +27,7 @@ use tracing::warn;
 
 pub trait CanStartWorker {
     fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
-    fn agent_id(&self) -> Result<AgentId, WorkerExecutorError>;
+    fn agent_target(&self) -> Result<AgentTarget, WorkerExecutorError>;
     fn env(&self) -> Option<Vec<(String, String)>>;
     fn config(&self) -> Result<Vec<AgentConfigEntryDto>, WorkerExecutorError>;
     fn parent(&self) -> Option<AgentId>;
@@ -63,7 +63,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .map_err(WorkerExecutorError::invalid_request)
     }
 
-    fn agent_id(&self) -> Result<AgentId, WorkerExecutorError> {
+    fn agent_target(&self) -> Result<AgentTarget, WorkerExecutorError> {
         let agent_id = self
             .proto_agent_id()
             .clone()
@@ -71,8 +71,8 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 
         AgentId::validate_length(&agent_id.name).map_err(WorkerExecutorError::invalid_request)?;
 
-        agent_id
-            .try_into()
+        AgentId::try_from(agent_id)
+            .map(AgentTarget::Current)
             .map_err(WorkerExecutorError::invalid_request)
     }
 
@@ -267,12 +267,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let agent_id = request.agent_id()?;
+        let target = request.agent_target()?;
+        let AgentTarget::Current(agent_id) = &target;
         if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
-            self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+            self.ensure_worker_belongs_to_this_executor(agent_id)?;
             let worker = Worker::get_exact_existing_suspended(
                 self,
-                &OwnedAgentId::new(request.environment_id()?, &agent_id),
+                &OwnedAgentId::new(request.environment_id()?, agent_id),
                 request.principal(),
             )
             .await?;
@@ -309,11 +310,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )>,
         WorkerExecutorError,
     > {
-        let agent_id = request.agent_id()?;
+        let target = request.agent_target()?;
         let environment_id = request.environment_id()?;
+        let AgentTarget::Current(agent_id) = &target;
         if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
-            self.ensure_worker_belongs_to_this_executor(&agent_id)?;
-            let owner = OwnedAgentId::new(environment_id, &agent_id);
+            self.ensure_worker_belongs_to_this_executor(agent_id)?;
+            let owner = OwnedAgentId::new(environment_id, agent_id);
             if Worker::<Ctx>::get_latest_metadata(self, &owner)
                 .await?
                 .is_none()
@@ -330,9 +332,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         let owned_agent_id = self
-            .canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, &agent_id))
+            .canonicalize_agent_target(environment_id, &target)
             .await?;
-        self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let component = self
             .component_service()
@@ -388,13 +390,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         ),
         WorkerExecutorError,
     > {
-        let agent_id = request.agent_id()?;
+        let target = request.agent_target()?;
         let environment_id = request.environment_id()?;
 
         let owned_agent_id = self
-            .canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, &agent_id))
+            .canonicalize_agent_target(environment_id, &target)
             .await?;
-        self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         // This runs on every invocation. For a resident agent, read the status the worker already
         // publishes; only an agent that is not resident has its record materialised (from the

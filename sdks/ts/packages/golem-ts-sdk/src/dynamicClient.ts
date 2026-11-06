@@ -3,15 +3,14 @@
 // Licensed under the Golem Source License v1.1
 
 import {
-  parseAgentId,
   type CancelableScheduledInvocationReceipt,
   type Datetime,
   type InvocationMetadata,
 } from 'golem:agent/host@2.0.0';
 import { resolveRemoteAgentFallibly, type RemoteAgentHandle } from './bridge/agent';
-import { schemaValueFromWit, type SchemaValue } from './internal/schema-model';
+import { type SchemaValue } from './internal/schema-model';
+import { decodeAgentId } from './internal/agentIdentity';
 import type { ParsedAgentId } from './agentId';
-import { Uuid } from './uuid';
 import type { ScopeCard } from './host/permissions';
 
 export interface DynamicInvocation<T> {
@@ -42,12 +41,8 @@ export class DynamicAgentClient implements DynamicAgentClientSurface {
 
   constructor(agentId: ParsedAgentId) {
     this.agentId = agentId;
-    const [typeName, constructorValue, phantomId] = parseAgentId(agentId.value);
-    this.remote = resolveRemoteAgentFallibly(
-      typeName,
-      schemaValueFromWit(constructorValue.value),
-      phantomId === undefined ? undefined : Uuid.from(phantomId),
-    );
+    const [typeName, constructorValue, phantomId] = decodeAgentId(agentId.value);
+    this.remote = resolveRemoteAgentFallibly(typeName, constructorValue, phantomId);
   }
 
   method(name: string): DynamicAgentMethod {

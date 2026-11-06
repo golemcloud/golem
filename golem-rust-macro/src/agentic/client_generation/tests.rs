@@ -53,8 +53,9 @@ fn durable_agents_generate_getters() {
     assert!(rendered.contains("get_with_config"));
     assert!(!rendered.contains("get_agent_type"));
     assert!(!rendered.contains("component_id"));
-    assert!(rendered.contains("WasmRpc :: create"));
-    assert!(!rendered.contains("WasmRpc :: new"));
+    assert!(rendered.contains("agentic :: __connect_agent_or_panic"));
+    assert!(!rendered.contains("host :: make_agent_id"));
+    assert!(!rendered.contains("WasmRpc :: create"));
 }
 
 #[test]
@@ -68,6 +69,8 @@ fn ephemeral_agents_generate_known_and_fresh_phantom_getters() {
     assert!(rendered.contains("get_phantom_with_config"));
     assert!(!rendered.contains("Uuid :: new_v4"));
     assert!(!rendered.contains("make_agent_id"));
+    assert!(rendered.contains("agentic :: __agent_proxy_or_panic"));
+    assert!(!rendered.contains("__connect_agent"));
     assert!(rendered.contains("async_invoke_and_await"));
     assert!(rendered.contains("wasm_rpc . invoke"));
     assert!(rendered.contains("schedule_invocation"));
@@ -99,7 +102,10 @@ fn caller_defined_clients_do_not_load_reflection_metadata() {
 
     assert!(!rendered.contains("get_agent_type"));
     assert!(!rendered.contains("component_id"));
-    assert!(rendered.contains("WasmRpc :: create"));
+    assert!(rendered.contains("agentic :: __connect_agent ("));
+    assert!(rendered.contains("agentic :: __agent_proxy ("));
+    assert!(!rendered.contains("WasmRpc :: create"));
+    assert!(rendered.contains("|| golem_rust :: encode_schema_value"));
 }
 
 #[test]
@@ -532,8 +538,8 @@ fn config_encoding_does_not_shadow_config_parameter_named_agent_id() {
 /// The wire `schema-value-tree` now carries an owned, affine `quota-token`
 /// handle, so the generated client must never store it. It stores the
 /// eagerly-computed `agent_id` string instead, rejects quota tokens in the
-/// constructor value before encoding, and computes the agent id via
-/// `make_agent_id` during construction.
+/// constructor value before encoding, and delegates identity and connection
+/// establishment with a constructor encoder rather than an affine wire tree.
 #[test]
 fn client_does_not_store_affine_constructor_tree() {
     let rendered = render_client(true);
@@ -542,8 +548,10 @@ fn client_does_not_store_affine_constructor_tree() {
     assert!(!rendered.contains("constructor_data"));
     assert!(!rendered.contains("agent_type_name"));
     // Agent id is computed eagerly during construction and stored.
-    assert!(rendered.contains("make_agent_id"));
-    assert!(rendered.contains("agent_id"));
+    assert!(rendered.contains("__connect_agent_or_panic"));
+    assert!(rendered.contains("agent_id : String"));
+    assert!(rendered.contains("let constructor_value = ||"));
+    assert!(rendered.contains("\"ExampleAgent\" , constructor_value ,"));
     // Quota tokens are rejected in constructor parameters before any encode.
     assert!(rendered.contains("reject_quota_tokens"));
 }

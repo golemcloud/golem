@@ -1128,6 +1128,7 @@ mod tests {
         StreamInvocationIdentity, StreamMappingRole, invocation_request, invocation_response,
         invocation_session_result,
     };
+    use golem_common::model::agent::AgentTarget;
     use golem_common::model::component::ComponentId;
     use golem_schema::proto::golem::schema::{
         SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
@@ -2049,7 +2050,8 @@ mod tests {
         let (accepted_sender, accepted_receiver) = tokio::sync::oneshot::channel();
         let result = rpc
             .invoke_and_await_streaming(
-                &OwnedAgentId::new(EnvironmentId::new(), &callee),
+                AgentTarget::Current(callee.clone()),
+                EnvironmentId::new(),
                 IdempotencyKey::fresh(),
                 "streaming-method".to_string(),
                 input,

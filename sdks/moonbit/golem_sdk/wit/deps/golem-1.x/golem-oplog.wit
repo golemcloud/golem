@@ -114,6 +114,7 @@ interface oplog {
     enum owner-kind {
         component-agent,
         ephemeral-external-tool,
+        oplog-processor,
     }
 
     /// Identifies a durable call by its place in a call order.

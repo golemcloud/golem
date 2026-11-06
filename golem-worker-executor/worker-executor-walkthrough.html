@@ -2282,11 +2282,13 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <!-- ===================== 16. OPLOG PROCESSOR ===================== -->
 <h2 id="s-processors"><span class="num">16</span>Oplog processor delivery</h2>
 <p>Oplog-processor plugins receive an agent's oplog entries as they are committed. Delivery is exactly-once per batch (<code>services/oplog/plugin.rs</code>), using the same two ingredients as RPC: a deterministic key and a durable checkpoint.</p>
+<p>The target has an explicit <code>OplogProcessor</code> execution owner. Its Create records durable mode and its component, but no agent type, canonical key or phantom identity. Only the internal local delivery path and the system-authenticated remote delivery path may create this owner; a reserved processor name alone grants no authority. The component must export the processor interface, even if it also declares agent types. No agent constructor runs.</p>
+<p>Processor owners use the ordinary durable queue, idempotency results and outer-loop reconstruction. Recovery starts the existing persisted incarnation, never recreates it through agent admission. Component-level configuration, files and permissions apply. Processors have no attached forwarding plugins, so their own oplogs do not recursively forward. Snapshot-capable processors use <code>oplog_processor_snapshotting</code>; otherwise they use <code>default_snapshotting</code>.</p>
 
 <figure>
 <svg class="dg" viewBox="0 0 960 446" role="img" aria-labelledby="proc-title proc-desc">
   <title id="proc-title">Exactly-once oplog processor delivery</title>
-  <desc id="proc-desc">Committed entries of the source agent's oplog are picked up by the plugin forwarder, which cuts a batch from first index to last index and derives a deterministic UUIDv5 idempotency key from the source agent, the plugin grant and the two indices. It persists sending_up_to equal to the last index in the agent status record, invokes the processor agent with the key, and on acknowledgement persists confirmed_up_to. A crash between the two checkpoints re-sends the identical range under the identical key, and the processor agent, a durable agent, deduplicates it through its own invocation queue.</desc>
+  <desc id="proc-desc">Committed entries of the source agent's oplog are picked up by the plugin forwarder, which cuts a batch from first index to last index and derives a deterministic UUIDv5 idempotency key from the source agent, the plugin grant and the two indices. It persists sending_up_to equal to the last index in the agent status record, invokes the processor owner with the key, and on acknowledgement persists confirmed_up_to. A crash between the two checkpoints re-sends the identical range under the identical key, and the durable processor owner deduplicates it through its ordinary invocation queue.</desc>
   <defs><marker id="arr-proc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--fg-muted)"/></marker></defs>
 
   <rect class="box ok" x="20" y="30" width="200" height="100"/>
@@ -2307,8 +2309,8 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <text x="305" y="172" class="lbl muted">an unconfirmed batch never widens</text>
 
   <rect class="box accent" x="720" y="30" width="220" height="100"/>
-  <text x="830" y="55" text-anchor="middle" class="title">Processor agent</text>
-  <text x="830" y="78" text-anchor="middle" class="lbl">a durable agent whose</text>
+  <text x="830" y="55" text-anchor="middle" class="title">Processor owner</text>
+  <text x="830" y="78" text-anchor="middle" class="lbl">a durable owner whose</text>
   <text x="830" y="96" text-anchor="middle" class="lbl">invocation queue deduplicates</text>
   <text x="830" y="114" text-anchor="middle" class="lbl">by idempotency key</text>
 
@@ -2337,7 +2339,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <li><strong>Key.</strong> <code>oplog_processor_idempotency_key</code> hashes source agent, plugin grant id and the batch's first/last index into a UUIDv5. Two forwarders that both see the same batch derive the same key.</li>
   <li><strong>Checkpoints.</strong> Per plugin, <code>confirmed_up_to</code> and <code>sending_up_to</code> live in <code>AgentStatusRecord.oplog_processor_checkpoints</code>, so a reconstructed forwarder knows exactly which entries still need delivery. The <code>OplogProcessorCheckpoint</code> hint (<code>plugin_grant_id, target_agent_id, confirmed_up_to, sending_up_to, last_batch_start</code>) records checkpoint advances in the source oplog.</li>
   <li><strong>Retry never widens the batch.</strong> If <code>sending_up_to &gt; confirmed_up_to</code> when the forwarder wakes up, it re-sends exactly <code>confirmed_up_to+1 ..= sending_up_to</code> — the same range, hence the same key. Only when the previous batch is confirmed does a new batch extend to the committed tail. A range consisting only of checkpoint entries is skipped by advancing both cursors.</li>
-  <li><strong>Target.</strong> The processor is itself a durable agent, so the "exactly-once" is ultimately the ordinary RPC contract of <a href="#s-rpc">§12</a> applied to a deterministically keyed batch.</li>
+  <li><strong>Target.</strong> The explicit durable processor owner uses the same acceptance, deduplication and reconstruction machinery as <a href="#s-rpc">durable RPC (§12)</a>. A retry retains the recorded target as well as its batch range and key, even when the per-executor processor cache has been rebuilt.</li>
 </ul>
 
 <!-- ===================== 17. SNAPSHOTS & UPDATES ===================== -->

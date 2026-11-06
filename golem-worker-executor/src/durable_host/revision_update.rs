@@ -84,7 +84,7 @@ impl RevisionUpdateInputs {
     pub(crate) fn of<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> Self {
         Self {
             component_service: ctx.state.component_service.clone(),
-            component_id: ctx.owned_agent_id.component_id(),
+            component_id: ctx.owner_component_metadata().id,
         }
     }
 }

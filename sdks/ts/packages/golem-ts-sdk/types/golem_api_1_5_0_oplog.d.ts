@@ -145,7 +145,7 @@ declare module 'golem:api/oplog@1.5.0' {
     path: string[];
     value: TypedSchemaValue;
   };
-  export type OwnerKind = "component-agent" | "ephemeral-external-tool";
+  export type OwnerKind = "component-agent" | "ephemeral-external-tool" | "oplog-processor";
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;

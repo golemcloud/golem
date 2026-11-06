@@ -22,6 +22,25 @@ test "a failed awaited input encode keeps argument permission cards" {
 }
 
 ///|
+test "identity and connection facades retain constructor schema errors" {
+  let invalid = @model.SchemaValue::S8(128)
+  try ParsedAgentId::create("Counter", invalid) catch {
+    Schema(message) =>
+      assert_true(message.has_prefix("failed to encode constructor value:"))
+    error => fail("expected a schema error, got \{repr(error)}")
+  } noraise {
+    _ => fail("expected constructor encoding to fail before identity creation")
+  }
+  try Transport::create("Counter", invalid, None) catch {
+    Schema(message) =>
+      assert_true(message.has_prefix("failed to encode constructor value:"))
+    error => fail("expected a schema error, got \{repr(error)}")
+  } noraise {
+    _ => fail("expected constructor encoding to fail before connection")
+  }
+}
+
+///|
 test "a failed reflected tool input encode keeps argument permission cards" {
   @test_support.reset_resource_drop_counts()
   let card_a = @card.adopt(@types.PermissionCard::PermissionCard(624))

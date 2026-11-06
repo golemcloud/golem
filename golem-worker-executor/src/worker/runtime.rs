@@ -75,7 +75,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_id,
                 )?
             }
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 crate::durable_host::owner_effective_surface_from_component_metadata(
                     &owner_component_metadata,
                     &self.owned_agent_id,
@@ -123,7 +123,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .map(|(path, value)| TypedAgentConfigEntry { path, value })
                     .collect()
             }
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 effective_agent_config(
                     worker_metadata.config,
                     owner_component_metadata
@@ -286,7 +286,7 @@ impl RunningWorker {
     ) -> Result<Box<[golem_common::model::component::InitialAgentFile]>, WorkerExecutorError> {
         let metadata = parent
             .component_service()
-            .get_metadata(parent.owned_agent_id.component_id(), Some(revision))
+            .get_metadata(parent.component_id(), Some(revision))
             .await?;
         Ok(parent
             .parsed_agent_id
@@ -418,7 +418,7 @@ impl RunningWorker {
         ),
         CreateWorkerInstanceError,
     > {
-        let component_id = parent.owned_agent_id.component_id();
+        let component_id = parent.component_id();
         let entity_generation = parent
             .active_agents()
             .try_get_active_agent(&parent.owned_agent_id)
@@ -742,7 +742,7 @@ impl RunningWorker {
             .unwrap_or_else(|| {
                 if matches!(
                     parent.owner_context,
-                    ResolvedOwnerContext::ComponentBaseline
+                    ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor
                 ) {
                     component_metadata_for_replay
                         .metadata

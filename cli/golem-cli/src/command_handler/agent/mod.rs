@@ -1358,19 +1358,15 @@ impl AgentCommandHandler {
                 .await?;
 
             for agent in agents {
-                let raw_agent_id = agent.agent_id.agent_id.clone();
+                let raw_agent_id = agent.raw_agent_id().to_owned();
 
                 let agent_component = self
                     .ctx
                     .component_handler()
-                    .get_component_revision_by_id(
-                        &agent.agent_id.component_id,
-                        agent.component_revision,
-                    )
+                    .get_component_revision_by_id(&agent.component_id(), agent.component_revision)
                     .await?;
 
-                let parsed_agent_type_name =
-                    ParsedAgentId::parse_agent_type_name(&raw_agent_id).ok();
+                let parsed_agent_type_name = agent.agent_type_name();
 
                 let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
                     agent_component
@@ -1402,11 +1398,11 @@ impl AgentCommandHandler {
                     })
                     .unwrap_or_default();
 
+                let parsed = agent.parsed_agent_id(&agent_component.metadata);
                 let mut agent_view = AgentMetadataView::from(agent)
                     .with_defaults(defaults)
                     .with_secret_config_paths(secret_config_paths);
 
-                let parsed = ParsedAgentId::parse(&raw_agent_id, &agent_component.metadata).ok();
                 agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
                     parsed.as_ref(),
                     &source_language,
@@ -1867,8 +1863,12 @@ impl AgentCommandHandler {
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
-        let plugin_priority =
-            self.resolve_plugin_priority(&component, &agent_id, &plugin_name, explicit_priority)?;
+        let plugin_priority = self.resolve_plugin_priority(
+            &component,
+            &agent_id_match.agent_type_name,
+            &plugin_name,
+            explicit_priority,
+        )?;
 
         log_action(
             "Activating plugin",
@@ -1916,8 +1916,12 @@ impl AgentCommandHandler {
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
-        let plugin_priority =
-            self.resolve_plugin_priority(&component, &agent_id, &plugin_name, explicit_priority)?;
+        let plugin_priority = self.resolve_plugin_priority(
+            &component,
+            &agent_id_match.agent_type_name,
+            &plugin_name,
+            explicit_priority,
+        )?;
 
         log_action(
             "Deactivating plugin",
@@ -1958,18 +1962,13 @@ impl AgentCommandHandler {
     fn resolve_plugin_priority(
         &self,
         component: &ComponentDto,
-        agent_id: &RawAgentId,
+        agent_type: &AgentTypeName,
         plugin_name: &str,
         explicit_priority: Option<i32>,
     ) -> anyhow::Result<i32> {
-        let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0)
-            .map(|n| n.0)
-            .unwrap_or_default();
-
-        let agent_type = AgentTypeName(agent_type_name.clone());
         let plugins = component
             .metadata
-            .agent_type_plugins(&agent_type)
+            .agent_type_plugins(agent_type)
             .unwrap_or_default();
 
         let matching: Vec<_> = plugins
@@ -1987,7 +1986,7 @@ impl AgentCommandHandler {
                 log_error(format!(
                     "Plugin {} is not installed for agent type {}.",
                     plugin_name.log_color_error_highlight(),
-                    agent_type_name.log_color_error_highlight(),
+                    agent_type.0.log_color_error_highlight(),
                 ));
                 if !available.is_empty() {
                     logln(format!(
@@ -2141,8 +2140,8 @@ impl AgentCommandHandler {
             let result = self
                 .update_agent(
                     component_name,
-                    &agent.agent_id.component_id,
-                    &agent.agent_id.agent_id,
+                    &agent.component_id(),
+                    agent.raw_agent_id(),
                     update_mode,
                     target_revision,
                     false,
@@ -2157,14 +2156,14 @@ impl AgentCommandHandler {
                 Err(error) => {
                     update_results.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        agent_id: agent.raw_agent_id().into(),
                         error: error_message_for_output(&error),
                     });
                 }
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
-                agent_id: agent.agent_id.agent_id.as_str().into(),
+                agent_id: agent.raw_agent_id().into(),
                 from_revision: agent.component_revision,
                 revision: target_revision,
                 from_version: self
@@ -2180,8 +2179,8 @@ impl AgentCommandHandler {
             for (agent, update_attempt_index) in agents_awaiting_update {
                 if let Err(error) = self
                     .await_update_result(
-                        &agent.agent_id.component_id,
-                        &agent.agent_id.agent_id,
+                        &agent.component_id(),
+                        agent.raw_agent_id(),
                         target_revision,
                         client_update_mode,
                         update_attempt_index,
@@ -2190,7 +2189,7 @@ impl AgentCommandHandler {
                 {
                     update_results.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        agent_id: agent.raw_agent_id().into(),
                         error: error_message_for_output(&error),
                     });
                 }
@@ -2417,7 +2416,7 @@ impl AgentCommandHandler {
 
         let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in agents {
-            let agent_id = agent.agent_id.agent_id.clone();
+            let agent_id = agent.raw_agent_id().to_owned();
             let from_revision = agent.component_revision;
             match self.redeploy_agent(component_name, agent).await {
                 Ok(()) => result
@@ -2486,9 +2485,9 @@ impl AgentCommandHandler {
 
         let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in &agents {
-            let agent_id = &agent.agent_id.agent_id;
+            let agent_id = agent.raw_agent_id();
             match self.delete_agent(component_name, agent).await {
-                Ok(()) => result.succeeded.push(agent_id.as_str().into()),
+                Ok(()) => result.succeeded.push(agent_id.into()),
                 Err(error) => {
                     log_error_action(
                         "Failed",
@@ -2500,7 +2499,7 @@ impl AgentCommandHandler {
                     );
                     result.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent_id.as_str().into(),
+                        agent_id: agent_id.into(),
                         error: error_message_for_output(&error),
                     });
                 }
@@ -2522,7 +2521,7 @@ impl AgentCommandHandler {
             format!(
                 "agent {}/{} to current version",
                 component_name.0.bold().blue(),
-                agent_metadata.agent_id.agent_id.bold().green(),
+                agent_metadata.raw_agent_id().bold().green(),
             ),
         );
         let _indent = LogIndent::new();
@@ -2536,12 +2535,12 @@ impl AgentCommandHandler {
             format!(
                 "agent {}/{}",
                 component_name.0.bold().blue(),
-                agent_metadata.agent_id.agent_id.bold().green(),
+                agent_metadata.raw_agent_id().bold().green(),
             ),
         );
         self.new_agent(
-            agent_metadata.agent_id.component_id.0,
-            agent_metadata.agent_id.agent_id,
+            agent_metadata.component_id().0,
+            agent_metadata.raw_agent_id().to_owned(),
             agent_metadata.env,
             agent_metadata.config,
         )
@@ -2562,12 +2561,12 @@ impl AgentCommandHandler {
             format!(
                 "agent {}/{}",
                 component_name.0.bold().blue(),
-                agent_metadata.agent_id.agent_id.bold().green(),
+                agent_metadata.raw_agent_id().bold().green(),
             ),
         );
         self.delete(
-            agent_metadata.agent_id.component_id.0,
-            &agent_metadata.agent_id.agent_id,
+            agent_metadata.component_id().0,
+            agent_metadata.raw_agent_id(),
         )
         .await?;
         log_action("Deleted", "agent");

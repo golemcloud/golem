@@ -36,14 +36,13 @@ use anyhow::anyhow;
 use golem_common::model::AgentId;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostRequestGolemApiOplogEnrich;
 use golem_common::model::oplog::HostRequestGolemApiOplogRead;
 use golem_common::model::oplog::HostResponseGolemApiOplogChunk;
 use golem_common::model::oplog::HostResponseGolemApiOplogEntries;
-use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::OplogEnrichmentEntry;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::oplog::host_functions::GolemApiEnrichOplogEntries;
 use golem_common::model::oplog::host_functions::GolemApiGetOplogNext;
@@ -116,7 +115,7 @@ fn is_denied_oplog_read(response: &HostResponseGolemApiOplogChunk) -> bool {
 }
 
 type SerializedOplogEntries = Vec<(u64, Vec<u8>)>;
-type OplogEntryConversion = Result<Vec<(u64, OplogEntry)>, String>;
+type OplogEntryConversion = Result<Vec<(u64, OplogEnrichmentEntry)>, String>;
 
 fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
@@ -128,7 +127,9 @@ fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
             .and_then(|entries| {
                 entries
                     .into_iter()
-                    .map(|(index, entry)| OplogEntry::try_from(entry).map(|entry| (index, entry)))
+                    .map(|(index, entry)| {
+                        OplogEnrichmentEntry::try_from(entry).map(|entry| (index, entry))
+                    })
                     .collect::<Result<Vec<_>, _>>()
             });
     let request_entries = match &entries {
@@ -179,13 +180,14 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         .await
         .map_err(|error| error.to_string())?
     };
-    let agent_type =
-        ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
+    let agent_type = &identity.create_parameters().agent_type_name;
     get_public_oplog_chunk(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
         agent_mode,
+        identity.create_parameters().component_id,
+        identity.create_parameters().owner_kind,
         agent_type.as_ref(),
         current_component_revision,
         entry.next_oplog_index,
@@ -218,13 +220,14 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .await
         .map_err(|error| error.to_string())?
     };
-    let agent_type =
-        ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
+    let agent_type = &identity.create_parameters().agent_type_name;
     search_public_oplog(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
         agent_mode,
+        identity.create_parameters().component_id,
+        identity.create_parameters().owner_kind,
         agent_type.as_ref(),
         current_component_revision,
         entry.next_oplog_index,
@@ -725,8 +728,6 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             let result = async {
                 let component_service = self.state.component_service.clone();
                 let oplog_service = self.state.oplog_service();
-                let agent_type =
-                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
                 let mut current_revision = ComponentRevision::try_from(component_revision)?;
                 let identity = self
                     .state
@@ -736,20 +737,28 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                     .map_err(|err| err.to_string())?
                     .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
                 let agent_mode = identity.agent_mode;
+                let agent_type = &identity.create_parameters().agent_type_name;
 
                 let mut result = Vec::with_capacity(entries.len());
                 for (index, entry) in entries {
-                    if let Some(revision) = entry.specifies_component_revision() {
+                    if let Some(revision) = match &entry {
+                        OplogEnrichmentEntry::CreateProjection { parameters, .. } => {
+                            Some(parameters.component_revision)
+                        }
+                        OplogEnrichmentEntry::Other(entry) => entry.specifies_component_revision(),
+                    } {
                         current_revision = revision;
                     }
                     result.push(
-                        PublicOplogEntry::from_oplog_entry(
+                        PublicOplogEntry::from_enrichment_entry(
                             OplogIndex::from_u64(index),
                             entry,
                             oplog_service.clone(),
                             component_service.clone(),
                             &owned_agent_id,
                             agent_mode,
+                            identity.create_parameters().component_id,
+                            identity.create_parameters().owner_kind,
                             agent_type.as_ref(),
                             current_revision,
                         )

@@ -20,16 +20,12 @@ fn Transport::create_with_config(
   phantom_id : @schema.Uuid?,
   agent_config : Array[@common.TypedAgentConfigValue],
 ) -> Transport raise ReflectError {
-  let constructor_input = @model.schema_value_to_wit(constructor_value) catch {
+  let prepared = @identity.Constructor::from_value(
+    type_name, constructor_value, phantom_id,
+  ) catch {
     error => raise Schema("failed to encode constructor value: \{repr(error)}")
   }
-  match
-    @agentHost.WasmRpc::create(
-      type_name,
-      constructor_input,
-      phantom_id.map(@schema.Uuid::to_wit),
-      agent_config,
-    ) {
+  match prepared.try_connect(agent_config) {
     Ok(raw) => { raw, default_scope_card: None, }
     Err(error) => raise rpc_error(error)
   }

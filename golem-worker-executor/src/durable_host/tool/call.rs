@@ -443,12 +443,10 @@ where
                     ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                         agent_type_name: agent.agent_type.clone(),
                     },
-                    ResolvedOwnerContext::ComponentWorker
-                    | ResolvedOwnerContext::ComponentBaseline => {
-                        ToolBindingOwner::ComponentBaseline {
-                            component_id: component.id,
-                        }
-                    }
+                    ResolvedOwnerContext::ComponentBaseline
+                    | ResolvedOwnerContext::OplogProcessor => ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    },
                 }
             });
             let activation_snapshot = if let Some(activation) = pinned_activation {

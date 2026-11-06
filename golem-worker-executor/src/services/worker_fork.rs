@@ -665,6 +665,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // is attributed to the component owner, not the caller.
         let target_worker_metadata = AgentMetadata {
             agent_id: target_agent_id.clone(),
+            component_id: initial_source_worker_metadata.component_id,
+            agent_type_name: initial_source_worker_metadata.agent_type_name.clone(),
+            canonical_key: None,
             owner_kind: initial_source_worker_metadata.owner_kind,
             created_by: initial_source_worker_metadata.created_by,
             created_by_email: initial_source_worker_metadata.created_by_email,
@@ -1209,6 +1212,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             } => {
                 parameters.agent_id = agent_id.clone();
                 parameters.instance_id = instance_id;
+                parameters.canonical_key = None;
                 Some(OplogEntry::Create {
                     timestamp,
                     parameters,

@@ -18029,11 +18029,12 @@ components:
         Authoritative kind of an execution owner.
 
         This is persisted at creation time. In particular, an instance name that
-        happens to look like an external-tool owner never grants that authority.
+        happens to use a reserved owner namespace never grants that authority.
       type: string
       enum:
       - component-agent
       - ephemeral-external-tool
+      - oplog-processor
     PathDirection:
       type: string
       enum:

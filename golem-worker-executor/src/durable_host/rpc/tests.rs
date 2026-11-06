@@ -24,6 +24,7 @@ use golem_common::model::IdempotencyKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::ScopeCard;
@@ -328,7 +329,8 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 impl Rpc for FingerprintMismatchRpc {
     async fn create_demand(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
@@ -346,7 +348,8 @@ impl Rpc for FingerprintMismatchRpc {
 
     async fn invoke_and_await(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -365,7 +368,8 @@ impl Rpc for FingerprintMismatchRpc {
 
     async fn invoke(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -385,7 +389,8 @@ impl Rpc for FingerprintMismatchRpc {
 impl Rpc for ActivationFailureRpc {
     async fn create_demand(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
@@ -403,7 +408,8 @@ impl Rpc for ActivationFailureRpc {
 
     async fn invoke_and_await(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -422,7 +428,8 @@ impl Rpc for ActivationFailureRpc {
 
     async fn invoke(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -442,7 +449,8 @@ impl Rpc for ActivationFailureRpc {
 impl Rpc for RecordingEnvRpc {
     async fn create_demand(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
@@ -461,7 +469,8 @@ impl Rpc for RecordingEnvRpc {
 
     async fn invoke_and_await(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -480,7 +489,8 @@ impl Rpc for RecordingEnvRpc {
 
     async fn invoke(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
