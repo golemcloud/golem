@@ -2766,7 +2766,7 @@ if equals ${component} otlp-exporter
     build_task = set build-otlp-exporter
     wasm = set plugins/otlp-exporter.wasm
     artifact_id = set otlp_exporter
-    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.8\"}"
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.9\"}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} filesystem-tools
@@ -2780,7 +2780,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.10\",\"npm@10.9.9+golem.9\",\"npx@10.9.9+golem.9\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.11\",\"npm@10.9.9+golem.10\",\"npx@10.9.9+golem.10\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2788,7 +2788,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.9\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.10\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2796,7 +2796,7 @@ elif equals ${component} bash
     build_task = set build-bash-tool
     wasm = set builtin-tools/bash.wasm
     artifact_id = set bash
-    exports_json = set "{\"tools\":[\"bash@0.3.2\"]}"
+    exports_json = set "{\"tools\":[\"bash@0.3.3\"]}"
     licenses = set builtin-tools/bash/LICENSE
     source_notice = set builtin-tools/bash/NOTICE
     sbom = set ""
@@ -2804,7 +2804,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.15\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.16\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json

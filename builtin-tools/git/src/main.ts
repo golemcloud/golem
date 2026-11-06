@@ -137,7 +137,7 @@ const noReceivePackResend = NamedPolicy.named("git-push-no-resend", Policy.never
   .appliesWhen(Predicate.eq(Props.verb, "POST"));
 
 const definition = toolDefinition("git", { requiresFilesystem: true })
-  .version("0.1.15")
+  .version("0.1.16")
   .doc({
     summary: "Run local and HTTP(S) remote Git workflows.",
     description:
