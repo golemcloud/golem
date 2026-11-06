@@ -11,7 +11,9 @@ if (command === undefined) {
 } else if (command === "push-usage") {
   // The command logs its failure as JSON; runMain would report it again as plain text.
   NodeRuntime.runMain(Commands.pushUsage.pipe(Effect.provide(logger)), { disableErrorReporting: true })
+} else if (command === "cleanup-deleted-accounts") {
+  NodeRuntime.runMain(Commands.cleanupDeletedAccounts.pipe(Effect.provide(logger)), { disableErrorReporting: true })
 } else {
-  process.stderr.write(`Unknown command: ${command}. Commands: push-usage\n`)
+  process.stderr.write(`Unknown command: ${command}. Commands: push-usage, cleanup-deleted-accounts\n`)
   process.exitCode = 2
 }

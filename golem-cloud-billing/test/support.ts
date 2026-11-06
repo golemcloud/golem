@@ -11,8 +11,13 @@ export const baseUrl = "http://localhost:3000"
 export const registryUrl = "http://registry.test"
 export const authSecret = "test-secret-that-is-at-least-32-characters-long"
 
-/** The registry token of the billing account, which has `view` and `set-plan` on every account. */
+/**
+ * The registry token of the billing account, which has `view`, `set-plan` and `hold-deletion` on
+ * every account.
+ */
 export const registryBillingToken = "golem_billing_token"
+/** The account of the billing token: the holder of every deletion hold of the app. */
+export const billingAccountId = "5f0c2e7a-91d4-4b3c-8a6e-2d7b1c9e0f34"
 export const freePlanId = "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10"
 export const paidPlanId = "9a1f3c2e-5b7d-4e8f-a6c4-2d1e0b9f8a73"
 export const suspendedPlanId = "3e8b1d47-0c2a-4f96-b5e1-7a9d2c4f6b08"
@@ -182,6 +187,10 @@ export class FakeUpstreams {
     durableStorageGbMonth: { metering: "disabled", planAmount: 5, unit: "GB-month" },
     ephemeralStorageGbMonth: { metering: "unknown", planAmount: 5, unit: "GB-month" }
   }
+  /** The reason of the deletion hold of the billing account on each account that has one. */
+  readonly deletionHolds = new Map<string, string>()
+  /** The accounts that the registry deleted; it answers 404 for them, as for an account it hides. */
+  readonly deletedAccounts = new Set<string>()
 
   /** The Golem account of the access token of `identity`, created on first use. */
   accountOf(identity: GitHubIdentity = this.github): RegistryAccount {
@@ -284,8 +293,17 @@ export class FakeUpstreams {
           expiresAt: "2036-11-03T10:00:00Z"
         })
       }
+      case `GET ${registryUrl}/v1/me/token`:
+        return bearer === registryBillingToken
+          ? Response.json({
+              id: "1d6f0e3a-7c2b-4f5e-9a8d-3b4c5d6e7f80",
+              accountId: billingAccountId,
+              createdAt: "2026-11-03T10:00:00Z",
+              expiresAt: "2027-11-03T10:00:00Z"
+            })
+          : new Response(null, { status: 401 })
       default: {
-        const match = /^\/v1\/accounts\/([0-9a-f-]{36})(\/plan|\/limits|\/monthly-usage-mode)?$/.exec(url.pathname)
+        const match = /^\/v1\/accounts\/([0-9a-f-]{36})(\/plan|\/limits|\/monthly-usage-mode|\/deletion-holds\/([0-9a-f-]{36}))?$/.exec(url.pathname)
         if (url.origin !== registryUrl || match === null) {
           return new Response(`No fake for ${route}`, { status: 599 })
         }
@@ -293,6 +311,31 @@ export class FakeUpstreams {
         const account = [...this.registryAccounts.values()].find((candidate) => candidate.accountId === accountId)
         const isOwner = account !== undefined && bearer === account.secret
         const isBilling = bearer === registryBillingToken && this.billingShare
+        if (this.deletedAccounts.has(accountId)) {
+          return new Response(null, { status: 404 })
+        }
+        if (match[3] !== undefined) {
+          if (!isBilling) {
+            return new Response(null, { status: 404 })
+          }
+          if (match[3] !== billingAccountId) {
+            return Response.json({ code: "FORBIDDEN" }, { status: 403 })
+          }
+          if (request.method === "PUT") {
+            const reason = (body as { reason: string }).reason
+            this.deletionHolds.set(accountId, reason)
+            return Response.json({
+              accountId,
+              holderAccountId: billingAccountId,
+              reason,
+              createdAt: "2026-11-04T10:00:00Z"
+            })
+          }
+          if (request.method === "DELETE") {
+            this.deletionHolds.delete(accountId)
+            return Response.json({})
+          }
+        }
         if (match[2] === undefined && request.method === "GET") {
           // The billing token sees every account, also one that never signed in to the app.
           return isOwner || isBilling ? Response.json(this.accountJson(accountId)) : new Response(null, { status: 404 })
@@ -367,6 +410,11 @@ export class FakeUpstreams {
     return this.requests.filter(
       (request) => request.method === "PUT" && request.url.pathname.endsWith("/monthly-usage-mode")
     )
+  }
+
+  /** The calls that place or remove a deletion hold. */
+  holdChanges(): Array<RecordedRequest> {
+    return this.requests.filter((request) => request.url.pathname.includes("/deletion-holds/"))
   }
 
   planChanges(): Array<RecordedRequest> {

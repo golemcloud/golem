@@ -99,6 +99,13 @@ export interface PolarShape {
     readonly externalCustomerId: string
     readonly returnUrl: string
   }) => Effect.Effect<string, PolarError>
+  /**
+   * Deletes the Polar customer with the external ID, through
+   * `DELETE /v1/customers/external/{external_id}` (scope `customers:write`). Polar cancels its
+   * subscriptions at once, revokes its benefits and clears its external ID. `missing`: Polar has no
+   * customer with the external ID, also after an earlier delete.
+   */
+  readonly deleteCustomer: (externalCustomerId: string) => Effect.Effect<"deleted" | "missing", PolarError>
 }
 
 export class Polar extends Context.Service<Polar, PolarShape>()("golem-cloud-billing/Polar") {}
@@ -149,6 +156,21 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
         customerSessions({ external_customer_id: request.externalCustomerId, return_url: request.returnUrl })
       ).pipe(Effect.map((session) => session.customer_portal_url))
 
-    return { ingestEvents, createCheckout, createCustomerPortalUrl }
+    const deleteCustomer = (externalCustomerId: string) =>
+      client
+        .del(`${baseUrl}/v1/customers/external/${encodeURIComponent(externalCustomerId)}`, {
+          headers: { authorization: `Bearer ${Redacted.value(accessToken)}` },
+          acceptJson: true
+        })
+        .pipe(
+          Effect.as<"deleted" | "missing">("deleted"),
+          Effect.catchIf(
+            (error) => error.reason._tag === "StatusCodeError" && error.reason.response.status === 404,
+            () => Effect.succeed<"deleted" | "missing">("missing")
+          ),
+          Effect.mapError(toPolarError("delete_customer"))
+        )
+
+    return { ingestEvents, createCheckout, createCustomerPortalUrl, deleteCustomer }
   })
 )

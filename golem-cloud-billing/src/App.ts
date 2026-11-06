@@ -8,6 +8,7 @@ import * as Database from "./Database.ts"
 import * as Http from "./Http.ts"
 import * as Polar from "./Polar.ts"
 import * as Registry from "./Registry.ts"
+import * as RegistryAccounts from "./RegistryAccounts.ts"
 import * as Settlement from "./Settlement.ts"
 import * as Subscriptions from "./Subscriptions.ts"
 
@@ -23,7 +24,7 @@ const polarConfig = Layer.effect(
 /** The services of the billing app, without the configuration and the HTTP client. */
 export const services = Layer.mergeAll(Subscriptions.layer, Polar.layer.pipe(Layer.provide(polarConfig))).pipe(
   Layer.provideMerge(Auth.layer),
-  Layer.provideMerge(Registry.layer),
+  Layer.provideMerge(Layer.merge(Registry.layer, RegistryAccounts.layer)),
   Layer.provideMerge(Database.layer)
 )
 
