@@ -99,8 +99,6 @@ fn component_metadata_helpers_use_exact_known_export_names() {
             tool_middleware_guest_interface: None,
         },
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::new(),
     );
@@ -148,8 +146,6 @@ fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         Vec::new(),
-        None,
-        None,
         Vec::new(),
         BTreeMap::from([(
             agent_type.clone(),
@@ -193,8 +189,6 @@ fn component_metadata_grpc_roundtrip_preserves_shared_memory_flag() {
             maximum: Some(2 * LinearMemory::PAGE_SIZE),
             shared: true,
         }],
-        None,
-        None,
         Vec::new(),
         BTreeMap::new(),
     );
@@ -286,8 +280,6 @@ fn metadata_with_tool() -> ComponentMetadata {
             ..KnownExports::default()
         },
         Vec::new(),
-        None,
-        None,
         Vec::new(),
         BTreeMap::new(),
         BTreeMap::from([(

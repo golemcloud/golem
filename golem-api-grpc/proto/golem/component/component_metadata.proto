@@ -25,8 +25,6 @@ message ComponentMetadata {
   KnownExports known_exports = 10;
   repeated Producers producers = 2;
   repeated LinearMemory memories = 3;
-  optional string root_package_name = 6;
-  optional string root_package_version = 7;
   repeated golem.schema.AgentTypeSchema agent_types = 8;
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
   map<string, ToolDeploymentMetadata> tools = 11;

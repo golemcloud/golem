@@ -143,8 +143,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata>
                 .into_iter()
                 .map(|memory| memory.into())
                 .collect(),
-            root_package_name: value.root_package_name,
-            root_package_version: value.root_package_version,
             config_schema: value
                 .config_schema
                 .map(TryInto::try_into)
@@ -255,8 +253,6 @@ impl TryFrom<ComponentMetadataInnerData>
                 .into_iter()
                 .map(|memory| memory.into())
                 .collect(),
-            root_package_name: value.root_package_name,
-            root_package_version: value.root_package_version,
             config_schema: Some(value.config_schema.into()),
             component_provision_config: Some(value.component_provision_config.try_into()?),
             agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),

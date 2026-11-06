@@ -127,8 +127,6 @@ fn component_metadata() -> ComponentMetadata {
     ComponentMetadata::from_parts(
         KnownExports::default(),
         Vec::new(),
-        None,
-        None,
         vec![representative_agent_type()],
         BTreeMap::new(),
     )

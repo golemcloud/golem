@@ -21,7 +21,7 @@ componentTemplates:
         componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
         customCommands:
           copy:
-          - command: cp "{{ golemTempDir }}/final-wasm/golem:moonbit-examples.wasm" "{{ appRootDir }}/../golem_it_tool_streaming_moonbit.wasm"
+          - command: cp "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm" "{{ appRootDir }}/../golem_it_tool_streaming_moonbit.wasm"
 
 components:
   golem:moonbit-examples:

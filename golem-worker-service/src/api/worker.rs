@@ -1330,8 +1330,6 @@ mod tests {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![test_agent_type(mode)],
                 std::collections::BTreeMap::new(),
             ),

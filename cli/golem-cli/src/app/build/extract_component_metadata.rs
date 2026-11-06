@@ -36,7 +36,7 @@ pub async fn extract_and_store_component_metadata(
         return Ok(metadata);
     }
     let component = ctx.application().component(component_name);
-    let wasm = component.agent_type_extraction_source_wasm();
+    let wasm = component.output_wasm();
     let extracted_component_metadata = component.extracted_component_metadata(&wasm);
 
     let metadata = new_task_up_to_date_check(ctx)

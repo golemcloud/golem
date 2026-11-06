@@ -1067,9 +1067,7 @@ pub mod shared_args {
         ///                 cargo, npm, scala-cli, moon are installed and the
         ///                 expected versions are available).
         ///   build         Run the per-language build for each selected
-        ///                 component (produces the component WASM).
-        ///   add-metadata  Attach Golem-specific metadata to the built WASM
-        ///                 components (agent types, secrets, resource limits).
+        ///                 component and copy its WASM to the final output path.
         ///   gen-bridge    Generate language-specific Bridge SDK client code
         ///                 from agent type interfaces, so other components in
         ///                 the application can call this component as a typed

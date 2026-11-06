@@ -1453,8 +1453,6 @@ fn test_tool_component(name: &str, tools: BTreeMap<ToolName, ToolDeploymentMetad
                 ..KnownExports::default()
             },
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
             tools,

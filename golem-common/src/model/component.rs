@@ -326,8 +326,6 @@ mod tests {
         let metadata = ComponentMetadata::from_parts_with_tools(
             KnownExports::default(),
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
             BTreeMap::from([(

@@ -3424,7 +3424,6 @@
         "$type",
         "componentName",
         "componentId",
-        "componentVersion",
         "componentRevision",
         "componentSize",
         "createdAt",
@@ -3445,9 +3444,6 @@
         },
         "componentId": {
           "type": "string"
-        },
-        "componentVersion": {
-          "type": ["string", "null"]
         },
         "componentRevision": {
           "type": "integer",
@@ -4605,7 +4601,6 @@
       "required": [
         "componentName",
         "componentId",
-        "componentVersion",
         "componentRevision",
         "componentSize",
         "createdAt",
@@ -4620,7 +4615,6 @@
       "properties": {
         "componentName": { "type": "string" },
         "componentId": { "type": "string" },
-        "componentVersion": { "type": ["string", "null"] },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "componentSize": { "type": "integer", "minimum": 0 },
         "createdAt": { "type": "string" },
@@ -6450,9 +6444,7 @@
         "componentName": { "type": "string" },
         "agentId": { "type": "string" },
         "fromRevision": { "type": "integer", "minimum": 0 },
-        "revision": { "type": "integer", "minimum": 0 },
-        "fromVersion": { "type": "string" },
-        "version": { "type": "string" }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6463,9 +6455,7 @@
         "componentName": { "type": "string" },
         "agentId": { "type": "string" },
         "fromRevision": { "type": "integer", "minimum": 0 },
-        "revision": { "type": "integer", "minimum": 0 },
-        "fromVersion": { "type": "string" },
-        "version": { "type": "string" }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },

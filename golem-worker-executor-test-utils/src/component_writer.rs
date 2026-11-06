@@ -43,8 +43,6 @@ pub(crate) struct CachedAnalysis {
     pub(crate) memories: Vec<LinearMemory>,
     pub(crate) known_exports: KnownExports,
     pub(crate) agent_types: Vec<AgentTypeSchema>,
-    pub(crate) root_package_name: Option<String>,
-    pub(crate) root_package_version: Option<String>,
     pub(crate) wasm_hash: Hash,
 }
 
@@ -164,8 +162,6 @@ impl FileSystemComponentWriter {
             memories,
             known_exports,
             agent_types,
-            root_package_name,
-            root_package_version,
             wasm_hash,
         } = {
             if skip_analysis {
@@ -177,8 +173,6 @@ impl FileSystemComponentWriter {
                     memories: vec![],
                     known_exports: KnownExports::default(),
                     agent_types: vec![],
-                    root_package_name: None,
-                    root_package_version: None,
                     wasm_hash,
                 }
             } else {
@@ -213,8 +207,6 @@ impl FileSystemComponentWriter {
             wasm_filename,
             agent_types,
             target_path,
-            root_package_name,
-            root_package_version,
             wasm_hash,
             final_hash: Hash::empty(),
         }
@@ -248,14 +240,14 @@ impl FileSystemComponentWriter {
 
     async fn analyze_memories_and_known_exports(
         path: &Path,
-    ) -> anyhow::Result<(RawComponentMetadata, Vec<LinearMemory>, KnownExports)> {
+    ) -> anyhow::Result<(Vec<LinearMemory>, KnownExports)> {
         let component_bytes = &tokio::fs::read(path).await?;
         let raw_component_metadata = RawComponentMetadata::analyse_component(component_bytes)?;
 
-        let known_exports = raw_component_metadata.known_exports.clone();
-
-        let linear_memories: Vec<LinearMemory> = raw_component_metadata.memories.clone();
-        Ok((raw_component_metadata, linear_memories, known_exports))
+        Ok((
+            raw_component_metadata.memories,
+            raw_component_metadata.known_exports,
+        ))
     }
 
     async fn analyze_component(
@@ -279,7 +271,7 @@ impl FileSystemComponentWriter {
                     source_path = source_path.display()
                 );
 
-                let (raw_component_metadata, memories, known_exports) =
+                let (memories, known_exports) =
                     Self::analyze_memories_and_known_exports(source_path)
                         .await
                         .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
@@ -292,8 +284,6 @@ impl FileSystemComponentWriter {
                     memories,
                     known_exports,
                     agent_types,
-                    root_package_name: raw_component_metadata.root_package_name,
-                    root_package_version: raw_component_metadata.root_package_version,
                     wasm_hash,
                 })
             })
@@ -452,7 +442,7 @@ impl FileSystemComponentWriter {
                     source_path.display()
                 );
 
-                let (raw_component_metadata, memories, known_exports) =
+                let (memories, known_exports) =
                     Self::analyze_memories_and_known_exports(source_path)
                         .await
                         .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
@@ -465,8 +455,6 @@ impl FileSystemComponentWriter {
                     memories,
                     known_exports,
                     agent_types,
-                    root_package_name: raw_component_metadata.root_package_name,
-                    root_package_version: raw_component_metadata.root_package_version,
                     wasm_hash: blake3_hash.into(),
                 })
             })
@@ -597,9 +585,6 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub agent_types: Vec<AgentTypeSchema>,
     pub target_path: PathBuf,
 
-    pub root_package_name: Option<String>,
-    pub root_package_version: Option<String>,
-
     pub final_hash: Hash,
 }
 
@@ -629,8 +614,6 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             metadata: ComponentMetadata::from_parts(
                 value.known_exports,
                 value.memories,
-                value.root_package_name,
-                value.root_package_version,
                 value.agent_types,
                 value.agent_type_provision_configs,
             ),

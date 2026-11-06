@@ -44,7 +44,9 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
                 let component_source_dir = component.component_dir();
 
                 paths.insert(("component wasm", component.wasm()));
-                paths.insert(("output wasm", component.final_wasm()));
+                if !fs::path_eq_normalized(&component.wasm(), &component.output_wasm()) {
+                    paths.insert(("output wasm", component.output_wasm()));
+                }
 
                 for build_step in component.build_commands() {
                     let build_dir = build_step

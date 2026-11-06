@@ -1009,8 +1009,6 @@ async fn test_tool_depublication_waits_for_grant_eligibility_lock(db: &PostgresD
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     Vec::new(),
-                    None,
-                    None,
                     Vec::new(),
                     Default::default(),
                 )),

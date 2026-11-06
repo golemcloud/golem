@@ -919,8 +919,6 @@ impl InvocationHarness {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![agent_type.clone()],
                 BTreeMap::new(),
             ),

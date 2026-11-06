@@ -28,7 +28,6 @@ use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use wit_parser::PackageName;
 
 pub enum TaskResultMarkerHashSourceKind {
     // The string will be hashed
@@ -269,25 +268,6 @@ impl TaskResultMarkerHashSource for ComponentGeneratorMarkerHash<'_> {
             "{}-{}",
             self.component_name, self.generator_kind
         )))
-    }
-}
-
-pub struct AddMetadataMarkerHash<'a> {
-    pub component_name: &'a ComponentName,
-    pub root_package_name: PackageName,
-}
-
-impl TaskResultMarkerHashSource for AddMetadataMarkerHash<'_> {
-    fn kind() -> &'static str {
-        "AddMetadataMarkerHash"
-    }
-
-    fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(Some(self.component_name.to_string()))
-    }
-
-    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(self.root_package_name.to_string()))
     }
 }
 

@@ -317,7 +317,7 @@ pub(crate) async fn collect_custom_targets_lenient(
     let mut agent_type_names = custom_target.agent_type_names.clone();
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
-        if !component.agent_type_extraction_source_wasm().exists() {
+        if !component.output_wasm().exists() {
             continue;
         }
 
@@ -489,7 +489,7 @@ async fn collect_manifest_targets_for_components_and_mode(
                 if ctx
                     .application()
                     .component(&provider)
-                    .agent_type_extraction_source_wasm()
+                    .output_wasm()
                     .exists()
                 {
                     extract_and_store_component_metadata(ctx, &provider).await?;
@@ -579,7 +579,7 @@ async fn collect_agent_manifest_targets_for_entry(
             && !ctx
                 .application()
                 .component(component_name)
-                .agent_type_extraction_source_wasm()
+                .output_wasm()
                 .exists()
         {
             continue;
@@ -725,7 +725,7 @@ async fn collect_tool_manifest_targets_for_entry(
             && !ctx
                 .application()
                 .component(component_name)
-                .agent_type_extraction_source_wasm()
+                .output_wasm()
                 .exists()
         {
             continue;
@@ -937,7 +937,7 @@ async fn collect_dependency_guest_bridge_targets(
         if ctx
             .application()
             .component(component_name)
-            .agent_type_extraction_source_wasm()
+            .output_wasm()
             .exists()
         {
             extracted.insert(
@@ -1770,7 +1770,7 @@ async fn gen_bridge_sdk_target(
 ) -> anyhow::Result<()> {
     let freshness_source = match &target.source {
         BridgeSdkTargetSource::Local { component_name } => {
-            ctx.application().component(component_name).final_wasm()
+            ctx.application().component(component_name).output_wasm()
         }
         BridgeSdkTargetSource::RemoteRelease {
             manifest_source, ..
