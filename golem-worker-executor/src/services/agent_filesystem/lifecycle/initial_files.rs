@@ -648,7 +648,7 @@ impl InitialFileSources {
             .try_fold(self, |mut sources, (path, file)| async move {
                 match sources.loaded.get(&file.content_hash) {
                     Some(source) if source.size() == file.size => Ok(sources),
-                    Some(_) => Err(Error::Sandbox(FilesystemStorageError::from(
+                    Some(_) => Err(Error::InitialFileFailed(FilesystemStorageError::from(
                         OperationContext::verification(
                             "verify consistent initial-file source size",
                             Some(path),
@@ -674,7 +674,7 @@ impl InitialFileSources {
             .get(&file.content_hash)
             .map(|source| source.path().clone())
             .ok_or_else(|| {
-                Error::Sandbox(FilesystemStorageError::from(
+                Error::InitialFileFailed(FilesystemStorageError::from(
                     OperationContext::verification(
                         "find the loaded initial-file source",
                         Some(path),
@@ -1149,9 +1149,11 @@ pub(super) fn declarations_of(
         |mut declarations, file| {
             let path = Arc::<Path>::from(PathBuf::from(file.path.to_rel_string()));
             match declarations.entry(path) {
-                Entry::Occupied(entry) => Err(Error::Sandbox(FilesystemStorageError::from(
-                    OperationContext::verification(duplicate_operation, Some(entry.key())),
-                ))),
+                Entry::Occupied(entry) => {
+                    Err(Error::InitialFileFailed(FilesystemStorageError::from(
+                        OperationContext::verification(duplicate_operation, Some(entry.key())),
+                    )))
+                }
                 Entry::Vacant(entry) => {
                     entry.insert(Arc::new(file));
                     Ok(declarations)
@@ -1174,7 +1176,7 @@ pub(super) fn validate_compatible(
                 .is_some_and(|existing| existing != *file)
         })
         .map_or(Ok(()), |(path, _)| {
-            Err(Error::Sandbox(FilesystemStorageError::from(
+            Err(Error::InitialFileFailed(FilesystemStorageError::from(
                 OperationContext::verification(
                     "resolve conflicting owner filesystem provision declarations",
                     Some(path),
@@ -1197,7 +1199,7 @@ pub(super) fn declaration_view<'a>(
 /// The error of a failed load of the initial-file source that an install or a start seeds at
 /// `path`: [`Error::InitialFileUnavailable`] when a later load can pass,
 /// [`Error::InitialFileRefused`] when the blob storage refuses the executor, and
-/// [`Error::Sandbox`] for every other failure.
+/// [`Error::InitialFileFailed`] for a permanent source failure.
 pub(super) fn load_error(error: InitialFileLoadError, path: &Path) -> Error {
     let failure = error.failure;
     let source = FilesystemStorageError::io(
@@ -1208,7 +1210,7 @@ pub(super) fn load_error(error: InitialFileLoadError, path: &Path) -> Error {
     match failure {
         InitialFileLoadFailure::Unavailable => Error::InitialFileUnavailable(source),
         InitialFileLoadFailure::Refused(refusal) => Error::InitialFileRefused { refusal, source },
-        InitialFileLoadFailure::Failed => Error::Sandbox(source),
+        InitialFileLoadFailure::Failed => Error::InitialFileFailed(source),
     }
 }
 
@@ -1227,7 +1229,7 @@ pub(crate) async fn prepare_initial_files(
     for file in files {
         let target = PathBuf::from(file.path.to_rel_string());
         if !targets.insert(target.clone()) {
-            return Err(Error::Sandbox(FilesystemStorageError::from(
+            return Err(Error::InitialFileFailed(FilesystemStorageError::from(
                 OperationContext::verification("prepare unique initial-file target", Some(&target)),
             )));
         }
@@ -1240,7 +1242,7 @@ pub(crate) async fn prepare_initial_files(
         let source = match sources.get(&file.content_hash) {
             Some(source) if source.size() == file.size => source.clone(),
             Some(_) => {
-                return Err(Error::Sandbox(FilesystemStorageError::from(
+                return Err(Error::InitialFileFailed(FilesystemStorageError::from(
                     OperationContext::verification(
                         "verify consistent initial-file source size",
                         Some(&target),

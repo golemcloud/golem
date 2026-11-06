@@ -1219,7 +1219,7 @@ async fn an_update_with_two_sizes_for_one_content_fails_before_any_change() {
 /// A source that the blob storage cannot give now stops an update before its first change as an
 /// unavailable source, and a source that the storage refuses stops it as a refused source. The
 /// generation stays valid: the same update passes when the storage gives the source. A source
-/// that the storage does not hold is a sandbox error.
+/// that the storage does not hold is a permanent initial-file error.
 #[test]
 #[timeout("60s")]
 async fn an_unavailable_initial_file_source_stops_an_update_before_any_change_and_a_later_update_passes()
@@ -1299,7 +1299,7 @@ async fn an_unavailable_initial_file_source_stops_an_update_before_any_change_an
         "{refused}"
     );
     assert!(unchanged);
-    assert!(matches!(failed, Error::Sandbox(_)), "{failed}");
+    assert!(matches!(failed, Error::InitialFileFailed(_)), "{failed}");
     assert_eq!(std::fs::read(root.join("added.txt")).unwrap(), content);
     assert!(!filesystem_activity(&resident).has_terminal_failure());
     delete(seal(resident)).await.unwrap();
@@ -3019,7 +3019,9 @@ fn declarations_at(
 fn error_outcome(error: Error) -> StepOutcome {
     match error {
         Error::Access(error) => StepOutcome::Access(error),
-        Error::Sandbox(error) => StepOutcome::Sandbox(error.io_kind()),
+        Error::Sandbox(error) | Error::InitialFileFailed(error) => {
+            StepOutcome::Sandbox(error.io_kind())
+        }
         Error::InitialFileUnavailable(_) => StepOutcome::InitialFileUnavailable,
         Error::InitialFileRefused { .. } => StepOutcome::InitialFileRefused,
         Error::InitialFileConflict(conflict) => {
