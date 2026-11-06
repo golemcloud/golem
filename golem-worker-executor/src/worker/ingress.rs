@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::worker::*;
+use chrono::{DateTime, Utc};
+use golem_common::model::{ScheduleId, ScheduledAction};
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Invocation entry point. Returns `Finished(...)` on read-only cache hit,
@@ -120,7 +122,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // For ReadOnly the helper returns the epoch captured under the
                 // enqueue lock; using any other epoch could store stale data.
                 let captured = self
-                    .enqueue_worker_invocation_with_effect(invocation, effect)
+                    .enqueue_worker_invocation_with_effect(invocation, effect, None)
                     .await?
                     .0;
                 (ResultOrSubscription::Pending(subscription), captured)
@@ -746,6 +748,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
         self.state_actor.status().await.pending_invocations.clone()
     }
+
+    pub(in crate::worker) async fn has_due_invocations(&self) -> bool {
+        let status = self.state_actor.status().await;
+        let now = Timestamp::now_utc();
+        status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.is_due(now))
+    }
+
     /// Reserved constructor key, also used to recognize initialization before inspecting files.
     pub(in crate::worker) fn initialization_idempotency_key(&self) -> IdempotencyKey {
         IdempotencyKey::new(format!("init-{}", self.agent_id()))
@@ -823,6 +835,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.enqueue_worker_invocation_with_effect(
             invocation,
             read_only_cache::InvocationEffect::UnknownAssumeMutating,
+            None,
         )
         .await
         .map(|(_, oplog_index)| {
@@ -833,6 +846,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         oplog: &Arc<dyn Oplog>,
         invocation: AgentInvocation,
+        not_before: Option<Timestamp>,
     ) -> Result<(Option<IdempotencyKey>, OplogEntry), WorkerExecutorError> {
         let (semantic_key, idempotency_key, invocation_payload, invocation_context) =
             into_pending_invocation_parts(invocation);
@@ -861,6 +875,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok((
             semantic_key,
             OplogEntry::pending_agent_invocation(
+                not_before,
                 idempotency_key,
                 payload,
                 invocation_context.trace_id,
@@ -879,6 +894,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: AgentInvocation,
         read_only_cache_effect: read_only_cache::InvocationEffect,
+        not_before: Option<Timestamp>,
     ) -> Result<(Option<u64>, Option<OplogIndex>), WorkerExecutorError> {
         // Carried on the span so the two sides of the hand-off share a searchable
         // key: the execution runs in its own trace, linked rather than nested, so
@@ -925,7 +941,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             let (semantic_idempotency_key, entry) = self
-                .pending_invocation_entry(&self.oplog, invocation)
+                .pending_invocation_entry(&self.oplog, invocation, not_before)
                 .await?;
 
             // Snapshot the epoch for a later read-only cache fill. Keyed admission releases and
@@ -1025,6 +1041,91 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .instrument(span)
         .await
     }
+
+    /// Commits scheduled work without starting the guest. Retrying acceptance repairs its wake
+    /// from the committed entry, so a retry cannot replace the original input or deadline.
+    pub async fn schedule_invocation(
+        &self,
+        invocation: AgentInvocation,
+        scheduled_at: DateTime<Utc>,
+    ) -> Result<ScheduleId, WorkerExecutorError> {
+        if !matches!(invocation, AgentInvocation::ExternalTool { .. }) {
+            self.ensure_component_agent_ingress("scheduled invocation")?;
+        }
+        let key = Self::require_idempotency_key(&invocation)?;
+        let fingerprint = self.initial_worker_metadata.fingerprint;
+        let schedule_id = ScheduleId::for_invocation(fingerprint, &key);
+        // Oplog timestamps persist milliseconds. Round up so serialization cannot make an
+        // invocation runnable before the requested instant, including after reconstruction.
+        let millis = scheduled_at.timestamp_millis().max(0) as u64
+            + u64::from(
+                !scheduled_at
+                    .timestamp_subsec_nanos()
+                    .is_multiple_of(1_000_000),
+            );
+        // A same-key retry returns the original receipt, also from an ephemeral agent that has
+        // already begun its execution and accepts nothing new.
+        if self.lookup_invocation_result(&key).await == LookupResult::New {
+            self.enqueue_worker_invocation_with_effect(
+                invocation,
+                read_only_cache::InvocationEffect::UnknownAssumeMutating,
+                Some(Timestamp::from(millis)),
+            )
+            .await?;
+        }
+        let status = self.state_actor.status().await;
+        if let Some(pending) = status
+            .pending_invocations
+            .iter()
+            .find(|pending| pending.has_idempotency_key(&key))
+            && let Some(deadline) = pending.not_before
+        {
+            self.register_invocation_wake(key, deadline).await;
+        }
+        Ok(schedule_id)
+    }
+
+    /// Registers the wakes of every committed future invocation. Scheduler storage keeps an
+    /// existing entry for the same schedule id, so this only restores wakes that were lost
+    /// between the pending commit and the wake insert. A wake registered for an entry cancelled
+    /// meanwhile finds no pending entry at delivery and is acknowledged without effect.
+    pub(in crate::worker) async fn register_pending_invocation_wakes(&self) {
+        // Construction publishes before this runs, so deletion may already have stopped the actor.
+        let Ok(Some(status)) = self.state_actor.observe_status().await else {
+            return;
+        };
+        // A begun ephemeral agent never runs its pending work again.
+        if self.agent_mode() == AgentMode::Ephemeral && status.ephemeral_execution_begun {
+            return;
+        }
+        let scheduled = status
+            .pending_invocations
+            .iter()
+            .filter_map(|pending| Some((pending.idempotency_key()?.clone(), pending.not_before?)))
+            .collect::<Vec<_>>();
+        for (key, deadline) in scheduled {
+            self.register_invocation_wake(key, deadline).await;
+        }
+    }
+
+    async fn register_invocation_wake(&self, key: IdempotencyKey, deadline: Timestamp) {
+        let fingerprint = self.initial_worker_metadata.fingerprint;
+        let scheduled_at = DateTime::from_timestamp_millis(deadline.to_millis() as i64)
+            .expect("persisted invocation deadline is in the chrono range");
+        self.deps
+            .scheduler_service()
+            .schedule_with_id(
+                ScheduleId::for_invocation(fingerprint, &key),
+                scheduled_at,
+                ScheduledAction::WakeInvocation {
+                    owned_agent_id: self.owned_agent_id.clone(),
+                    idempotency_key: key,
+                    target_worker_fingerprint: fingerprint,
+                },
+            )
+            .await;
+    }
+
     pub(in crate::worker) fn accept_ephemeral_invocation(
         &self,
         invocation: &AgentInvocation,
@@ -1060,6 +1161,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .map_err(|_| WorkerExecutorError::runtime("Filesystem inspection stopped"))?
     }
+    /// Refuses an inspection that would be the first start of an ephemeral agent: it would run
+    /// the constructor before a schedule whose commit the caller may still be repairing.
+    pub(crate) async fn ensure_inspection_may_start(&self) -> Result<(), WorkerExecutorError> {
+        if self.agent_mode() != AgentMode::Ephemeral {
+            return Ok(());
+        }
+        let status = self.state_actor.try_status().await?;
+        if super::invocation_loop::ephemeral_inspection_may_start(
+            &status,
+            &self.initialization_idempotency_key(),
+            Timestamp::now_utc(),
+        ) {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::invalid_request(
+                "Cannot inspect an ephemeral agent before it starts executing",
+            ))
+        }
+    }
+
     pub(in crate::worker) async fn enqueue_filesystem_request(
         self: &Arc<Self>,
         invocation: QueuedWorkerInvocation,

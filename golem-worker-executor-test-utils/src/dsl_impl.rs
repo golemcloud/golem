@@ -1252,6 +1252,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                scheduled: None,
             })
             .await?
             .into_inner();

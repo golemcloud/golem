@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::worker::invocation_session_result;
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationFailure, InvocationFailureKind, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
-    InvocationStart, LogEvent,
+    InvocationStart, LogEvent, ScheduledInvocationCancellation,
 };
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -658,6 +658,7 @@ pub trait WorkerClient: Send + Sync {
         idempotency_key: &IdempotencyKey,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
+        scheduled: Option<ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool>;
 
     async fn invoke_agent(
@@ -2023,6 +2024,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         idempotency_key: &IdempotencyKey,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
+        scheduled: Option<ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool> {
         let agent_id = agent_id.clone();
         let idempotency_key = idempotency_key.clone();
@@ -2038,6 +2040,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: None,
+                    scheduled: scheduled.clone(),
                 }))
             },
             |response| match response.into_inner() {

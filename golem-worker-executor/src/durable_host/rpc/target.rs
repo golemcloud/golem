@@ -49,7 +49,6 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
-use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::invocation_context::InvocationContextSpan;
@@ -88,7 +87,6 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
-    remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     creation_index: Option<OplogIndex>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
@@ -100,7 +98,6 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
             target_activation: WasmRpcTargetActivation::DeferredEphemeral { env, config },
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             remote_owner,
             creation_index,
         }),
@@ -175,7 +172,6 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
-    remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     pinned_ephemeral_identity: bool,
     creation_index: Option<OplogIndex>,
@@ -205,7 +201,6 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             ),
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             remote_owner,
             creation_index,
         }),
@@ -223,7 +218,6 @@ pub(super) async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
-    remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     pinned_ephemeral_identity: bool,
     creation_index: Option<OplogIndex>,
@@ -246,7 +240,6 @@ pub(super) async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
             target_activation,
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             remote_owner,
             creation_index,
         }),

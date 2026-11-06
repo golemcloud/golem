@@ -1323,6 +1323,7 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
 fn pending_agent_invocation_with_initialization_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
+        not_before: None,
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             constructor_parameters: typed(
@@ -1352,6 +1353,7 @@ fn pending_agent_invocation_with_initialization_serialization_poem_serde_equival
 fn pending_worker_invocation_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
+        not_before: Some(Timestamp::from(123_456)),
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
@@ -1563,6 +1565,47 @@ fn resumed_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn pending_invocation_deadline_raw_and_public_roundtrips() {
+    for not_before in [None, Some(Timestamp::from(123_456))] {
+        let raw = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before,
+            idempotency_key: IdempotencyKey::new("pending".to_string()),
+            payload: OplogPayload::SerializedInline {
+                bytes: crate::serialization::serialize(
+                    &crate::model::AgentInvocationPayload::SaveSnapshot,
+                )
+                .unwrap(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![],
+        };
+        assert!(raw.is_hint());
+        let bytes = crate::serialization::serialize(&raw).unwrap();
+        let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(raw, decoded);
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            raw.clone().try_into().unwrap();
+        let decoded: OplogEntry = proto.try_into().unwrap();
+        assert_eq!(raw, decoded);
+
+        let public = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+            timestamp: raw.timestamp(),
+            not_before,
+            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+        });
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            public.clone().try_into().unwrap();
+        let decoded: PublicOplogEntry = proto.try_into().unwrap();
+        assert_eq!(public, decoded);
+        let decoded: PublicOplogEntry = serde_json::from_str(&public.to_json_string()).unwrap();
+        assert_eq!(public, decoded);
+    }
 }
 
 #[test]

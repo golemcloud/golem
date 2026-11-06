@@ -461,6 +461,42 @@ fn any_entry_moves_the_oplog_index() {
     assert_ne!(folded, baseline);
 }
 
+/// The execution-begun bit is set by a `Restart` and survives later folds without one.
+#[test]
+fn restart_sets_ephemeral_execution_begun_permanently() {
+    let retry = RetryConfig::default();
+    let baseline = AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(2),
+        ..AgentStatusRecord::default()
+    };
+    let before = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        baseline,
+        BTreeMap::from([(OplogIndex::from_u64(3), OplogEntry::grow_memory(8))]),
+        &retry,
+    )
+    .unwrap();
+    assert!(!before.ephemeral_execution_begun);
+
+    let begun = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        before,
+        BTreeMap::from([(OplogIndex::from_u64(4), OplogEntry::restart())]),
+        &retry,
+    )
+    .unwrap();
+    assert!(begun.ephemeral_execution_begun);
+
+    let later = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        begun,
+        BTreeMap::from([(OplogIndex::from_u64(5), OplogEntry::grow_memory(8))]),
+        &retry,
+    )
+    .unwrap();
+    assert!(later.ephemeral_execution_begun);
+}
+
 fn export_owner_fingerprint() -> AgentFingerprint {
     AgentFingerprint(uuid::Uuid::from_u128(1))
 }
@@ -4425,6 +4461,7 @@ impl TestCaseBuilder {
         let (idempotency_key, invocation_payload, invocation_context) =
             invocation.clone().into_parts();
         let entry = OplogEntry::pending_agent_invocation(
+            None,
             idempotency_key,
             OplogPayload::Inline(Box::new(invocation_payload)),
             invocation_context.trace_id.clone(),
@@ -4441,6 +4478,7 @@ impl TestCaseBuilder {
         self.add(entry.clone(), move |mut status| {
             status.pending_invocations.push(PendingInvocationRef {
                 timestamp: entry.timestamp(),
+                not_before: None,
                 oplog_index: oplog_idx,
                 idempotency_key: ref_idempotency_key.clone(),
                 manual_update_target_revision,
@@ -7436,6 +7474,7 @@ mod region_fold {
     pub(super) fn manual_invocation(target: u64) -> OplogEntry {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
@@ -7973,6 +8012,7 @@ mod invocation_payload_decodes {
         match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
+                not_before,
                 idempotency_key,
                 payload: OplogPayload::Inline(payload),
                 trace_id,
@@ -7980,6 +8020,7 @@ mod invocation_payload_decodes {
                 invocation_context,
             } => OplogEntry::PendingAgentInvocation {
                 timestamp,
+                not_before,
                 idempotency_key,
                 payload: OplogPayload::SerializedInline {
                     bytes: golem_common::serialization::serialize(payload.as_ref()).unwrap(),
@@ -7996,6 +8037,7 @@ mod invocation_payload_decodes {
     fn method_invocation() -> OplogEntry {
         serialized(OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "a".to_string(),
@@ -8025,6 +8067,47 @@ mod invocation_payload_decodes {
         INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.set(0));
         fold();
         INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.get())
+    }
+
+    #[test]
+    fn pending_invocation_deadline_survives_serialization_and_incremental_status_fold() {
+        let deadline = Timestamp::from(123_456);
+        let mut scheduled = method_invocation();
+        let OplogEntry::PendingAgentInvocation { not_before, .. } = &mut scheduled else {
+            unreachable!()
+        };
+        *not_before = Some(deadline);
+        assert!(scheduled.is_hint());
+
+        let bytes = golem_common::serialization::serialize(&scheduled).unwrap();
+        let scheduled: OplogEntry = golem_common::serialization::deserialize(&bytes).unwrap();
+        let entries = BTreeMap::from([(idx(2), scheduled), (idx(3), method_invocation())]);
+        let fold = |initial, entries| {
+            super::super::update_status_with_new_entries(
+                AgentMode::Durable,
+                initial,
+                entries,
+                &RetryConfig::default(),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let full = fold(AgentStatusRecord::default(), entries.clone());
+        let prefix = fold(
+            AgentStatusRecord::default(),
+            BTreeMap::from([(idx(2), entries[&idx(2)].clone())]),
+        );
+        let bytes = golem_common::serialization::serialize(&prefix).unwrap();
+        let restored = golem_common::serialization::deserialize(&bytes).unwrap();
+        let incremental = fold(
+            restored,
+            BTreeMap::from([(idx(3), entries[&idx(3)].clone())]),
+        );
+
+        assert_eq!(full.pending_invocations, incremental.pending_invocations);
+        assert_eq!(full.pending_invocations.len(), 2);
+        assert_eq!(full.pending_invocations[0].not_before, Some(deadline));
+        assert_eq!(full.pending_invocations[1].not_before, None);
     }
 
     #[test]

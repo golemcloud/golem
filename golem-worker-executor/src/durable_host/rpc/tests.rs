@@ -326,6 +326,32 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 
 #[async_trait]
 impl Rpc for FingerprintMismatchRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
     async fn create_demand(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -383,6 +409,32 @@ impl Rpc for FingerprintMismatchRpc {
 
 #[async_trait]
 impl Rpc for ActivationFailureRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
     async fn create_demand(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -440,6 +492,32 @@ impl Rpc for ActivationFailureRpc {
 
 #[async_trait]
 impl Rpc for RecordingEnvRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
     async fn create_demand(
         &self,
         _owned_agent_id: &OwnedAgentId,
