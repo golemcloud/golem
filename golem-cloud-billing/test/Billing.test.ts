@@ -339,7 +339,8 @@ describe("Polar billing", () => {
 
       const html = await page(jar)
 
-      expect(html).toContain("Usage this month (UTC)")
+      expect(html).toContain("Monthly usage")
+      expect(html).toContain("This month (UTC), against the monthly allowance of the plan.")
       expect(html).toContain("2.5M of 100M GCU included · 3%")
       expect(html).toContain("250 of 912.5 GB-hours included · 27%")
       expect(html).toContain(`max="100000000" value="2500000"`)
@@ -390,7 +391,7 @@ describe("Polar billing", () => {
 
       const html = await page(jar)
 
-      expect(html).not.toContain("Usage this month")
+      expect(html).toContain("Golem did not return the usage of this month.")
       expect(html).toContain(`action="/billing/overage"`)
     })
 

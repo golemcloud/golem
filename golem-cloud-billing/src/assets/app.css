@@ -312,19 +312,19 @@ main {
   color: var(--text);
 }
 
-.overage {
+.usage-card {
   margin-top: 3rem;
 }
 
-.overage + .grid {
+.usage-card + .grid {
   margin-top: 1.25rem;
 }
 
-.overage .actions {
+.usage-card .actions {
   margin-bottom: 0.75rem;
 }
 
-.overage h3 {
+.usage-card h3 {
   margin-bottom: 0.75rem;
   color: var(--text-secondary);
   font-size: 0.85rem;
