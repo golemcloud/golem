@@ -19,8 +19,8 @@ use crate::services::token::TokenService;
 use golem_common::model::Empty;
 use golem_common::model::Page;
 use golem_common::model::account::{
-    Account, AccountCreation, AccountEmail, AccountId, AccountRevision, AccountSetPlan,
-    AccountUpdate,
+    Account, AccountCreation, AccountDeletionHold, AccountDeletionHoldCreation, AccountEmail,
+    AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
 use golem_common::model::auth::{Token, TokenCreation, TokenWithSecret};
 use golem_common::model::plan::Plan;
@@ -353,6 +353,9 @@ impl AccountsApi {
     }
 
     /// Delete an account.
+    ///
+    /// The delete fails with 409 while the account has a deletion hold. The error lists the
+    /// reasons of the holds.
     #[oai(
         path = "/:account_id",
         method = "delete",
@@ -385,6 +388,139 @@ impl AccountsApi {
     ) -> ApiResult<Json<Empty>> {
         self.account_service
             .delete(account_id, current_revision, &auth)
+            .await?;
+        Ok(Json(Empty {}))
+    }
+
+    /// List the deletion holds of an account.
+    ///
+    /// While an account has a deletion hold, the account cannot be deleted.
+    #[oai(
+        path = "/:account_id/deletion-holds",
+        method = "get",
+        operation_id = "list_account_deletion_holds"
+    )]
+    async fn list_account_deletion_holds(
+        &self,
+        account_id: Path<AccountId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<AccountDeletionHold>>> {
+        let record = recorded_http_api_request!(
+            "list_account_deletion_holds",
+            account_id = account_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .list_account_deletion_holds_internal(account_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn list_account_deletion_holds_internal(
+        &self,
+        account_id: AccountId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<AccountDeletionHold>>> {
+        let values = self
+            .account_service
+            .list_deletion_holds(account_id, &auth)
+            .await?;
+        Ok(Json(Page { values }))
+    }
+
+    /// Place a deletion hold on an account.
+    ///
+    /// The holder is the account of the caller. When the holder has a hold on the account
+    /// already, the reason replaces the reason of that hold.
+    #[oai(
+        path = "/:account_id/deletion-holds/:holder_account_id",
+        method = "put",
+        operation_id = "place_account_deletion_hold"
+    )]
+    async fn place_account_deletion_hold(
+        &self,
+        account_id: Path<AccountId>,
+        holder_account_id: Path<AccountId>,
+        payload: Json<AccountDeletionHoldCreation>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<AccountDeletionHold>> {
+        let record = recorded_http_api_request!(
+            "place_account_deletion_hold",
+            account_id = account_id.0.to_string(),
+            holder_account_id = holder_account_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .place_account_deletion_hold_internal(
+                account_id.0,
+                holder_account_id.0,
+                payload.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn place_account_deletion_hold_internal(
+        &self,
+        account_id: AccountId,
+        holder_account_id: AccountId,
+        payload: AccountDeletionHoldCreation,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<AccountDeletionHold>> {
+        let result = self
+            .account_service
+            .place_deletion_hold(account_id, holder_account_id, payload, &auth)
+            .await?;
+        Ok(Json(result))
+    }
+
+    /// Remove a deletion hold from an account.
+    ///
+    /// Removing a hold that does not exist succeeds.
+    #[oai(
+        path = "/:account_id/deletion-holds/:holder_account_id",
+        method = "delete",
+        operation_id = "remove_account_deletion_hold"
+    )]
+    async fn remove_account_deletion_hold(
+        &self,
+        account_id: Path<AccountId>,
+        holder_account_id: Path<AccountId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "remove_account_deletion_hold",
+            account_id = account_id.0.to_string(),
+            holder_account_id = holder_account_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .remove_account_deletion_hold_internal(account_id.0, holder_account_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn remove_account_deletion_hold_internal(
+        &self,
+        account_id: AccountId,
+        holder_account_id: AccountId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Empty>> {
+        self.account_service
+            .remove_deletion_hold(account_id, holder_account_id, &auth)
             .await?;
         Ok(Json(Empty {}))
     }

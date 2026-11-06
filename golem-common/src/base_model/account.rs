@@ -236,4 +236,17 @@ declare_structs! {
         pub current_revision: AccountRevision,
         pub plan: PlanId
     }
+
+    /// A deletion hold: while an account has one, the registry refuses to delete it. The holder
+    /// is the account that placed the hold, and only the holder removes it.
+    pub struct AccountDeletionHold {
+        pub account_id: AccountId,
+        pub holder_account_id: AccountId,
+        pub reason: String,
+        pub created_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    pub struct AccountDeletionHoldCreation {
+        pub reason: String,
+    }
 }

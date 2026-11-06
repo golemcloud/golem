@@ -173,6 +173,16 @@ async fn test_card_dag_revoke_transaction_rolls_back_atomically(deps: &Deps) {
 }
 
 #[test]
+async fn test_account_deletion_holds(deps: &Deps) {
+    crate::repo::common::test_account_deletion_holds(deps).await;
+}
+
+#[test]
+async fn test_oauth2_login_after_account_delete_creates_new_account(deps: &Deps) {
+    crate::repo::common::test_oauth2_login_after_account_delete_creates_new_account(deps).await;
+}
+
+#[test]
 async fn test_create_and_get_account(deps: &Deps) {
     crate::repo::common::test_create_and_get_account(deps).await;
 }

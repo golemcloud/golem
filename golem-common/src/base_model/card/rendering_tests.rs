@@ -647,7 +647,8 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
                 SystemVerb::ImpersonateUser,
                 SystemVerb::ViewDefaultPlan,
                 SystemVerb::ViewAccountSummariesReport,
-                SystemVerb::ViewAccountCountsReport
+                SystemVerb::ViewAccountCountsReport,
+                SystemVerb::OverrideDeletionHold
             ]),
             Just(SystemResourcePattern).boxed()
         ),
@@ -670,7 +671,8 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
                 AccountVerb::Update,
                 AccountVerb::Delete,
                 AccountVerb::SetPlan,
-                AccountVerb::ViewPlan
+                AccountVerb::ViewPlan,
+                AccountVerb::HoldDeletion
             ]),
             Just(AccountResourcePattern).boxed()
         ),
