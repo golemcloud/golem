@@ -264,22 +264,69 @@ interface UsageMeter {
   /** Converts an amount of the meter into the unit that the page shows. */
   readonly scale: number
   readonly format: Intl.NumberFormat
+  /** The overage price of the meter, and the amount of the meter that the price is for. */
+  readonly price: (prices: OveragePrices) => string
+  readonly pricedAmount: number
 }
 
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 2 })
 const oneDecimal = new Intl.NumberFormat("en", { maximumFractionDigits: 1 })
 const twoDecimals = new Intl.NumberFormat("en", { maximumFractionDigits: 2 })
+// An amount below one shows two significant digits, so that a small usage does not show as 0.
+const small = new Intl.NumberFormat("en", { maximumSignificantDigits: 2 })
+const usd = new Intl.NumberFormat("en", { style: "currency", currency: "USD" })
 
 // Memory shows GB-hours, the unit of its overage price, not the GB-seconds of the meter.
 const usageMeters = {
-  computeGcu: { label: "Compute", unit: "GCU", scale: 1, format: compact },
-  memoryGbSeconds: { label: "Memory", unit: "GB-hours", scale: 1 / 3600, format: oneDecimal },
-  durableStorageGbMonth: { label: "Durable storage", unit: "GB-month", scale: 1, format: twoDecimals },
-  ephemeralStorageGbMonth: { label: "Ephemeral storage", unit: "GB-month", scale: 1, format: twoDecimals }
+  computeGcu: {
+    label: "Compute",
+    unit: "GCU",
+    scale: 1,
+    format: compact,
+    price: (prices) => prices.perMillionGcu,
+    pricedAmount: 1_000_000
+  },
+  memoryGbSeconds: {
+    label: "Memory",
+    unit: "GB-hours",
+    scale: 1 / 3600,
+    format: oneDecimal,
+    price: (prices) => prices.perGbHour,
+    pricedAmount: 3600
+  },
+  durableStorageGbMonth: {
+    label: "Durable storage",
+    unit: "GB-month",
+    scale: 1,
+    format: twoDecimals,
+    price: (prices) => prices.perDurableGbMonth,
+    pricedAmount: 1
+  },
+  ephemeralStorageGbMonth: {
+    label: "Ephemeral storage",
+    unit: "GB-month",
+    scale: 1,
+    format: twoDecimals,
+    price: (prices) => prices.perEphemeralGbMonth,
+    pricedAmount: 1
+  }
 } as const satisfies Record<string, UsageMeter>
 
-const usageItem = (meter: UsageMeter, limit: MonthlyLimit) => {
-  const number = (value: number) => meter.format.format(value * meter.scale)
+type MeterKey = keyof typeof usageMeters
+
+const meterKeys = Object.keys(usageMeters) as Array<MeterKey>
+
+/** The paid overage of a meter in USD, at the overage prices of the page. */
+const overageCost = (meter: UsageMeter, limit: MonthlyLimit, prices: OveragePrices): number =>
+  ((limit.allowOverageUsage ?? 0) / meter.pricedAmount) * Number(meter.price(prices))
+
+const money = (value: number): string => (value > 0 && value < 0.01 ? "less than $0.01" : usd.format(value))
+
+const usageItem = (meter: UsageMeter, limit: MonthlyLimit, prices: OveragePrices) => {
+  const number = (value: number) => {
+    const shown = value * meter.scale
+    return shown > 0 && shown < 1 ? small.format(shown) : meter.format.format(shown)
+  }
   const amount = (value: number) => `${number(value)} ${meter.unit}`
   if (limit.metering === "disabled") {
     return html`<div><dt>${meter.label}</dt><dd class="muted">Not metered</dd></div>`
@@ -292,23 +339,34 @@ const usageItem = (meter: UsageMeter, limit: MonthlyLimit) => {
   }
   const allowance = limit.resolvedMonthlyAmount
   const used = Math.min(limit.usage, allowance)
-  const percent = allowance > 0 ? Math.round((used / allowance) * 100) : 100
+  const exact = allowance > 0 ? (used / allowance) * 100 : 100
+  const percent = used > 0 && exact < 1 ? "<1%" : `${Math.round(exact)}%`
   const overage = limit.allowOverageUsage ?? 0
   return html`<div>
             <dt>${meter.label}</dt>
-            <dd>${number(used)} of ${amount(allowance)} · ${percent}%
-              <progress class="${used >= allowance ? "full" : ""}" max="${Math.max(allowance, 1)}" value="${used}" aria-label="${meter.label} used">${percent}%</progress>
+            <dd>${number(used)} of ${amount(allowance)} included · ${percent}
+              <progress class="${used >= allowance ? "full" : ""}" max="${Math.max(allowance, 1)}" value="${used}" aria-label="${meter.label} used">${percent}</progress>
             </dd>
-            ${overage > 0 ? html`<dd class="muted">and ${amount(overage)} of paid overage</dd>` : null}
+            ${
+              overage > 0
+                ? html`<dd class="overage-amount">+ ${amount(overage)} of paid overage · ${money(overageCost(meter, limit, prices))}</dd>`
+                : null
+            }
           </div>`
 }
 
-const usageSection = (limits: AccountLimits) => {
+const usageSection = (limits: AccountLimits, prices: OveragePrices) => {
   const monthly = limits.monthly
   if (monthly === undefined) return null
+  const total = meterKeys.reduce((sum, key) => sum + overageCost(usageMeters[key], monthly[key], prices), 0)
   return html`<h3>Usage this month (UTC)</h3>
+        ${
+          total > 0
+            ? html`<p class="notice">Paid overage this month: about ${money(total)} plus tax, at the prices below. It is billed on the next invoice.</p>`
+            : null
+        }
         <dl class="facts usage">
-          ${(Object.keys(usageMeters) as Array<keyof typeof usageMeters>).map((key) => usageItem(usageMeters[key], monthly[key]))}
+          ${meterKeys.map((key) => usageItem(usageMeters[key], monthly[key], prices))}
         </dl>`
 }
 
@@ -326,7 +384,7 @@ const overageCard = (options: SignedInPageOptions) => {
             ? "On. When the account has used its monthly allowance, its agents keep running, and the usage above the allowance is billed at these prices."
             : "Off. When the account has used its monthly allowance, its agents stop until the next month."
         }</p>
-        ${usageSection(options.limits)}
+        ${usageSection(options.limits, prices)}
         <h3>Overage prices</h3>
         <dl class="facts prices">
           <div><dt>Compute</dt><dd>$${prices.perMillionGcu} per million GCU</dd></div>
