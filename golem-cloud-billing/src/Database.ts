@@ -1,12 +1,14 @@
-import { Context, Effect, Layer, Redacted } from "effect"
+import { type Config, Context, Effect, Layer, Redacted, type Scope } from "effect"
 import pg from "pg"
-import { BillingConfig, type DbTls, type PostgresConfig } from "./BillingConfig.ts"
+import { BillingConfig, type DbTls, type PostgresConfig, postgresConfig } from "./BillingConfig.ts"
 
 export interface DatabaseShape {
   /** A pool whose connections have the schema of the billing app as their `search_path`. */
   readonly pool: pg.Pool
   /** The PostgreSQL schema that holds every table of the billing app. */
   readonly schema: string
+  /** The connection settings of the pool, also for connections outside it. */
+  readonly config: PostgresConfig
 }
 
 export class Database extends Context.Service<Database, DatabaseShape>()(
@@ -42,10 +44,8 @@ export const connectionOptions = (config: PostgresConfig): pg.ClientConfig => ({
 export const makePool = (config: PostgresConfig): pg.Pool =>
   new pg.Pool({ ...connectionOptions(config), max: config.maxConnections })
 
-export const layer: Layer.Layer<Database, never, BillingConfig> = Layer.effect(
-  Database,
+const make = (db: PostgresConfig): Effect.Effect<DatabaseShape, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const { db } = yield* BillingConfig
     const pool = yield* Effect.acquireRelease(
       Effect.sync(() => makePool(db)),
       (pool) => Effect.promise(() => pool.end())
@@ -60,7 +60,26 @@ export const layer: Layer.Layer<Database, never, BillingConfig> = Layer.effect(
         )
       )
     })
-    return { pool, schema: db.schema }
+    return { pool, schema: db.schema, config: db }
+  })
+
+/** The database of the web app, configured by `BillingConfig`. */
+export const layer: Layer.Layer<Database, never, BillingConfig> = Layer.effect(
+  Database,
+  Effect.gen(function* () {
+    const { db } = yield* BillingConfig
+    return yield* make(db)
+  })
+)
+
+/**
+ * The database configured by the `GOLEM__DB__CONFIG__*` variables alone, for the commands that need
+ * no other setting of the web app.
+ */
+export const layerFromEnv: Layer.Layer<Database, Config.ConfigError> = Layer.effect(
+  Database,
+  Effect.gen(function* () {
+    return yield* make(yield* postgresConfig)
   })
 )
 

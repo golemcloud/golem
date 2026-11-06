@@ -303,6 +303,86 @@ main {
   font-size: 0.85em;
 }
 
+.notice {
+  margin-bottom: 1rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+.usage-card {
+  margin-top: 3rem;
+}
+
+.usage-card + .grid {
+  margin-top: 1.25rem;
+}
+
+.usage-card .actions {
+  margin-bottom: 0.75rem;
+}
+
+.usage-card h3 {
+  margin-bottom: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.usage {
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  margin-bottom: 1.5rem;
+}
+
+.usage .overage-amount {
+  margin-top: 0.4rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.usage progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin-top: 0.4rem;
+  border: none;
+  border-radius: 3px;
+  background: var(--border);
+  appearance: none;
+}
+
+.usage progress::-webkit-progress-bar {
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.usage progress::-webkit-progress-value {
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.usage progress::-moz-progress-bar {
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.usage progress.full::-webkit-progress-value {
+  background: var(--marker);
+}
+
+.usage progress.full::-moz-progress-bar {
+  background: var(--marker);
+}
+
+.prices {
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  margin-bottom: 1rem;
+}
+
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
