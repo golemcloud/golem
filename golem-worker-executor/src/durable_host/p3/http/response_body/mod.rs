@@ -177,8 +177,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             "http::types::response",
             "new",
         );
-        let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
-        <WasiHttp as types::HostResponseWithStore<U>>::new(store, headers, contents, trailers)
+        let (response, inner) = {
+            let access =
+                Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
+            <WasiHttp as types::HostResponseWithStore<U>>::new(access, headers, contents, trailers)?
+        };
+        let (transmission, pending) = interpose_transmission::<Ctx, U>(&mut store, inner)?;
+        // Like requests, constructed responses remain guest-owned until consume-body or drop.
+        // A cancelled read does not imply that transmission can progress independently.
+        {
+            let mut access = store.as_context_mut();
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .state
+                .p3_http_transmissions
+                .responses
+                .insert(response.rep(), pending);
+        }
+        Ok((response, transmission))
     }
 
     fn consume_body(
@@ -189,6 +204,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         StreamReader<u8>,
         FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
     )> {
+        let (fut, host_input) = transfer_transmission_to_host::<Ctx, U>(&mut store, fut)?;
+        let pending = {
+            let mut access = store.as_context_mut();
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .state
+                .p3_http_transmissions
+                .responses
+                .remove(&res.rep())
+        };
+        finish_transmission::<Ctx, U>(&mut store, pending, host_input)?;
         // Take ownership of the response's open-response state (if this
         // response came from `client::send`): the durable consume-body task
         // finishes its span when the body reaches its terminal and uses its
@@ -258,7 +283,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         let (demand_tx, demand_rx) = demand_channel();
         let demand_signal = Arc::new(HttpBodyDemandSignal::default());
         let (trailers_tx, trailers_rx) = oneshot::channel();
-        let trailers_delivery = HttpTrailersDelivery::new();
+        let trailers_delivery = HttpFutureDelivery::new();
         let producer_hook = {
             let mut store_ctx = store.as_context_mut();
             expect_ctx::<Ctx, U>(store_ctx.data_mut()).p3_http_body_producer_hook()
@@ -283,7 +308,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                 return Err(err);
             }
         };
-        let delivery_guard = HttpTrailersDeliveryGuard::new(trailers_delivery.clone());
+        let delivery_guard = HttpFutureDeliveryGuard::new(trailers_delivery.clone());
         if let Err(err) = trailers.register_terminal_observer(&mut store, move |consumption| {
             delivery_guard.observe(consumption);
         }) {
@@ -317,6 +342,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             "http::types::response",
             "drop",
         );
+
+        // Remove constructor wiring before deleting the resource, so a reused rep cannot
+        // alias its transmission. Drop only forwards the deterministic sender-closed result.
+        let pending = {
+            let mut access = store.as_context_mut();
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .state
+                .p3_http_transmissions
+                .responses
+                .remove(&res.rep())
+        };
+        finish_transmission::<Ctx, U>(&mut store, pending, false)?;
 
         // Sample liveness at drop, not at send: replay-created responses can survive into live
         // invocations. Snapshot drops and replay drops only release resident state.
