@@ -8,6 +8,7 @@ import type pg from "pg"
 import { BillingConfig, type PostgresConfig } from "./BillingConfig.ts"
 import { Database, withAdvisoryLock } from "./Database.ts"
 import { Registry, type RegistryShape } from "./Registry.ts"
+import { RegistryAccounts, type RegistryAccountsShape } from "./RegistryAccounts.ts"
 
 type SessionCreateResult = boolean | void | { data: Session & Record<string, unknown> }
 
@@ -149,10 +150,14 @@ const trySession = <A>(reason: string, f: () => Promise<A>) =>
  * Without account linking, only the GitHub identity of the user signs in to it, and Better Auth
  * stores the access token of the sign-in on that account before it creates the session. The
  * bridge therefore requires exactly one GitHub account, and it refuses a Golem account other than
- * the one that the user has already.
+ * the one that the user has already. After the registry deletes the account, the registry gives the
+ * GitHub identity a new Golem account at the next login, and the bridge still refuses the user of
+ * the deleted account. The cleanup deletes the Polar customer of the deleted account first and the
+ * user after it, so the next sign-in creates a new user for the new account. A checkout of the new
+ * account therefore never finds the Polar customer of the deleted account by its email.
  */
 export const linkSessionToGolemAccount =
-  (registry: RegistryShape) =>
+  (registry: RegistryShape, registryAccounts: RegistryAccountsShape) =>
   (session: Session & Record<string, unknown>, context: GenericEndpointContext | null) =>
     Effect.gen(function* () {
       if (context === null) {
@@ -181,8 +186,15 @@ export const linkSessionToGolemAccount =
       )
       const golemToken = yield* registry.exchangeGitHubAccessToken(accessToken)
       if (linkedAccountId && linkedAccountId !== golemToken.accountId) {
+        const linkedIsDeleted = yield* registryAccounts.isDeleted(linkedAccountId).pipe(
+          Effect.mapError(
+            (cause) => new IdentityBridgeError({ reason: "cannot read whether the linked Golem account is deleted", cause })
+          )
+        )
         return yield* new IdentityBridgeError({
-          reason: `the registry returned the Golem account ${golemToken.accountId}, but the user is linked to ${linkedAccountId}`
+          reason: linkedIsDeleted
+            ? `the user is linked to the deleted Golem account ${linkedAccountId}, and the cleanup has not deleted the user yet`
+            : `the registry returned the Golem account ${golemToken.accountId}, but the user is linked to ${linkedAccountId}`
         })
       }
       if (!linkedAccountId) {
@@ -284,15 +296,16 @@ export const migrate = (options: BetterAuthOptions, pool: pg.Pool, db: PostgresC
     }
   })
 
-export const layer: Layer.Layer<Auth, MigrationError, BillingConfig | Database | Registry> =
+export const layer: Layer.Layer<Auth, MigrationError, BillingConfig | Database | Registry | RegistryAccounts> =
   Layer.effect(
     Auth,
     Effect.gen(function* () {
       const config = yield* BillingConfig
       const { pool, schema } = yield* Database
       const registry = yield* Registry
+      const registryAccounts = yield* RegistryAccounts
       const services = yield* Effect.context<never>()
-      const link = linkSessionToGolemAccount(registry)
+      const link = linkSessionToGolemAccount(registry, registryAccounts)
 
       const options = authOptions({
         pool,

@@ -2,6 +2,7 @@ import { webhooks } from "@polar-sh/sdk/2026-10"
 import { Data, Effect, Redacted } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
 import type { RegistryError } from "./Registry.ts"
+import type { RegistryAccountsError } from "./RegistryAccounts.ts"
 import * as Settlement from "./Settlement.ts"
 import { type Order, type Subscription, Subscriptions, type SubscriptionsError } from "./Subscriptions.ts"
 
@@ -69,9 +70,13 @@ const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["
  *
  * It verifies the Standard Webhooks signature, skips a `webhook-id` that it handled before, and
  * for a `subscription.*` or `order.*` event of the paid product stores the subscription or the
- * order and moves the account to the plan of its subscriptions and orders (`Settlement.planFor`).
- * An account on any other plan keeps it.
- * A failed registry or database call answers 500, so Polar delivers the webhook again.
+ * order, sets the deletion hold of the account (`Settlement.holdFor`) and moves the account to the
+ * plan of its subscriptions and orders (`Settlement.planFor`). An account on any other plan keeps
+ * it. An event of a deleted account is stored and answers 200, so that the account does not make
+ * Polar disable the endpoint.
+ * A failed registry or database call answers 500, so Polar delivers the webhook again. This
+ * includes a 404 of the registry for an account that is not deleted: the permission share of the
+ * billing account is missing.
  */
 export const makeHandler = Effect.gen(function* () {
   const config = yield* BillingConfig
@@ -95,7 +100,7 @@ export const makeHandler = Effect.gen(function* () {
 
   const handleSubscription = (
     payload: SubscriptionPayload
-  ): Effect.Effect<void, RegistryError | SubscriptionsError> => {
+  ): Effect.Effect<void, RegistryError | SubscriptionsError | RegistryAccountsError> => {
     const data = payload.data
     const accountId = data.customer.external_id ?? undefined
     if (accountId === undefined || !uuid.test(accountId)) {
@@ -122,7 +127,7 @@ export const makeHandler = Effect.gen(function* () {
     )
   }
 
-  const handleOrder = (payload: OrderPayload): Effect.Effect<void, RegistryError | SubscriptionsError> => {
+  const handleOrder = (payload: OrderPayload): Effect.Effect<void, RegistryError | SubscriptionsError | RegistryAccountsError> => {
     const data = payload.data
     const accountId = data.customer?.external_id ?? undefined
     if (accountId === undefined || !uuid.test(accountId)) {
