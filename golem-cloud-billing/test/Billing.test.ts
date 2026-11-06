@@ -349,6 +349,7 @@ describe("Polar billing", () => {
 
     it("shows a used-up allowance and the paid overage above it", async () => {
       const { jar, accountId } = await paidAccount()
+      await deliver("subscription.active", subscription(accountId))
       upstreams.usageModes.set(accountId, "allowOverage")
       upstreams.monthly = {
         ...(upstreams.monthly as object),
@@ -366,7 +367,8 @@ describe("Polar billing", () => {
       expect(html).toContain("100M of 100M GCU included · 100%")
       expect(html).toContain(`class="full"`)
       expect(html).toContain("+ 1.5M GCU of paid overage · $0.02")
-      expect(html).toContain("Paid overage this month: about $0.02 plus tax")
+      expect(html).toContain("Paid overage so far this month: about $0.02 plus tax")
+      expect(html).toContain("Polar bills it on the invoice of December 4, 2026, with the next month of the plan.")
     })
 
     it("shows a small usage with significant digits, not as 0", async () => {
@@ -379,7 +381,7 @@ describe("Polar billing", () => {
       const html = await page(jar)
 
       expect(html).toContain("0.001 of 912.5 GB-hours included · &lt;1%")
-      expect(html).not.toContain("Paid overage this month")
+      expect(html).not.toContain("Paid overage so far this month")
     })
 
     it("shows the switch when the registry reports no usage", async () => {
