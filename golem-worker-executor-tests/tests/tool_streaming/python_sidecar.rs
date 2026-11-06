@@ -188,10 +188,10 @@ async fn exercise_python_session(
     mode: PythonSession,
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::worker::{
-        ExternalToolInvocation, InputStreamEnd, InputStreamItem, InvocationRequest,
-        InvocationStart, StreamCancel, StreamCancelReason, StreamCancelRole, ToolByteStreamRole,
-        input_stream_item, invocation_request, invocation_response, invocation_session_completion,
-        invocation_session_result,
+        ExternalToolInvocation, InputStreamItem, InvocationRequest, InvocationStart,
+        StreamDirection, StreamEnd, StreamTerminalAuthor, ToolByteStreamRole, input_stream_item,
+        invocation_request, invocation_response, invocation_session_completion,
+        invocation_session_result, stream_terminal,
     };
     use golem_common::model::oplog::PublicExternalToolResult;
 
@@ -320,11 +320,20 @@ async fn exercise_python_session(
         if cancel_input {
             sender
                 .send(InvocationRequest {
-                    request: Some(invocation_request::Request::StreamCancel(StreamCancel {
+                    request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                         transport_stream_id: stdin.transport_stream_id,
                         producer_sequence: 0,
-                        role: StreamCancelRole::InputProducer as i32,
-                        reason: StreamCancelReason::Cancelled as i32,
+                        direction: StreamDirection::Input as i32,
+                        authored_by: StreamTerminalAuthor::Guest as i32,
+                        outcome: Some(
+                            golem_common::base_model::durable_stream::StreamTerminal::Failed(
+                                golem_common::base_model::durable_stream::StreamError::Interrupted(
+                                    "stream producer cancelled".to_string(),
+                                ),
+                            )
+                            .try_into()
+                            .map_err(anyhow::Error::msg)?,
+                        ),
                         durable_stream_id: stdin.handle.as_ref().unwrap().stream_id,
                         epoch: accepted.epoch,
                         ..Default::default()
@@ -347,11 +356,19 @@ async fn exercise_python_session(
             }
             sender
                 .send(InvocationRequest {
-                    request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+                    request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                         transport_stream_id: stdin.transport_stream_id,
-                        sequence: bytes.len() as u64,
+                        producer_sequence: bytes.len() as u64,
+                        direction: StreamDirection::Input as i32,
+                        authored_by: StreamTerminalAuthor::Guest as i32,
+                        outcome: Some(
+                            golem_common::base_model::durable_stream::StreamTerminal::Finished
+                                .try_into()
+                                .map_err(anyhow::Error::msg)?,
+                        ),
                         durable_stream_id: stdin.handle.as_ref().unwrap().stream_id,
                         epoch: accepted.epoch,
+                        ..Default::default()
                     })),
                 })
                 .await?;
@@ -373,7 +390,13 @@ async fn exercise_python_session(
                         errors.extend(item.packed_u8);
                     }
                 }
-                Some(invocation_response::Response::OutputEnd(end)) => {
+                Some(invocation_response::Response::StreamEnd(end))
+                    if end.direction == StreamDirection::Output as i32 =>
+                {
+                    assert!(matches!(
+                        end.outcome.and_then(|outcome| outcome.terminal),
+                        Some(stream_terminal::Terminal::Finished(_))
+                    ));
                     assert!(ends.insert(end.transport_stream_id));
                 }
                 Some(invocation_response::Response::Result(result)) => {
@@ -413,7 +436,13 @@ async fn exercise_python_session(
                     );
                     finished = true;
                 }
-                Some(invocation_response::Response::StreamCancel(_)) if cancel_input => {}
+                Some(invocation_response::Response::StreamEnd(end)) if cancel_input => {
+                    assert_eq!(end.direction, StreamDirection::Input as i32);
+                    assert!(matches!(
+                        end.outcome.and_then(|outcome| outcome.terminal),
+                        Some(stream_terminal::Terminal::ConsumerCancelled(_))
+                    ));
+                }
                 other => anyhow::bail!("unexpected Python session response: {other:?}"),
             }
         }

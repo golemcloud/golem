@@ -379,11 +379,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         timestamp: timestamp.into(),
         record: encode_public_typed_schema_value(record)?,
     } }
-    StreamEnd { record StreamEndParams => DurableStreamRecordParameters {
-        timestamp: timestamp.into(),
-        record: encode_public_typed_schema_value(record)?,
-    } }
-    StreamCancel { record StreamCancelParams => DurableStreamRecordParameters {
+    StreamTerminal { record StreamTerminalParams => DurableStreamRecordParameters {
         timestamp: timestamp.into(),
         record: encode_public_typed_schema_value(record)?,
     } }

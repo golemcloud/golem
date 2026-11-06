@@ -129,7 +129,7 @@ not add a feature-specific recovery path or immediate restart.
 
 ## Durable streams
 
-- The producer's oplog (`StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel`) and the
+- The producer's oplog (`StreamRegistered`/`StreamItems`/`StreamTerminal`) and the
   consumer's `StreamSession` journal are the only authoritative stream state. Commit before
   `DurableLiveStreamBus::publish_committed`; the bus, readers, sockets and transports are
   resumable optimizations and must never be the only holder of an item or terminal.
@@ -137,8 +137,8 @@ not add a feature-specific recovery path or immediate restart.
 - Stream liveness is bound to the durable `AgentFingerprint` of the producer; every place a stream
   identity crosses a boundary checks it (`validate_forwarded_mapping`, producer-side
   `CorruptHistory` checks). Reject mismatches rather than reattaching to a recreated agent.
-- Every stream is finalized exactly once. Protocol terminals appended on invocation completion or
-  failure fence later guest terminals; do not add a second finalization path.
+- Every stream is finalized exactly once. The first selected terminal fences competing terminals;
+  completed replay still validates the exact recorded terminal. Do not add a second finalization path.
 - Reconstruct terminal outputs from committed records without requiring the finished consumer to
   reattach. Open agent-RPC outputs still require an active attachment before production.
 - Stream entries are hints and must stay hints: they take part in no `Start`/terminal pairing and

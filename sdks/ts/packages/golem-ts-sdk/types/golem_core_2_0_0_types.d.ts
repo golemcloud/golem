@@ -847,6 +847,35 @@ declare module 'golem:core/types@2.0.0' {
     value: SchemaValueTree;
   };
   /**
+   * The producer's failure, independent of a reader dropping its stream.
+   */
+  export type StreamError =
+  {
+    tag: 'failed'
+    val: TypedSchemaValue
+  } |
+  {
+    tag: 'trapped'
+    val: string
+  } |
+  /** An invocation cancellation request was recorded and honoured. */
+  {
+    tag: 'cancelled'
+  } |
+  /** The producing invocation completed with its writer still open. */
+  {
+    tag: 'abandoned'
+  } |
+  {
+    tag: 'interrupted'
+    val: string
+  } |
+  {
+    tag: 'resource-exhausted'
+    val: string
+  };
+  export type StreamOutcome = Result<void, StreamError>;
+  /**
    * A declared tool failure shared by invocation and oplog interfaces.
    */
   export type CustomToolError = {

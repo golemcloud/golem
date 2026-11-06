@@ -23,6 +23,7 @@ use crate::durable_host::stream_transport::{
     LiveInputProducer, LiveStreamEndpoint, accounted_output_stream_pair, relay_stream_pair,
 };
 use crate::workerctx::WorkerCtx;
+use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
 use golem_schema::schema::schema_value::{
     PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
 };
@@ -176,23 +177,22 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                                 match apply_projection(&item_plan, value, &mut context) {
                                     Ok(value) => (Box::pin(publisher.publish_item(value)), false),
                                     Err(error) => (
-                                        Box::pin(publisher.publish_error(format!(
-                                            "schema stream item projection failed at {}: {}",
-                                            error.path, error.message
-                                        ))),
+                                        Box::pin(publisher.publish_terminal(
+                                            StreamTerminalAuthor::Protocol,
+                                            StreamTerminal::Failed(StreamError::Interrupted(format!(
+                                                "schema stream item projection failed at {}: {}",
+                                                error.path, error.message
+                                            ))),
+                                        )),
                                         true,
                                     ),
                                 }
                             }
-                            Ok(Some(DurableInputEvent::End)) => {
-                                (Box::pin(publisher.publish_end()), true)
+                            Ok(Some(DurableInputEvent::Terminal { authored_by, terminal })) => {
+                                (Box::pin(publisher.publish_terminal(authored_by, terminal)), true)
                             }
                             Ok(None) => {
                                 source.abort_for_teardown();
-                                target_lifecycle.abort();
-                                return;
-                            }
-                            Ok(Some(DurableInputEvent::Cancelled)) => {
                                 target_lifecycle.abort();
                                 return;
                             }
@@ -250,38 +250,26 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                                         terminal = false;
                                         Box::pin(publisher.publish_item(value))
                                     }
-                                    Err(error) => Box::pin(publisher.publish_error(format!(
-                                        "schema stream item projection failed at {}: {}",
-                                        error.path, error.message
-                                    ))),
+                                    Err(error) => Box::pin(publisher.publish_terminal(
+                                        StreamTerminalAuthor::Protocol,
+                                        StreamTerminal::Failed(StreamError::Interrupted(format!(
+                                            "schema stream item projection failed at {}: {}",
+                                            error.path, error.message
+                                        ))),
+                                    )),
                                 }
                             }
-                            crate::durable_host::stream_bus::LiveStreamEventPayload::End => {
-                                Box::pin(publisher.publish_end())
-                            }
-                            crate::durable_host::stream_bus::LiveStreamEventPayload::Error(
-                                error,
-                            ) => Box::pin(publisher.publish_error(error)),
-                            crate::durable_host::stream_bus::LiveStreamEventPayload::ClassifiedError {
-                                kind,
-                                message,
-                            } => {
-                                let ordinary_message = message.clone();
-                                Box::pin(publisher.publish_host_error(
-                                    anyhow::Error::new(
-                                        crate::durable_host::durability::ClassifiedHostError {
-                                            kind,
-                                            message,
-                                        },
-                                    ),
-                                    ordinary_message,
-                                ))
-                            }
+                            crate::durable_host::stream_bus::LiveStreamEventPayload::Terminal {
+                                authored_by,
+                                terminal,
+                            } => Box::pin(publisher.publish_terminal(authored_by, terminal)),
                         },
-                        Err(error) => Box::pin(
-                            publisher
-                                .publish_error(format!("live stream receive failed: {error:?}")),
-                        ),
+                        Err(error) => Box::pin(publisher.publish_terminal(
+                            StreamTerminalAuthor::Host,
+                            StreamTerminal::Failed(StreamError::Interrupted(format!(
+                                "live stream receive failed: {error:?}"
+                            ))),
+                        )),
                     };
                     tokio::select! {
                         biased;
@@ -636,6 +624,9 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostWithStore<T> for CoreTypesHost<Ctx> {
 mod tests {
     use super::*;
     use crate::durable_host::stream_bus::LiveStreamEventPayload;
+    use golem_common::base_model::durable_stream::{
+        StreamError, StreamTerminal, StreamTerminalAuthor,
+    };
     use golem_schema::schema::metadata::MetadataEnvelope;
     use golem_schema::schema::schema_type::NamedFieldType;
     use golem_schema::schema::tool::compatibility::{ProjectionNode, RecordFieldProjection};
@@ -777,8 +768,56 @@ mod tests {
         );
         assert!(matches!(
             target.recv().await.unwrap().payload,
-            LiveStreamEventPayload::End
+            LiveStreamEventPayload::Terminal {
+                authored_by: StreamTerminalAuthor::Guest,
+                terminal: StreamTerminal::Finished,
+            }
         ));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn relay_preserves_typed_terminal_and_author() {
+        for terminal in [
+            StreamTerminal::Finished,
+            StreamTerminal::Failed(StreamError::Interrupted("source stopped".into())),
+            StreamTerminal::Failed(StreamError::Trapped("trap".into())),
+            StreamTerminal::Failed(StreamError::Cancelled),
+            StreamTerminal::Failed(StreamError::Abandoned),
+            StreamTerminal::Failed(StreamError::ResourceExhausted("memory".into())),
+            StreamTerminal::ConsumerCancelled {
+                details: Some("reader stopped".into()),
+            },
+        ] {
+            for authored_by in [
+                StreamTerminalAuthor::Guest,
+                StreamTerminalAuthor::Host,
+                StreamTerminalAuthor::Protocol,
+            ] {
+                let (publisher, endpoint) = relay_stream_pair(1).unwrap();
+                let mut streams = ExecutorProjectionStreams::for_test(1);
+                let mut target = streams
+                    .project_stream(
+                        SchemaValueStream::from_host_endpoint(endpoint),
+                        Some(reordered_record_plan()),
+                    )
+                    .unwrap()
+                    .take_host_endpoint::<LiveStreamEndpoint>()
+                    .unwrap()
+                    .activate();
+                publisher
+                    .publish_terminal(authored_by, terminal.clone())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    target.recv().await.unwrap().payload,
+                    LiveStreamEventPayload::Terminal {
+                        authored_by,
+                        terminal: terminal.clone(),
+                    }
+                );
+            }
+        }
     }
 
     #[test]
@@ -908,14 +947,23 @@ mod tests {
                     .await
                     .unwrap();
             }
-            let LiveStreamEventPayload::Error(error) = target.recv().await.unwrap().payload else {
+            let LiveStreamEventPayload::Terminal {
+                authored_by,
+                terminal: StreamTerminal::Failed(error),
+            } = target.recv().await.unwrap().payload
+            else {
                 panic!("expected error terminal");
             };
             if invalid_item {
+                assert_eq!(authored_by, StreamTerminalAuthor::Protocol);
+                let StreamError::Interrupted(error) = error else {
+                    panic!("projection rejection must be a protocol interruption");
+                };
                 assert!(error.contains("projection failed"));
                 lifecycle.cancelled().await;
             } else {
-                assert_eq!(error, "upstream failure");
+                assert_eq!(authored_by, StreamTerminalAuthor::Host);
+                assert_eq!(error, StreamError::Trapped("upstream failure".into()));
             }
         }
     }

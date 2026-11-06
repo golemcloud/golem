@@ -19,6 +19,8 @@ use super::{
     OwnedSemaphorePermit, Pin, Poll, RawAttachmentStreamProducer, StreamProducer, StreamResult,
     VecBuffer, WriteBuffer,
 };
+use crate::durable_host::stream_bus::StreamTerminalError;
+use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
 
 impl AttachmentWriteBody {
     pub(super) fn len(&self) -> usize {
@@ -79,6 +81,25 @@ unsafe impl WriteBuffer<Result<Vec<u8>, ByteStreamFailure>> for AttachmentStream
 }
 
 impl AttachmentStreamProducer {
+    pub(in crate::durable_host::tool) fn failure_terminal(
+        failure: ByteStreamFailure,
+    ) -> StreamTerminalError {
+        let error = match failure {
+            ByteStreamFailure::Cancelled => {
+                StreamError::Interrupted("tool output cancelled".into())
+            }
+            ByteStreamFailure::Abandoned => StreamError::Abandoned,
+            ByteStreamFailure::ResourceExhausted => {
+                StreamError::ResourceExhausted("tool output attachment limit".into())
+            }
+            ByteStreamFailure::Failed(message) => StreamError::Interrupted(message),
+        };
+        StreamTerminalError {
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(error),
+        }
+    }
+
     /// Dequeues one item while retaining its memory charge until the next poll or drop.
     /// An adapter must finish using that item before polling for another one.
     pub(in crate::durable_host::tool) fn poll_read(
@@ -378,9 +399,9 @@ impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
             }
             AttachmentStreamRead::Failure { failure, .. } => {
                 self.finished = true;
-                Poll::Ready(Err(wasmtime::Error::msg(format!(
-                    "underlying tool stdout failed: {failure:?}"
-                ))))
+                Poll::Ready(Err(wasmtime::Error::from_anyhow(
+                    AttachmentStreamProducer::failure_terminal(failure).into_trap(),
+                )))
             }
         }
     }

@@ -19,7 +19,8 @@ use crate::service::worker::WorkerService;
 use bytes::Bytes;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::{
-    InvocationContext, InvocationStart, invocation_session_completion, invocation_session_result,
+    InvocationContext, InvocationStart, StreamDirection, invocation_session_completion,
+    invocation_session_result, stream_terminal,
 };
 use golem_common::model::agent::{ParsedAgentId, Principal};
 use golem_common::model::{AgentId, IdempotencyKey};
@@ -232,10 +233,7 @@ async fn receive_response_head(
                     _ => Err(RequestHandlerError::RawBadGateway),
                 };
             }
-            HttpSessionEvent::StreamCancel(cancel)
-                if cancel.role()
-                    == golem_api_grpc::proto::golem::worker::StreamCancelRole::InputConsumer =>
-            {
+            HttpSessionEvent::StreamEnd(end) if end.direction() == StreamDirection::Input => {
                 stop_upload(session, upload).await;
             }
             HttpSessionEvent::Error(error) => return Err(map_session_error(error)),
@@ -270,15 +268,10 @@ async fn finish_bodyless_response(
                 stop_upload(session, upload).await;
                 return Ok(());
             }
-            HttpSessionEvent::StreamCancel(cancel)
-                if cancel.role()
-                    == golem_api_grpc::proto::golem::worker::StreamCancelRole::InputConsumer =>
-            {
+            HttpSessionEvent::StreamEnd(end) if end.direction() == StreamDirection::Input => {
                 stop_upload(session, upload).await;
             }
-            HttpSessionEvent::OutputItem(_)
-            | HttpSessionEvent::OutputEnd(_)
-            | HttpSessionEvent::StreamCancel(_) => {}
+            HttpSessionEvent::OutputItem(_) | HttpSessionEvent::StreamEnd(_) => {}
             HttpSessionEvent::Error(error) => return Err(map_session_error(error)),
             _ => return Err(RequestHandlerError::RawBadGateway),
         }
@@ -469,10 +462,19 @@ async fn output_step(mut state: OutputState) -> Option<(Result<Bytes, io::Error>
                     _ => state.gate.producer_failure(),
                 }
             }
-            HttpSessionEvent::OutputEnd(end) if end.transport_stream_id == state.output_id => {
-                state.gate.body_eof()
+            HttpSessionEvent::StreamEnd(end)
+                if end.direction() == StreamDirection::Output
+                    && end.transport_stream_id == state.output_id =>
+            {
+                if matches!(
+                    end.outcome.and_then(|outcome| outcome.terminal),
+                    Some(stream_terminal::Terminal::Finished(_))
+                ) {
+                    state.gate.body_eof()
+                } else {
+                    state.gate.producer_failure()
+                }
             }
-            HttpSessionEvent::OutputError(_) => state.gate.producer_failure(),
             HttpSessionEvent::Finished(finished)
                 if matches!(
                     finished.outcome,
@@ -485,20 +487,9 @@ async fn output_step(mut state: OutputState) -> Option<(Result<Bytes, io::Error>
             HttpSessionEvent::Finished(_) | HttpSessionEvent::Error(_) => {
                 state.gate.session_failure()
             }
-            HttpSessionEvent::StreamCancel(cancel)
-                if cancel.role
-                    == golem_api_grpc::proto::golem::worker::StreamCancelRole::InputConsumer
-                        as i32 =>
-            {
+            HttpSessionEvent::StreamEnd(end) if end.direction() == StreamDirection::Input => {
                 stop_upload(&state.session, &mut state.upload).await;
                 continue;
-            }
-            HttpSessionEvent::StreamCancel(cancel)
-                if cancel.role
-                    == golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputProducer
-                        as i32 =>
-            {
-                state.gate.producer_failure()
             }
             _ => continue,
         };

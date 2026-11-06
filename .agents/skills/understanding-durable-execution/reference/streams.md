@@ -188,8 +188,8 @@ request; bytes received on an already-open SSE connection do not keep the sessio
 
 Only these are authoritative:
 
-- The **producer's own oplog** holds `StreamRegistered`, `StreamItems`, `StreamEnd` and
-  `StreamCancel` (`DurableStreamStore::{register, write_items, end, cancel_open}` in
+- The **producer's own oplog** holds `StreamRegistered`, `StreamItems` and
+  `StreamTerminal` (`DurableStreamStore::{register, write_items, end, cancel_open}` in
   `durable_host/durable_stream/mod.rs`). Registration defines `LocalStreamId(registration_index)`;
   later records name that owner-local ID. Each `StreamItemsRecord` carries `first_sequence` and
   per-item `StreamOffset { oplog index, sub_index }`. Records are committed
@@ -288,6 +288,18 @@ materialized. This ordering prevents a result from becoming durable while stdout
 unvalidated. Historical stdout is never published a second time: every byte and the terminal must
 match the producer journal before live output may continue.
 
+Native tool output uses an owned attachment-to-bus relay. It publishes attachment failures as
+Host-authored failed terminals, not Wasmtime transfer errors: dropping a native consumer after a
+transfer error cannot carry that failure to the separate output bus. The relay and durable drain
+run together under the tool task; teardown aborts the relay without manufacturing clean EOF.
+
+Native output acceptance checks committed cancellation before taking a new scalar item or byte.
+The durable drain installs the historical prefix allowance before activating the endpoint. A
+Control terminal caps native acceptance at its recorded sequence even if the frontend runs ahead
+of validation; a Source terminal must still be reproduced exactly. Cancellation does not unconsume
+an already accepted in-flight write. A fresh write after the cancellation barrier takes nothing and
+returns reader-dropped, while the producer invocation can continue.
+
 ### Exactly-once item delivery
 
 Delivery works by offsets, not by connection state. During reconstruction a consumer reads only
@@ -311,7 +323,14 @@ handle and avoiding attachment to the intermediary.
 
 Native guest reads record one `ConsumerItemValue` or `ConsumerTerminal` at Wasmtime's per-read
 consumption observer. The observer synchronously reserves the oplog position with `enqueue_add`,
-then owned work commits and indexes the record under producer admission. Its position is the
+then owned work commits the record under producer admission. Persisted metadata folds the record
+from the oplog; the native continuation does not apply it again to a resident consumer head.
+Before a host observation append or source-loss overlay validates an affected reader, it replaces
+that reader's head from fresh persisted metadata at its returned coverage horizon plus the local
+oplog suffix through a fixed current horizon. This includes native observations whose positions
+are reserved but whose continuations have not entered the mutation lane. Re-observations retain
+their original logical progress; prospective host records apply only after reconciliation.
+No history scan or additional metadata lookup is added to native reads. The record's position is the
 guest boundary: replay retains the reconstructed item there until the observer acknowledges
 waitable delivery or callback. After source/cursor readiness, `InputObservationDelivery::prepare`
 waits for the consuming Store's `RuntimeStore::await_guest_blocked`: recorded async events reach
@@ -320,6 +339,10 @@ reads share this gate with timers and accessor completions. A non-blocking poll 
 cannot consume an async input; a busy guest must ask through recorded synchronous host calls.
 Host-side `consume_host` takes do not gate. Native guest write completions are not instrumented
 by this gate. These records remain hints and satisfy no claim.
+Native failed-terminal traps use the same preparation and blocked-wait gate. Wasmtime propagates
+a producer error without calling its read-consumption observer, so the adapter acknowledges the
+prepared observation immediately before emitting the native trap. Host take alone still records
+nothing; the original terminal and diagnostic remain unchanged.
 There is no extra durable call or delivery marker. Packed byte records contain only the bytes
 the guest read consumed; later reads record the remainder. A crash between host take and guest
 consumption leaves no consumer record, so restart re-reads the source by offset. Nested reader
@@ -377,12 +400,55 @@ later run reads the persisted value.
 
 ### Terminals
 
-Terminals are either guest-authored (`StreamEnd` with the guest's result, `StreamCancel` with
-`GuestDrop`/`Cancelled`) or protocol-authored. When the producing invocation completes or fails
-with streams still open, the protocol cancels open inputs and ends open outputs with an error
-context, then appends `Finished`; a protocol terminal fences any later guest terminal. A stream
-failing locally does not fail sibling streams or the invocation
+`StreamTerminal` records one `Finished`, `Failed(StreamError)` or `ConsumerCancelled` terminal,
+authored by `Guest`, `Host` or `Protocol`. The first terminal wins; a competing terminal cannot
+replace it. Its independent `Source` or `Control` origin identifies whether the source produced
+the terminal or an authoritative operation stopped the source. Reconstruction validates the
+recorded item prefix in both cases, then requires a `Source` terminal to reproduce exactly or
+stops at a `Control` terminal without waiting for another source event. A losing control request
+cannot cancel reconstruction of a source-selected terminal. Fenced writes retain the complete
+winning event, even after session completion; drains accept a Control stop only after validating
+all retained items, including an open prefix without a terminal. Scalar source closure and malformed
+values derive the same failure terminal live and during reconstruction: an exact recorded failure
+replays, while a different failure or a failure before the retained prefix ends is divergence.
+Author and outcome alone do not identify origin: both a natural host failure and administrative
+cancellation can be Host Interrupted. A consumer drop records `ConsumerCancelled` and the writer's next write reports "reader dropped"; it does
+not become a producer failure. Administrative session or slot deletion and expiry instead record
+`Host / Failed(Interrupted)`. Traps, nonresumable source loss and limits retain their distinct
+`Trapped`, `Interrupted` and `ResourceExhausted` failures. At invocation completion an open tool
+writer becomes `Abandoned`; an agent writer still becomes `Finished` because its guest interface
+does not distinguish close from drop. Session finalization closes unread inputs and open outputs
+before appending its `Finished` record. A stream failing locally does not fail sibling streams or the invocation
 (`tests/rpc.rs::stream_local_output_failure_does_not_fail_sibling_or_invocation`).
+
+The resident live bus carries `Item` or `Terminal { authored_by, terminal }`. It forwards the
+same typed terminal through projections and output drains. Consumer terminal observations retain
+the author as well as the outcome, so replaying a projection needs no producer lookup and keeps
+the exact output terminal identity. `ClassifiedHostError` stays internal
+to retry; both classifications publish `Host / Failed(Interrupted(message))`. A typed terminal
+crosses a Wasmtime stream error without becoming a formatted trap. Agent readers accept only
+`Finished` as clean EOF; every other terminal traps with its outcome in the diagnostic. Tool
+stdin maps producer failures to the existing `byte-stream-failure` values instead. Raw tool
+stdout preserves abandonment and resource exhaustion; legacy attachment cancellation becomes
+`Interrupted`, not invocation `Cancelled`, because no invocation-cancellation record exists.
+The attachment's sanitized failure message remains sanitized across this boundary.
+
+The invocation session keeps the `golem.agent-invocation.v1` subprotocol and uses one
+`stream-end` message in both directions. Its explicit stream direction distinguishes an input
+producer terminal from an output consumer cancellation. The gRPC terminal retains its author;
+the public adapter forwards the typed outcome unchanged, including a declared error's schema
+and value. Unknown outcomes fail decoding rather than becoming clean EOF. Input producer
+terminals use the ordinary sequential acknowledgement path; their exact retry identity includes
+the outcome and author. A client may cancel an output consumer, but cannot choose that output's
+producer outcome. An input-consumer cancellation from the server remains an input terminal,
+not an output failure. The existing sequence, epoch, cursor and cancellation-race checks apply.
+A clean WebSocket close or a dropped connection only detaches the session. Neither records a
+stream terminal nor cancels the invocation; local input EOF requires an explicit `stream-end`.
+
+Until per-slot outcomes replace the legacy edge flags, Durable Streams sets `Stream-Cancelled`
+only for `ConsumerCancelled`, `Failed(Cancelled)` and `Failed(Interrupted)`. Other terminals,
+including `Failed(Trapped)`, report plain closure. This projection does not change the stored
+terminal or its Source/Control reconstruction obligations.
 
 Finalization uses the ordinary atomic vector batch: all terminal records precede `Finished`,
 and commit precedes publication. Durable oplogs externalize records only above their configured

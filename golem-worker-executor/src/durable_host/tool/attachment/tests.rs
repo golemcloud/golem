@@ -1828,6 +1828,72 @@ async fn native_raw_read_observer_feasibility() {
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn raw_tool_output_preserves_failure_terminal_through_wasmtime() {
+    use crate::durable_host::stream_bus::{StreamTerminalError, live_output_stream_bus};
+    use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
+
+    for (failure, expected) in [
+        (
+            ByteStreamFailure::Cancelled,
+            StreamError::Interrupted("tool output cancelled".into()),
+        ),
+        (ByteStreamFailure::Abandoned, StreamError::Abandoned),
+        (
+            ByteStreamFailure::ResourceExhausted,
+            StreamError::ResourceExhausted("tool output attachment limit".into()),
+        ),
+        (
+            ByteStreamFailure::Failed("private producer diagnostic".into()),
+            StreamError::Interrupted("stream producer failed".into()),
+        ),
+    ] {
+        let (producer, consumer, _) = pair(8);
+        assert!(producer.configure_live());
+        producer.write(vec![7, 19]).await.unwrap();
+        producer.fail(failure).unwrap();
+
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let reader = StreamReader::new(&mut store, consumer.into_raw_stream_producer()).unwrap();
+        let (chunks, mut received) = mpsc::unbounded_channel();
+        let error = store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+                accessor
+                    .with(|mut store| reader.pipe(&mut store, CollectRawConsumer { chunks }))?;
+                std::future::pending().await
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(received.try_recv().unwrap(), vec![7, 19]);
+        assert!(received.try_recv().is_err());
+        let terminal = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<StreamTerminalError>())
+            .expect("raw output must retain the typed failure through Wasmtime");
+        assert_eq!(terminal.authored_by, StreamTerminalAuthor::Host);
+        assert_eq!(terminal.terminal, StreamTerminal::Failed(expected));
+        let expected_terminal = terminal.terminal.clone();
+        let (publisher, subscriber) =
+            live_output_stream_bus::<u8>(4, tokio_util::sync::CancellationToken::new()).unwrap();
+        let mut subscriber = subscriber.activate();
+        publisher
+            .publish_host_error(error.into(), "must not replace the typed terminal".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            subscriber.recv().await.unwrap().payload,
+            crate::durable_host::stream_bus::LiveStreamEventPayload::Terminal {
+                authored_by: StreamTerminalAuthor::Host,
+                terminal: expected_terminal,
+            }
+        );
+    }
+}
+
+#[test]
 async fn unread_raw_completion_stream_retains_grants_until_wasmtime_consumes_bytes() {
     let (producer, consumer, _) = pair(8);
     assert!(producer.configure_completion());

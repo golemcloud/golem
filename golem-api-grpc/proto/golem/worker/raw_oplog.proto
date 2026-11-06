@@ -71,8 +71,7 @@ message RawOplogEntry {
     RawCardTransferConfirmedParameters card_transfer_confirmed = 58;
     RawDurableStreamRecordParameters stream_registered = 59;
     RawDurableStreamRecordParameters stream_items = 60;
-    RawDurableStreamRecordParameters stream_end = 61;
-    RawDurableStreamRecordParameters stream_cancel = 62;
+    RawDurableStreamRecordParameters stream_terminal = 61;
     RawDurableStreamRecordParameters stream_session = 63;
     RawTimestampOnly resumed = 64;
     RawTimestampOnly recovery_succeeded = 65;
@@ -577,20 +576,26 @@ message RawDurableStreamEventSummary {
   enum Kind {
     REGISTERED = 0;
     ITEMS = 1;
-    END = 2;
-    CANCELLED = 3;
+    TERMINAL_FINISHED = 2;
+    TERMINAL_CONSUMER_CANCELLED = 3;
     SESSION_RESULT = 4;
     SESSION_FINISHED = 5;
     SESSION_CANCELLATION = 6;
     SESSION_EXPIRED = 7;
+    TERMINAL_FAILED = 8;
   }
   enum Outcome {
     SUCCESS = 0;
     ERROR = 1;
   }
+  enum TerminalOrigin {
+    SOURCE = 0;
+    CONTROL = 1;
+  }
   Kind kind = 1;
   optional uint64 item_count = 2;
   optional Outcome outcome = 3;
+  optional TerminalOrigin terminal_origin = 4;
 }
 
 message RawOplogEntryWithIndex {

@@ -27,7 +27,7 @@ use super::{
     authorize_live_permissions_at_serialized_access, discard_producer, durability, input, mpsc,
     oneshot, secret_hold_targets_for_value,
 };
-use super::{AccessorTask, StreamCancelReason};
+use super::{AccessorTask, StreamError};
 
 impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
     for ToolStdinStreamPumpTask<Ctx>
@@ -51,16 +51,23 @@ impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx
                 return Ok(());
             }
         }
-        // A tool's stdin has a failure item, so a client's cancel reaches the tool as
-        // `cancelled`. Every other end of the source is a clean end.
-        let cancelled = matches!(
-            self.source_cancel.as_ref().and_then(|reason| reason.get()),
-            Some(StreamCancelReason::Cancelled)
-        );
-        let _ = if cancelled {
-            self.producer.fail(ByteStreamFailure::Cancelled)
-        } else {
-            self.producer.finish()
+        let _ = match self
+            .source_cancel
+            .as_ref()
+            .and_then(|terminal| terminal.get())
+        {
+            Some(StreamError::Cancelled) => self.producer.fail(ByteStreamFailure::Cancelled),
+            Some(StreamError::Abandoned) => self.producer.fail(ByteStreamFailure::Abandoned),
+            Some(StreamError::ResourceExhausted(_)) => {
+                self.producer.fail(ByteStreamFailure::ResourceExhausted)
+            }
+            Some(StreamError::Trapped(message) | StreamError::Interrupted(message)) => self
+                .producer
+                .fail(ByteStreamFailure::Failed(message.clone())),
+            Some(StreamError::Failed(value)) => self
+                .producer
+                .fail(ByteStreamFailure::Failed(format!("{value:?}"))),
+            None => self.producer.finish(),
         };
         Ok(())
     }

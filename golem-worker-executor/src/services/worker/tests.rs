@@ -2034,33 +2034,38 @@ fn tracks_workers_with_pending_updates_for_assignment_recovery() {
 #[test]
 fn tracks_idle_worker_with_pending_caller_side_stream_cancellation() {
     use golem_common::model::durable_stream::{
-        LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelIntentRecord,
-        StreamInvocationId, StreamRecordReference,
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelIntentRecord, StreamEndpointSide, StreamError, StreamInvocationId,
+        StreamRecordReference, StreamTerminal, StreamTerminalAuthor,
     };
 
     let mut status = AgentStatusRecord::default();
+    let intent = StreamConsumerCancelIntentRecord {
+        format_version: 1,
+        session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(
+            StreamInvocationId {
+                callee_environment_id: EnvironmentId::new(),
+                callee: AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "remote".into(),
+                },
+                callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
+                idempotency_key: IdempotencyKey::new("caller-side".into()),
+            },
+        ),
+        consumer_invocation: IdempotencyKey::new("consumer".into()),
+        source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
+        epoch: 1,
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted("stream cancelled".into())),
+        },
+    };
     status
         .pending_durable_stream_cancellations
-        .insert(StreamConsumerCancelIntentRecord {
-            format_version: 1,
-            session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(
-                StreamInvocationId {
-                    callee_environment_id: EnvironmentId::new(),
-                    callee: AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "remote".into(),
-                    },
-                    callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
-                    idempotency_key: IdempotencyKey::new("caller-side".into()),
-                },
-            ),
-            consumer_invocation: IdempotencyKey::new("consumer".into()),
-            source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
-            epoch: 1,
-            role: StreamCancelRole::OutputConsumer,
-            reason: StreamCancelReason::Cancelled,
-            details: None,
-        });
+        .insert((intent.source.clone(), intent.epoch), vec![intent]);
 
     assert!(status.durable_stream_sessions.iter().next().is_none());
     assert!(DefaultWorkerService::should_track_for_assignment_recovery(

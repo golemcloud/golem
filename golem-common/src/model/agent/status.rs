@@ -561,8 +561,10 @@ pub struct AgentStatusRecord {
     pub durable_stream_sessions: DurableStreamSessionIndex,
     pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
-    pub pending_durable_stream_cancellations:
-        HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
+    pub pending_durable_stream_cancellations: HashMap<
+        (crate::model::durable_stream::StreamRecordReference, u64),
+        Vec<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
+    >,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub cancelled_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
@@ -629,7 +631,7 @@ impl Default for AgentStatusRecord {
             durable_stream_sessions: DurableStreamSessionIndex::default(),
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
-            pending_durable_stream_cancellations: HashSet::new(),
+            pending_durable_stream_cancellations: HashMap::new(),
             current_idempotency_key: None,
             cancelled_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,

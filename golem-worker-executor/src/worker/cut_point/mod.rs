@@ -207,8 +207,7 @@ where
             | OplogEntry::ToolAttachmentRead { .. }
             | OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamTerminal { .. }
             | OplogEntry::StreamSession { .. } => None,
         };
 
@@ -312,8 +311,7 @@ where
             read(idx).await,
             OplogEntry::StreamRegistered { .. }
                 | OplogEntry::StreamItems { .. }
-                | OplogEntry::StreamEnd { .. }
-                | OplogEntry::StreamCancel { .. }
+                | OplogEntry::StreamTerminal { .. }
                 | OplogEntry::StreamSession { .. }
         ) {
             return Some(idx);

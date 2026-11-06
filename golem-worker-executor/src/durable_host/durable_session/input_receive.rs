@@ -120,13 +120,12 @@ impl AttachedDurableCatchUpReader {
             offset,
             packed_u8_batch_end: None,
             terminal_author: None,
+            terminal_origin: None,
             nested_handles: Vec::new(),
             nested_references: Vec::new(),
-            payload: CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::System,
-                reason: StreamCancelReason::SourceUnavailable,
-                details: None,
-            },
+            payload: CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(
+                StreamError::Interrupted("durable stream source unavailable".into()),
+            )),
         }))
     }
 
@@ -138,8 +137,7 @@ impl AttachedDurableCatchUpReader {
                 self.after = Some(event.offset);
                 self.terminal = matches!(
                     event.payload,
-                    CommittedProducerStreamEventPayload::End(_)
-                        | CommittedProducerStreamEventPayload::Cancel { .. }
+                    CommittedProducerStreamEventPayload::Terminal(_)
                 );
                 return Ok(Some(event));
             }
@@ -600,11 +598,9 @@ impl DurableInputEndpoint {
                 event.terminal_author.is_none()
                     && matches!(
                         &event.payload,
-                        CommittedProducerStreamEventPayload::Cancel {
-                            role: StreamCancelRole::System,
-                            reason: StreamCancelReason::SourceUnavailable,
-                            ..
-                        }
+                        CommittedProducerStreamEventPayload::Terminal(
+                            StreamTerminal::Failed(StreamError::Interrupted(details))
+                        ) if details == "durable stream source unavailable"
                     )
             }) {
                 journaled = true;
@@ -773,7 +769,7 @@ impl DurableInputEndpoint {
                             recursive_mappings: Vec::new(),
                         })
                     }
-                    CommittedProducerStreamEventPayload::End(result) => {
+                    CommittedProducerStreamEventPayload::Terminal(terminal) => {
                         StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
                             format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
                             observation: observation.clone(),
@@ -782,27 +778,12 @@ impl DurableInputEndpoint {
                             reader_id,
                             source_offset: event.offset,
                             consumer_read_ordinal: ordinal,
-                            terminal: StreamConsumerTerminal::End(result.clone()),
+                            authored_by: event
+                                .terminal_author
+                                .unwrap_or(StreamTerminalAuthor::Protocol),
+                            terminal: terminal.clone(),
                         })
                     }
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role,
-                        reason,
-                        details,
-                    } => StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
-                        format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
-                        observation: observation.clone(),
-                        reobserves: None,
-                        session_key: streams.session_reference.clone(),
-                        reader_id,
-                        source_offset: event.offset,
-                        consumer_read_ordinal: ordinal,
-                        terminal: StreamConsumerTerminal::Cancel {
-                            role: *role,
-                            reason: *reason,
-                            details: details.clone(),
-                        },
-                    }),
                 };
                 if guest {
                     // Only nested readers wait for the parent's oplog index.

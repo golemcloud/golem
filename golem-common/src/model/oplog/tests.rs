@@ -265,12 +265,15 @@ fn log_trace_context_binary_and_raw_protobuf_roundtrip() {
 #[test]
 fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_payloads() {
     use crate::model::durable_stream::{
-        LocalStreamId, StreamEndRecord, StreamEndResult, StreamItemsPayload, StreamItemsRecord,
-        StreamOffset, StreamRegistrationInvocation, StreamSessionFinishedRecord,
-        StreamSessionInvocationResultRecord, StreamSessionRecord, StreamTerminalAuthor,
+        LocalStreamId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
+        StreamRegistrationInvocation, StreamSessionFinishedRecord,
+        StreamSessionInvocationResultRecord, StreamSessionRecord, StreamTerminal,
+        StreamTerminalAuthor, StreamTerminalOrigin, StreamTerminalRecord,
     };
     use crate::model::oplog::PayloadId;
-    use crate::model::oplog::raw_types::{DurableStreamEventSummary, DurableStreamOutcome};
+    use crate::model::oplog::raw_types::{
+        DurableStreamEventSummary, DurableStreamOutcome, DurableStreamTerminalOutcome,
+    };
 
     let stream_id = LocalStreamId(OplogIndex::from_u64(4));
     let items = StreamItemsRecord {
@@ -282,16 +285,19 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
         payload: StreamItemsPayload::Values(vec![vec![1], vec![2], vec![3]]),
         offsets: vec![],
     };
-    let successful_end = StreamEndRecord {
+    let successful_end = StreamTerminalRecord {
         format_version: 1,
         stream_id,
         sequence: 3,
         offset: StreamOffset::new(OplogIndex::from_u64(5), 0),
         authored_by: StreamTerminalAuthor::Guest,
-        result: StreamEndResult::Ok,
+        origin: StreamTerminalOrigin::Source,
+        terminal: StreamTerminal::Finished,
     };
-    let failed_end = StreamEndRecord {
-        result: StreamEndResult::ErrorContext(vec![9]),
+    let failed_end = StreamTerminalRecord {
+        terminal: StreamTerminal::Failed(crate::model::durable_stream::StreamError::Trapped(
+            "trap".into(),
+        )),
         ..successful_end.clone()
     };
     let session_key = StreamRegistrationInvocation::Local(IdempotencyKey::new("stream".into()));
@@ -339,15 +345,31 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
     let summaries = [
         Some(DurableStreamEventSummary::Registered),
         Some(DurableStreamEventSummary::items(&items)),
-        Some(DurableStreamEventSummary::end(&successful_end)),
-        Some(DurableStreamEventSummary::end(&failed_end)),
-        Some(DurableStreamEventSummary::Cancelled),
+        Some(DurableStreamEventSummary::terminal(&successful_end)),
+        Some(DurableStreamEventSummary::terminal(&failed_end)),
+        Some(DurableStreamEventSummary::terminal(&StreamTerminalRecord {
+            terminal: StreamTerminal::ConsumerCancelled { details: None },
+            ..successful_end.clone()
+        })),
         DurableStreamEventSummary::session(&successful_session),
         DurableStreamEventSummary::session(&failed_session),
         DurableStreamEventSummary::session(&session_result),
         DurableStreamEventSummary::session(&session_cancellation),
         DurableStreamEventSummary::session(&session_expired),
         DurableStreamEventSummary::session(&irrelevant_session),
+        Some(DurableStreamEventSummary::terminal(&StreamTerminalRecord {
+            origin: StreamTerminalOrigin::Control,
+            ..successful_end.clone()
+        })),
+        Some(DurableStreamEventSummary::terminal(&StreamTerminalRecord {
+            origin: StreamTerminalOrigin::Control,
+            ..failed_end.clone()
+        })),
+        Some(DurableStreamEventSummary::terminal(&StreamTerminalRecord {
+            origin: StreamTerminalOrigin::Control,
+            terminal: StreamTerminal::ConsumerCancelled { details: None },
+            ..successful_end.clone()
+        })),
     ];
     assert_eq!(
         summaries[1],
@@ -355,14 +377,23 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
     );
     assert_eq!(
         summaries[2],
-        Some(DurableStreamEventSummary::End {
-            outcome: DurableStreamOutcome::Success
+        Some(DurableStreamEventSummary::Terminal {
+            outcome: DurableStreamTerminalOutcome::Finished,
+            origin: StreamTerminalOrigin::Source,
         })
     );
     assert_eq!(
         summaries[3],
-        Some(DurableStreamEventSummary::End {
-            outcome: DurableStreamOutcome::Error
+        Some(DurableStreamEventSummary::Terminal {
+            outcome: DurableStreamTerminalOutcome::Failed,
+            origin: StreamTerminalOrigin::Source,
+        })
+    );
+    assert_eq!(
+        summaries[4],
+        Some(DurableStreamEventSummary::Terminal {
+            outcome: DurableStreamTerminalOutcome::ConsumerCancelled,
+            origin: StreamTerminalOrigin::Source,
         })
     );
     assert_eq!(
@@ -387,6 +418,9 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
         Some(DurableStreamEventSummary::SessionExpired)
     );
     assert_eq!(summaries[10], None);
+    assert_ne!(summaries[2], summaries[11]);
+    assert_ne!(summaries[3], summaries[12]);
+    assert_ne!(summaries[4], summaries[13]);
 
     for (index, summary) in summaries.into_iter().enumerate() {
         let records = [
@@ -418,6 +452,94 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
 }
 
 #[test]
+fn stream_terminal_binary_and_raw_public_protobuf_roundtrip() {
+    use crate::model::durable_stream::{
+        LocalStreamId, StreamError, StreamOffset, StreamTerminal, StreamTerminalAuthor,
+        StreamTerminalOrigin, StreamTerminalRecord,
+    };
+    use crate::model::oplog::public_oplog_entry::StreamTerminalParams;
+    use crate::model::oplog::raw_types::DurableStreamEventSummary;
+
+    let declared = (17u32, "declared failure".to_string())
+        .into_typed_schema_value()
+        .unwrap();
+    for (origin, terminal) in [
+        StreamTerminal::Finished,
+        StreamTerminal::Failed(StreamError::Failed(declared)),
+        StreamTerminal::Failed(StreamError::Trapped("trap".into())),
+        StreamTerminal::Failed(StreamError::Cancelled),
+        StreamTerminal::Failed(StreamError::Abandoned),
+        StreamTerminal::Failed(StreamError::Interrupted("session deleted".into())),
+        StreamTerminal::Failed(StreamError::ResourceExhausted("retained bytes".into())),
+        StreamTerminal::ConsumerCancelled {
+            details: Some("reader dropped".into()),
+        },
+        StreamTerminal::ConsumerCancelled { details: None },
+    ]
+    .into_iter()
+    .flat_map(|terminal| {
+        [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control]
+            .map(|origin| (origin, terminal.clone()))
+    }) {
+        let record = StreamTerminalRecord {
+            format_version: 1,
+            stream_id: LocalStreamId(OplogIndex::from_u64(4)),
+            sequence: 3,
+            offset: StreamOffset::new(OplogIndex::from_u64(8), 0),
+            authored_by: StreamTerminalAuthor::Host,
+            origin,
+            terminal,
+        };
+        let timestamp = Timestamp::now_utc().rounded();
+        let public = PublicOplogEntry::StreamTerminal(StreamTerminalParams {
+            timestamp,
+            record: record.clone().into_typed_schema_value().unwrap(),
+        });
+        assert!(public.matches(&Query::parse("stream-terminal").unwrap()));
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            public.clone().try_into().unwrap();
+        assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+        let record_bytes = crate::serialization::serialize(&record).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<StreamTerminalRecord>(&record_bytes).unwrap(),
+            record
+        );
+        let entry = OplogEntry::StreamTerminal {
+            timestamp,
+            entity_parent_start_index: None,
+            summary: Some(DurableStreamEventSummary::terminal(&record)),
+            record: OplogPayload::Inline(Box::new(record.clone())),
+        };
+        assert_eq!(OplogEntry::try_from(public).unwrap(), entry);
+        let entry = OplogEntry::StreamTerminal {
+            timestamp,
+            entity_parent_start_index: None,
+            summary: Some(DurableStreamEventSummary::terminal(&record)),
+            record: OplogPayload::SerializedInline {
+                bytes: crate::serialization::serialize(&record).unwrap(),
+                cached: None,
+            },
+        };
+        let bytes = crate::serialization::serialize(&entry).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+            entry
+        );
+        let mut scoped_entry = entry;
+        if let OplogEntry::StreamTerminal {
+            entity_parent_start_index,
+            ..
+        } = &mut scoped_entry
+        {
+            *entity_parent_start_index = Some(OplogIndex::from_u64(2));
+        }
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            scoped_entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto).unwrap(), scoped_entry);
+    }
+}
+
+#[test]
 fn raw_durable_stream_summary_protobuf_rejects_invalid_fields() {
     use crate::model::oplog::raw_types::DurableStreamEventSummary;
     use golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary;
@@ -428,31 +550,55 @@ fn raw_durable_stream_summary_protobuf_rejects_invalid_fields() {
             kind: 99,
             item_count: None,
             outcome: None,
+            terminal_origin: None,
         },
         RawDurableStreamEventSummary {
-            kind: Kind::End as i32,
+            kind: Kind::SessionFinished as i32,
             item_count: None,
             outcome: Some(99),
+            terminal_origin: None,
         },
         RawDurableStreamEventSummary {
             kind: Kind::Items as i32,
             item_count: None,
             outcome: None,
+            terminal_origin: None,
         },
         RawDurableStreamEventSummary {
-            kind: Kind::End as i32,
+            kind: Kind::SessionFinished as i32,
             item_count: None,
             outcome: None,
+            terminal_origin: None,
         },
         RawDurableStreamEventSummary {
             kind: Kind::Registered as i32,
             item_count: Some(3),
             outcome: None,
+            terminal_origin: None,
         },
         RawDurableStreamEventSummary {
-            kind: Kind::Cancelled as i32,
+            kind: Kind::TerminalConsumerCancelled as i32,
             item_count: None,
             outcome: Some(Outcome::Success as i32),
+            terminal_origin: Some(0),
+        },
+        RawDurableStreamEventSummary {
+            kind: Kind::TerminalFinished as i32,
+            item_count: None,
+            outcome: None,
+            terminal_origin: None,
+        },
+        RawDurableStreamEventSummary {
+            kind: Kind::TerminalFinished as i32,
+            item_count: None,
+            outcome: None,
+            terminal_origin: Some(99),
+        },
+        RawDurableStreamEventSummary {
+            kind: Kind::Registered as i32,
+            item_count: None,
+            outcome: None,
+            terminal_origin: Some(0),
         },
     ];
     for summary in invalid {
@@ -2848,13 +2994,7 @@ mod scope_projection {
                 summary: None,
                 record: external_payload!(),
             },
-            OplogEntry::StreamEnd {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-                summary: None,
-                record: external_payload!(),
-            },
-            OplogEntry::StreamCancel {
+            OplogEntry::StreamTerminal {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 summary: None,

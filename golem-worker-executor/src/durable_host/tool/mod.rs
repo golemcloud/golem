@@ -134,9 +134,7 @@ use crate::durable_host::entity::{
     encode_tool_terminal, record_tool_rejection_access,
 };
 use crate::durable_host::secrets::secret_hold_targets_for_value;
-use crate::durable_host::stream_transport::{
-    LiveStreamEndpoint, accounted_byte_output_stream_pair,
-};
+use crate::durable_host::stream_transport::LiveStreamEndpoint;
 use crate::durable_host::tool::attachment::{
     AttachmentConsumer, AttachmentController, AttachmentMemory, AttachmentObserver,
     AttachmentProducer, AttachmentStreamProducer, attachment_pair, discard_producer,
@@ -184,9 +182,7 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationValue};
 use golem_common::model::component::ComponentName;
-use golem_common::model::durable_stream::{
-    DurableStreamHandle, SessionStreamRole, StreamCancelReason,
-};
+use golem_common::model::durable_stream::{DurableStreamHandle, SessionStreamRole, StreamError};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
     InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
@@ -343,8 +339,8 @@ struct UnderlyingToolStdinStreamConsumer {
 struct ToolStdinStreamPumpTask<Ctx> {
     producer: AttachmentProducer,
     items: mpsc::UnboundedReceiver<ToolStdinStreamItem>,
-    /// The reason of a cancel by the producer of a client's stdin, set before the source ends.
-    source_cancel: Option<Arc<OnceLock<StreamCancelReason>>>,
+    /// The failure of a client's stdin, set before the source ends.
+    source_cancel: Option<Arc<OnceLock<StreamError>>>,
     _ctx: std::marker::PhantomData<fn() -> Ctx>,
 }
 
