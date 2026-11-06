@@ -16,7 +16,7 @@ components:
   my-app:service:
     plugins:
       - name: golem-otlp-exporter
-        version: "1.5.8"
+        version: "1.5.9"
         parameters:
           endpoint: "http://localhost:4318"
           signals: "traces,logs,metrics"
@@ -152,7 +152,7 @@ components:
   my-app:service:
     plugins:
       - name: golem-otlp-exporter
-        version: "1.5.8"
+        version: "1.5.9"
         parameters:
           endpoint: "http://localhost:4318"
           signals: "traces,logs,metrics"
@@ -161,7 +161,7 @@ components:
         pluginsMergeMode: replace
         plugins:
           - name: golem-otlp-exporter
-            version: "1.5.8"
+            version: "1.5.9"
             parameters:
               endpoint: "https://otel.prod.example.com:4318"
               headers: "x-api-key={{ OTLP_API_KEY }}"

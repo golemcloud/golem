@@ -53,7 +53,7 @@ The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by 
 `isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. The source implements local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and repository-local `config`,
 plus HTTP(S) `remote`, `ls-remote`, `clone`, `fetch`, `push`, `pull`, `merge`, and linear `rebase`.
-The source exports `git@0.1.15`; its new immutable component release awaits authorized
+The source exports `git@0.1.16`; its new immutable component release awaits authorized
 publication. The artifact lock still pins the previous release.
 All network commands inject the component's WASI HTTP adapter; they do not use sockets.
 Called from a shell, commands start in the shell's current directory; other callers start at `/`
@@ -254,7 +254,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: git
-      version: 0.1.15
+      version: 0.1.16
 
 agents:
   CodingAgent:

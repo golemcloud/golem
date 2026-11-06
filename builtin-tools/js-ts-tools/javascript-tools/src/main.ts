@@ -30,7 +30,7 @@ type NpmBundle = {
 };
 
 const nodeTool = toolDefinition('node', { requiresFilesystem: true })
-  .version('0.1.10')
+  .version('0.1.11')
   .doc(
     "Run a JavaScript or TypeScript file (.js, .mjs, .cjs, .ts, .mts, .cts) or inline source with Golem's Node-compatible runtime. TypeScript runs without flags: types are removed and not checked; use the tsc tool to type-check.",
   )
@@ -61,7 +61,7 @@ const nodeTool = toolDefinition('node', { requiresFilesystem: true })
   );
 
 const npmTool = toolDefinition('npm', { requiresFilesystem: true })
-  .version('10.9.9+golem.9')
+  .version('10.9.9+golem.10')
   .doc('Install and manage JavaScript packages and run package scripts with npm.')
   .annotations({ openWorld: false })
   .body((body) =>
@@ -88,7 +88,7 @@ const npmTool = toolDefinition('npm', { requiresFilesystem: true })
   );
 
 const npxTool = toolDefinition('npx', { requiresFilesystem: true })
-  .version('10.9.9+golem.9')
+  .version('10.9.9+golem.10')
   .doc(
     'Run a command provided by a local or downloaded npm package. When tsx or ts-node is not installed in the project, `npx tsx <file>` and `npx ts-node <file>` (and their -e forms) run through the node tool, which runs TypeScript without downloading anything and without type checking; `node <file>` does the same directly.',
   )

@@ -11,7 +11,7 @@ const TYPESCRIPT_ROOT = '/toolchain/typescript/node_modules/typescript';
 const TSC_BUNDLED = '/toolchain/private/tsc.cjs';
 
 const tscTool = toolDefinition('tsc', { requiresFilesystem: true })
-  .version('5.9.2+golem.9')
+  .version('5.9.2+golem.10')
   .doc('Type-check and compile TypeScript files and projects.')
   .annotations({ openWorld: false })
   .body((body) =>
