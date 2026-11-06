@@ -142,6 +142,7 @@ pub(crate) fn prepared(key: &StreamSessionKey) -> StreamSessionPreparedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         session_key: key.idempotency_key.clone(),
         public_session_id: key.idempotency_key.value.clone(),
+        route_scope: None,
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {

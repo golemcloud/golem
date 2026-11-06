@@ -345,6 +345,89 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
     }
+    /// Finds the accepted caller payload in retained history. Result indexes point at terminals,
+    /// so completed requests walk backwards from that terminal to their recorded start. No
+    /// resident request table is needed, including after index eviction or reconstruction.
+    pub(in crate::worker) async fn accepted_invocation_payload(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<AgentInvocationPayload>, WorkerExecutorError> {
+        let status = self.state_actor.status().await;
+        if let Some(pending) = status
+            .pending_invocations
+            .iter()
+            .find(|p| p.has_idempotency_key(key))
+        {
+            return Ok(Some(
+                self.hydrate_pending_invocation(pending)
+                    .await?
+                    .invocation
+                    .into_parts()
+                    .1,
+            ));
+        }
+        let terminal = if let Some(index) = status.invocation_results.get(key) {
+            Some(*index)
+        } else if status.invocation_results.might_contain(key) {
+            self.resolve_old_invocation_result_index(&status, key)
+                .await?
+        } else {
+            None
+        };
+        if terminal.is_none() && status.current_idempotency_key.as_ref() != Some(key) {
+            return Ok(None);
+        }
+        let mut last = terminal.unwrap_or(status.oplog_idx).as_u64();
+        let chunk_size = self
+            .deps
+            .config()
+            .invocation_results
+            .physical_index_catch_up_chunk_size
+            .max(1);
+        while last >= OplogIndex::INITIAL.as_u64() {
+            let first = last
+                .saturating_sub(chunk_size - 1)
+                .max(OplogIndex::INITIAL.as_u64());
+            // The handle also sees an ephemeral writer's handed-off but not yet stored tail.
+            let entries = self
+                .oplog
+                .read_exact(OplogIndex::from_u64(first), last - first + 1)
+                .await?;
+            for (index, entry) in entries.iter().rev() {
+                if status.deleted_regions.is_in_deleted_region(*index) {
+                    continue;
+                }
+                match entry {
+                    OplogEntry::PendingAgentInvocation {
+                        idempotency_key,
+                        payload,
+                        ..
+                    }
+                    | OplogEntry::AgentInvocationStarted {
+                        idempotency_key,
+                        payload,
+                        ..
+                    } if idempotency_key == key => {
+                        return self
+                            .oplog
+                            .download_payload(payload.clone())
+                            .await
+                            .map(Some)
+                            .map_err(WorkerExecutorError::runtime);
+                    }
+                    _ => {}
+                }
+            }
+            if first == OplogIndex::INITIAL.as_u64() {
+                break;
+            }
+            last = first - 1;
+        }
+        Err(WorkerExecutorError::runtime(
+            "accepted invocation has no retained request payload",
+        ))
+    }
+
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         // Kept as an `Arc` rather than cloned out of. The ordered actor read ensures a preceding
         // completion fold is published first. The record owns

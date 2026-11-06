@@ -3874,6 +3874,9 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicAgentInvocation;
+    use golem_common::model::{IdempotencyScope, InvocationId};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -3886,6 +3889,18 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
 
     let idempotency_key = IdempotencyKey::fresh();
+    let scope = executor.auth_ctx().idempotency_scope().unwrap();
+    assert!(matches!(scope, IdempotencyScope::User(_)));
+    let final_key = IdempotencyKey::from_uuid(
+        InvocationId::external(
+            worker_id.clone(),
+            executor.get_worker_metadata(&worker_id).await?.fingerprint,
+            "add",
+            Some(scope),
+            Some(&idempotency_key),
+        )
+        .uuid(),
+    );
     executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -3905,6 +3920,28 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
             data_value!("G1000", "Golem T-Shirt M"),
         )
         .await?;
+
+    let conflict = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &repo_id,
+            &idempotency_key,
+            "add",
+            data_value!("G1000", "Changed description"),
+        )
+        .await
+        .expect_err("changed input must not reuse the accepted invocation");
+    assert!(
+        conflict.to_string().contains("IdempotencyConflict:"),
+        "{conflict}"
+    );
+    let starts = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?
+        .into_iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(parameters)
+                if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.idempotency_key == final_key)
+        )).count();
+    assert_eq!(starts, 1);
 
     let contents = executor
         .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
@@ -3940,6 +3977,9 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicAgentInvocation;
+    use golem_common::model::{IdempotencyScope, InvocationId};
+
     let context = TestContext::new(last_unique_id);
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
@@ -3989,6 +4029,18 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     );
 
     let oldest_key = oldest_key.unwrap();
+    let scope = executor.auth_ctx().idempotency_scope().unwrap();
+    assert!(matches!(scope, IdempotencyScope::User(_)));
+    let final_key = IdempotencyKey::from_uuid(
+        InvocationId::external(
+            worker_id.clone(),
+            executor.get_worker_metadata(&worker_id).await?.fingerprint,
+            "increment",
+            Some(scope),
+            Some(&oldest_key),
+        )
+        .uuid(),
+    );
     let read_exact_before = executor.oplog_service_call_count(&worker_id, "read_exact");
     let duplicate_result = executor
         .invoke_and_await_agent_with_key(
@@ -4001,10 +4053,9 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         .await?
         .into_typed::<u32>()?;
     assert_eq!(duplicate_result, 1);
-    assert_eq!(
-        executor.oplog_service_call_count(&worker_id, "read_exact"),
-        read_exact_before,
-        "an evicted idempotency result must resolve from the hot physical index without scanning the oplog"
+    assert!(
+        executor.oplog_service_call_count(&worker_id, "read_exact") > read_exact_before,
+        "the terminal index must lead back to the accepted request for conflict detection"
     );
 
     let next_key = IdempotencyKey::fresh();
@@ -4019,6 +4070,13 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         .await?
         .into_typed::<u32>()?;
     assert_eq!(next_result, 33);
+    let starts = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?
+        .into_iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(parameters)
+                if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.idempotency_key == final_key)
+        )).count();
+    assert_eq!(starts, 1);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -7812,6 +7870,157 @@ async fn scheduled_invocation(
 
 #[test]
 #[timeout("4m")]
+async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocation;
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent = agent_id!("ScheduledInvocationServer", "request-conflict");
+    let target = executor.start_agent(&component.id, agent.clone()).await?;
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    drop(executor);
+
+    let pending_key = IdempotencyKey::fresh();
+    let complete_key = IdempotencyKey::fresh();
+    let raced_key = IdempotencyKey::fresh();
+    let deadline = Utc::now() + chrono::Duration::hours(1);
+    let request = |key: &IdempotencyKey, value, scope_card| AgentInvocation::AgentMethod {
+        idempotency_key: key.clone(),
+        method_name: "inc_global_by".to_string(),
+        input: data_value!(value).into_parts().1,
+        invocation_context: InvocationContextStack::fresh(),
+        principal: Principal::anonymous(),
+        scope_card,
+    };
+    let changed_card = ScopeCard {
+        scope_card_id: CardId::new(),
+        root_card_ids: vec![],
+        lower_positive: vec![],
+        lower_negative: vec![],
+        upper_positive: vec![],
+        upper_negative: vec![],
+        expires_at: None,
+    };
+    for round in 0..2 {
+        let executor = start(deps, &context).await?;
+        executor.start_agent(&component.id, agent.clone()).await?;
+        let worker = executor.active_agent(&owned).await.unwrap().primary();
+        let (left, right) = tokio::join!(
+            worker.schedule_invocation(request(&raced_key, 31u64, None), deadline),
+            worker.schedule_invocation(request(&raced_key, 37u64, None), deadline),
+        );
+        let conflict = match (left, right) {
+            (Ok(_), Err(error)) | (Err(error), Ok(_)) => error,
+            other => panic!("concurrent changed requests must accept exactly one: {other:?}"),
+        };
+        assert!(
+            matches!(conflict, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:"))
+        );
+        let receipt = worker
+            .schedule_invocation(request(&pending_key, 17u64, None), deadline)
+            .await?;
+        assert_eq!(
+            worker
+                .schedule_invocation(
+                    request(&pending_key, 17u64, None),
+                    deadline + chrono::Duration::hours(1)
+                )
+                .await?,
+            receipt,
+        );
+        worker
+            .clone()
+            .invoke_and_await(request(&complete_key, 23u64, None))
+            .await?;
+        worker
+            .clone()
+            .invoke_and_await(request(&complete_key, 23u64, None))
+            .await?;
+
+        for key in [&pending_key, &complete_key] {
+            for changed in [
+                request(key, 999u64, None),
+                request(
+                    key,
+                    if key == &pending_key { 17u64 } else { 23 },
+                    Some(changed_card.clone()),
+                ),
+            ] {
+                let error = worker
+                    .clone()
+                    .invoke(changed)
+                    .await
+                    .err()
+                    .expect("changed request must be rejected");
+                assert!(
+                    matches!(error, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:")),
+                    "round {round}"
+                );
+            }
+        }
+        let error = worker
+            .schedule_invocation(request(&pending_key, 999u64, None), deadline)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:"))
+        );
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &agent, "get_global_value", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            23
+        );
+        let entries = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+        let mut pending_count = 0;
+        let mut raced_count = 0;
+        let mut started_count = 0;
+        for entry in entries {
+            match entry.entry {
+                PublicOplogEntry::PendingAgentInvocation(parameters) => {
+                    raced_count += usize::from(
+                        matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == raced_key),
+                    );
+                    if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == pending_key)
+                    {
+                        pending_count += 1;
+                        assert_eq!(
+                            parameters.not_before.unwrap().to_millis(),
+                            deadline.timestamp_millis() as u64
+                                + u64::from(
+                                    !deadline.timestamp_subsec_nanos().is_multiple_of(1_000_000)
+                                )
+                        );
+                    }
+                }
+                PublicOplogEntry::AgentInvocationStarted(parameters) => {
+                    if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == complete_key)
+                    {
+                        started_count += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(pending_count, 1);
+        assert_eq!(raced_count, 1);
+        assert_eq!(started_count, 1);
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
 async fn grpc_schedule_commits_pending_without_loading_target(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -7821,9 +8030,10 @@ async fn grpc_schedule_commits_pending_without_loading_target(
         InvocationRequest, InvocationStart, invocation_request, invocation_response,
     };
     use golem_common::model::oplog::PublicAgentInvocation;
+    use golem_common::model::{IdempotencyScope, InvocationId, InvocationRequestKey};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let mut executor = start(deps, &context).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
@@ -7841,59 +8051,109 @@ async fn grpc_schedule_commits_pending_without_loading_target(
     .await??;
     assert!(!executor.worker_is_loaded(&owned).await);
     let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint;
-    let key = IdempotencyKey::new("scheduled-key-not-a-uuid".to_string());
+    let raw_key = IdempotencyKey::new("scheduled-key-not-a-uuid".to_string());
+    let scope = executor.auth_ctx().idempotency_scope().unwrap();
+    assert!(matches!(scope, IdempotencyScope::User(_)));
+    let request_key = InvocationRequestKey::external(Some(scope), Some(&raw_key));
+    let key = IdempotencyKey::from_uuid(
+        InvocationId::external(
+            target.clone(),
+            fingerprint,
+            "inc_global_by",
+            Some(scope),
+            Some(&raw_key),
+        )
+        .uuid(),
+    );
+    assert_ne!(key, raw_key);
     let future = Utc::now() + chrono::Duration::hours(1);
 
-    // A same-key retry must preserve both the original input and the original deadline.
-    for (at, value) in [(future, 101u64), (future + chrono::Duration::hours(1), 999)] {
-        let (_, input) = data_value!(value).into_parts();
-        let request = InvocationRequest {
-            request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(target.clone().into()),
-                method_name: Some("inc_global_by".to_string()),
-                input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-                idempotency_key: Some(key.clone().into()),
-                auth_ctx: Some(executor.auth_ctx().into()),
-                environment_id: Some(component.environment_id.into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-                schedule_at: Some(prost_types::Timestamp {
-                    seconds: at.timestamp(),
-                    nanos: at.timestamp_subsec_nanos() as i32,
-                }),
-                ..Default::default()
-            })),
-        };
-        let (sender, receiver) = tokio::sync::mpsc::channel(1);
-        sender.send(request).await?;
-        let mut responses = executor
-            .client
-            .clone()
-            .invoke_agent_session(tokio_stream::wrappers::ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        let mut accepted = false;
-        while let Some(response) = responses.message().await? {
-            match response.response {
-                Some(invocation_response::Response::Accepted(_)) => accepted = true,
-                Some(invocation_response::Response::Rejected(error)) => {
-                    bail!("schedule was rejected: {error:?}")
-                }
-                Some(invocation_response::Response::Finished(completion)) => {
-                    assert!(matches!(
+    for round in 0..2 {
+        if round == 1 {
+            drop(executor);
+            executor = start(deps, &context).await?;
+        }
+        // A repair may change its proposed deadline, but cannot change the accepted input.
+        for (at, value) in [
+            (future, 101u64),
+            (future + chrono::Duration::hours(1), 101),
+            (future + chrono::Duration::hours(1), 999),
+        ] {
+            let (_, input) = data_value!(value).into_parts();
+            let request = InvocationRequest {
+                request: Some(invocation_request::Request::Start(InvocationStart {
+                    agent_id: Some(target.clone().into()),
+                    method_name: Some("inc_global_by".to_string()),
+                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                    idempotency_key: Some(raw_key.clone().into()),
+                    request_key: Some(request_key.clone().into()),
+                    expected_callee_fingerprint: Some(fingerprint.0.into()),
+                    auth_ctx: Some(executor.auth_ctx().into()),
+                    environment_id: Some(component.environment_id.into()),
+                    component_owner_account_id: Some(component.account_id.into()),
+                    mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule
+                        as i32,
+                    schedule_at: Some(prost_types::Timestamp {
+                        seconds: at.timestamp(),
+                        nanos: at.timestamp_subsec_nanos() as i32,
+                    }),
+                    ..Default::default()
+                })),
+            };
+            let (sender, receiver) = tokio::sync::mpsc::channel(1);
+            sender.send(request).await?;
+            let mut responses = executor
+                .client
+                .clone()
+                .invoke_agent_session(tokio_stream::wrappers::ReceiverStream::new(receiver))
+                .await?
+                .into_inner();
+            let mut accepted = false;
+            let mut conflict = false;
+            while let Some(response) = responses.message().await? {
+                match response.response {
+                    Some(invocation_response::Response::Accepted(acceptance)) => {
+                        assert_eq!(acceptance.idempotency_key, Some(key.clone().into()));
+                        assert_eq!(acceptance.callee_fingerprint, Some(fingerprint.0.into()));
+                        accepted = true;
+                    }
+                    Some(invocation_response::Response::Rejected(error)) => {
+                        assert_eq!(value, 999, "unchanged schedule was rejected: {error:?}");
+                        assert_eq!(
+                        error.reason,
+                        golem_api_grpc::proto::golem::worker::InvocationRejectionReason::IdempotencyConflict as i32,
+                    );
+                        let worker_error: WorkerExecutorError = error
+                            .worker_error
+                            .expect("conflict must retain its worker error")
+                            .try_into()
+                            .map_err(anyhow::Error::msg)?;
+                        assert!(
+                            matches!(worker_error, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:"))
+                        );
+                        conflict = true;
+                    }
+                    Some(invocation_response::Response::Finished(completion)) => {
+                        assert!(matches!(
                         completion.outcome,
                         Some(golem_api_grpc::proto::golem::worker::invocation_session_completion::Outcome::Success(_))
                     ), "schedule failed: {completion:?}");
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
+            assert_eq!(accepted, value == 101);
+            assert_eq!(conflict, value == 999);
+            assert!(!executor.worker_is_loaded(&owned).await);
+            drop(sender);
         }
-        assert!(accepted);
-        assert!(!executor.worker_is_loaded(&owned).await);
-        drop(sender);
-    }
-    let entries = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
-    let pending = entries
+        let entries = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+        assert!(!entries.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::PendingAgentInvocation(parameters)
+                if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.idempotency_key == raw_key)
+        )), "the raw external seed must not become a persisted invocation or alias");
+        let pending = entries
         .iter()
         .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::PendingAgentInvocation(parameters)
@@ -7902,20 +8162,18 @@ async fn grpc_schedule_commits_pending_without_loading_target(
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(pending.len(), 1);
-    let expected_millis = future.timestamp_millis() as u64
-        + u64::from(!future.timestamp_subsec_nanos().is_multiple_of(1_000_000));
-    assert_eq!(pending[0].not_before.unwrap().to_millis(), expected_millis);
-    let PublicAgentInvocation::AgentMethodInvocation(method) = &pending[0].invocation else {
-        unreachable!()
-    };
-    assert_eq!(
-        method.function_input.clone().into_parts().1,
-        data_value!(101u64).into_parts().1
-    );
-
-    drop(executor);
-    let executor = start(deps, &context).await?;
+        assert_eq!(pending.len(), 1);
+        let expected_millis = future.timestamp_millis() as u64
+            + u64::from(!future.timestamp_subsec_nanos().is_multiple_of(1_000_000));
+        assert_eq!(pending[0].not_before.unwrap().to_millis(), expected_millis);
+        let PublicAgentInvocation::AgentMethodInvocation(method) = &pending[0].invocation else {
+            unreachable!()
+        };
+        assert_eq!(
+            method.function_input.clone().into_parts().1,
+            data_value!(101u64).into_parts().1
+        );
+    }
     assert_eq!(
         executor.get_worker_metadata(&target).await?.fingerprint,
         fingerprint

@@ -21,8 +21,8 @@ use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationStart, invocation_session_completion, invocation_session_result,
 };
+use golem_common::model::AgentId;
 use golem_common::model::agent::{ParsedAgentId, Principal};
-use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
     FromSchema, IntoSchema, SchemaGraph, SchemaValue, TypedSchemaValue, try_into_schema_graph,
@@ -152,7 +152,8 @@ impl RawHandler {
             .handler
             .as_ref()
             .ok_or(RequestHandlerError::RawBadGateway)?;
-        let key = IdempotencyKey::fresh();
+        let request_key = golem_common::model::InvocationRequestKey::external(None, None);
+        let key = request_key.owner_key(&handler.method_name);
         let logical = ParsedAgentId::try_new(
             router.agent_type.clone(),
             TypedSchemaValue::new(
@@ -181,7 +182,7 @@ impl RawHandler {
                 agent_id: Some(agent_id.into()),
                 method_name: Some(handler.method_name.clone()),
                 input: Some(input),
-                idempotency_key: Some(key.into()),
+                request_key: Some(request_key.into()),
                 context: Some(context),
                 auth_ctx: Some(AuthCtx::System.into()),
                 principal: Some(principal.into()),
@@ -537,6 +538,14 @@ fn map_session_error(error: super::http_session::HttpSessionError) -> RequestHan
         super::http_session::HttpSessionError::Deadline => RequestHandlerError::RawDeadline,
         super::http_session::HttpSessionError::MessageTooLarge(error) => {
             RequestHandlerError::RawMessageTooLarge(error)
+        }
+        super::http_session::HttpSessionError::InvocationIdentityConflict(error) => {
+            RequestHandlerError::AgentInvocationFailed(
+                golem_service_base::error::worker_executor::WorkerExecutorError::invalid_request(
+                    format!("IdempotencyConflict: {error}"),
+                )
+                .into(),
+            )
         }
         _ => RequestHandlerError::RawBadGateway,
     }

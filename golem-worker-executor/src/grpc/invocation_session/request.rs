@@ -62,15 +62,12 @@ pub(crate) fn build_durable_streaming_request(
         .ok_or_else(|| WorkerExecutorError::invalid_request("environment_id not found"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
-    let idempotency_key: IdempotencyKey = request
-        .idempotency_key
-        .clone()
-        .ok_or_else(|| {
+    let idempotency_key: IdempotencyKey =
+        invocation.idempotency_key().cloned().ok_or_else(|| {
             WorkerExecutorError::invalid_request(
-                "durable streaming invocations require an idempotency key",
+                "durable streaming invocations require an admitted invocation key",
             )
-        })?
-        .into();
+        })?;
     let attempt_id = AttemptId(
         request
             .attempt_id

@@ -1039,6 +1039,16 @@ async fn durable_stream_operation_policy_is_isolated_per_route_family() {
     let control = controls[0].export_control.as_ref().unwrap();
     assert_eq!(control.session, session);
     assert_eq!(control.slot.as_deref(), Some("$result"));
+    let (environment, revision, route): (String, String, String) =
+        serde_json::from_str(&control.route_scope).unwrap();
+    let expected_environment: EnvironmentId = controls[0]
+        .producer_environment_id
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(environment, expected_environment.to_string());
+    assert_eq!(revision, DeploymentRevision::INITIAL.to_string());
+    assert_eq!(route, "14");
 
     let response = handler.handle_request(request("stream")).await.unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
@@ -1118,8 +1128,8 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
     let source_fork =
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
-    let named_fork = |root: &str, name: &str| {
-        let hash = blake3::hash(format!("{root}\0{name}").as_bytes());
+    let named_fork = |root: &str, scope: &str, name: &str| {
+        let hash = blake3::hash(&serde_json::to_vec(&(root, scope, name)).unwrap());
         let mut bytes: [u8; 16] = hash.as_bytes()[..16].try_into().unwrap();
         bytes[6] = (bytes[6] & 15) | 64;
         bytes[8] = (bytes[8] & 63) | 128;
@@ -1250,14 +1260,14 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 assert_eq!(
                     forks[0].source_agent_id.as_ref().unwrap().name,
                     if nested {
-                        named_fork(&root_id, &source_fork)
+                        named_fork(&root_id, &forks[0].route_scope, &source_fork)
                     } else {
                         root_id.clone()
                     }
                 );
                 assert_eq!(
                     forks[0].target_agent_id.as_ref().unwrap().name,
-                    named_fork(&root_id, &target_fork)
+                    named_fork(&root_id, &forks[0].route_scope, &target_fork)
                 );
                 assert_eq!(forks[0].source_path, source);
             }

@@ -40,6 +40,7 @@ impl WorkerService for RecordingWorkerService {
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
         _fingerprint: golem_common::model::AgentFingerprint,
+        _route_scope: &str,
         _public_session_id: &str,
     ) -> Result<
         Option<golem_common::model::DurableStreamPublicBinding>,

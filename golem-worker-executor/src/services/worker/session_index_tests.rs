@@ -605,6 +605,7 @@ fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionReco
     StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
         public_session_id: key.value.clone(),
+        route_scope: Some(test_route_scope()),
         session_key: key.clone(),
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
@@ -2372,6 +2373,121 @@ fn bounded_status_evicts_old_completed_sessions_but_retains_unfinished_session()
     assert!(index.get(&unfinished).is_some());
 }
 
+fn test_route_scope() -> String {
+    golem_common::model::durable_stream::durable_stream_route_scope("environment", "1", "route")
+}
+
+#[test]
+async fn public_bindings_isolate_routes_and_recreated_generations_after_rebuild() {
+    use golem_common::model::durable_stream::durable_stream_route_scope;
+
+    let (service, _kv, oplog_service) = service_with_oplog().await;
+    let id = owned_agent("route-bindings", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+    let public = "shared-name";
+    let scopes = [
+        durable_stream_route_scope("environment", "1", "first"),
+        durable_stream_route_scope("environment", "1", "second"),
+        durable_stream_route_scope("environment", "2", "first"),
+        durable_stream_route_scope("other-environment", "1", "first"),
+    ];
+    let keys = scopes
+        .iter()
+        .map(|_| IdempotencyKey::fresh())
+        .collect::<Vec<_>>();
+    let prepare = |key: &IdempotencyKey, scope: Option<String>| {
+        let mut prepared = prepared_record(&id, key);
+        let StreamSessionRecord::Prepared(record) = &mut prepared else {
+            unreachable!()
+        };
+        record.public_session_id = public.into();
+        record.route_scope = scope;
+        record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 };
+        record.expiry_deadline_millis = Some(10_000);
+        prepared
+    };
+    for (scope, key) in scopes.iter().zip(&keys) {
+        append_session(oplog.as_ref(), prepare(key, Some(scope.clone()))).await;
+    }
+    // Ordinary invocation sessions never publish a route binding.
+    append_session(oplog.as_ref(), prepare(&IdempotencyKey::fresh(), None)).await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Expired(StreamSessionExpiredRecord {
+            format_version: 1,
+            session_key: keys[0].clone(),
+            public_session_id: public.into(),
+            route_scope: scopes[0].clone(),
+            expected_deadline_millis: 10_000,
+            expired_at_millis: 10_000,
+        }),
+    )
+    .await;
+    let replacement = IdempotencyKey::fresh();
+    append_session(
+        oplog.as_ref(),
+        prepare(&replacement, Some(scopes[0].clone())),
+    )
+    .await;
+    // A delayed expiry of the retired generation cannot retire its replacement.
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Expired(StreamSessionExpiredRecord {
+            format_version: 1,
+            session_key: keys[0].clone(),
+            public_session_id: public.into(),
+            route_scope: scopes[0].clone(),
+            expected_deadline_millis: 10_000,
+            expired_at_millis: 20_000,
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    for rebuild in [false, true] {
+        if rebuild {
+            service
+                .stream_session_index
+                .clear(&id, test_fingerprint())
+                .await
+                .unwrap();
+        }
+        for (index, scope) in scopes.iter().enumerate() {
+            let expected = if index == 0 {
+                &replacement
+            } else {
+                &keys[index]
+            };
+            assert!(matches!(service.stream_session_index.lookup_public_binding(
+                &id, AgentMode::Durable, test_fingerprint(), scope, public,
+            ).await.unwrap(), Some(DurableStreamPublicBinding::Live { session_key, .. }) if &session_key == expected));
+            let status = service
+                .stream_session_index
+                .lookup_latest(&id, AgentMode::Durable, test_fingerprint(), expected)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(status.route_scope.as_ref(), Some(scope));
+            assert_eq!(status.public_session_id.as_deref(), Some(public));
+            assert!(!status.expired);
+        }
+        assert_eq!(
+            service
+                .stream_session_index
+                .lookup_public_binding(
+                    &id,
+                    AgentMode::Durable,
+                    test_fingerprint(),
+                    &durable_stream_route_scope("environment", "1", "missing"),
+                    public,
+                )
+                .await
+                .unwrap(),
+            None
+        );
+    }
+}
+
 #[test]
 async fn public_binding_projection_is_fenced_and_rebuildable() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
@@ -2395,6 +2511,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
             format_version: 1,
             session_key: first.clone(),
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 10_000,
             refreshed_at_millis: 10_000,
             deadline_millis: 20_000,
@@ -2408,6 +2525,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
             format_version: 1,
             session_key: first.clone(),
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 10_000,
             expired_at_millis: 20_000,
         }),
@@ -2419,6 +2537,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
             format_version: 1,
             session_key: first.clone(),
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 20_000,
             expired_at_millis: 20_000,
         }),
@@ -2430,6 +2549,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             session_key: second.clone(),
             source_invocation: session_key(&id, &first),
             request_hash: vec![7; 32],
@@ -2448,7 +2568,13 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected.clone())
@@ -2471,7 +2597,13 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected)
@@ -2489,6 +2621,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             session_key: key.clone(),
             source_invocation: session_key(&id, &key),
             request_hash: vec![7; 32],
@@ -2502,6 +2635,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
             format_version: 1,
             session_key: key.clone(),
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 10_000,
             refreshed_at_millis: 10_000,
             deadline_millis: 20_000,
@@ -2511,6 +2645,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
             format_version: 1,
             session_key: key.clone(),
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 20_000,
             expired_at_millis: 20_000,
         }),
@@ -2526,7 +2661,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     assert!(matches!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), &test_route_scope(), public)
             .await
             .unwrap(),
         Some(DurableStreamPublicBinding::Retired { session_key }) if session_key == key
@@ -2586,7 +2721,13 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected.clone())
@@ -2609,7 +2750,13 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected)
@@ -2654,7 +2801,7 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     assert!(matches!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), &test_route_scope(), public)
             .await
             .unwrap(),
         Some(DurableStreamPublicBinding::Live { session_key, .. }) if session_key == key
@@ -2678,7 +2825,13 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         None
@@ -2710,7 +2863,13 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         None
@@ -2765,7 +2924,13 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected.clone())
@@ -2799,7 +2964,13 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected.clone())
@@ -2812,7 +2983,13 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected)

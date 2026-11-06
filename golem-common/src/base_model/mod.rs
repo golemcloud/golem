@@ -39,6 +39,7 @@ pub mod error;
 pub mod external_agent_secret;
 pub mod http_api_deployment;
 pub mod invocation_context;
+pub mod invocation_id;
 pub mod json;
 pub mod login;
 pub mod mcp_deployment;
@@ -63,6 +64,7 @@ pub mod worker;
 pub mod worker_filter;
 
 pub use durable_stream::*;
+pub use invocation_id::{IdempotencyScope, InvocationId, InvocationRequestKey};
 pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;

@@ -85,6 +85,7 @@ struct ValidatedOutputFrame {
 #[derive(Debug)]
 pub struct InvocationSessionState {
     phase: SessionPhase,
+    request_idempotency_key: Option<String>,
     idempotency_key: Option<String>,
     accepted_agent_id: Option<AgentId>,
     accepted_revision: Option<u64>,
@@ -109,6 +110,7 @@ impl Default for InvocationSessionState {
     fn default() -> Self {
         Self {
             phase: SessionPhase::Initial,
+            request_idempotency_key: None,
             idempotency_key: None,
             accepted_agent_id: None,
             accepted_revision: None,
@@ -245,7 +247,17 @@ impl InvocationSessionState {
                 if reason == InvocationRejectionReason::Unspecified {
                     return Err("invocation rejection reason is unspecified".to_string());
                 }
-                self.validate_idempotency_key(&rejected.idempotency_key)?;
+                if self.resume {
+                    self.validate_idempotency_key(&rejected.idempotency_key)?;
+                } else if rejected
+                    .idempotency_key
+                    .as_ref()
+                    .map(|_| required_idempotency_key(&rejected.idempotency_key))
+                    .transpose()?
+                    != self.request_idempotency_key.as_deref()
+                {
+                    return Err("invocation rejection key differs from its start".to_string());
+                }
                 self.phase = SessionPhase::Complete;
                 Ok(())
             }
@@ -538,7 +550,10 @@ impl InvocationSessionState {
         resume: bool,
         out_of_band_inputs: bool,
     ) -> Result<(), String> {
-        let key = required_idempotency_key(idempotency_key)?;
+        let key = idempotency_key
+            .as_ref()
+            .map(|_| required_idempotency_key(idempotency_key))
+            .transpose()?;
         let stream_ids = input
             .map(stream_references)
             .transpose()?
@@ -555,7 +570,7 @@ impl InvocationSessionState {
                 )
             })
             .collect();
-        self.idempotency_key = Some(key.to_string());
+        self.request_idempotency_key = key.map(str::to_string);
         self.phase = SessionPhase::AwaitDecision { resume };
         Ok(())
     }
@@ -633,7 +648,10 @@ impl InvocationSessionState {
     }
 
     fn accept(&mut self, accepted: &InvocationAccepted) -> Result<(), String> {
-        self.validate_idempotency_key(&accepted.idempotency_key)?;
+        let invocation_key = required_idempotency_key(&accepted.idempotency_key)?;
+        if self.resume {
+            self.validate_idempotency_key(&accepted.idempotency_key)?;
+        }
         let agent_id = accepted
             .agent_id
             .as_ref()
@@ -962,6 +980,7 @@ impl InvocationSessionState {
                 }
             }
         }
+        self.idempotency_key = Some(invocation_key.to_string());
         self.accepted_agent_id = Some(agent_id.clone());
         self.accepted_revision = accepted.component_revision;
         self.accepted_epoch = durable_acceptance.then_some(accepted.epoch);
@@ -3139,6 +3158,83 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_establishes_identity_distinct_from_the_request_key() {
+        for trusted in [false, true] {
+            let mut state = InvocationSessionState::default();
+            if trusted {
+                state
+                    .validate_trusted_request(&trusted_start(record(Vec::new())))
+                    .unwrap();
+            } else {
+                state
+                    .validate_public_request(&public_start(record(Vec::new())))
+                    .unwrap();
+            }
+            let mut acceptance = accepted();
+            let Some(invocation_response::Response::Accepted(accepted)) =
+                acceptance.response.as_mut()
+            else {
+                unreachable!()
+            };
+            let invocation_key = Some(IdempotencyKey {
+                value: "f055e100-ad10-56a8-8ac2-cb545f157aa0".to_string(),
+            });
+            accepted.idempotency_key = invocation_key.clone();
+            state.validate_response(&acceptance).unwrap();
+
+            let mut invocation_result = result(scalar(1));
+            assert!(state.validate_response(&invocation_result).is_err());
+            let Some(invocation_response::Response::Result(result)) =
+                invocation_result.response.as_mut()
+            else {
+                unreachable!()
+            };
+            result.idempotency_key = invocation_key;
+            state.validate_response(&invocation_result).unwrap();
+            state.validate_response(&success()).unwrap();
+        }
+    }
+
+    #[test]
+    fn unkeyed_start_accepts_a_final_identity_or_an_unkeyed_rejection() {
+        let mut start = trusted_start(record(Vec::new()));
+        let Some(invocation_request::Request::Start(start)) = start.request.as_mut() else {
+            unreachable!()
+        };
+        start.idempotency_key = None;
+        let start = trusted_request(invocation_request::Request::Start(start.clone()));
+        let mut accepted_state = InvocationSessionState::default();
+        accepted_state.validate_trusted_request(&start).unwrap();
+        accepted_state.validate_response(&accepted()).unwrap();
+        accepted_state
+            .validate_response(&result(scalar(1)))
+            .unwrap();
+        accepted_state.validate_response(&success()).unwrap();
+
+        let mut rejected_state = InvocationSessionState::default();
+        rejected_state.validate_trusted_request(&start).unwrap();
+        let mut rejection = InvocationRejected {
+            reason: InvocationRejectionReason::Validation as i32,
+            idempotency_key: key(),
+            ..Default::default()
+        };
+        assert!(
+            rejected_state
+                .validate_response(&response(invocation_response::Response::Rejected(
+                    rejection.clone()
+                )))
+                .is_err()
+        );
+        rejection.idempotency_key = None;
+        rejected_state
+            .validate_response(&response(invocation_response::Response::Rejected(
+                rejection,
+            )))
+            .unwrap();
+        assert!(rejected_state.is_complete());
+    }
+
+    #[test]
     fn resume_attach_accepts_the_exact_requested_identity_and_epoch() {
         let resume = resume_attach(vec![StreamCursor {
             stream_id: Some(uuid(107)),
@@ -3278,7 +3374,7 @@ mod tests {
 
     #[test]
     fn resume_acceptance_rejects_identity_and_epoch_mismatches() {
-        for mutate in 0..6 {
+        for mutate in 0..7 {
             let resume = resume_attach(Vec::new());
             let mut acceptance = resumed_acceptance(Vec::new());
             let Some(invocation_response::Response::Accepted(accepted)) =
@@ -3293,6 +3389,11 @@ mod tests {
                 3 => accepted.attempt_id = Some(uuid(32)),
                 4 => accepted.callee_fingerprint = Some(uuid(33)),
                 5 => accepted.epoch = 3,
+                6 => {
+                    accepted.idempotency_key = Some(IdempotencyKey {
+                        value: "other-invocation".to_string(),
+                    })
+                }
                 _ => unreachable!(),
             }
             let mut state = InvocationSessionState::default();

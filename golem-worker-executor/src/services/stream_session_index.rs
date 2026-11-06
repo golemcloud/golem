@@ -686,6 +686,7 @@ impl StreamSessionIndexService {
         id: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, SessionError> {
         let oplog = self.oplog.upgrade().ok_or("oplog service is unavailable")?;
@@ -700,7 +701,7 @@ impl StreamSessionIndexService {
                 Self::namespace(id, fingerprint),
                 vec![
                     METADATA_FIELD.into(),
-                    Self::public_binding_field(public_session_id),
+                    Self::public_binding_field(route_scope, public_session_id),
                 ]
                 .into(),
             )
@@ -751,8 +752,10 @@ impl StreamSessionIndexService {
         format!("{SESSION_FIELD_PREFIX}{}", key.value)
     }
 
-    pub(super) fn public_binding_field(public_session_id: &str) -> String {
-        format!("{PUBLIC_BINDING_FIELD_PREFIX}{public_session_id}")
+    pub(super) fn public_binding_field(route_scope: &str, public_session_id: &str) -> String {
+        let identity = serde_json::to_string(&(route_scope, public_session_id))
+            .expect("string tuple is serializable");
+        format!("{PUBLIC_BINDING_FIELD_PREFIX}{identity}")
     }
 
     fn index_lock(&self, id: &OwnedAgentId) -> IndexLock {
@@ -1156,22 +1159,22 @@ impl StreamSessionIndexService {
                     } else {
                         match record {
                             StreamSessionRecord::Prepared(record) => {
-                                Some(&record.public_session_id)
+                                record.route_scope.as_ref().map(|scope| Self::public_binding_field(scope, &record.public_session_id))
                             }
                             StreamSessionRecord::ExportForkInitialized(record) => {
-                                Some(&record.public_session_id)
+                                Some(Self::public_binding_field(&record.route_scope, &record.public_session_id))
                             }
                             StreamSessionRecord::ExpiryRefreshed(record) => {
-                                Some(&record.public_session_id)
+                                Some(Self::public_binding_field(&record.route_scope, &record.public_session_id))
                             }
                             StreamSessionRecord::Expired(record) => {
-                                Some(&record.public_session_id)
+                                Some(Self::public_binding_field(&record.route_scope, &record.public_session_id))
                             }
                             _ => None,
                         }
                     };
                     if let Some(public_session_id) = public_session_id {
-                        if !public_bindings.contains_key(public_session_id) {
+                        if !public_bindings.contains_key(&public_session_id) {
                             let old = self
                                 .kv
                                 .with_entity(
@@ -1181,13 +1184,13 @@ impl StreamSessionIndexService {
                                 )
                                 .get(
                                     namespace.clone(),
-                                    &Self::public_binding_field(public_session_id),
+                                    &public_session_id,
                                 )
                                 .await?;
                             public_bindings.insert(public_session_id.clone(), old);
                         }
                         let current = public_bindings
-                            .get(public_session_id)
+                            .get(&public_session_id)
                             .and_then(Option::as_ref);
                         let binding = DurableStreamPublicBinding::fold(current, record);
                         public_bindings.insert(public_session_id.clone(), binding);
@@ -1347,7 +1350,7 @@ impl StreamSessionIndexService {
                 for (public_session_id, binding) in public_bindings {
                     if let Some(binding) = binding {
                         fields.push((
-                            Self::public_binding_field(&public_session_id),
+                            public_session_id,
                             serialize(&binding)?,
                         ));
                     }
@@ -1536,6 +1539,7 @@ impl StreamSessionIndexService {
                 value.attachment_attached = None;
                 value.lifecycle_error = None;
                 value.public_session_id = None;
+                value.route_scope = None;
                 value.expiry_policy =
                     golem_common::model::durable_stream::StreamSessionExpiryPolicy::None;
                 value.expiry_deadline_millis = None;

@@ -39,6 +39,8 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationId;
+use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
@@ -54,6 +56,15 @@ use wasmtime::component::Accessor;
 use wasmtime::component::HasSelf;
 use wasmtime::component::Resource;
 use wasmtime::component::ResourceTableError;
+
+fn internal_rpc_child_key(request_key: &InvocationRequestKey) -> anyhow::Result<IdempotencyKey> {
+    match request_key {
+        InvocationRequestKey::Internal(key) => Ok(key.clone()),
+        _ => Err(anyhow::anyhow!(
+            "RPC Start must carry an internal request key"
+        )),
+    }
+}
 
 #[async_trait::async_trait]
 impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
@@ -150,6 +161,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     mut handle: FutureInvokeCallHandle,
     request: &HostRequestGolemRpcInvoke,
+    invocation_id: &InvocationId,
     span_id: &SpanId,
     this_rep: u32,
 ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
@@ -160,7 +172,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
             if let Err(err) = worker_proxy
                 .cancel_invocation(
                     &request.remote_agent_id,
-                    request.idempotency_key.clone(),
+                    IdempotencyKey::from_uuid(invocation_id.uuid()),
                     &auth_ctx,
                 )
                 .await
@@ -239,6 +251,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 task: Option<FutureInvokeTaskHandle>,
                 streaming: Option<DurableStreamingTaskParams>,
                 request: HostRequestGolemRpcInvoke,
+                invocation_id: InvocationId,
                 remote_agent_id: OwnedAgentId,
                 env: Vec<(String, String)>,
                 config: Vec<AgentConfigEntryDto>,
@@ -290,6 +303,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     task,
                     streaming,
                     request,
+                    invocation_id,
                     remote_agent_id,
                     env,
                     config,
@@ -305,6 +319,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         task: task.take(),
                         streaming: streaming.clone(),
                         request: request.clone(),
+                        invocation_id: invocation_id.clone(),
                         remote_agent_id: remote_agent_id.clone(),
                         env: env.clone(),
                         config: config.clone(),
@@ -323,6 +338,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 task,
                 streaming,
                 request,
+                invocation_id,
                 remote_agent_id,
                 env,
                 config,
@@ -388,7 +404,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             // cancelled" response, so replay delivers the same result here.
                             drop(task);
                             return cancel_in_flight_get(
-                                accessor, handle, &request, &span_id, this_rep,
+                                accessor,
+                                handle,
+                                &request,
+                                &invocation_id,
+                                &span_id,
+                                this_rep,
                             )
                             .await;
                         }
@@ -435,11 +456,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             let auth_ctx = live.take_agent_auth_ctx();
                             let mut task = accessor.with(|mut access| {
                                 let ctx = access.get();
-                                match streaming.clone() {
+                                Ok::<_, anyhow::Error>(match streaming.clone() {
                                     Some(params) => spawn_streaming_invoke_and_await_task(
                                         ctx,
                                         remote_agent_id.clone(),
-                                        request.idempotency_key.clone(),
+                                        internal_rpc_child_key(&request.request_key)?,
                                         request.method_name.clone(),
                                         params,
                                         env.clone(),
@@ -452,7 +473,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     None => spawn_invoke_and_await_task(
                                         ctx,
                                         &remote_agent_id,
-                                        request.idempotency_key.clone(),
+                                        internal_rpc_child_key(&request.request_key)?,
                                         request.method_name.clone(),
                                         request.input.clone(),
                                         env.clone(),
@@ -464,8 +485,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                         request.scope_card.clone(),
                                         auth_ctx,
                                     ),
-                                }
-                            });
+                                })
+                            })?;
                             let (rpc_wait, interrupt_signal) = accessor.with(|mut access| {
                                 let ctx = access.get();
                                 let wait = accessor.runtime_activity().and_then(|activity| {
@@ -507,7 +528,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     // handling as the live-path cancellation race above.
                                     drop(task);
                                     return cancel_in_flight_get(
-                                        accessor, live, &request, &span_id, this_rep,
+                                        accessor,
+                                        live,
+                                        &request,
+                                        &invocation_id,
+                                        &span_id,
+                                        this_rep,
                                     )
                                     .await;
                                 }
@@ -771,13 +797,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 FutureInvokeResultState::Active {
                     handle,
                     request,
+                    invocation_id,
                     span_id,
                     cancel_token,
                     ..
                 } => match handle.take() {
                     Some(handle) => {
                         let remote_agent_id = request.remote_agent_id.clone();
-                        let idempotency_key = request.idempotency_key.clone();
+                        let idempotency_key = IdempotencyKey::from_uuid(invocation_id.uuid());
                         let span_id = span_id.clone();
                         *state = FutureInvokeResultState::Cancelled;
                         CancelPlan::Cancel {

@@ -538,6 +538,7 @@ message ExportStreamControl {
   // Absent cancels session streams; present soft-deletes one canonical slot.
   optional string slot = 2;
   string expected_method = 3;
+  string route_scope = 4;
 }
 
 enum ExportStreamControlResult {
@@ -591,6 +592,8 @@ message CreateStreamSessionRequest {
   StreamSessionExpiryPolicy expiry_policy = 2;
   StreamSessionCreationIntent creation_intent = 3;
   golem.worker.InvocationStart invocation = 4;
+  // Required canonical (environment_id, deployment_revision, route_id) tuple.
+  string route_scope = 5;
 }
 
 message CreateStreamSessionSuccess {
@@ -627,6 +630,7 @@ message ReadStreamSlotRequest {
   string expected_method = 10;
   StreamSlotReadAdmission admission = 11;
   optional golem.worker.IdempotencyKey invocation_key = 12;
+  string route_scope = 13;
 }
 
 enum StreamSlotReadAdmission {
@@ -700,6 +704,7 @@ message ForkStreamSlotRequest {
   bytes initial_content = 15;
   bool closed = 16;
   StreamSessionExpiryPolicy expiry_policy = 17;
+  string route_scope = 18;
 }
 
 message ForkStreamSlotSuccess {
@@ -754,6 +759,7 @@ message AppendToStreamSlotRequest {
   bool close = 8;
   optional ExternalStreamProducer producer = 9;
   string expected_method = 10;
+  string route_scope = 11;
 }
 
 message TypedStreamSlotItems {

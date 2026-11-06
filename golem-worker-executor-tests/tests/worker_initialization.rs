@@ -903,6 +903,7 @@ async fn prepare_session(
         StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
             public_session_id: idempotency_key.value.clone(),
+            route_scope: None,
             session_key: idempotency_key.clone(),
             expiry_policy: StreamSessionExpiryPolicy::None,
             expiry_deadline_millis: None,

@@ -27,6 +27,24 @@ use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
 pub const DURABLE_STREAM_FORMAT_VERSION: u8 = 1;
+/// Canonical route identity. JSON tuple encoding preserves all field boundaries.
+pub fn durable_stream_route_scope(environment: &str, revision: &str, route: &str) -> String {
+    serde_json::to_string(&(environment, revision, route)).expect("string tuple is serializable")
+}
+
+pub fn validate_durable_stream_route_scope(scope: &str) -> Result<(), String> {
+    let (environment, revision, route): (String, String, String) = serde_json::from_str(scope)
+        .map_err(|_| "invalid durable stream route scope".to_string())?;
+    if environment.is_empty()
+        || revision.is_empty()
+        || route.is_empty()
+        || durable_stream_route_scope(&environment, &revision, &route) != scope
+    {
+        return Err("invalid durable stream route scope".to_string());
+    }
+    Ok(())
+}
+
 pub const STREAM_ID_NAMESPACE_V1: Uuid = Uuid::from_u128(0x7125b775_3cb6_58b6_82c8_e7584ae91b2a);
 pub const ATTACHMENT_ID_NAMESPACE_V1: Uuid =
     Uuid::from_u128(0xde596c85_8f1b_55ab_9430_63aced239572);
@@ -741,6 +759,7 @@ pub struct StreamSessionPreparedRecord {
     pub format_version: u8,
     pub session_key: IdempotencyKey,
     pub public_session_id: String,
+    pub route_scope: Option<String>,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
     pub attempt: StartAttemptDescriptor,
@@ -754,6 +773,7 @@ pub struct StreamSessionExpiryRefreshedRecord {
     pub format_version: u8,
     pub session_key: IdempotencyKey,
     pub public_session_id: String,
+    pub route_scope: String,
     pub expected_deadline_millis: u64,
     pub refreshed_at_millis: u64,
     pub deadline_millis: u64,
@@ -766,6 +786,7 @@ pub struct StreamSessionExpiredRecord {
     pub format_version: u8,
     pub session_key: IdempotencyKey,
     pub public_session_id: String,
+    pub route_scope: String,
     pub expected_deadline_millis: u64,
     pub expired_at_millis: u64,
 }
@@ -1410,6 +1431,7 @@ pub struct StreamExportFork {
     pub source_fingerprint: AgentFingerprint,
     pub source_path: String,
     pub session: String,
+    pub route_scope: String,
     pub slot: String,
     pub expected_method: String,
     pub requested_offset: Option<StreamOffset>,
@@ -1454,6 +1476,7 @@ pub struct StreamExportForkAdmittedRecord {
 pub struct StreamExportForkInitializedRecord {
     pub format_version: u8,
     pub public_session_id: String,
+    pub route_scope: String,
     pub session_key: IdempotencyKey,
     pub source_invocation: StreamInvocationId,
     pub request_hash: Vec<u8>,
@@ -1650,6 +1673,10 @@ impl StreamSessionRecord {
                     .collect::<HashSet<_>>();
                 !record.public_session_id.is_empty()
                     && record
+                        .route_scope
+                        .as_deref()
+                        .is_none_or(|scope| validate_durable_stream_route_scope(scope).is_ok())
+                    && record
                         .expiry_policy
                         .accepts_deadline(record.expiry_deadline_millis)
                     && supported_attempt(&record.attempt)
@@ -1685,10 +1712,12 @@ impl StreamSessionRecord {
             }
             Self::ExpiryRefreshed(record) => {
                 !record.public_session_id.is_empty()
+                    && validate_durable_stream_route_scope(&record.route_scope).is_ok()
                     && record.refreshed_at_millis <= record.deadline_millis
             }
             Self::Expired(record) => {
                 !record.public_session_id.is_empty()
+                    && validate_durable_stream_route_scope(&record.route_scope).is_ok()
                     && record.expired_at_millis >= record.expected_deadline_millis
             }
             Self::Mapping(record) => record.mapping.source.has_supported_format(),
@@ -1870,6 +1899,7 @@ impl StreamSessionRecord {
             }
             Self::ExportForkInitialized(record) => {
                 !record.public_session_id.is_empty()
+                    && validate_durable_stream_route_scope(&record.route_scope).is_ok()
                     && record.request_hash.len() == 32
                     && record
                         .expiry_policy
@@ -2201,6 +2231,7 @@ mod tests {
             format_version: 1,
             session_key: session_key.idempotency_key.clone(),
             public_session_id: session_key.idempotency_key.value.clone(),
+            route_scope: None,
             expiry_policy: StreamSessionExpiryPolicy::None,
             expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {
@@ -2267,6 +2298,7 @@ mod tests {
             format_version: 1,
             session_key: session_key.idempotency_key.clone(),
             public_session_id: session_key.idempotency_key.value.clone(),
+            route_scope: None,
             expiry_policy: StreamSessionExpiryPolicy::None,
             expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {

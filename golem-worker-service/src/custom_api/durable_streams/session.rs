@@ -103,6 +103,13 @@ impl DurableStreamsHandler {
             external_tool: None,
             input: Some(input),
             idempotency_key: Some(IdempotencyKey::new(session.to_owned()).into()),
+            request_key: Some(
+                golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
+                    scope: super::route_scope(route),
+                    key: IdempotencyKey::new(session.to_owned()),
+                }
+                .into(),
+            ),
             context: Some(InvocationContext {
                 parent: None,
                 env: Default::default(),
@@ -127,6 +134,7 @@ impl DurableStreamsHandler {
                 agent_id,
                 CreateStreamSessionRequest {
                     public_session_id: session.to_owned(),
+                    route_scope: super::route_scope(route),
                     expiry_policy,
                     creation_intent: creation_intent as i32,
                     invocation: Some(start),
@@ -326,6 +334,7 @@ impl DurableStreamsHandler {
                     export_control: Some(ExportStreamControl {
                         session,
                         slot,
+                        route_scope: super::route_scope(route),
                         expected_method: route_method(route).to_owned(),
                     }),
                     ..Default::default()

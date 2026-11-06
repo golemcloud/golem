@@ -168,6 +168,7 @@ message InvokeAgentRequest {
   InvocationFreshnessDisposition freshness_disposition = 11;
   repeated golem.worker.AgentConfigEntryDto config = 12;
   optional golem.worker.EncodedScopeCard scope_card = 13;
+  golem.worker.InvocationRequestKey request_key = 14;
 }
 
 enum InvocationFreshnessDisposition {

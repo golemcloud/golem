@@ -509,10 +509,17 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, SessionError> {
         self.stream_session_index
-            .lookup_public_binding(owned_agent_id, agent_mode, fingerprint, public_session_id)
+            .lookup_public_binding(
+                owned_agent_id,
+                agent_mode,
+                fingerprint,
+                route_scope,
+                public_session_id,
+            )
             .await
     }
 

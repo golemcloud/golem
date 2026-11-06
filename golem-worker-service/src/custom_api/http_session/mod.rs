@@ -48,6 +48,7 @@ pub use crate::config::HttpSessionLimits;
 pub enum HttpSessionError {
     InvalidStart(String),
     Rejected,
+    InvocationIdentityConflict(String),
     Protocol(String),
     TransportUnavailable,
     MessageTooLarge(String),
@@ -62,6 +63,7 @@ impl HttpSessionError {
         match self {
             Self::InvalidStart(_) => "invalid_start",
             Self::Rejected => "rejected",
+            Self::InvocationIdentityConflict(_) => "invocation_identity_conflict",
             Self::Protocol(_) => "protocol",
             Self::TransportUnavailable => "transport_unavailable",
             Self::MessageTooLarge(_) => "message_too_large",
@@ -310,6 +312,8 @@ impl HttpSession {
         let cleanup_limits = limits.clone();
         let cleanup_events = event_tx.clone();
         let terminal_error = failure.clone();
+        let cleanup_identity = Arc::new(OnceLock::new());
+        let accepted_cleanup_identity = cleanup_identity.clone();
         let session_span = info_span!(
             "http_invocation_session",
             agent = ?cleanup_start.agent_id,
@@ -325,6 +329,7 @@ impl HttpSession {
                     control_rx,
                     event_tx,
                     completed,
+                    accepted_cleanup_identity,
                     close_token.clone(),
                 );
                 tokio::pin!(session);
@@ -365,15 +370,11 @@ impl HttpSession {
                 }
             }
             if !completion.load(Ordering::Acquire) {
-                // Prepared identity is final and private, even before Accepted arrives.
-                if let (Some(agent), Some(key)) =
-                    (cleanup_start.agent_id, cleanup_start.idempotency_key)
-                    && let Ok(agent) = AgentId::try_from(agent)
-                {
+                if let Some((agent, key)) = cleanup_identity.get() {
                     let started = Instant::now();
                     let cleanup = tokio::time::timeout(
                         cleanup_limits.cleanup_timeout,
-                        cleanup_transport.cleanup(agent, ModelIdempotencyKey::new(key.value)),
+                        cleanup_transport.cleanup(agent.clone(), key.clone()),
                     )
                     .await;
                     let outcome = match cleanup {

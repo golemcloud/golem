@@ -185,6 +185,7 @@ impl Rpc for HoldFirstSchedule {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: golem_common::model::AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: DateTime<Utc>,
         auth_ctx: &AuthCtx,
@@ -206,6 +207,7 @@ impl Rpc for HoldFirstSchedule {
             .schedule_invocation(
                 owned_agent_id,
                 expected_fingerprint,
+                request_key,
                 invocation,
                 scheduled_at,
                 auth_ctx,

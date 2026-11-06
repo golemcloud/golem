@@ -51,7 +51,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
-    InvocationStatus, OwnedAgentId, PromiseId,
+    InvocationRequestKey, InvocationStatus, OwnedAgentId, PromiseId,
 };
 use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -541,6 +541,10 @@ impl WorkerProxy for RemoteWorkerProxy {
             .map_err(|error: String| {
                 WorkerProxyError::InternalError(WorkerExecutorError::invalid_request(error))
             })?;
+        let request_key = idempotency_key
+            .clone()
+            .map(InvocationRequestKey::Internal)
+            .unwrap_or_else(|| InvocationRequestKey::external(None, None));
         let first_dispatch = AtomicBool::new(true);
 
         let response: InvokeAgentResponse = self
@@ -568,6 +572,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     mode: proto_mode,
                     schedule_at: proto_schedule_at,
                     idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                    request_key: Some(request_key.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env.clone(),
@@ -1086,6 +1091,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     mode: proto_mode,
                     schedule_at: None,
                     idempotency_key: Some(idempotency_key.clone().into()),
+                    request_key: None,
                     context: None,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: Some(Principal::anonymous().into()),

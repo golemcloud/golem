@@ -61,7 +61,7 @@ use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
-    PromiseId, ScanCursor,
+    InvocationRequestKey, PromiseId, ScanCursor,
 };
 use golem_common::model::{AgentInvocationOutput, AgentInvocationResult, InvocationStatus};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -668,7 +668,7 @@ pub trait WorkerClient: Send + Sync {
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: IdempotencyKey,
+        request_key: InvocationRequestKey,
         invocation_context: Option<InvocationContext>,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
@@ -2225,7 +2225,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: IdempotencyKey,
+        request_key: InvocationRequestKey,
         invocation_context: Option<InvocationContext>,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
@@ -2239,6 +2239,12 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         let agent_id_clone = agent_id.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
         let attempt_id = uuid::Uuid::new_v4();
+        let idempotency_key = match &request_key {
+            InvocationRequestKey::External { key, .. }
+            | InvocationRequestKey::Internal(key)
+            | InvocationRequestKey::RouteSession { key, .. } => Some(key.clone()),
+            InvocationRequestKey::Unkeyed(_) => None,
+        };
 
         let result = self
             .call_worker_executor(
@@ -2251,7 +2257,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         agent_id: Some(agent_id_clone.clone().into()),
                         method_name: method_name.clone(),
                         input: method_parameters.clone(),
-                        idempotency_key: Some(idempotency_key.clone().into()),
+                        idempotency_key: idempotency_key.clone().map(Into::into),
+                        request_key: Some(request_key.clone().into()),
                         context: invocation_context.clone(),
                         auth_ctx: Some(auth_ctx.clone().into()),
                         principal: Some(principal.clone()),
@@ -3522,6 +3529,11 @@ mod rejection_mapping_tests {
         calls: Arc<AtomicUsize>,
         /// The opening frame's freshness disposition, one per call in call order.
         dispositions: Arc<std::sync::Mutex<Vec<i32>>>,
+        request_keys: Arc<
+            std::sync::Mutex<
+                Vec<Option<golem_api_grpc::proto::golem::worker::InvocationRequestKey>>,
+            >,
+        >,
         /// Receives `(call index, frames after the opening one)` once a call's request stream has
         /// ended, which happens after the call returned its response stream.
         tail_frames: Option<tokio::sync::mpsc::UnboundedSender<(usize, usize)>>,
@@ -3728,17 +3740,21 @@ mod rejection_mapping_tests {
         ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
             let mut requests = request.into_inner();
             let start = requests.message().await?.expect("missing invocation start");
-            let (idempotency_key, agent_id, freshness_disposition) = match start.request {
+            let (idempotency_key, agent_id, freshness_disposition, request_key) = match start
+                .request
+            {
                 Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(
                     start,
                 )) => (
                     start.idempotency_key,
                     start.agent_id,
                     start.freshness_disposition,
+                    start.request_key,
                 ),
                 other => panic!("expected invocation start, got {other:?}"),
             };
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.request_keys.lock().unwrap().push(request_key);
             self.dispositions
                 .lock()
                 .unwrap()
@@ -3886,7 +3902,7 @@ mod rejection_mapping_tests {
                 }),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
-                golem_common::model::IdempotencyKey::new("session-key".to_string()),
+                golem_common::model::InvocationRequestKey::external(None, None),
                 None,
                 InvocationFreshnessDisposition::MayExist,
                 vec![],
@@ -4007,8 +4023,16 @@ mod rejection_mapping_tests {
             ..Default::default()
         };
         let calls = executor.calls.clone();
+        let request_keys = executor.request_keys.clone();
 
         let error = invoke_against(executor, 32 * 1024 * 1024).await;
+        let keys = request_keys.lock().unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], keys[1]);
+        assert!(matches!(
+            golem_common::model::InvocationRequestKey::try_from(keys[0].clone().unwrap()).unwrap(),
+            golem_common::model::InvocationRequestKey::Unkeyed(_)
+        ));
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -4027,6 +4051,9 @@ mod rejection_mapping_tests {
             request: Some(invocation_request::Request::Start(InvocationStart {
                 agent_id: Some(agent_id.clone().into()),
                 method_name: Some("run".to_string()),
+                request_key: Some(
+                    golem_common::model::InvocationRequestKey::external(None, None).into(),
+                ),
                 idempotency_key: Some(
                     golem_common::model::IdempotencyKey::new("session-key".to_string()).into(),
                 ),
@@ -4047,6 +4074,7 @@ mod rejection_mapping_tests {
         };
         let calls = executor.calls.clone();
         let dispositions = executor.dispositions.clone();
+        let request_keys = executor.request_keys.clone();
         let (client, agent_id) = client_against(executor, 32 * 1024 * 1024).await;
 
         let responses = client
@@ -4060,6 +4088,13 @@ mod rejection_mapping_tests {
             tokio::time::timeout(Duration::from_secs(30), responses.collect::<Vec<_>>())
                 .await
                 .expect("the session's response stream never ended");
+        let keys = request_keys.lock().unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], keys[1]);
+        assert!(matches!(
+            golem_common::model::InvocationRequestKey::try_from(keys[0].clone().unwrap()).unwrap(),
+            golem_common::model::InvocationRequestKey::Unkeyed(_)
+        ));
 
         assert_eq!(
             calls.load(Ordering::SeqCst),

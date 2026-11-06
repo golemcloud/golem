@@ -116,6 +116,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     acceptance_match,
                     producer,
                     instance_guard,
+                    creation_admission
+                        .as_ref()
+                        .map(|admission| admission.route_scope.clone()),
                 )
                 .await;
             drop(creation_admission);
@@ -130,6 +133,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         acceptance_match: DurableStreamingAcceptanceMatch,
         producer: Arc<DurableStreamStore>,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
+        route_scope: Option<String>,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
         let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
             Some(
@@ -171,6 +175,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if existing_prepared.is_some() && prepared_records.next().is_some() {
             return Err(WorkerExecutorError::runtime(
                 "durable Stream Session contains multiple Prepared records",
+            ));
+        }
+        if existing_prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.route_scope != route_scope)
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "IdempotencyConflict: the durable stream session belongs to a different route",
             ));
         }
         if existing_prepared.is_none()
@@ -344,6 +356,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 format_version: 1,
                 session_key: session_key.idempotency_key.clone(),
                 public_session_id: request.public_session_id.clone(),
+                route_scope: route_scope.clone(),
                 expiry_policy: request.expiry_policy,
                 expiry_deadline_millis: request.expiry_deadline_millis,
                 attempt,
@@ -425,6 +438,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     move |bindings| StreamSessionPreparedRecord {
                         format_version: 1,
                         public_session_id,
+                        route_scope,
                         session_key: local_session_key,
                         expiry_policy,
                         expiry_deadline_millis,

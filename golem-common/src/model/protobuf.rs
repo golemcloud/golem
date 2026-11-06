@@ -19,9 +19,9 @@ use crate::model::oplog::{AgentResourceId, OplogIndex};
 use crate::model::{
     AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter, AgentId,
     AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentRevisionFilter, AgentStatus,
-    AgentStatusFilter, FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId,
-    RoutingTable, RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, StringFilterComparator,
-    Timestamp,
+    AgentStatusFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationRequestKey,
+    LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable, RoutingTableEntry, ScanCursor,
+    ShardEpoch, ShardId, StringFilterComparator, Timestamp,
 };
 use applying::Apply;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -334,6 +334,103 @@ impl From<golem::worker::IdempotencyKey> for IdempotencyKey {
 impl From<IdempotencyKey> for golem::worker::IdempotencyKey {
     fn from(value: IdempotencyKey) -> Self {
         Self { value: value.value }
+    }
+}
+
+impl From<IdempotencyScope> for golem::worker::CallerIdempotencyScope {
+    fn from(value: IdempotencyScope) -> Self {
+        use golem::worker::caller_idempotency_scope::Value;
+
+        Self {
+            value: Some(match value {
+                IdempotencyScope::User(account) => Value::User(account.into()),
+                IdempotencyScope::Agent(account) => Value::Agent(account.into()),
+                IdempotencyScope::AdminImpersonation { admin, target } => {
+                    Value::AdminImpersonation(golem::worker::AdminImpersonationIdempotencyScope {
+                        admin: Some(admin.into()),
+                        target: Some(target.into()),
+                    })
+                }
+            }),
+        }
+    }
+}
+
+impl TryFrom<golem::worker::CallerIdempotencyScope> for IdempotencyScope {
+    type Error = String;
+
+    fn try_from(value: golem::worker::CallerIdempotencyScope) -> Result<Self, Self::Error> {
+        use golem::worker::caller_idempotency_scope::Value;
+
+        match value.value.ok_or("missing caller idempotency scope")? {
+            Value::User(account) => Ok(Self::User(account.try_into()?)),
+            Value::Agent(account) => Ok(Self::Agent(account.try_into()?)),
+            Value::AdminImpersonation(scope) => Ok(Self::AdminImpersonation {
+                admin: scope
+                    .admin
+                    .ok_or("missing admin idempotency account")?
+                    .try_into()?,
+                target: scope
+                    .target
+                    .ok_or("missing target idempotency account")?
+                    .try_into()?,
+            }),
+        }
+    }
+}
+
+impl From<InvocationRequestKey> for golem::worker::InvocationRequestKey {
+    fn from(value: InvocationRequestKey) -> Self {
+        use golem::worker::invocation_request_key::Value;
+
+        Self {
+            value: Some(match value {
+                InvocationRequestKey::External { scope, key } => {
+                    Value::External(golem::worker::ExternalInvocationRequestKey {
+                        scope: Some(scope.into()),
+                        key: Some(key.into()),
+                    })
+                }
+                InvocationRequestKey::Internal(key) => Value::Internal(key.into()),
+                InvocationRequestKey::RouteSession { scope, key } => {
+                    Value::RouteSession(golem::worker::RouteSessionInvocationRequestKey {
+                        scope,
+                        key: Some(key.into()),
+                    })
+                }
+                InvocationRequestKey::Unkeyed(seed) => Value::Unkeyed(seed.into()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<golem::worker::InvocationRequestKey> for InvocationRequestKey {
+    type Error = String;
+
+    fn try_from(value: golem::worker::InvocationRequestKey) -> Result<Self, Self::Error> {
+        use golem::worker::invocation_request_key::Value;
+
+        match value
+            .value
+            .ok_or("missing invocation request key provenance")?
+        {
+            Value::External(request) => Ok(Self::External {
+                scope: request
+                    .scope
+                    .ok_or("missing external invocation scope")?
+                    .try_into()?,
+                key: request.key.ok_or("missing external invocation key")?.into(),
+            }),
+            Value::Internal(key) => Ok(Self::Internal(key.into())),
+            Value::RouteSession(request) => Ok(Self::RouteSession {
+                scope: request.scope,
+                key: request
+                    .key
+                    .ok_or("missing route session invocation key")?
+                    .into(),
+            }),
+            Value::Unkeyed(seed) => Ok(Self::Unkeyed(seed.into())),
+        }
     }
 }
 
@@ -887,6 +984,120 @@ mod tests {
     use test_r::test;
 
     test_r::enable!();
+
+    #[test]
+    fn invocation_request_key_protobuf_preserves_provenance_and_retry_identity() {
+        use crate::model::AgentFingerprint;
+        use crate::model::account::AccountId;
+        use crate::model::component::ComponentId;
+        use uuid::Uuid;
+
+        let account = AccountId(Uuid::from_u128(11));
+        let target = AccountId(Uuid::from_u128(12));
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::from_u128(13)),
+            agent_id: "counter(\"a.b/雪\")".to_string(),
+        };
+        let fingerprint = AgentFingerprint(Uuid::from_u128(14));
+        let key = IdempotencyKey::from("same-key");
+        let mut requests = vec![
+            InvocationRequestKey::Internal(key.clone()),
+            InvocationRequestKey::RouteSession {
+                scope: "route/internal/雪".to_string(),
+                key: key.clone(),
+            },
+            InvocationRequestKey::external(None, Some(&key)),
+        ];
+        for scope in [
+            IdempotencyScope::User(account),
+            IdempotencyScope::Agent(account),
+            IdempotencyScope::AdminImpersonation {
+                admin: account,
+                target,
+            },
+        ] {
+            requests.push(InvocationRequestKey::External {
+                scope,
+                key: key.clone(),
+            });
+        }
+
+        for request in requests {
+            let expected = request.finalize(agent_id.clone(), fingerprint, "method");
+            let owner_key = request.owner_key("method");
+            let wire: golem::worker::InvocationRequestKey = request.clone().into();
+            let decoded = InvocationRequestKey::try_from(wire).unwrap();
+            assert_eq!(decoded, request);
+            assert_eq!(decoded.owner_key("method"), owner_key);
+            assert_eq!(
+                decoded.finalize(agent_id.clone(), fingerprint, "method"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn invocation_request_key_protobuf_rejects_missing_provenance_and_scope_fields() {
+        use crate::model::account::AccountId;
+        use golem::worker::caller_idempotency_scope::Value as Scope;
+        use golem::worker::invocation_request_key::Value;
+        use uuid::Uuid;
+
+        let account = AccountId(Uuid::from_u128(11));
+        let scope: golem::worker::CallerIdempotencyScope = IdempotencyScope::User(account).into();
+        let key = Some(IdempotencyKey::from("key").into());
+        for value in [
+            None,
+            Some(Value::External(
+                golem::worker::ExternalInvocationRequestKey {
+                    scope: None,
+                    key: key.clone(),
+                },
+            )),
+            Some(Value::External(
+                golem::worker::ExternalInvocationRequestKey {
+                    scope: Some(scope),
+                    key: None,
+                },
+            )),
+            Some(Value::External(
+                golem::worker::ExternalInvocationRequestKey {
+                    scope: Some(golem::worker::CallerIdempotencyScope { value: None }),
+                    key: key.clone(),
+                },
+            )),
+            Some(Value::RouteSession(
+                golem::worker::RouteSessionInvocationRequestKey {
+                    scope: "route".to_string(),
+                    key: None,
+                },
+            )),
+        ] {
+            assert!(
+                InvocationRequestKey::try_from(golem::worker::InvocationRequestKey { value })
+                    .is_err()
+            );
+        }
+        for (admin, target) in [(None, Some(account.into())), (Some(account.into()), None)] {
+            let scope = golem::worker::CallerIdempotencyScope {
+                value: Some(Scope::AdminImpersonation(
+                    golem::worker::AdminImpersonationIdempotencyScope { admin, target },
+                )),
+            };
+            assert!(IdempotencyScope::try_from(scope).is_err());
+        }
+        for value in [
+            Scope::User(Default::default()),
+            Scope::Agent(Default::default()),
+        ] {
+            assert!(
+                IdempotencyScope::try_from(golem::worker::CallerIdempotencyScope {
+                    value: Some(value)
+                })
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn scan_cursor_preserves_opaque_value_through_protobuf_conversion() {

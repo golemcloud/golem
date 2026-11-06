@@ -69,9 +69,10 @@ interface host {
       %result: option<schema-value-tree>,
     }
 
-    /// Asynchronous invocation handle together with its final identity.
+    /// Asynchronous invocation handle together with its final identity, when
+    /// preparation succeeded. Rejected calls report their error through the future.
     record async-invocation-with-metadata {
-      metadata: invocation-metadata,
+      metadata: option<invocation-metadata>,
       %future: future-invoke-result,
     }
 

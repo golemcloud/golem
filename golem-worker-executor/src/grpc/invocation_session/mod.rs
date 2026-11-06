@@ -142,6 +142,7 @@ fn retained_response_stream(
 }
 
 struct AcceptedInvocation {
+    idempotency_key: IdempotencyKey,
     component_revision: Option<ComponentRevision>,
     durable_streams: Option<StreamSession>,
     prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,

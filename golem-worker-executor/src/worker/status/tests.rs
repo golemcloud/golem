@@ -531,6 +531,12 @@ fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) ->
                         source_fingerprint: export_owner_fingerprint(),
                         source_path: "/source".into(),
                         session: session.into(),
+                        route_scope:
+                            golem_common::model::durable_stream::durable_stream_route_scope(
+                                "environment",
+                                "1",
+                                "route",
+                            ),
                         slot: "output".into(),
                         expected_method: "run".into(),
                         requested_offset: None,
@@ -5263,6 +5269,7 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
     let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
         public_session_id: session_key.idempotency_key.value.clone(),
+        route_scope: None,
         session_key: session_key.idempotency_key.clone(),
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,

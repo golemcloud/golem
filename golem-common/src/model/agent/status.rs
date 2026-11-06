@@ -770,6 +770,7 @@ pub struct DurableStreamSessionStatus {
     pub tombstoned_slots: HashSet<String>,
     pub cancellation_requested: bool,
     pub public_session_id: Option<String>,
+    pub route_scope: Option<String>,
     pub expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
     pub expired: bool,
@@ -844,6 +845,7 @@ impl DurableStreamSessionStatus {
                 // ordinary fork. A target-only export identity is replaced on initialization.
                 if self.first_prepared.is_none() {
                     self.public_session_id = None;
+                    self.route_scope = None;
                 }
                 self.expiry_policy = crate::model::durable_stream::StreamSessionExpiryPolicy::None;
                 self.expiry_deadline_millis = None;
@@ -910,12 +912,14 @@ impl DurableStreamSessionStatus {
                     self.prepared = Some(oplog_idx);
                     self.prepared_attempt_id = Some(v.attempt.attempt_id);
                     self.public_session_id = Some(v.public_session_id.clone());
+                    self.route_scope = v.route_scope.clone();
                     self.expiry_policy = v.expiry_policy;
                     self.expiry_deadline_millis = v.expiry_deadline_millis;
                 }
             }
             StreamSessionRecord::ExpiryRefreshed(v)
                 if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.route_scope.as_deref() == Some(&v.route_scope)
                     && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
                     && matches!(
                         self.expiry_policy,
@@ -927,6 +931,7 @@ impl DurableStreamSessionStatus {
             }
             StreamSessionRecord::Expired(v)
                 if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.route_scope.as_deref() == Some(&v.route_scope)
                     && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
                     && !self.expired =>
             {
@@ -934,6 +939,7 @@ impl DurableStreamSessionStatus {
             }
             StreamSessionRecord::ExportForkInitialized(v) if self.public_session_id.is_none() => {
                 self.public_session_id = Some(v.public_session_id.clone());
+                self.route_scope = Some(v.route_scope.clone());
                 self.expiry_policy = v.expiry_policy;
                 self.expiry_deadline_millis = v.expiry_deadline_millis;
                 self.expired = false;

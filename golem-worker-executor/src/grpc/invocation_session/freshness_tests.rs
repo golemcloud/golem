@@ -33,7 +33,7 @@ use golem_common::base_model::agent::Snapshotting;
 use golem_common::base_model::component::{ComponentId, ComponentRevision};
 use golem_common::base_model::component_metadata::{ComponentMetadata, KnownExports};
 use golem_common::base_model::durable_stream::{
-    DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, MAX_DURABLE_STREAM_ITEM_SIZE,
+    AttachmentId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, MAX_DURABLE_STREAM_ITEM_SIZE,
     SessionStreamRole, StreamId, StreamInvocationId, StreamMapSide, StreamSessionMappingRecord,
     StreamValuePathStep,
 };
@@ -836,7 +836,8 @@ fn durable_request_builder_preserves_size_precedence_and_stream_metadata_order()
             .contains("input exceeds the 16 MiB logical value limit")
     );
 
-    let (request, metadata, invocation) = builder_fixture();
+    let (mut request, metadata, invocation) = builder_fixture();
+    request.idempotency_key = Some(IdempotencyKey::from("request-input-key").into());
     let (acceptance_committed, _) = tokio::sync::oneshot::channel();
     let built = build_durable_streaming_request(
         &request,
@@ -849,6 +850,19 @@ fn durable_request_builder_preserves_size_precedence_and_stream_metadata_order()
         8,
     )
     .unwrap();
+    assert_eq!(
+        built.attempt.session_key.idempotency_key,
+        IdempotencyKey::from("test-key")
+    );
+    assert_eq!(
+        built.attempt.attachment_id,
+        AttachmentId::primary(
+            request.environment_id.unwrap().try_into().unwrap(),
+            &request.agent_id.clone().unwrap().try_into().unwrap(),
+            &IdempotencyKey::from("test-key"),
+        )
+        .unwrap()
+    );
     let expected_paths = [
         vec![
             StreamValuePathStep::RecordField(0),

@@ -24,6 +24,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationId;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
@@ -225,6 +226,7 @@ enum FutureInvokeResultState {
         task: Option<FutureInvokeTaskHandle>,
         streaming: Option<DurableStreamingTaskParams>,
         request: HostRequestGolemRpcInvoke,
+        invocation_id: InvocationId,
         remote_agent_id: OwnedAgentId,
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,

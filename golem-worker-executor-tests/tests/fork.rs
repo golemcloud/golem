@@ -225,6 +225,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
@@ -233,6 +234,7 @@ impl Rpc for StreamingRemoteRpc {
             .schedule_invocation(
                 owned_agent_id,
                 expected_fingerprint,
+                request_key,
                 invocation,
                 scheduled_at,
                 auth_ctx,
@@ -769,6 +771,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     )
     .map_err(anyhow::Error::msg)?;
     let create_request = CreateStreamSessionRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         public_session_id: session.clone(),
         expiry_policy: Some(StreamSessionExpiryPolicy {
             kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
@@ -825,6 +828,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .expiry_deadline_millis
         .expect("sliding session has a deadline");
     let read_metadata = |admission, invocation_key| ReadStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         agent_id: Some(source.clone().into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -850,6 +854,29 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         anyhow::bail!("{head:?}");
     };
     assert_eq!(head.expiry_deadline_millis, Some(initial_deadline));
+    for (admission, invocation_key) in [
+        (StreamSlotReadAdmission::Head, None),
+        (
+            StreamSlotReadAdmission::Continuation,
+            created.invocation_key.clone(),
+        ),
+    ] {
+        let mut other_route = read_metadata(admission as i32, invocation_key);
+        other_route.route_scope = "[\"environment\",\"1\",\"other-route\"]".into();
+        let read = executor
+            .client
+            .clone()
+            .read_stream_slot(other_route)
+            .await?
+            .into_inner()
+            .message()
+            .await?
+            .unwrap();
+        assert!(matches!(
+            read.result,
+            Some(read_stream_slot_response::Result::NotFound(_))
+        ));
+    }
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let touched = executor
         .client
@@ -886,6 +913,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     };
     assert_eq!(continuation.expiry_deadline_millis, Some(touched_deadline));
     let append = |agent: &AgentId, value: &str| AppendToStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         agent_id: Some(agent.clone().into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -950,6 +978,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     ));
     assert_eq!(gap.expiry_deadline_millis, Some(duplicate_deadline));
     let request = ForkStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         source_agent_id: Some(source.clone().into()),
         target_agent_id: Some(target.clone().into()),
         environment_id: Some(component.environment_id.into()),
@@ -1078,6 +1107,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             .client
             .clone()
             .read_stream_slot(ReadStreamSlotRequest {
+                route_scope: "[\"environment\",\"1\",\"route\"]".into(),
                 agent_id: Some(agent.clone().into()),
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
@@ -1381,6 +1411,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                 .client
                 .clone()
                 .read_stream_slot(ReadStreamSlotRequest {
+                    route_scope: "[\"environment\",\"1\",\"route\"]".into(),
                     agent_id: Some(expiring_target.clone().into()),
                     environment_id: Some(component.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
@@ -1431,6 +1462,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .client
         .clone()
         .create_stream_session(CreateStreamSessionRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             public_session_id: concurrent_session.clone(),
             expiry_policy: None,
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
@@ -1464,6 +1496,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         Some(append_to_stream_slot_response::Result::Accepted(_))
     ));
     let concurrent_request = |target: AgentId| ForkStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         source_agent_id: Some(source.clone().into()),
         target_agent_id: Some(target.into()),
         environment_id: Some(component.environment_id.into()),
@@ -1528,6 +1561,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     )
     .map_err(anyhow::Error::msg)?;
     let expired_request = CreateStreamSessionRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         public_session_id: expired_session.clone(),
         expiry_policy: Some(StreamSessionExpiryPolicy {
             kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(0)),
@@ -1599,6 +1633,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .client
         .clone()
         .read_stream_slot(ReadStreamSlotRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             agent_id: Some(source.clone().into()),
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(AuthCtx::System.into()),
@@ -1642,6 +1677,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .client
         .clone()
         .create_stream_session(CreateStreamSessionRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             public_session_id: restart_session.clone(),
             expiry_policy: Some(StreamSessionExpiryPolicy {
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(1)),
@@ -1741,6 +1777,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
         .client
         .clone()
         .create_stream_session(CreateStreamSessionRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             public_session_id: session.clone(),
             expiry_policy: Some(StreamSessionExpiryPolicy {
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(30)),
@@ -1765,6 +1802,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
     let initial_deadline = created.expiry_deadline_millis.unwrap();
     let session_key: IdempotencyKey = created.invocation_key.clone().unwrap().into();
     let read = |admission, invocation_key| ReadStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         agent_id: Some(source.clone().into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -1836,6 +1874,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
     assert_eq!(suppressed.expiry_deadline_millis, Some(touched_deadline));
 
     let append = AppendToStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         agent_id: Some(source.clone().into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -2111,6 +2150,7 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
         .client
         .clone()
         .create_stream_session(CreateStreamSessionRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             public_session_id: session.clone(),
             expiry_policy: Some(StreamSessionExpiryPolicy {
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
@@ -2133,6 +2173,7 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
         anyhow::bail!("{created:?}");
     };
     let request = ForkStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         source_agent_id: Some(source.clone().into()),
         target_agent_id: Some(target.clone().into()),
         environment_id: Some(component.environment_id.into()),

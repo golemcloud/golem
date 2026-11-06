@@ -321,6 +321,11 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
     let session_expired =
         StreamSessionRecord::Expired(crate::model::durable_stream::StreamSessionExpiredRecord {
             format_version: 1,
+            route_scope: crate::model::durable_stream::durable_stream_route_scope(
+                "environment",
+                "1",
+                "route",
+            ),
             public_session_id: "public-stream".to_string(),
             session_key: session_key.idempotency_key().clone(),
             expected_deadline_millis: 100,
@@ -329,6 +334,11 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
     let irrelevant_session = StreamSessionRecord::ExpiryRefreshed(
         crate::model::durable_stream::StreamSessionExpiryRefreshedRecord {
             format_version: 1,
+            route_scope: crate::model::durable_stream::durable_stream_route_scope(
+                "environment",
+                "1",
+                "route",
+            ),
             public_session_id: "public-stream".to_string(),
             session_key: session_key.idempotency_key().clone(),
             expected_deadline_millis: 100,
