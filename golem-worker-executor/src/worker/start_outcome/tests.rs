@@ -419,7 +419,9 @@ fn code(cell: Cell) -> &'static str {
 /// `ManualLoadExited` (all fail the update), `ManualLoadInterrupted` (which passes its
 /// interrupt), `Restore(DiskFull)` (the cells of `Restore(Fixed)` with their own text),
 /// `AfterReplay` (a filesystem failure after the replay, which passes in every column),
-/// `BlobStorageRefused` (a refused initial-file source at the update point), and
+/// `BlobStorageRefused` (a refused initial-file source at the update point),
+/// `InitialFileRefused` (a refused initial-file source that the start loads, which fails only a
+/// pending manual update, because only its start loads the files of the target), and
 /// `LoadLost` (a lost payload of the selected record, which only a snapshot-assisted attempt
 /// reports).
 #[test]
@@ -435,7 +437,7 @@ fn the_outcome_table() {
         Column::AssistedPromoted,
     ];
     let refused = FetchProblem::Refused(ComponentServiceRefusal::Unauthorized);
-    let table: [(Problem, [&str; 7]); 36] = [
+    let table: [(Problem, [&str; 7]); 37] = [
         (Problem::StaleSource, ["P", "P", "P", "P", "P", "F", "P"]),
         (Problem::TargetExecutor, ["P", "P", "P", "P", "P", "P", "P"]),
         (
@@ -538,6 +540,10 @@ fn the_outcome_table() {
             Problem::BlobStorageRefused(BlobRefusal::AccessDenied),
             ["P", "Fb", "P", "P", "Fb", "Fb", "P"],
         ),
+        (
+            Problem::InitialFileRefused(BlobRefusal::AccessDenied),
+            ["P", "Fb", "P", "P", "P", "P", "P"],
+        ),
     ];
     table.iter().for_each(|(problem, expected)| {
         let actual = columns.map(|column| code(cell(column, *problem)));
@@ -554,6 +560,7 @@ fn the_outcome_table() {
         Problem::RestoreConflict,
         Problem::Quota,
         Problem::Reconstruction,
+        Problem::InitialFileRefused(BlobRefusal::AccessDenied),
     ]
     .iter()
     .for_each(|problem| {
@@ -674,9 +681,16 @@ fn each_raw_error_has_its_problem() {
             FilesystemError::InitialFileUnavailable(storage()),
             Problem::Reconstruction,
         ),
-        (refused_source(), Problem::Reconstruction),
+        (
+            refused_source(),
+            Problem::InitialFileRefused(BlobRefusal::AccessDenied),
+        ),
         (
             FilesystemError::InitialFileConflict(Box::new(conflict())),
+            Problem::RestoreConflict,
+        ),
+        (
+            FilesystemError::InitialFileFailed(storage()),
             Problem::RestoreConflict,
         ),
         (FilesystemError::AgentQuota(storage()), Problem::Quota),
@@ -1475,6 +1489,71 @@ fn a_refused_initial_file_source_at_the_update_point_fails_the_update_with_its_c
             None
         )
     );
+}
+
+/// A pending manual update starts on its target revision, so the start loads the initial files of
+/// the target. A source that the blob storage refuses there fails the update with
+/// `UPDATE_BLOB_STORAGE_REFUSED`, as at the update point, and the agent starts again on its
+/// source revision.
+#[test]
+fn a_refused_initial_file_source_of_a_pending_manual_update_fails_the_update_with_its_code() {
+    let head = manual_head();
+    let role = BaselineRole::ManualPending(Arc::new(head.clone()));
+    let error = refused_source();
+
+    let (entry, reject) = failed_entry(decide_now(
+        &role,
+        Some(&head),
+        RawStartError::Filesystem(&error),
+    ));
+    let (_, details, assisted, attempt, fault) = entry_fields(&entry);
+
+    assert_eq!(
+        (details, assisted, attempt, fault, reject),
+        (
+            format!(
+                "UPDATE_BLOB_STORAGE_REFUSED: the executor cannot read blob storage (access \
+                     denied); request the update again after the storage is fixed: {error}"
+            ),
+            None,
+            Some(head.admission_index),
+            None,
+            None
+        )
+    );
+}
+
+/// Every other start loads the initial files of the revision that the agent runs, so a source
+/// that the blob storage refuses fails the start and writes no failed update.
+#[test]
+fn a_refused_initial_file_source_of_the_running_revision_fails_the_start() {
+    let assisted = assisted_head();
+    let automatic = automatic_head();
+    let error = refused_source();
+    let cases = [
+        (BaselineRole::Periodic(OplogIndex::from_u64(7)), None),
+        (BaselineRole::InitialFiles, None),
+        (BaselineRole::ManualPromoted, None),
+        (BaselineRole::AssistedPromoted, None),
+        (BaselineRole::InitialFiles, Some(&automatic)),
+        (BaselineRole::ManualPromoted, Some(&automatic)),
+        (BaselineRole::AssistedPromoted, Some(&automatic)),
+        (
+            BaselineRole::AssistedPending(Arc::new(assisted.clone())),
+            Some(&assisted),
+        ),
+    ];
+
+    cases.iter().for_each(|(role, head)| {
+        match decide_now(role, *head, RawStartError::Filesystem(&error)) {
+            StartAction::Error(actual) => assert_eq!(
+                actual,
+                reconstruction_startup_error(&error),
+                "{role:?} with {head:?}"
+            ),
+            other => panic!("{role:?} with {head:?} gave {other:?}"),
+        }
+    });
 }
 
 /// A passed error at the update point: an unavailable component service and an unavailable

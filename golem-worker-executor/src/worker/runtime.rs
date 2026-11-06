@@ -853,11 +853,17 @@ impl RunningWorker {
         .await
         {
             Ok(prepared) => prepared,
+            // The outcome table decides, as for a failed restore. A pending manual update starts
+            // on its target revision, so a permanent failure of these files fails only that update.
             Err(error) => {
-                return Err(cleanup_reconstructing_agent_filesystem(
-                    reconstructing,
-                    window,
-                    start_outcome::reconstruction_startup_error(&error),
+                return Err(Self::end_failed_start(
+                    &parent,
+                    &start_filesystem.replay().role,
+                    pending_update_ref.as_ref(),
+                    start_outcome::RawStartError::Filesystem(&error),
+                    async move |error| {
+                        cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await
+                    },
                 )
                 .await);
             }

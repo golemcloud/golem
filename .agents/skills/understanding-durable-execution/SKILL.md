@@ -2240,16 +2240,21 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
 - `UPDATE_TARGET_NOT_FOUND`, `UPDATE_TARGET_REFUSED`: the component service has no target
   revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
   writes no failed update: the recovery path retries the start.
-- `UPDATE_BLOB_STORAGE_REFUSED`: at the update point, the blob storage refused the executor a read
-  of an initial-file source of the target (`FilesystemError::InitialFileRefused`, from
-  `BlobFailure::Refused` of a `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other
-  than a code that asks for a retry, or `PermissionDenied` of the filesystem backend). The install
-  loads every source before its first change, so the agent runs on its source revision. The text
-  names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`) writes no failed
-  update and retries as a recovery. At any start, including the source restart after a failed
-  update, a refused source fails the agent and its waiting invocations with the cause.
-  Invalid declarations and missing or corrupt sources (`InitialFileFailed`) are permanent too;
-  they do not share the retryable sandbox-I/O classification. The guest blob store maps the same refusal to a permanent
+- `UPDATE_BLOB_STORAGE_REFUSED`: the blob storage refused the executor a read of an initial-file
+  source of the target (`FilesystemError::InitialFileRefused`, from `BlobFailure::Refused` of a
+  `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other than a code that asks for a
+  retry, or `PermissionDenied` of the filesystem backend). Two places load the files of a target:
+  the update point, and the start of a pending snapshot-based manual update, which replays at the
+  target revision (the row `StartProblem::InitialFileRefused`). The start sends a failed load of
+  its initial files through the outcome table (`end_failed_start`), as it sends a failed restore.
+  The install loads every source before its first change, so the agent runs on its source
+  revision. The text names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`)
+  writes no failed update and retries as a recovery. An invalid declaration or a missing or
+  corrupt source of the target (`InitialFileFailed`) fails the update without a code. Every other
+  start loads the files of the revision that the agent runs, also the source restart after a
+  failed update: there a refused, invalid, missing or corrupt source fails the agent and its
+  waiting invocations with the cause. `InitialFileFailed` does not share the retryable sandbox-I/O
+  classification. The guest blob store maps the same refusal to a permanent
   `BlobStoreError::PermissionDenied`.
 
 Before loading a pending target, Worker validates its cached metadata with

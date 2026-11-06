@@ -6305,6 +6305,112 @@ async fn refusing_initial_files_of_both_revisions_fails_the_update_then_the_sour
     Ok(())
 }
 
+/// A pending manual update starts on its target revision, so that start loads the initial files
+/// of the target. A target file that the blob storage refuses, or does not have, fails only the
+/// update: the agent starts again on its source revision, which has no initial files, and keeps
+/// its state.
+#[test]
+#[timeout("120s")]
+async fn a_manual_update_whose_target_initial_file_does_not_load_fails_only_the_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for missing in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let outage = Arc::new(InitialFileOutage::default());
+        let wrapper_outage = outage.clone();
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                wrap_blob_storage: Some(Arc::new(move |inner| {
+                    Arc::new(FlakyInitialFileStorage {
+                        inner,
+                        outage: wrapper_outage.clone(),
+                    })
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let http_server = TestHttpServer::start().await;
+        let env = HashMap::from([("PORT".to_string(), http_server.port().to_string())]);
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_update_v2)
+            .store()
+            .await?;
+        let agent_id = agent_id!("UpdateTest");
+        let worker_id = executor
+            .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "f1", data_value!(0u64))
+            .await?;
+        let before_update = executor
+            .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
+            .await?;
+        let target = executor
+            .update_component_with_files(
+                &component.id,
+                "UpdateTest",
+                "it_agent_update_v3_release",
+                vec![IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/target.txt")
+                        .map_err(anyhow::Error::msg)?,
+                    permissions: AgentFilePermissions::ReadOnly,
+                }],
+            )
+            .await?;
+        if missing {
+            outage.lose();
+        } else {
+            outage.refuse(None);
+        }
+
+        executor
+            .manual_update_worker(&worker_id, target.revision, false)
+            .await?;
+        let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+        let after_update = executor
+            .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
+            .await?;
+        let metadata = executor.get_worker_metadata(&worker_id).await?;
+        executor.check_oplog_is_queryable(&worker_id).await?;
+        drop(executor);
+        http_server.abort();
+
+        let details = failed
+            .updates
+            .iter()
+            .find_map(|record| match record {
+                UpdateRecord::FailedUpdate(update) => update.details.clone(),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if missing {
+            assert!(
+                !details.starts_with("UPDATE_") && details.contains("File not found"),
+                "{details}"
+            );
+        } else {
+            assert!(
+                details.starts_with("UPDATE_BLOB_STORAGE_REFUSED:")
+                    && details.contains("access denied"),
+                "{details}"
+            );
+        }
+        assert_eq!(before_update, after_update);
+        assert_eq!(metadata.component_revision, component.revision);
+        assert_ne!(metadata.status, AgentStatus::Failed);
+        assert_eq!(update_counts(&metadata), (0, 0, 1));
+        assert_eq!(outage.refused(), 1, "only the target start reads the file");
+    }
+    Ok(())
+}
+
 /// A blob storage that cannot give the content of an initial file while it is down, as a blob
 /// storage whose outage outlived the retry budget of its backend cannot. Every other operation
 /// goes to the storage that it wraps.
@@ -6320,6 +6426,8 @@ enum InitialFileFailure {
     Refused {
         source_before_target: Option<PathBuf>,
     },
+    /// The storage has no content for any initial file.
+    Missing,
 }
 
 /// The failure of a [`FlakyInitialFileStorage`] and the initial-file reads it observed.
@@ -6341,27 +6449,39 @@ impl InitialFileOutage {
         });
     }
 
+    fn lose(&self) {
+        *self.failure.lock().unwrap() = Some(InitialFileFailure::Missing);
+    }
+
     fn end(&self) {
         *self.failure.lock().unwrap() = None;
     }
 
+    /// The number of initial-file reads that failed or found no content.
     fn refused(&self) -> usize {
         self.refused.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Records a read of `path`. `Ok(true)` lets the read go to the wrapped storage, `Ok(false)`
+    /// answers that the storage has no content at `path`, and `Err` fails the read.
     fn check(
         &self,
         namespace: &BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         if !matches!(namespace, BlobStorageNamespace::InitialAgentFiles { .. }) {
-            return Ok(());
+            return Ok(true);
         }
         let path = path.to_path_buf();
         self.reads.lock().unwrap().push(path.clone());
         let mut failure = self.failure.lock().unwrap();
         let error = match failure.as_mut() {
-            None => return Ok(()),
+            None => return Ok(true),
+            Some(InitialFileFailure::Missing) => {
+                self.refused
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Ok(false);
+            }
             Some(InitialFileFailure::Unavailable) => {
                 anyhow::anyhow!("injected 503: the blob storage is down")
             }
@@ -6369,7 +6489,7 @@ impl InitialFileOutage {
                 source_before_target,
             }) => {
                 if source_before_target.as_ref() == Some(&path) {
-                    return Ok(());
+                    return Ok(true);
                 }
                 // Once the target is refused, the restarted source is refused too.
                 *source_before_target = None;
@@ -6393,7 +6513,9 @@ impl BlobStorageBackend for FlakyInitialFileStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.outage.check(&namespace, path)?;
+        if !self.outage.check(&namespace, path)? {
+            return Ok(None);
+        }
         self.inner
             .get_raw(target_label, op_label, namespace, path)
             .await
@@ -6406,7 +6528,9 @@ impl BlobStorageBackend for FlakyInitialFileStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<Bytes>>>> {
-        self.outage.check(&namespace, path)?;
+        if !self.outage.check(&namespace, path)? {
+            return Ok(None);
+        }
         self.inner
             .get_stream(target_label, op_label, namespace, path)
             .await

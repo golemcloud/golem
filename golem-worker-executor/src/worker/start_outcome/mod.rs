@@ -56,8 +56,8 @@ pub(crate) const UPDATE_SNAPSHOT_RESTORE_FAILED: &str = "UPDATE_SNAPSHOT_RESTORE
 pub(crate) const UPDATE_TARGET_NOT_FOUND: &str = "UPDATE_TARGET_NOT_FOUND";
 /// The component service or this executor refused the target revision of an update.
 pub(crate) const UPDATE_TARGET_REFUSED: &str = "UPDATE_TARGET_REFUSED";
-/// The blob storage refused the executor a read of an initial-file source of the target revision
-/// at the update point.
+/// The blob storage refused the executor a read of an initial-file source of the target revision,
+/// at the update point or at the start of a pending snapshot-based manual update.
 pub(crate) const UPDATE_BLOB_STORAGE_REFUSED: &str = "UPDATE_BLOB_STORAGE_REFUSED";
 
 /// The baseline of a start: the column of the outcome table, without the head of a plain
@@ -458,6 +458,11 @@ enum StartProblem {
     /// The blob storage refused the executor a read of an initial-file source of the target at
     /// the update point.
     BlobStorageRefused(BlobRefusal),
+    /// The blob storage refused the executor a read of an initial-file source that the start
+    /// loads. A pending snapshot-based manual update starts on its target revision, so only that
+    /// start loads the files of a target; every other start loads the files of the revision that
+    /// the agent runs.
+    InitialFileRefused(BlobRefusal),
     /// The oplog of the agent failed: it does not read or an archive layer did not store it. It is
     /// the row of every such error, whatever the
     /// step of the start that read the oplog.
@@ -486,11 +491,13 @@ impl StartProblem {
                 FilesystemError::InitialFileConflict(_) | FilesystemError::InitialFileFailed(_) => {
                     Self::RestoreConflict
                 }
+                FilesystemError::InitialFileRefused { refusal, .. } => {
+                    Self::InitialFileRefused(*refusal)
+                }
                 FilesystemError::AgentQuota(_) => Self::Quota,
                 FilesystemError::Access(_)
                 | FilesystemError::Sandbox(_)
                 | FilesystemError::InitialFileUnavailable(_)
-                | FilesystemError::InitialFileRefused { .. }
                 | FilesystemError::PhysicalCapacity(_)
                 | FilesystemError::RuntimeInvalidated => Self::Reconstruction,
             },
@@ -710,7 +717,9 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         Column::ManualPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
             Problem::TargetUnsupported => coded(Code::TargetUnsupported),
-            Problem::BlobStorageRefused(refusal) => coded(Code::BlobStorageRefused(refusal)),
+            Problem::BlobStorageRefused(refusal) | Problem::InitialFileRefused(refusal) => {
+                coded(Code::BlobStorageRefused(refusal))
+            }
             Problem::ModeChange
             | Problem::RestoreConflict
             | Problem::ManualLoadFailed
@@ -745,7 +754,8 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             | Problem::Restore(_)
             | Problem::RestoreConflict
             | Problem::Quota
-            | Problem::Reconstruction => cell(base.column(), problem),
+            | Problem::Reconstruction
+            | Problem::InitialFileRefused(_) => cell(base.column(), problem),
             Problem::LoadRetry => Cell::Retry,
             Problem::LoadUnavailable
             | Problem::LoadFailed
