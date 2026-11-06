@@ -1,4 +1,5 @@
-import type { Account } from "./Registry.ts"
+import type { OveragePrices } from "./BillingConfig.ts"
+import type { Account, AccountLimits } from "./Registry.ts"
 import type { Subscription } from "./Subscriptions.ts"
 
 /** HTML that `html` inserts as it is. */
@@ -126,6 +127,18 @@ export const signedOutPage = (options: { readonly error: string | undefined }) =
  */
 export type PlanState = "free" | "paid" | "suspended" | "other" | "unknown"
 
+/**
+ * The result of the last post of the overage form, from the redirect after it: paid overage is
+ * now on or off, or the plan of the account has no paid overage.
+ */
+export type OverageNotice = "on" | "off" | "not-eligible"
+
+/**
+ * How long a change of the monthly usage mode takes to reach the agents: the worker executors
+ * read the limits of an account again every 5 minutes (`limit_refresh_interval`).
+ */
+const usageModeDelay = "5 minutes"
+
 export interface SignedInPageOptions {
   readonly email: string
   readonly golemAccountId: string
@@ -137,6 +150,10 @@ export interface SignedInPageOptions {
   /** Polar has redirected back after a payment, and the plan has not changed yet. */
   readonly checkoutPending: boolean
   readonly cliCommand: string
+  /** The monthly usage mode of a paid account; `undefined` on another plan or when the call failed. */
+  readonly limits: AccountLimits | undefined
+  readonly overagePrices: OveragePrices
+  readonly overageNotice: OverageNotice | undefined
 }
 
 const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "UTC" })
@@ -206,6 +223,52 @@ const planHero = (options: SignedInPageOptions) => {
   }
 }
 
+const overageNoticeHtml = (notice: OverageNotice | undefined) => {
+  switch (notice) {
+    case undefined:
+      return null
+    case "on":
+      return html`<p class="notice" role="status">Paid overage is on. The change takes effect within ${usageModeDelay}.</p>`
+    case "off":
+      return html`<p class="notice" role="status">Paid overage is off. The change takes effect within ${usageModeDelay}.</p>`
+    case "not-eligible":
+      return html`<p class="alert" role="alert">The plan of this account has no paid overage.</p>`
+  }
+}
+
+/**
+ * The paid-overage switch of a paid account, with the overage prices. Without the switch, only
+ * the notice of the last post of the form shows.
+ */
+const overageCard = (options: SignedInPageOptions) => {
+  if (options.plan !== "paid" || options.checkoutPending || options.limits?.overageAllowedByPlan !== true) {
+    return overageNoticeHtml(options.overageNotice)
+  }
+  const on = options.limits.monthlyUsageMode === "allowOverage"
+  const prices = options.overagePrices
+  return html`<section class="card overage" aria-labelledby="overage-heading">
+        <h2 id="overage-heading">Paid overage</h2>
+        ${overageNoticeHtml(options.overageNotice)}
+        <p>${
+          on
+            ? "On. When the account has used its monthly allowance, its agents keep running, and the usage above the allowance is billed at these prices."
+            : "Off. When the account has used its monthly allowance, its agents stop until the next month."
+        }</p>
+        <dl class="facts prices">
+          <div><dt>Compute</dt><dd>$${prices.perMillionGcu} per million GCU</dd></div>
+          <div><dt>Memory</dt><dd>$${prices.perGbHour} per GB-hour</dd></div>
+          <div><dt>Durable storage</dt><dd>$${prices.perDurableGbMonth} per GB-month</dd></div>
+          <div><dt>Ephemeral storage</dt><dd>$${prices.perEphemeralGbMonth} per GB-month</dd></div>
+        </dl>
+        <p class="muted">Prices in USD, plus tax. The overage of a month is billed on the next invoice.</p>
+        <form method="post" action="/billing/overage" class="actions">
+          <input type="hidden" name="mode" value="${on ? "hardLimit" : "allowOverage"}">
+          <button type="submit" class="btn ${on ? "btn-secondary" : "btn-primary"}">${on ? "Turn off paid overage" : "Turn on paid overage"}</button>
+        </form>
+        <p class="muted">A change takes effect within ${usageModeDelay}.</p>
+      </section>`
+}
+
 export const signedInPage = (options: SignedInPageOptions) =>
   layout({
     title: "Your plan · Golem Cloud",
@@ -216,6 +279,7 @@ export const signedInPage = (options: SignedInPageOptions) =>
     body: html`      <section class="hero">
         ${planHero(options)}
       </section>
+      ${overageCard(options)}
       <div class="grid">
         <section class="card" aria-labelledby="account-heading">
           <h2 id="account-heading">Account</h2>

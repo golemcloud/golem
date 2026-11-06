@@ -23,6 +23,18 @@ export interface PostgresConfig {
   readonly tls: DbTls
 }
 
+/**
+ * The overage prices that the plan page shows, in USD, as decimal strings. Polar bills the
+ * overage with the metered prices of its product; these values only show the prices, so they must
+ * match the product.
+ */
+export interface OveragePrices {
+  readonly perMillionGcu: string
+  readonly perGbHour: string
+  readonly perDurableGbMonth: string
+  readonly perEphemeralGbMonth: string
+}
+
 export interface BillingConfigShape {
   readonly httpPort: number
   /** Public origin of the billing app, for example `https://billing.golem.cloud`. */
@@ -48,6 +60,7 @@ export interface BillingConfigShape {
     /** No monthly amounts and no overage, so the agents of the account stop. */
     readonly suspended: string
   }
+  readonly overagePrices: OveragePrices
   readonly polar: {
     /** The base URL of the Polar API: `https://sandbox-api.polar.sh` or `https://api.polar.sh`. */
     readonly apiUrl: URL
@@ -71,6 +84,8 @@ export class BillingConfig extends Context.Service<BillingConfig, BillingConfigS
 const schemaName = /^[a-z_][a-z0-9_]*$/
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+const decimal = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/
 
 const invalid = (message: string): Effect.Effect<never, Config.ConfigError> =>
   Effect.fail(new Config.ConfigError(new ConfigProvider.SourceError({ message })))
@@ -127,6 +142,12 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
     paid: Config.String("GOLEM_CLOUD_BILLING_PAID_PLAN_ID"),
     suspended: Config.String("GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID")
   }),
+  overagePrices: Config.all({
+    perMillionGcu: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU"),
+    perGbHour: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR"),
+    perDurableGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH"),
+    perEphemeralGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH")
+  }),
   polar: Config.all({
     apiUrl: Config.URL("POLAR_API_URL"),
     accessToken: Config.Redacted("POLAR_ACCESS_TOKEN"),
@@ -151,6 +172,17 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
     }
     if (new Set(plans.map(([, value]) => value)).size !== plans.length) {
       return invalid(`${plans.map(([name]) => name).join(", ")} must differ`)
+    }
+    const prices = [
+      ["GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU", config.overagePrices.perMillionGcu],
+      ["GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR", config.overagePrices.perGbHour],
+      ["GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH", config.overagePrices.perDurableGbMonth],
+      ["GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH", config.overagePrices.perEphemeralGbMonth]
+    ] as const
+    for (const [name, value] of prices) {
+      if (!decimal.test(value)) {
+        return invalid(`${name} must be a decimal number of USD, such as 0.045, got ${value}`)
+      }
     }
     if (!Redacted.value(config.polar.webhookSecret).startsWith("whsec_")) {
       return invalid("POLAR_WEBHOOK_SECRET must start with whsec_")

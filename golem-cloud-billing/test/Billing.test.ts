@@ -221,6 +221,115 @@ describe("Polar billing", () => {
     })
   })
 
+  describe("paid overage", () => {
+    const paidAccount = async () => {
+      const session = await signedIn()
+      upstreams.planOf(session.accountId).planId = paidPlanId
+      return session
+    }
+
+    const postOverage = (jar: CookieJar, mode: string, origin = baseUrl) =>
+      request(
+        app.handler,
+        jar,
+        "POST",
+        "/billing/overage",
+        { origin, "content-type": "application/x-www-form-urlencoded" },
+        `mode=${mode}`
+      )
+
+    it("shows the switch and the overage prices on the paid plan", async () => {
+      const { jar } = await paidAccount()
+
+      const html = await page(jar)
+
+      expect(html).toContain("Paid overage")
+      expect(html).toContain("Off. When the account has used its monthly allowance, its agents stop")
+      expect(html).toContain("$0.0112 per million GCU")
+      expect(html).toContain("$0.045 per GB-hour")
+      expect(html).toContain("$0.27 per GB-month")
+      expect(html).toContain("$0.24 per GB-month")
+      expect(html).toContain(`action="/billing/overage"`)
+      expect(html).toContain(`value="allowOverage"`)
+      expect(html).toContain("A change takes effect within 5 minutes.")
+    })
+
+    it("turns paid overage on with the token of the owner, and tells the delay", async () => {
+      const { jar, accountId } = await paidAccount()
+
+      const response = await postOverage(jar, "allowOverage")
+
+      expect(response.status).toBe(303)
+      expect(response.headers.get("location")).toBe("/?overage=on")
+      const [change, ...others] = upstreams.usageModeChanges()
+      expect(others).toEqual([])
+      expect(change!.url.pathname).toBe(`/v1/accounts/${accountId}/monthly-usage-mode`)
+      expect(change!.headers.get("authorization")).toBe(`Bearer ${upstreams.registryAccount.secret}`)
+      expect(change!.body).toEqual({ mode: "allowOverage" })
+      const html = await page(jar, "/?overage=on")
+      expect(html).toContain("Paid overage is on. The change takes effect within 5 minutes.")
+      expect(html).toContain("On. When the account has used its monthly allowance, its agents keep running")
+      expect(html).toContain(`value="hardLimit"`)
+    })
+
+    it("turns paid overage off", async () => {
+      const { jar, accountId } = await paidAccount()
+      upstreams.usageModes.set(accountId, "allowOverage")
+
+      const response = await postOverage(jar, "hardLimit")
+
+      expect(response.headers.get("location")).toBe("/?overage=off")
+      expect(upstreams.usageModes.get(accountId)).toBe("hardLimit")
+      expect(await page(jar, "/?overage=off")).toContain("Paid overage is off. The change takes effect within 5 minutes.")
+    })
+
+    it("treats a repeated post as done", async () => {
+      const { jar, accountId } = await paidAccount()
+      upstreams.usageModes.set(accountId, "allowOverage")
+
+      const response = await postOverage(jar, "allowOverage")
+
+      expect(response.status).toBe(303)
+      expect(response.headers.get("location")).toBe("/?overage=on")
+    })
+
+    it("tells the owner when the plan has no paid overage", async () => {
+      const { jar } = await signedIn()
+
+      const response = await postOverage(jar, "allowOverage")
+
+      expect(response.headers.get("location")).toBe("/?overage=not-eligible")
+      const html = await page(jar, "/?overage=not-eligible")
+      expect(html).toContain("The plan of this account has no paid overage.")
+      expect(html).not.toContain(`action="/billing/overage"`)
+    })
+
+    it("shows no switch on the free plan", async () => {
+      const { jar } = await signedIn()
+
+      expect(await page(jar)).not.toContain(`action="/billing/overage"`)
+      expect(upstreams.requests.filter((request) => request.url.pathname.endsWith("/limits"))).toEqual([])
+    })
+
+    it("refuses an overage form that another site posts", async () => {
+      const { jar } = await paidAccount()
+
+      const response = await postOverage(jar, "allowOverage", "https://evil.test")
+
+      expect(response.status).toBe(403)
+      expect(upstreams.usageModeChanges()).toEqual([])
+    })
+
+    it("refuses an unknown mode", async () => {
+      const { jar } = await paidAccount()
+
+      const response = await postOverage(jar, "unlimited")
+
+      expect(response.status).toBe(400)
+      expect(upstreams.usageModeChanges()).toEqual([])
+    })
+  })
+
   describe("webhooks", () => {
     it("moves the account to the paid plan when its subscription is active", async () => {
       const { jar, accountId } = await signedIn()

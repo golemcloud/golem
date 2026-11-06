@@ -25,6 +25,34 @@ export const Account = Schema.Struct({
 export type Account = typeof Account.Type
 
 /**
+ * `hardLimit` stops the agents of the account at its monthly amounts. `allowOverage` lets them
+ * run on, and the usage above the monthly amounts is billed as paid overage.
+ */
+export const MonthlyUsageMode = Schema.Literals(["hardLimit", "allowOverage"])
+export type MonthlyUsageMode = typeof MonthlyUsageMode.Type
+
+/** The fields of the registry service's `AccountResourcePolicy` that the billing app reads. */
+export const AccountLimits = Schema.Struct({
+  monthlyUsageMode: MonthlyUsageMode,
+  overageAllowedByPlan: Schema.Boolean
+})
+export type AccountLimits = typeof AccountLimits.Type
+
+/**
+ * The result of a change of the monthly usage mode: `changed`, `unchanged` when the account is
+ * in that mode already, or `notEligible` when the plan of the account has no paid overage.
+ */
+export type UsageModeChange = "changed" | "unchanged" | "notEligible"
+
+const ErrorCode = Schema.Struct({ code: Schema.String })
+
+/** The error codes of `set_account_monthly_usage_mode` that are not failures of the call. */
+const usageModeRefusals: Readonly<Record<string, UsageModeChange>> = {
+  MONTHLY_USAGE_MODE_UNCHANGED: "unchanged",
+  MONTHLY_USAGE_MODE_NOT_ELIGIBLE: "notEligible"
+}
+
+/**
  * A failed registry call. It carries no request URL or response body: the URL of
  * `POST /v1/login/oauth2` holds the GitHub access token.
  */
@@ -72,6 +100,20 @@ export interface RegistryShape {
     account: Account,
     planId: string
   ) => Effect.Effect<Account, RegistryError>
+  /** The monthly usage mode of the account, through `GET /v1/accounts/{account_id}/limits`. */
+  readonly getLimits: (
+    token: Redacted.Redacted<string>,
+    accountId: string
+  ) => Effect.Effect<AccountLimits, RegistryError>
+  /**
+   * Enters or leaves paid-overage mode, through `PUT /v1/accounts/{account_id}/monthly-usage-mode`.
+   * Only a token of the owner of the account can enter it; the registry records the consent.
+   */
+  readonly setMonthlyUsageMode: (
+    token: Redacted.Redacted<string>,
+    accountId: string,
+    mode: MonthlyUsageMode
+  ) => Effect.Effect<UsageModeChange, RegistryError>
 }
 
 export class Registry extends Context.Service<Registry, RegistryShape>()(
@@ -83,7 +125,8 @@ export const layer: Layer.Layer<Registry, never, BillingConfig | HttpClient.Http
   Effect.gen(function* () {
     const { registryUrl } = yield* BillingConfig
     const baseUrl = registryUrl.href.replace(/\/$/, "")
-    const client = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk)
+    const rawClient = yield* HttpClient.HttpClient
+    const client = rawClient.pipe(HttpClient.filterStatusOk)
 
     const exchangeGitHubAccessToken = (accessToken: Redacted.Redacted<string>) =>
       client
@@ -121,6 +164,46 @@ export const layer: Layer.Layer<Registry, never, BillingConfig | HttpClient.Http
           Effect.mapError(toRegistryError("set_account_plan"))
         )
 
-    return { exchangeGitHubAccessToken, getAccount, setAccountPlan }
+    const getLimits = (token: Redacted.Redacted<string>, accountId: string) =>
+      client
+        .get(`${baseUrl}/v1/accounts/${encodeURIComponent(accountId)}/limits`, {
+          headers: { authorization: `Bearer ${Redacted.value(token)}` },
+          acceptJson: true
+        })
+        .pipe(
+          Effect.flatMap(HttpIncomingMessage.schemaBodyJson(AccountLimits)),
+          Effect.mapError(toRegistryError("get_account_limits"))
+        )
+
+    const setMonthlyUsageMode = (token: Redacted.Redacted<string>, accountId: string, mode: MonthlyUsageMode) => {
+      const operation = "set_account_monthly_usage_mode"
+      return rawClient
+        .put(`${baseUrl}/v1/accounts/${encodeURIComponent(accountId)}/monthly-usage-mode`, {
+          headers: { authorization: `Bearer ${Redacted.value(token)}` },
+          acceptJson: true,
+          body: HttpBody.jsonUnsafe({ mode })
+        })
+        .pipe(
+          Effect.mapError(toRegistryError(operation)),
+          Effect.flatMap((response): Effect.Effect<UsageModeChange, RegistryError> => {
+            if (response.status >= 200 && response.status < 300) {
+              return Effect.succeed("changed")
+            }
+            const unexpected = new RegistryError({ operation, reason: "unexpected status", status: response.status })
+            if (response.status !== 400) {
+              return Effect.fail(unexpected)
+            }
+            return HttpIncomingMessage.schemaBodyJson(ErrorCode)(response).pipe(
+              Effect.mapError(toRegistryError(operation)),
+              Effect.flatMap(({ code }) => {
+                const change = usageModeRefusals[code]
+                return change === undefined ? Effect.fail(unexpected) : Effect.succeed(change)
+              })
+            )
+          })
+        )
+    }
+
+    return { exchangeGitHubAccessToken, getAccount, setAccountPlan, getLimits, setMonthlyUsageMode }
   })
 )
