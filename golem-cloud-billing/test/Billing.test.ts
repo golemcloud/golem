@@ -210,6 +210,20 @@ describe("Polar billing", () => {
       expect(await page(jar, "/?checkout_id=polar_c_test")).toContain("Activating Paid")
     })
 
+    it("links the stylesheet and the script with a hash of their content", async () => {
+      const { jar } = await signedIn()
+
+      const html = await page(jar)
+      const stylesheet = /href="(\/assets\/app\.css\?v=[0-9a-f]{12})"/.exec(html)?.[1]
+      const script = /src="(\/assets\/app\.js\?v=[0-9a-f]{12})"/.exec(html)?.[1]
+
+      expect(stylesheet).toBeDefined()
+      expect(script).toBeDefined()
+      const response = await request(app.handler, jar, "GET", stylesheet!)
+      expect(response.status).toBe(200)
+      expect(response.headers.get("content-type")).toContain("text/css")
+    })
+
     it("lets the forms redirect to Polar", async () => {
       const { jar } = await signedIn()
 
@@ -318,6 +332,50 @@ describe("Polar billing", () => {
 
       expect(response.status).toBe(403)
       expect(upstreams.usageModeChanges()).toEqual([])
+    })
+
+    it("shows the usage of the month against the allowance", async () => {
+      const { jar } = await paidAccount()
+
+      const html = await page(jar)
+
+      expect(html).toContain("Usage this month (UTC)")
+      expect(html).toContain("2.5M of 100M GCU · 3%")
+      expect(html).toContain("250 of 912.5 GB-hours · 27%")
+      expect(html).toContain(`max="100000000" value="2500000"`)
+      expect(html).toContain("Not metered")
+      expect(html).toContain("No usage reported this month")
+    })
+
+    it("shows a used-up allowance and the paid overage above it", async () => {
+      const { jar, accountId } = await paidAccount()
+      upstreams.usageModes.set(accountId, "allowOverage")
+      upstreams.monthly = {
+        ...(upstreams.monthly as object),
+        computeGcu: {
+          metering: "enabled",
+          resolvedMonthlyAmount: 100_000_000,
+          usage: 101_500_000,
+          allowOverageUsage: 1_500_000,
+          unit: "GCU"
+        }
+      }
+
+      const html = await page(jar)
+
+      expect(html).toContain("100M of 100M GCU · 100%")
+      expect(html).toContain(`class="full"`)
+      expect(html).toContain("and 1.5M GCU of paid overage")
+    })
+
+    it("shows the switch when the registry reports no usage", async () => {
+      const { jar } = await paidAccount()
+      upstreams.monthly = undefined
+
+      const html = await page(jar)
+
+      expect(html).not.toContain("Usage this month")
+      expect(html).toContain(`action="/billing/overage"`)
     })
 
     it("refuses an unknown mode", async () => {

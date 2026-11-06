@@ -157,6 +157,31 @@ export class FakeUpstreams {
   planConflicts = 0
   /** The monthly usage mode of each account ID; an account starts in `hardLimit`. */
   readonly usageModes = new Map<string, "hardLimit" | "allowOverage">()
+  /** `monthly` of the limits of every account, as the registry reports it; `undefined` leaves it out. */
+  monthly: unknown = {
+    computeGcu: {
+      metering: "enabled",
+      planAmount: 100_000_000,
+      resolvedMonthlyAmount: 100_000_000,
+      usage: 2_500_000,
+      remaining: 97_500_000,
+      allowOverageUsage: 0,
+      unit: "GCU",
+      behavior: "hardLimit"
+    },
+    memoryGbSeconds: {
+      metering: "enabled",
+      planAmount: 3_285_000,
+      resolvedMonthlyAmount: 3_285_000,
+      usage: 900_000,
+      remaining: 2_385_000,
+      allowOverageUsage: 0,
+      unit: "GB-seconds",
+      behavior: "hardLimit"
+    },
+    durableStorageGbMonth: { metering: "disabled", planAmount: 5, unit: "GB-month" },
+    ephemeralStorageGbMonth: { metering: "unknown", planAmount: 5, unit: "GB-month" }
+  }
 
   /** The Golem account of the access token of `identity`, created on first use. */
   accountOf(identity: GitHubIdentity = this.github): RegistryAccount {
@@ -277,7 +302,8 @@ export class FakeUpstreams {
             ? Response.json({
                 accountId,
                 monthlyUsageMode: this.usageModes.get(accountId) ?? "hardLimit",
-                overageAllowedByPlan: this.planOf(accountId).planId === paidPlanId
+                overageAllowedByPlan: this.planOf(accountId).planId === paidPlanId,
+                ...(this.monthly === undefined ? {} : { monthly: this.monthly })
               })
             : new Response(null, { status: 404 })
         }

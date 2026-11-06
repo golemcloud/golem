@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
 import type { OveragePrices } from "./BillingConfig.ts"
-import type { Account, AccountLimits } from "./Registry.ts"
+import type { Account, AccountLimits, MonthlyLimit } from "./Registry.ts"
 import type { Subscription } from "./Subscriptions.ts"
 
 /** HTML that `html` inserts as it is. */
@@ -36,6 +38,21 @@ const render = (value: Interpolation): string => {
 export const html = (strings: TemplateStringsArray, ...values: ReadonlyArray<Interpolation>): SafeHtml =>
   new SafeHtml(strings.reduce((out, string, i) => out + string + (i < values.length ? render(values[i]) : ""), ""))
 
+/**
+ * The URL of an asset with a hash of its content. The assets are cached for an hour, so a new
+ * image would otherwise render its page with the stylesheet of the old one.
+ */
+const versionedAsset = (name: string): string => {
+  const hash = createHash("sha256")
+    .update(readFileSync(new URL(`./assets/${name}`, import.meta.url)))
+    .digest("hex")
+    .slice(0, 12)
+  return `/assets/${name}?v=${hash}`
+}
+
+const stylesheetUrl = versionedAsset("app.css")
+const scriptUrl = versionedAsset("app.js")
+
 /** The default cloud URL of the Golem CLI; the CLI selects it with `--cloud`. */
 const cliDefaultCloudUrl = "https://release.api.golem.cloud"
 
@@ -64,8 +81,8 @@ const layout = (options: { readonly title: string; readonly navUser?: SafeHtml; 
     <meta name="robots" content="noindex">
     <title>${options.title}</title>
     <link rel="icon" type="image/png" href="/assets/favicon.png">
-    <link rel="stylesheet" href="/assets/app.css">
-    <script src="/assets/app.js" defer></script>
+    <link rel="stylesheet" href="${stylesheetUrl}">
+    <script src="${scriptUrl}" defer></script>
   </head>
   <body>
     <header class="nav">
@@ -240,6 +257,61 @@ const overageNoticeHtml = (notice: OverageNotice | undefined) => {
  * The paid-overage switch of a paid account, with the overage prices. Without the switch, only
  * the notice of the last post of the form shows.
  */
+/** How a meter of the current month shows its amounts: the unit, and a conversion from the meter. */
+interface UsageMeter {
+  readonly label: string
+  readonly unit: string
+  /** Converts an amount of the meter into the unit that the page shows. */
+  readonly scale: number
+  readonly format: Intl.NumberFormat
+}
+
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 2 })
+const oneDecimal = new Intl.NumberFormat("en", { maximumFractionDigits: 1 })
+const twoDecimals = new Intl.NumberFormat("en", { maximumFractionDigits: 2 })
+
+// Memory shows GB-hours, the unit of its overage price, not the GB-seconds of the meter.
+const usageMeters = {
+  computeGcu: { label: "Compute", unit: "GCU", scale: 1, format: compact },
+  memoryGbSeconds: { label: "Memory", unit: "GB-hours", scale: 1 / 3600, format: oneDecimal },
+  durableStorageGbMonth: { label: "Durable storage", unit: "GB-month", scale: 1, format: twoDecimals },
+  ephemeralStorageGbMonth: { label: "Ephemeral storage", unit: "GB-month", scale: 1, format: twoDecimals }
+} as const satisfies Record<string, UsageMeter>
+
+const usageItem = (meter: UsageMeter, limit: MonthlyLimit) => {
+  const number = (value: number) => meter.format.format(value * meter.scale)
+  const amount = (value: number) => `${number(value)} ${meter.unit}`
+  if (limit.metering === "disabled") {
+    return html`<div><dt>${meter.label}</dt><dd class="muted">Not metered</dd></div>`
+  }
+  if (limit.usage === undefined) {
+    return html`<div><dt>${meter.label}</dt><dd class="muted">No usage reported this month</dd></div>`
+  }
+  if (limit.resolvedMonthlyAmount === undefined) {
+    return html`<div><dt>${meter.label}</dt><dd>${amount(limit.usage)}, no monthly limit</dd></div>`
+  }
+  const allowance = limit.resolvedMonthlyAmount
+  const used = Math.min(limit.usage, allowance)
+  const percent = allowance > 0 ? Math.round((used / allowance) * 100) : 100
+  const overage = limit.allowOverageUsage ?? 0
+  return html`<div>
+            <dt>${meter.label}</dt>
+            <dd>${number(used)} of ${amount(allowance)} · ${percent}%
+              <progress class="${used >= allowance ? "full" : ""}" max="${Math.max(allowance, 1)}" value="${used}" aria-label="${meter.label} used">${percent}%</progress>
+            </dd>
+            ${overage > 0 ? html`<dd class="muted">and ${amount(overage)} of paid overage</dd>` : null}
+          </div>`
+}
+
+const usageSection = (limits: AccountLimits) => {
+  const monthly = limits.monthly
+  if (monthly === undefined) return null
+  return html`<h3>Usage this month (UTC)</h3>
+        <dl class="facts usage">
+          ${(Object.keys(usageMeters) as Array<keyof typeof usageMeters>).map((key) => usageItem(usageMeters[key], monthly[key]))}
+        </dl>`
+}
+
 const overageCard = (options: SignedInPageOptions) => {
   if (options.plan !== "paid" || options.checkoutPending || options.limits?.overageAllowedByPlan !== true) {
     return overageNoticeHtml(options.overageNotice)
@@ -254,6 +326,8 @@ const overageCard = (options: SignedInPageOptions) => {
             ? "On. When the account has used its monthly allowance, its agents keep running, and the usage above the allowance is billed at these prices."
             : "Off. When the account has used its monthly allowance, its agents stop until the next month."
         }</p>
+        ${usageSection(options.limits)}
+        <h3>Overage prices</h3>
         <dl class="facts prices">
           <div><dt>Compute</dt><dd>$${prices.perMillionGcu} per million GCU</dd></div>
           <div><dt>Memory</dt><dd>$${prices.perGbHour} per GB-hour</dd></div>
