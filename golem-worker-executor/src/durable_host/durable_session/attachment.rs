@@ -316,7 +316,7 @@ impl StreamSession {
                             })?
                         )
                         .await?,
-                    OplogEntry::PendingAgentInvocation { idempotency_key, .. }
+                    OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. }
                         if idempotency_key == self.session_key.idempotency_key
                 ))
         {

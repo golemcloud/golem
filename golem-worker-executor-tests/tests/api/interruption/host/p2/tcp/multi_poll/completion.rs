@@ -80,6 +80,7 @@ async fn completion_and_history(
     let first_port = listeners[0].local_addr()?.port();
     let second_port = listeners[1].local_addr()?.port();
     let key = IdempotencyKey::fresh();
+    let stored_key = executor.external_invocation_key(&id, &key, method).await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -100,7 +101,7 @@ async fn completion_and_history(
     let result = async {
         let mut effects = PeerEffects::default();
         let mut peers = accept_pair(&listeners, &mut effects).await?;
-        let start = wait_for_input_poll(&executor, &id, &key, count).await?;
+        let start = wait_for_input_poll(&executor, &id, &stored_key, count).await?;
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
         release_second(&mut peers, &mut effects).await?;
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
@@ -108,8 +109,8 @@ async fn completion_and_history(
         let completed_poll = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let recorded = poll_result(&completed_poll, start)?;
         assert_indices(&recorded, duplicate)?;
-        ensure!(input_poll(&completed_poll, &key, count, Some(&recorded))? == start);
-        assert_invocation(&completed_poll, &key, 0)?;
+        ensure!(input_poll(&completed_poll, &stored_key, count, Some(&recorded))? == start);
+        assert_invocation(&completed_poll, &stored_key, 0)?;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
@@ -139,8 +140,8 @@ async fn completion_and_history(
         closed_pair(&mut peers, &mut effects).await?;
         ensure!(effects.accepts == [1, 1] && effects.closed == [1, 1] && effects.sent == [0, 1]);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(input_poll(&completed, &key, count, Some(&recorded))? == start);
-        assert_invocation(&completed, &key, 1)?;
+        ensure!(input_poll(&completed, &stored_key, count, Some(&recorded))? == start);
+        assert_invocation(&completed, &stored_key, 1)?;
         settled_history(&completed)?;
         ensure!(count_agent_invocation_pair_since(&completed, OplogIndex::INITIAL) == (2, 2));
         let cached = executor.invoke_and_await_agent_with_key(
@@ -155,6 +156,9 @@ async fn completion_and_history(
         // Physical reconstruction re-executes both native connects, but must not await
         // historical TCP input readiness. Keep both historical peers silent and open.
         let fresh_key = IdempotencyKey::fresh();
+        let stored_fresh_key = executor
+            .external_invocation_key(&id, &fresh_key, method)
+            .await?;
         let fresh = executor.invoke_and_await_agent_with_key(
             &component, &name, &fresh_key, method, data_value!(first_port, second_port),
         );
@@ -173,11 +177,11 @@ async fn completion_and_history(
         no_connections(&listeners).await?;
         ensure!(effects.accepts == [3, 3] && effects.closed == [3, 3] && effects.sent == [0, 2]);
         let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(input_poll(&history, &key, count, Some(&recorded))? == start);
-        input_poll(&history, &fresh_key, count, Some(&fresh_result))?;
+        ensure!(input_poll(&history, &stored_key, count, Some(&recorded))? == start);
+        input_poll(&history, &stored_fresh_key, count, Some(&fresh_result))?;
         ensure!(poll_starts(&history).len() == 6, "completed history adds no poll Start");
-        assert_invocation(&history, &key, 1)?;
-        assert_invocation(&history, &fresh_key, 1)?;
+        assert_invocation(&history, &stored_key, 1)?;
+        assert_invocation(&history, &stored_fresh_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
         settled_history(&history)?;
         info!(%key, %fresh_key, %start, duplicate, ?recorded, ?effects,

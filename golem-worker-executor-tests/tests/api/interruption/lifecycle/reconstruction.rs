@@ -77,6 +77,9 @@ mod completed_history {
         .context("initial idle permit release")?;
         assert!(worker.is_loaded().await);
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+        let stored_key = executor
+            .external_invocation_key(&id, &key, "increment")
+            .await?;
         let original_tip = worker.oplog().current_oplog_index().await;
         let original = worker
             .oplog()
@@ -89,13 +92,14 @@ mod completed_history {
                 .iter()
                 .filter_map(|(index, entry)| match entry {
                     OplogEntry::AgentInvocationStarted {
-                        idempotency_key, ..
+                        invocation_id: idempotency_key,
+                        ..
                     } if idempotency_key == key => Some(*index),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
         };
-        let starts = started(&original, &key);
+        let starts = started(&original, &stored_key);
         assert_eq!(starts.len(), 1);
         let finished_index = *original
             .range(starts[0].next()..)
@@ -118,7 +122,7 @@ mod completed_history {
         );
         eprintln!("[monthly-replay] original committed oplog: {original:#?}");
         let (replay_start, replay_finished, payload) =
-            completed_invocation_payload(&original, &key)?;
+            completed_invocation_payload(&original, &stored_key)?;
         assert_eq!((replay_start, replay_finished), (starts[0], finished_index));
         let (replay, release_replay) = executor.gate_next_oplog_payload_read(&id, payload);
         // The public crash API ignores Idle. Restart the resident Worker through the same stop path.
@@ -198,7 +202,7 @@ mod completed_history {
                 .await?,
             original
         );
-        assert_eq!(started(&stopped, &key), starts);
+        assert_eq!(started(&stopped, &stored_key), starts);
         let stopped_raw = executor.stored_oplog(&id).await;
         assert!(stopped_raw.len() >= original_raw.len());
         assert_eq!(&stopped_raw[..original_raw.len()], original_raw.as_slice());
@@ -249,6 +253,9 @@ mod completed_history {
             result
         );
         let new_key = IdempotencyKey::fresh();
+        let stored_new_key = executor
+            .external_invocation_key(&id, &new_key, "increment")
+            .await?;
         assert_eq!(
             executor
                 .invoke_and_await_agent_with_key(
@@ -289,8 +296,8 @@ mod completed_history {
                 .await?,
             original
         );
-        assert_eq!(started(&recovered, &key), starts);
-        assert_eq!(started(&recovered, &new_key).len(), 1);
+        assert_eq!(started(&recovered, &stored_key), starts);
+        assert_eq!(started(&recovered, &stored_new_key).len(), 1);
         let recovered_raw = executor.stored_oplog(&id).await;
         assert!(recovered_raw.len() >= stopped_raw.len());
         assert_eq!(&recovered_raw[..stopped_raw.len()], stopped_raw.as_slice());
@@ -451,6 +458,9 @@ mod post_export {
         .await
         .context("initial idle permit release")?;
         let key = IdempotencyKey::fresh();
+        let stored_key = executor
+            .external_invocation_key(&id, &key, "get_in_spawned_task_after_return")
+            .await?;
         executor
             .invoke_agent_with_key(
                 &component,
@@ -463,7 +473,7 @@ mod post_export {
         tokio::time::timeout(Duration::from_secs(10), request)
             .await
             .context("spawned HTTP request entered held handler")??;
-        let (started, chunk) = pending_tail(&worker, &key).await?;
+        let (started, chunk) = pending_tail(&worker, &stored_key).await?;
         let prefix = executor.stored_oplog(&id).await;
         limits.initialize_account(context.account_id).await?;
         let admitted_revision = registry.current_limits().monthly_policy_revision;
@@ -488,7 +498,7 @@ mod post_export {
             Some(registry.current_limits().monthly_policy_revision)
         );
         assert!(matches!(cause, InterruptKind::Suspend(_)));
-        assert_eq!(pending_tail(&worker, &key).await?, (started, chunk));
+        assert_eq!(pending_tail(&worker, &stored_key).await?, (started, chunk));
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
@@ -546,7 +556,7 @@ mod post_export {
                 .values()
                 .any(|entry| matches!(entry, OplogEntry::Jump { .. }))
         );
-        assert_eq!(stopped.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+        assert_eq!(stopped.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
         assert_eq!(
             stopped
                 .values()
@@ -610,7 +620,7 @@ mod post_export {
             oplog.commit(CommitLevel::Always).await?;
             let entries = oplog.read_exact(OplogIndex::INITIAL, observed_tip.as_u64()).await?;
             let starts = entries.iter().filter_map(|(index, entry)| match entry {
-                OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key => Some(*index),
+                OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == key => Some(*index),
                 _ => None,
             }).collect::<Vec<_>>();
             if let [started] = starts.as_slice() {

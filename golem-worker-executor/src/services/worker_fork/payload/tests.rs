@@ -47,7 +47,7 @@ async fn shared_pending_and_started_payloads_rehome_independently() {
         ),
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: IdempotencyKey::new("shared".to_string()),
+            invocation_id: IdempotencyKey::new("shared".to_string()),
             payload,
             trace_id: context.trace_id,
             trace_states: context.trace_states,

@@ -18,7 +18,7 @@ fn invocation_entries<'a>(
         .filter_map(|(index, entry)| {
             matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if &method.idempotency_key == key))
+                if &method.invocation_id == key))
             .then_some(index)
         })
         .collect();
@@ -46,7 +46,7 @@ pub(super) fn assert_invocation(
     let method = invocation_entries(entries, key)?;
     let accepted: Vec<_> = entries.iter().filter(|entry| matches!(&entry.entry,
         PublicOplogEntry::PendingAgentInvocation(pending)
-        if matches!(&pending.invocation, PublicAgentInvocation::AgentMethodInvocation(call) if &call.idempotency_key == key)
+        if matches!(&pending.invocation, PublicAgentInvocation::AgentMethodInvocation(call) if &call.invocation_id == key)
     )).collect();
     ensure!(accepted.len() == 1 && accepted[0].oplog_index < method[0].oplog_index);
     ensure!(

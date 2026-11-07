@@ -5893,10 +5893,11 @@
     },
     "PublicOplogEntryAgentInvocationFinished": {
       "type": "object",
-      "required": ["type", "timestamp", "result", "consumedFuel", "componentRevision"],
+      "required": ["type", "timestamp", "invocationId", "result", "consumedFuel", "componentRevision"],
       "properties": {
         "type": { "const": "AgentInvocationFinished" },
         "timestamp": { "type": "string" },
+        "invocationId": { "type": "string" },
         "result": { "$ref": "#/definitions/PublicAgentInvocationResult" },
         "methodName": { "type": ["string", "null"] },
         "consumedFuel": { "type": "integer" },
@@ -5926,6 +5927,7 @@
         "type": { "const": "Error" },
         "timestamp": { "type": "string" },
         "kind": { "type": "string", "enum": ["invocation", "recovery"] },
+        "invocationId": { "type": ["string", "null"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },
         "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] }
@@ -6015,8 +6017,8 @@
     },
     "PublicOplogEntryCancelPendingInvocation": {
       "type": "object",
-      "required": ["type", "timestamp", "idempotencyKey"],
-      "properties": { "type": { "const": "CancelPendingInvocation" }, "timestamp": { "type": "string" }, "idempotencyKey": { "type": "string" } },
+      "required": ["type", "timestamp", "invocationId"],
+      "properties": { "type": { "const": "CancelPendingInvocation" }, "timestamp": { "type": "string" }, "invocationId": { "type": "string" } },
       "additionalProperties": false
     },
     "PublicOplogEntryBeginRemoteTransaction": {
@@ -6242,26 +6244,26 @@
         { "$ref": "#/definitions/PublicAgentInvocationExternalTool" },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "SaveSnapshot" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "idempotencyKey"], "properties": { "type": { "const": "ProcessOplogEntries" }, "idempotencyKey": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "invocationId"], "properties": { "type": { "const": "ProcessOplogEntries" }, "invocationId": { "type": "string" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "targetRevision"], "properties": { "type": { "const": "ManualUpdate" }, "targetRevision": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
       ]
     },
     "PublicAgentInvocationAgentInitialization": {
       "type": "object",
-      "required": ["type", "idempotencyKey", "constructorParameters", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "AgentInitialization" }, "idempotencyKey": { "type": "string" }, "constructorParameters": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "constructorParameters", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "AgentInitialization" }, "invocationId": { "type": "string" }, "constructorParameters": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationAgentMethodInvocation": {
       "type": "object",
-      "required": ["type", "idempotencyKey", "methodName", "functionInput", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "AgentMethodInvocation" }, "idempotencyKey": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "methodName", "functionInput", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "AgentMethodInvocation" }, "invocationId": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationExternalTool": {
       "type": "object",
-      "required": ["type", "idempotencyKey", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "ExternalTool" }, "idempotencyKey": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "ExternalTool" }, "invocationId": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationResult": {

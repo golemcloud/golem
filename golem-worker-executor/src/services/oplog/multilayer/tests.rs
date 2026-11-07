@@ -286,6 +286,9 @@ async fn observer_open_after_primary_growth(archived: u64) {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 kind: OplogErrorKind::Invocation,
+                invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                    "invocation".to_string(),
+                )),
                 error: AgentError::Unknown(index.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,

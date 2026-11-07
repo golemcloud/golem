@@ -187,10 +187,11 @@ declare module 'golem:agent/host@2.0.0' {
     metadata: InvocationMetadata;
   };
   /**
-   * Asynchronous invocation handle together with its final identity.
+   * Asynchronous invocation handle together with its final identity, when
+   * preparation succeeded. Rejected calls report their error through the future.
    */
   export type AsyncInvocationWithMetadata = {
-    metadata: InvocationMetadata;
+    metadata?: InvocationMetadata;
     future: FutureInvokeResult;
   };
   /**

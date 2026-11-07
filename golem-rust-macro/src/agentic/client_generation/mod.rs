@@ -958,10 +958,14 @@ fn generate_method_code(
             quote! {
                 #encode_input_async
                 let invocation = #invoke;
-                let metadata = invocation.metadata;
                 let rpc_result_ok = golem_rust::agentic::await_invoke_schema_value_result(invocation.future)
                     .await
                     .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+                let metadata = invocation.metadata.ok_or_else(|| {
+                    golem_rust::GolemReflectError::ProtocolError(
+                        "the host completed an RPC call it did not accept".to_string(),
+                    )
+                })?;
                 let value = { #decode_value };
                 Ok(golem_rust::agentic::EphemeralInvocationResult { metadata, value })
             },
@@ -1063,10 +1067,10 @@ fn generate_method_code(
         quote! {
             #encode_input_async
             let invocation = #invoke;
-            let metadata = invocation.metadata;
             let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
                 golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await;
             let rpc_result_ok = rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
+            let metadata = invocation.metadata.unwrap_or_else(|| panic!("the host completed the RPC call to {} without accepting it", #remote_token));
             let value = { #process_invoke_result };
             golem_rust::agentic::EphemeralInvocationResult { metadata, value }
         },
@@ -1200,9 +1204,9 @@ fn generate_direct_method_code(
         quote! {
             #encode_input_async
             let invocation = #invoke;
-            let metadata = invocation.metadata;
             let rpc_result = invocation.future.get().await;
             let rpc_result_ok = rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
+            let metadata = invocation.metadata.unwrap_or_else(|| panic!("the host completed the RPC call to {} without accepting it", #remote_token));
             let value = { #process_invoke_result };
             golem_rust::agentic::EphemeralInvocationResult { metadata, value }
         },

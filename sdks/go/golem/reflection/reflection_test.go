@@ -274,6 +274,7 @@ type fakeRPC struct {
 	has       bool
 	err       error
 	cancelled bool
+	noID      bool
 	scope     witTypes.Option[*types.PermissionCard]
 }
 
@@ -281,8 +282,12 @@ var fakeID = golem.InvocationID{AgentID: "Greeter(\"ada\")", IdempotencyKey: "k1
 
 func (f *fakeRPC) start(method string, _ types.SchemaValueTree, scope witTypes.Option[*types.PermissionCard]) (pendingRPC, error) {
 	f.gotMethod, f.gotForm, f.scope = method, "call", scope
+	id := &fakeID
+	if f.noID {
+		id = nil
+	}
 	return pendingRPC{
-		id: fakeID,
+		id: id,
 		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
 			if !f.has {
 				return witTypes.None[types.SchemaValueTree](), f.err
@@ -322,13 +327,13 @@ func TestReflectedClientCallsAndDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	if rpc.gotMethod != "greet" || got != "hi hi" || id != fakeID {
+	if rpc.gotMethod != "greet" || got != "hi hi" || id == nil || *id != fakeID {
 		t.Errorf("invoked %q, got %v, id %+v", rpc.gotMethod, got, id)
 	}
 
-	id, err = client.Trigger("greet", map[string]any{"greeting": "hi", "times": 1})
-	if err != nil || rpc.gotForm != "trigger" || id != fakeID {
-		t.Errorf("Trigger: %v %q %+v", err, rpc.gotForm, id)
+	triggered, err := client.Trigger("greet", map[string]any{"greeting": "hi", "times": 1})
+	if err != nil || rpc.gotForm != "trigger" || triggered != fakeID {
+		t.Errorf("Trigger: %v %q %+v", err, rpc.gotForm, triggered)
 	}
 	sched, err := client.Schedule(time.Now(), "greet", map[string]any{"greeting": "hi", "times": 1})
 	if err != nil || rpc.gotForm != "schedule" || sched.ID != fakeID {
@@ -450,7 +455,7 @@ func TestDynamicAgentClientCallsWithPackedValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	if rpc.gotMethod != "greet" || id != fakeID || got.IsNone() {
+	if rpc.gotMethod != "greet" || id == nil || *id != fakeID || got.IsNone() {
 		t.Fatalf("invoked %q id %+v result %v", rpc.gotMethod, id, got)
 	}
 	value, err := m.Output().Unwrap().UnpackJSON(got.Unwrap())
@@ -533,7 +538,7 @@ func TestAPendingCallIsCancelledOrAwaited(t *testing.T) {
 	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
 
 	p, err := client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
-	if err != nil || p.ID != fakeID {
+	if err != nil || p.ID == nil || *p.ID != fakeID {
 		t.Fatalf("CallAsync gave %+v, %v", p, err)
 	}
 	if got, err := p.Get(); got != "hi" || err != nil {
@@ -548,5 +553,57 @@ func TestAPendingCallIsCancelledOrAwaited(t *testing.T) {
 	p.Cancel()
 	if _, err := p.Get(); !errors.Is(err, golem.ErrCallCancelled) || !rpc.cancelled {
 		t.Errorf("a cancelled call gave %v (cancelled=%v)", err, rpc.cancelled)
+	}
+}
+
+// TestARejectedCallHasNoIdentity — a call the host rejects before it starts
+// has no invocation identity, and awaiting it returns the rejection.
+func TestARejectedCallHasNoIdentity(t *testing.T) {
+	r := snapshotOf(t)
+	denied := errors.New("denied")
+	rpc := &fakeRPC{noID: true, err: denied}
+	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
+
+	p, err := client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
+	if err != nil || p.ID != nil {
+		t.Fatalf("CallAsync gave id %v, %v; want no id and no error", p.ID, err)
+	}
+	if _, err := p.Get(); !errors.Is(err, denied) {
+		t.Errorf("awaiting a rejected call gave %v, want the rejection", err)
+	}
+
+	_, id, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 1})
+	if id != nil || !errors.Is(err, denied) {
+		t.Errorf("Call gave id %v, %v; want no id and the rejection", id, err)
+	}
+
+	// Only a rejected call lacks an identity, so one that succeeds without
+	// one breaks the host contract, for reflected and dynamic clients alike.
+	// The dropped result gives its permission cards back to the host.
+	var released []*types.PermissionCard
+	prev := link.ReleaseCard
+	t.Cleanup(func() { link.ReleaseCard = prev })
+	link.ReleaseCard = func(h *types.PermissionCard) { released = append(released, h) }
+	card := &types.PermissionCard{}
+	withCard := greetResult(t, r, "hi")
+	withCard.ValueNodes = append(slices.Clone(withCard.ValueNodes), types.MakeSchemaValueNodePermissionCardHandle(card))
+	rpc = &fakeRPC{noID: true, tree: withCard, has: true}
+	client.rpc = rpc
+	var rce *golem.RemoteCallError
+	if got, id, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 1}); !errors.As(err, &rce) || rce.Kind != golem.RemoteProtocolError || id != nil || got != nil {
+		t.Errorf("a successful call without an identity gave %v, id %v, %v; want a protocol error", got, id, err)
+	}
+	if len(released) != 1 || released[0] != card {
+		t.Errorf("released %v, want the dropped result's card", released)
+	}
+	rpc = &fakeRPC{noID: true, tree: greetResult(t, r, "hi"), has: true}
+	m, _ := r.Method("greet")
+	input, err := m.Input().PackJSON(map[string]any{"greeting": "hi", "times": 1})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	dynamic := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
+	if got, id, err := dynamic.Call("greet", input); !errors.As(err, &rce) || rce.Kind != golem.RemoteProtocolError || id != nil || got.IsSome() {
+		t.Errorf("a dynamic call without an identity gave %v, id %v, %v; want a protocol error", got, id, err)
 	}
 }

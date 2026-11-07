@@ -68,7 +68,7 @@ type witRPC struct {
 func (w witRPC) start(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (pendingRPC, error) {
 	inv := w.rpc.AsyncInvokeAndAwait(method, input, scopeCard)
 	return pendingRPC{
-		id: invocationIDFrom(inv.Metadata),
+		id: asyncInvocationID(inv.Metadata),
 		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
 			res := inv.Future.Get()
 			inv.Future.Drop()
@@ -237,6 +237,16 @@ func noScopeCard() witTypes.Option[*types.PermissionCard] {
 
 func invocationIDFrom(m host.InvocationMetadata) golem.InvocationID {
 	return golem.InvocationID{AgentID: m.AgentId, IdempotencyKey: m.IdempotencyKey}
+}
+
+// asyncInvocationID is the identity of an asynchronous invocation, or nil when
+// the host rejected the call before it started; its future reports the rejection.
+func asyncInvocationID(m witTypes.Option[host.InvocationMetadata]) *golem.InvocationID {
+	if m.IsNone() {
+		return nil
+	}
+	id := invocationIDFrom(m.Some())
+	return &id
 }
 
 func instantFrom(t time.Time) clock.Instant {

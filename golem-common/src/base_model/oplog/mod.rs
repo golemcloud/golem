@@ -191,7 +191,7 @@ oplog_entry! {
         wit_raw_type: "raw-agent-invocation-started-parameters"
         wit_public_type: "agent-invocation-started-parameters"
         raw {
-            idempotency_key: IdempotencyKey,
+            invocation_id: IdempotencyKey,
             payload: payload::OplogPayload<AgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
@@ -209,12 +209,14 @@ oplog_entry! {
         wit_raw_type: "raw-agent-invocation-finished-parameters"
         wit_public_type: "agent-invocation-finished-parameters"
         raw {
+            invocation_id: IdempotencyKey,
             result: payload::OplogPayload<AgentInvocationResult>,
             method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
         }
         public {
+            invocation_id: IdempotencyKey,
             result: PublicAgentInvocationResult,
             method_name: Option<String>,
             consumed_fuel: i64,
@@ -237,6 +239,8 @@ oplog_entry! {
         raw {
             entity_parent_start_index: Option<OplogIndex>,
             kind: OplogErrorKind,
+            /// The invocation whose work failed; `None` for a `Recovery` error, and for an `Invocation` error recorded while no invocation runs.
+            invocation_id: Option<IdempotencyKey>,
             error: AgentError,
             /// Points to the oplog index where the retry should start from.
             /// When counting the number of retries for a specific error, the error entries are grouped by this index.
@@ -247,6 +251,7 @@ oplog_entry! {
         }
         public {
             kind: OplogErrorKind,
+            invocation_id: Option<IdempotencyKey>,
             error: String,
             retry_from: OplogIndex,
             retry_policy_state: Option<PublicRetryPolicyState>,
@@ -300,7 +305,7 @@ oplog_entry! {
         wit_public_type: "pending-agent-invocation-parameters"
         raw {
             not_before: Option<Timestamp>,
-            idempotency_key: IdempotencyKey,
+            invocation_id: IdempotencyKey,
             payload: payload::OplogPayload<AgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
@@ -488,10 +493,10 @@ oplog_entry! {
         wit_raw_type: "cancel-pending-invocation-parameters"
         wit_public_type: "cancel-pending-invocation-parameters"
         raw {
-            idempotency_key: IdempotencyKey,
+            invocation_id: IdempotencyKey,
         }
         public {
-            idempotency_key: IdempotencyKey,
+            invocation_id: IdempotencyKey,
         }
     },
     /// Marks the beginning of a remote transaction

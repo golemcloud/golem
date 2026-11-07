@@ -936,6 +936,41 @@ impl TestWorkerExecutor {
         })
     }
 
+    /// The invocation ID this executor's DSL caller gets for `key` on `operation` of the current
+    /// incarnation of `agent_id`, as the idempotency key stored in the agent's oplog.
+    pub async fn external_invocation_key(
+        &self,
+        agent_id: &AgentId,
+        key: &IdempotencyKey,
+        operation: &str,
+    ) -> anyhow::Result<IdempotencyKey> {
+        let request_key = golem_common::model::InvocationRequestKey::external(
+            self.auth_ctx().idempotency_scope(),
+            Some(key),
+        );
+        self.finalized_invocation_key(agent_id, &request_key, operation)
+            .await
+    }
+
+    /// The invocation ID that `request_key` finalizes to on `operation` of the current
+    /// incarnation of `agent_id`, as the idempotency key stored in the agent's oplog.
+    pub async fn finalized_invocation_key(
+        &self,
+        agent_id: &AgentId,
+        request_key: &golem_common::model::InvocationRequestKey,
+        operation: &str,
+    ) -> anyhow::Result<IdempotencyKey> {
+        let fingerprint = golem_test_framework::dsl::TestDsl::get_worker_metadata(self, agent_id)
+            .await?
+            .fingerprint;
+        Ok(IdempotencyKey::new(
+            request_key
+                .finalize(agent_id.clone(), fingerprint, operation)
+                .uuid()
+                .to_string(),
+        ))
+    }
+
     /// Returns the number of entries the agent's opened oplog returned from `Oplog::read_exact`.
     pub fn oplog_entries_read(&self, agent_id: &AgentId) -> u64 {
         self.additional_test_deps
@@ -7495,7 +7530,7 @@ impl AdditionalTestDeps {
         agent_id: AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         fn is_initialization_enqueue(entry: &OplogEntry) -> bool {
-            matches!(entry, OplogEntry::PendingAgentInvocation { idempotency_key, .. }
+            matches!(entry, OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. }
                 if idempotency_key.value.starts_with("init-"))
         }
         self.gate_next_append(agent_id, is_initialization_enqueue)

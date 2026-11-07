@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::InvocationId;
 use crate::base_model::agent::Principal;
 use crate::model::card::{ScopeCard, StoredCard};
 use crate::model::component::{ComponentId, ComponentRevision};
@@ -893,6 +894,9 @@ pub struct EntityInvocationScope {
     /// so the scope is resident state and is not part of the entity invocation `Start`.
     #[serde(skip)]
     invocation_scope_card: Option<ScopeCard>,
+    /// The agent invocation that encloses this invocation, as the calling Store reports it.
+    #[serde(skip)]
+    enclosing_invocation_id: Option<InvocationId>,
     /// Resident tracing context restored from the immutable entity invocation `Start`.
     #[serde(skip)]
     span_started: Option<ResidentEntitySpan>,
@@ -950,6 +954,7 @@ impl EntityInvocationScope {
             stream_session_idempotency_key,
             authority_wallet: Vec::new(),
             invocation_scope_card: None,
+            enclosing_invocation_id: None,
             span_started: None,
         })
     }
@@ -970,6 +975,18 @@ impl EntityInvocationScope {
 
     pub fn invocation_scope_card(&self) -> Option<&ScopeCard> {
         self.invocation_scope_card.as_ref()
+    }
+
+    pub fn with_enclosing_invocation_id(
+        mut self,
+        enclosing_invocation_id: Option<InvocationId>,
+    ) -> Self {
+        self.enclosing_invocation_id = enclosing_invocation_id;
+        self
+    }
+
+    pub fn enclosing_invocation_id(&self) -> Option<&InvocationId> {
+        self.enclosing_invocation_id.as_ref()
     }
 
     pub fn owner_id(&self) -> &OwnedAgentId {

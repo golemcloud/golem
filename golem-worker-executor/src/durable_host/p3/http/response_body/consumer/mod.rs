@@ -299,6 +299,13 @@ where
         let mut resume_retry_state = InFunctionRetryState::new();
         let mut resume_semantic_override = None;
         let mut resume_retry_ctx: Option<TaskRetryContext<Ctx>> = None;
+        // The resume retry context is built lazily, possibly during a later invocation; its
+        // errors name the invocation that started consuming the body.
+        let consuming_invocation = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .state
+                .get_current_idempotency_key()
+        });
         // Bytes delivered to the guest-facing stream so far (replayed chunks +
         // live frames): the resume offset for `Range` requests, and their digest, which a
         // re-sent full response must reproduce before its remainder may continue the stream.
@@ -664,6 +671,7 @@ where
                         let retry_ctx = resume_retry_ctx
                             .as_mut()
                             .expect("resume retry context was just created");
+                        retry_ctx.invocation_id = consuming_invocation.clone();
                         retry_ctx.retry_properties = properties.clone();
                         match resume_retry_state
                             .decide_retry_with_properties(retry_ctx, "http-zone2-read", &properties)

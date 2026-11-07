@@ -1228,7 +1228,8 @@ pub(crate) fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
         (std::collections::BTreeMap::<String, usize>::new(), None),
         |(mut finished, current), entry| match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } => {
                 let key = idempotency_key.to_string();
                 finished.entry(key.clone()).or_insert(0);

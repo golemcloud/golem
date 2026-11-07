@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 )
 
@@ -32,8 +33,9 @@ import (
 // It wraps the host resource rather than replacing it — a handle, not data, so
 // nothing here crosses the schema marshaler.
 type Future[Out any] struct {
-	// ID identifies the invocation, available before the result is.
-	ID InvocationID
+	// ID identifies the invocation, available before the result is. It is nil
+	// when the call was rejected before it started; Get returns the rejection.
+	ID *InvocationID
 
 	fut    *host.FutureInvokeResult
 	method string
@@ -69,9 +71,20 @@ func (f *Future[Out]) Get() (Out, error) {
 	f.fut.Drop()
 	f.fut = nil
 	f.done = true
-	if res.IsErr() {
+	switch {
+	case res.IsErr():
 		f.err = rpcErrorToGo(f.target, f.method, res.Err())
-	} else {
+	case f.ID == nil:
+		// Only a rejected call has no identity, and its future reports the
+		// rejection, so a successful one without an identity is a protocol error.
+		if out := res.Ok(); out.IsSome() {
+			engine.ReleaseCardsIn(out.Some().ValueNodes, releaseCard)
+		}
+		f.err = &RemoteCallError{
+			Target: f.target, Method: f.method, Kind: RemoteProtocolError,
+			Message: "the host completed a call that has no invocation identity",
+		}
+	default:
 		f.out, f.err = decodeOutput[Out](f.target, f.method, res.Ok())
 	}
 	return f.out, f.err

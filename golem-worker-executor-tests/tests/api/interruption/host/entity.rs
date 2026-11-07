@@ -104,6 +104,9 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     let worker = active.primary();
     let authority_wallet = worker.get_wallet_cards().await?;
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "tcp_collect_p3")
+        .await?;
     let primary_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let entity_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let entity_port = entity_listener.local_addr()?.port();
@@ -378,7 +381,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         &raw_after_stop[..committed_prefix.len()],
         committed_prefix.as_slice()
     );
-    assert_eq!(stopped.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+    assert_eq!(stopped.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
     assert_eq!(
         stopped
             .values()

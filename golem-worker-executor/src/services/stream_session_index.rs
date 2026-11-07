@@ -1033,7 +1033,7 @@ impl StreamSessionIndexService {
                 let mut consumer_deleting = None;
                 for (idx, entry) in &entries {
                     if let OplogEntry::PendingAgentInvocation {
-                        idempotency_key, ..
+                        invocation_id: idempotency_key, ..
                     } = entry
                     {
                         if !updates.contains_key(idempotency_key) {
@@ -1312,7 +1312,7 @@ impl StreamSessionIndexService {
                         };
                         match referent {
                             Some(OplogEntry::PendingAgentInvocation {
-                                idempotency_key, ..
+                                invocation_id: idempotency_key, ..
                             }) => status.apply_pending_invocation(
                                 attached.pending_invocation_oplog_index,
                                 idempotency_key,

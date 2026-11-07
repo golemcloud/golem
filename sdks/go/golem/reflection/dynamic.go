@@ -91,11 +91,12 @@ func (c *DynamicAgentClient) Parsed() RawAgentID { return c.parsed }
 
 // Call invokes a method with an already-packed parameter record and waits for
 // its result, none for a method that returns nothing, together with the
-// invocation's identity.
-func (c *DynamicAgentClient) Call(method string, input core.SchemaValue, opts ...CallOpt) (golem.Option[core.SchemaValue], golem.InvocationID, error) {
+// invocation's identity, which is nil when the call was rejected before it
+// started.
+func (c *DynamicAgentClient) Call(method string, input core.SchemaValue, opts ...CallOpt) (golem.Option[core.SchemaValue], *golem.InvocationID, error) {
 	p, err := c.CallAsync(method, input, opts...)
 	if err != nil {
-		return golem.None[core.SchemaValue](), golem.InvocationID{}, err
+		return golem.None[core.SchemaValue](), nil, err
 	}
 	out, err := p.Get()
 	return out, p.ID, err
@@ -115,7 +116,7 @@ func (c *DynamicAgentClient) CallAsync(method string, input core.SchemaValue, op
 		return nil, err
 	}
 	return &PendingCall[golem.Option[core.SchemaValue]]{ID: p.id, cancel: p.cancel, wait: func() (golem.Option[core.SchemaValue], error) {
-		res, err := p.wait()
+		res, err := p.await(c.agentID, method)
 		if err != nil {
 			return golem.None[core.SchemaValue](), err
 		}

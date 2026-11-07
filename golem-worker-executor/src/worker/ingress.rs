@@ -259,7 +259,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             activation
         } else if let Some(index) = accepted_index {
             let OplogEntry::PendingAgentInvocation {
-                idempotency_key: accepted_key,
+                invocation_id: accepted_key,
                 payload,
                 ..
             } = self.oplog.read(index).await?
@@ -886,7 +886,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let entry = self.oplog.read(pending.oplog_index).await?;
         match entry {
             OplogEntry::PendingAgentInvocation {
-                idempotency_key,
+                invocation_id: idempotency_key,
                 payload,
                 trace_id,
                 trace_states,

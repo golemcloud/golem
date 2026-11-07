@@ -361,14 +361,12 @@ fn update_status_with_precomputed_regions(
         &new_entries,
     )?;
 
-    let (invocation_results, current_idempotency_key, cancelled_idempotency_key) =
-        calculate_invocation_results(
-            last_known.invocation_results,
-            last_known.current_idempotency_key,
-            last_known.cancelled_idempotency_key,
-            deleted_regions,
-            &new_entries,
-        );
+    let (invocation_results, current_idempotency_key) = calculate_invocation_results(
+        last_known.invocation_results,
+        last_known.current_idempotency_key,
+        deleted_regions,
+        &new_entries,
+    );
 
     let total_linear_memory_size = calculate_total_linear_memory_size(
         last_known.total_linear_memory_size,
@@ -416,7 +414,6 @@ fn update_status_with_precomputed_regions(
         ephemeral_execution_begun,
         pending_durable_stream_cancellations,
         current_idempotency_key,
-        cancelled_idempotency_key,
         component_revision,
         component_size,
         owned_resources,

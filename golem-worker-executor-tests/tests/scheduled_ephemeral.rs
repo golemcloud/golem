@@ -379,7 +379,7 @@ fn scheduled_key(oplog: &[PublicOplogEntryWithIndex]) -> Option<IdempotencyKey> 
         PublicOplogEntry::PendingAgentInvocation(pending) if pending.not_before.is_some() => {
             match &pending.invocation {
                 PublicAgentInvocation::AgentMethodInvocation(method) => {
-                    Some(method.idempotency_key.clone())
+                    Some(method.invocation_id.clone())
                 }
                 _ => None,
             }
@@ -406,7 +406,7 @@ fn shape(oplog: &[PublicOplogEntryWithIndex]) -> Shape {
             matches!(entry, PublicOplogEntry::AgentInvocationStarted(started)
                 if matches!(&started.invocation,
                     PublicAgentInvocation::AgentMethodInvocation(method)
-                        if Some(&method.idempotency_key) == key.as_ref()))
+                        if Some(&method.invocation_id) == key.as_ref()))
         }),
         starts: count(&|entry| matches!(entry, PublicOplogEntry::AgentInvocationStarted(_))),
         cancellations: count(&|entry| {

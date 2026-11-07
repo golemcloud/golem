@@ -334,7 +334,7 @@ mod tests {
             assert_eq!(history.iter().filter(|entry| matches!(&entry.entry,
                 PublicOplogEntry::AgentInvocationStarted(start)
                     if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation)
-                        if &invocation.idempotency_key.value == key)
+                        if &invocation.invocation_id.value == key)
             )).count(), 1);
             assert_eq!(history.iter().filter(|entry| matches!(&entry.entry,
                 PublicOplogEntry::AgentInvocationFinished(finish) if finish.method_name.as_deref() == Some(method)

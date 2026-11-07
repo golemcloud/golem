@@ -219,7 +219,7 @@ func (m MethodDef[Id, In, Out]) callAsync(c Client[Id], in In, scope ScopeCard) 
 	}
 	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree, card)
 	return &Future[Out]{
-		ID:     invocationIDFrom(inv.Metadata),
+		ID:     asyncInvocationID(inv.Metadata),
 		fut:    inv.Future,
 		method: m.name,
 		target: c.agentID,
@@ -307,6 +307,17 @@ type InvocationID struct {
 
 func invocationIDFrom(m host.InvocationMetadata) InvocationID {
 	return InvocationID{AgentID: m.AgentId, IdempotencyKey: m.IdempotencyKey}
+}
+
+// asyncInvocationID is the identity of an asynchronous invocation, or nil when
+// the host rejected the call before it started. The future of a rejected call
+// reports the rejection.
+func asyncInvocationID(m witTypes.Option[host.InvocationMetadata]) *InvocationID {
+	if m.IsNone() {
+		return nil
+	}
+	id := invocationIDFrom(m.Some())
+	return &id
 }
 
 // ScheduledInvocation is a future invocation that has not run yet.

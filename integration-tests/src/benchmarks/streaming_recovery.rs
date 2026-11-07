@@ -277,7 +277,7 @@ fn validate_execution(
             matches!(&entry.entry,
         PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation)
-                if &invocation.idempotency_key == key))
+                if &invocation.invocation_id == key))
         })
         .count();
     ensure!(
@@ -289,7 +289,7 @@ fn validate_execution(
     for entry in history {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current_is_target = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation) if &invocation.idempotency_key == key);
+                current_is_target = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation) if &invocation.invocation_id == key);
             }
             PublicOplogEntry::AgentInvocationFinished(_) if current_is_target => {
                 finishes += 1;

@@ -191,6 +191,7 @@ pub(super) fn live_unfinished_handle<P: DropPolicy>(
             entity_parent_start_index: None,
             invocation_id: None,
             logical_key_position: None,
+            agent_invocation: None,
         },
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -2062,6 +2063,7 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -2079,6 +2081,7 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
@@ -2105,6 +2108,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2113,6 +2117,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let error_a = {
@@ -2169,6 +2174,7 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let mut handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
     let terminal_error: anyhow::Error = TerminalCallError::new(
@@ -2220,6 +2226,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2228,6 +2235,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
     let handle_b = synthetic_finished_handle_with_scope::<Cancellable>(scope_b);
@@ -2308,6 +2316,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let scope = begun.finish(idx(11));
@@ -2324,6 +2333,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let scope = begun.finish(idx(12));
@@ -2340,6 +2350,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     let scope = begun.finish(idx(11));
@@ -2359,6 +2370,7 @@ fn call_execution_scope_owns_call_retry_point() {
         entity_parent_start_index: None,
         invocation_id: None,
         logical_key_position: None,
+        agent_invocation: None,
     };
 
     assert_eq!(scope.retry_from, idx(42));

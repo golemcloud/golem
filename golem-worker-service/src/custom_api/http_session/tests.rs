@@ -14,6 +14,7 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, invocation_session_result,
 };
+use golem_common::model::{AgentId, IdempotencyKey as ModelIdempotencyKey};
 use golem_schema::proto::golem::common::{Empty, Uuid};
 use golem_schema::proto::golem::schema::{
     ListValue, SchemaValue, SchemaValueStreamReference, schema_value,
@@ -981,10 +982,18 @@ async fn finished_failure_does_not_cleanup() {
 
 #[test]
 #[test_timeout("10s")]
-async fn rejected_start_does_not_use_request_echo_for_cleanup() {
+async fn rejected_start_cleans_up_its_prepared_unkeyed_identity_exactly_once() {
     let mut h = harness(1);
+    let prepared = start();
+    let Some(golem_common::model::InvocationRequestKey::Unkeyed(uuid)) = prepared
+        .request_key
+        .clone()
+        .map(|key| golem_common::model::InvocationRequestKey::try_from(key).unwrap())
+    else {
+        panic!("test start is unkeyed")
+    };
     let mut session =
-        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+        HttpSession::start_with_transport(prepared, h.transport.clone(), limits()).unwrap();
     let _ = call(&mut h.calls).await;
     send(
         &h.response_txs[0],
@@ -1004,6 +1013,12 @@ async fn rejected_start_does_not_use_request_echo_for_cleanup() {
         event(&mut session).await,
         HttpSessionEvent::Error(HttpSessionError::Rejected)
     ));
+    let (agent, key) = timeout(Duration::from_secs(1), h.cleanups.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(agent, AgentId::try_from(proto_agent()).unwrap());
+    assert_eq!(key, ModelIdempotencyKey::from_uuid(uuid));
     assert!(
         timeout(Duration::from_millis(50), h.cleanups.recv())
             .await

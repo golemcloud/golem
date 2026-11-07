@@ -568,6 +568,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     let task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: retry_params.retry_point,
                         entity_parent_start_index: retry_params.entity_parent_start_index,
+                        invocation_id: retry_params.invocation_id,
                         environment_state_service: retry_params.environment_state_service,
                         environment_id: retry_params.environment_id,
                         default_retry_policy: retry_params.default_retry_policy,
@@ -641,6 +642,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
             worker: ctx.public_state.worker(),
             retry_point,
             entity_parent_start_index: ctx.entity_parent_start_index(),
+            invocation_id: ctx.state.get_current_idempotency_key(),
             execution_status: ctx.execution_status.clone(),
         })
     };

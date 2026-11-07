@@ -59,7 +59,7 @@ fn pending_invocation_deadline_survives_raw_and_public_wit_conversion() {
         let raw = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
             not_before,
-            idempotency_key: IdempotencyKey::new("pending".to_string()),
+            invocation_id: IdempotencyKey::new("pending".to_string()),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
                     &AgentInvocationPayload::SaveSnapshot,
@@ -359,7 +359,7 @@ fn wit_projection_preserves_invocation_wallet_pins() {
     let pinned_card_ids = vec![CardId::new(), CardId::new()];
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
-        idempotency_key: IdempotencyKey::new("wallet-pin".to_string()),
+        invocation_id: IdempotencyKey::new("wallet-pin".to_string()),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "test".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },

@@ -165,10 +165,10 @@ private[golem] object WasmRpcApi {
       functionName: String,
       input: JsSchemaValueTree,
       scopeCard: js.Any
-    ): Either[RpcError, (InvocationMetadata, RawFutureInvokeResult)] =
+    ): Either[RpcError, (Option[InvocationMetadata], RawFutureInvokeResult)] =
       try {
         val value = raw.asyncInvokeAndAwait(functionName, input, scopeCard)
-        Right((metadata(value.metadata), value.future))
+        Right((value.metadata.toOption.map(metadata), value.future))
       } catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
 
     def scheduleInvocation(
@@ -242,8 +242,8 @@ private[golem] object WasmRpcApi {
 
   @js.native
   private[rpc] trait RawAsyncInvocationWithMetadata extends js.Object {
-    def metadata: RawInvocationMetadata = js.native
-    def future: RawFutureInvokeResult   = js.native
+    def metadata: js.UndefOr[RawInvocationMetadata] = js.native
+    def future: RawFutureInvokeResult               = js.native
   }
 
   @js.native

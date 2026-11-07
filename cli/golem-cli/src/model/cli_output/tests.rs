@@ -2348,7 +2348,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
 
     fn method_invocation() -> PublicAgentInvocation {
         PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            idempotency_key: IdempotencyKey::new("method-key".to_string()),
+            invocation_id: IdempotencyKey::new("method-key".to_string()),
             method_name: "generated-method".to_string(),
             function_input: typed_string_value("input"),
             trace_id: TraceId::generate(),
@@ -2541,6 +2541,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: IdempotencyKey::new("finished-key".to_string()),
             result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
                 output: typed_string_value("output"),
             }),
@@ -2554,6 +2555,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::Error(ErrorParams {
             timestamp: timestamp(),
             kind: OplogErrorKind::Invocation,
+            invocation_id: Some(IdempotencyKey::new("failed-key".to_string())),
             error: "generated error".to_string(),
             retry_from: OplogIndex::INITIAL,
             retry_policy_state: Some(retry_policy_state),
@@ -2578,7 +2580,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             not_before: Some(timestamp()),
             invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-                idempotency_key: IdempotencyKey::new("init-key".to_string()),
+                invocation_id: IdempotencyKey::new("init-key".to_string()),
                 constructor_parameters: typed_string_value("constructor"),
                 trace_id: TraceId::generate(),
                 trace_states: vec![],
@@ -2691,7 +2693,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
             timestamp: timestamp(),
-            idempotency_key: IdempotencyKey::new("cancel-key".to_string()),
+            invocation_id: IdempotencyKey::new("cancel-key".to_string()),
         }),
         PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
             timestamp: timestamp(),
@@ -2759,6 +2761,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: IdempotencyKey::new("finished-key".to_string()),
             result: PublicAgentInvocationResult::SaveSnapshot(SaveSnapshotResultParameters {
                 snapshot: json_snapshot(),
             }),
@@ -2782,7 +2785,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             not_before: None,
             invocation: PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
-                idempotency_key: IdempotencyKey::new("process-key".to_string()),
+                invocation_id: IdempotencyKey::new("process-key".to_string()),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
@@ -2794,6 +2797,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: IdempotencyKey::new("finished-key".to_string()),
             result: PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters {
                 error: Some("load failed".to_string()),
             }),
@@ -2803,6 +2807,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: IdempotencyKey::new("finished-key".to_string()),
             result: PublicAgentInvocationResult::ProcessOplogEntries(
                 ProcessOplogEntriesResultParameters { error: None },
             ),
@@ -2812,6 +2817,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: IdempotencyKey::new("finished-key".to_string()),
             result: PublicAgentInvocationResult::ManualUpdate(Empty {}),
             method_name: Some("generated-method".to_string()),
             consumed_fuel: 104,

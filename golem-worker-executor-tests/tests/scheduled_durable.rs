@@ -162,7 +162,7 @@ fn scheduled(oplog: &[PublicOplogEntryWithIndex]) -> Scheduled {
             && pending.not_before.is_some()
             && let PublicAgentInvocation::AgentMethodInvocation(method) = &pending.invocation
         {
-            keys.push(method.idempotency_key.clone());
+            keys.push(method.invocation_id.clone());
             not_before = pending.not_before;
         }
     }
@@ -172,7 +172,7 @@ fn scheduled(oplog: &[PublicOplogEntryWithIndex]) -> Scheduled {
             PublicOplogEntry::AgentInvocationStarted(started)
                 if matches!(&started.invocation,
                     PublicAgentInvocation::AgentMethodInvocation(method)
-                        if keys.contains(&method.idempotency_key)) =>
+                        if keys.contains(&method.invocation_id)) =>
             {
                 Some(started.timestamp)
             }

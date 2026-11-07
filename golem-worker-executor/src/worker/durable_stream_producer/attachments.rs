@@ -235,7 +235,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     || attached.epoch == 0
                     || attached.attachment_id != prepared.attempt.attachment_id
                     || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await?,
-                        OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == key.idempotency_key)
+                        OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == key.idempotency_key)
                 {
                     return Err(WorkerExecutorError::runtime(
                         "durable Attached record does not exactly identify its Prepared attempt and pending invocation",

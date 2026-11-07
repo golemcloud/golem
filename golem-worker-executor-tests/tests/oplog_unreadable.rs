@@ -1090,6 +1090,10 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
         .expect("the agent is loaded after its first invocation");
     let mut events = worker.events().subscribe();
     let queued = IdempotencyKey::fresh();
+    let stored_queued = agent
+        .executor
+        .external_invocation_key(&agent.agent_id, &queued, "get_self_metadata_result")
+        .await?;
 
     // The enqueue folds every entry before it, so the status of the first invocation does not
     // need the history.
@@ -1116,7 +1120,9 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
                 agent_id,
                 idempotency_key,
                 result,
-            } if agent_id == &agent.agent_id && idempotency_key == &queued => Some(result.clone()),
+            } if agent_id == &agent.agent_id && idempotency_key == &stored_queued => {
+                Some(result.clone())
+            }
             _ => None,
         }),
     )

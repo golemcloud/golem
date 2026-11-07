@@ -5020,6 +5020,9 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
             timestamp,
             entity_parent_start_index: None,
             kind: OplogErrorKind::Invocation,
+            invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                "invocation".to_string(),
+            )),
             error: AgentError::Unknown(i.to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
@@ -5135,6 +5138,9 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
                 timestamp,
                 entity_parent_start_index: None,
                 kind: OplogErrorKind::Invocation,
+                invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                    "invocation".to_string(),
+                )),
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
@@ -5321,10 +5327,11 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .unwrap();
     let entry_start = oplog.read(start_idx).await.unwrap().rounded();
     let entry_end = oplog.read(end_idx).await.unwrap().rounded();
+    let invocation_id = IdempotencyKey::fresh();
     let entry2 = oplog
         .add_agent_invocation_started(
             AgentInvocation::AgentMethod {
-                idempotency_key: IdempotencyKey::fresh(),
+                idempotency_key: invocation_id.clone(),
                 method_name: "f2".to_string(),
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::String("request".to_string())],
@@ -5341,6 +5348,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .rounded();
     let entry3 = oplog
         .add_agent_invocation_finished(
+            invocation_id,
             &AgentInvocationResult::AgentMethod {
                 output: SchemaValue::Record {
                     fields: vec![SchemaValue::String("response".to_string())],
@@ -5659,7 +5667,7 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
         oplog.commit(CommitLevel::Always).await.unwrap();
 
         let OplogEntry::AgentInvocationStarted {
-            idempotency_key: recorded_key,
+            invocation_id: recorded_key,
             trace_id,
             trace_states,
             invocation_context,
@@ -5855,7 +5863,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         assert_eq!(blob_storage.puts.load(Ordering::Relaxed), uploads);
 
         let OplogEntry::AgentInvocationStarted {
-            idempotency_key,
+            invocation_id: idempotency_key,
             payload: recorded,
             trace_id,
             wallet_pin,
@@ -5960,10 +5968,11 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .unwrap();
     let entry_start = oplog.read(start_idx).await.unwrap().rounded();
     let entry_end = oplog.read(end_idx).await.unwrap().rounded();
+    let invocation_id = IdempotencyKey::fresh();
     let entry2 = oplog
         .add_agent_invocation_started(
             AgentInvocation::AgentMethod {
-                idempotency_key: IdempotencyKey::fresh(),
+                idempotency_key: invocation_id.clone(),
                 method_name: "f2".to_string(),
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::Binary(BinaryValuePayload {
@@ -5983,6 +5992,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .rounded();
     let entry3 = oplog
         .add_agent_invocation_finished(
+            invocation_id,
             &AgentInvocationResult::AgentMethod {
                 output: SchemaValue::Record {
                     fields: vec![SchemaValue::Binary(BinaryValuePayload {
@@ -6453,6 +6463,9 @@ async fn read_from_archive_impl(use_blob: bool) {
                 timestamp,
                 entity_parent_start_index: None,
                 kind: OplogErrorKind::Invocation,
+                invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                    "invocation".to_string(),
+                )),
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
@@ -10148,6 +10161,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 timestamp,
                 entity_parent_start_index: None,
                 kind: OplogErrorKind::Invocation,
+                invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                    "invocation".to_string(),
+                )),
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
@@ -10258,6 +10274,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 timestamp,
                 entity_parent_start_index: None,
                 kind: OplogErrorKind::Invocation,
+                invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                    "invocation".to_string(),
+                )),
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
@@ -10369,6 +10388,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 timestamp,
                 entity_parent_start_index: None,
                 kind: OplogErrorKind::Invocation,
+                invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                    "invocation".to_string(),
+                )),
                 error: AgentError::Unknown("last".to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
@@ -10423,6 +10445,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             timestamp,
             entity_parent_start_index: None,
             kind: OplogErrorKind::Invocation,
+            invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                "invocation".to_string()
+            )),
             error: AgentError::Unknown("0".to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
@@ -10435,6 +10460,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             timestamp,
             entity_parent_start_index: None,
             kind: OplogErrorKind::Invocation,
+            invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                "invocation".to_string()
+            )),
             error: AgentError::Unknown("99".to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
@@ -10447,6 +10475,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             timestamp,
             entity_parent_start_index: None,
             kind: OplogErrorKind::Invocation,
+            invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                "invocation".to_string()
+            )),
             error: AgentError::Unknown("999".to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
@@ -10459,6 +10490,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             timestamp,
             entity_parent_start_index: None,
             kind: OplogErrorKind::Invocation,
+            invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                "invocation".to_string()
+            )),
             error: AgentError::Unknown("last".to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
@@ -10560,6 +10594,9 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
                     timestamp,
                     entity_parent_start_index: None,
                     kind: OplogErrorKind::Invocation,
+                    invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                        "invocation".to_string(),
+                    )),
                     error: AgentError::Unknown(i.to_string()),
                     retry_from: OplogIndex::NONE,
                     retry_policy_state: None,
@@ -10709,6 +10746,9 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 timestamp,
                 entity_parent_start_index: None,
                 kind: OplogErrorKind::Invocation,
+                invocation_id: Some(golem_common::model::IdempotencyKey::new(
+                    "invocation".to_string(),
+                )),
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,

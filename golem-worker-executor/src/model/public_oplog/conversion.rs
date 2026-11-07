@@ -234,7 +234,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             )),
             OplogEntry::AgentInvocationStarted {
                 timestamp,
-                idempotency_key,
+                invocation_id: idempotency_key,
                 payload,
                 trace_id,
                 trace_states,
@@ -276,6 +276,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             }
             OplogEntry::AgentInvocationFinished {
                 timestamp,
+                invocation_id,
                 result,
                 method_name,
                 consumed_fuel,
@@ -297,6 +298,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::AgentInvocationFinished(
                     AgentInvocationFinishedParams {
                         timestamp,
+                        invocation_id,
                         result: public_result,
                         method_name,
                         consumed_fuel,
@@ -310,6 +312,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Error {
                 timestamp,
                 kind,
+                invocation_id,
                 error,
                 retry_from,
                 retry_policy_state,
@@ -317,6 +320,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp,
                 kind,
+                invocation_id,
                 error: error.to_string(""),
                 retry_from,
                 retry_policy_state: retry_policy_state.map(Into::into),
@@ -338,7 +342,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 not_before,
-                idempotency_key,
+                invocation_id: idempotency_key,
                 payload,
                 trace_id,
                 trace_states,
@@ -586,11 +590,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             })),
             OplogEntry::CancelPendingInvocation {
                 timestamp,
-                idempotency_key,
+                invocation_id,
             } => Ok(PublicOplogEntry::CancelPendingInvocation(
                 CancelPendingInvocationParams {
                     timestamp,
-                    idempotency_key,
+                    invocation_id,
                 },
             )),
             OplogEntry::BeginRemoteTransaction {

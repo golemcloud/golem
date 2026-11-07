@@ -885,17 +885,20 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             };
             match &entry {
                 OplogEntry::PendingAgentInvocation {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } if manual_update.is_none() => {
                     pending_invocation_keys.push((idempotency_key.clone(), oplog_index));
                 }
                 OplogEntry::AgentInvocationStarted {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } => {
                     pending_invocation_keys.retain(|(key, _)| key != idempotency_key);
                 }
                 OplogEntry::CancelPendingInvocation {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } => {
                     pending_invocation_keys.retain(|(key, _)| key != idempotency_key);
                 }
@@ -959,7 +962,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             new_oplog
                 .add(OplogEntry::CancelPendingInvocation {
                     timestamp: now,
-                    idempotency_key,
+                    invocation_id: idempotency_key,
                 })
                 .await?;
         }
@@ -1482,7 +1485,7 @@ mod tests {
         let target = agent_id("target");
         let entry = OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: IdempotencyKey::new("fork-wallet-pin".to_string()),
+            invocation_id: IdempotencyKey::new("fork-wallet-pin".to_string()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "test".to_string(),
                 input: SchemaValue::Record { fields: Vec::new() },
@@ -1604,7 +1607,7 @@ mod tests {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
             not_before: None,
-            idempotency_key: IdempotencyKey::fresh(),
+            invocation_id: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
             })),
@@ -1774,7 +1777,7 @@ mod tests {
         let invocation = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
             not_before: None,
-            idempotency_key: IdempotencyKey::fresh(),
+            invocation_id: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
@@ -1846,7 +1849,7 @@ mod tests {
         let stored = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
             not_before: None,
-            idempotency_key: IdempotencyKey::fresh(),
+            invocation_id: IdempotencyKey::fresh(),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
                     &AgentInvocationPayload::ManualUpdate {

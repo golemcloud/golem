@@ -568,7 +568,6 @@ pub struct AgentStatusRecord {
     pub pending_durable_stream_cancellations:
         HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
     pub current_idempotency_key: Option<IdempotencyKey>,
-    pub cancelled_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -636,7 +635,6 @@ impl Default for AgentStatusRecord {
             ephemeral_execution_begun: false,
             pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
-            cancelled_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
@@ -1126,14 +1124,11 @@ impl DurableStreamSessionIndex {
     ) -> Result<(), String> {
         use crate::model::oplog::OplogPayload;
 
-        if let OplogEntry::PendingAgentInvocation {
-            idempotency_key, ..
-        } = entry
-        {
-            if let Some(status) = self.get(idempotency_key).cloned() {
+        if let OplogEntry::PendingAgentInvocation { invocation_id, .. } = entry {
+            if let Some(status) = self.get(invocation_id).cloned() {
                 let mut status = status;
-                status.apply_pending_invocation(index, idempotency_key);
-                self.insert(idempotency_key.clone(), status);
+                status.apply_pending_invocation(index, invocation_id);
+                self.insert(invocation_id.clone(), status);
             }
             return Ok(());
         }

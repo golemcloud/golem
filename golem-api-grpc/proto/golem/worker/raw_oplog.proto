@@ -258,7 +258,7 @@ message RawCompletionDeliveredParameters {
 }
 
 message RawAgentInvocationStartedParameters {
-  IdempotencyKey idempotency_key = 1;
+  IdempotencyKey invocation_id = 1;
   RawOplogPayload payload = 2;
   string trace_id = 3;
   repeated string trace_states = 4;
@@ -277,6 +277,7 @@ message RawAgentInvocationFinishedParameters {
   int64 consumed_fuel = 2;
   uint64 component_revision = 3;
   optional string method_name = 4;
+  IdempotencyKey invocation_id = 5;
 }
 
 message RawErrorParameters {
@@ -287,6 +288,7 @@ message RawErrorParameters {
   uint64 retry_from = 2;
   optional bytes retry_policy_state = 4;
   OplogErrorKind kind = 5;
+  optional IdempotencyKey invocation_id = 6;
 }
 
 message RawJumpParameters {
@@ -294,7 +296,7 @@ message RawJumpParameters {
 }
 
 message RawPendingAgentInvocationParameters {
-  IdempotencyKey idempotency_key = 1;
+  IdempotencyKey invocation_id = 1;
   RawOplogPayload payload = 2;
   string trace_id = 3;
   repeated string trace_states = 4;
@@ -385,7 +387,7 @@ message RawRevertParameters {
 }
 
 message RawCancelPendingInvocationParameters {
-  IdempotencyKey idempotency_key = 1;
+  IdempotencyKey invocation_id = 1;
 }
 
 message RawBeginRemoteTransactionParameters {

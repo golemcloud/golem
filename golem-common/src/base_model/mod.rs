@@ -587,12 +587,14 @@ impl IdempotencyKey {
 
     /// Generates a deterministic idempotency key in the namespace of `base` from arbitrary bytes.
     pub fn derived_from_bytes(base: &IdempotencyKey, name: &[u8]) -> Self {
-        let namespace = if let Ok(base_uuid) = Uuid::parse_str(&base.value) {
-            base_uuid
-        } else {
-            Uuid::new_v5(&Self::ROOT_NS, base.value.as_bytes())
-        };
-        Self::from_uuid(Uuid::new_v5(&namespace, name))
+        Self::from_uuid(Uuid::new_v5(&base.to_uuid(), name))
+    }
+
+    /// The UUID of this key: the key itself when it is a UUID, otherwise a UUIDv5 of the key in
+    /// the ROOT_NS namespace.
+    pub fn to_uuid(&self) -> Uuid {
+        Uuid::parse_str(&self.value)
+            .unwrap_or_else(|_| Uuid::new_v5(&Self::ROOT_NS, self.value.as_bytes()))
     }
 }
 

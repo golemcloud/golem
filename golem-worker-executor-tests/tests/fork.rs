@@ -13,8 +13,9 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionRequest, ResumeWorkerRequest, StreamSessionCreationIntent,
-    resume_worker_response, worker_executor_client::WorkerExecutorClient,
+    CreateStreamSessionRequest, CreateWorkerRequest, ResumeWorkerRequest,
+    StreamSessionCreationIntent, create_worker_response, resume_worker_response,
+    worker_executor_client::WorkerExecutorClient,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
@@ -144,6 +145,7 @@ pub(crate) async fn start_with_remote_streaming_rpc(
                         evidence: Some(evidence.clone()),
                         lose_response: Arc::new(AtomicBool::new(false)),
                         checkpoint: Arc::new(Mutex::new(None)),
+                        prepare_on_executor: false,
                     });
                     let _ = proxy.set(wrapped.clone());
                     wrapped
@@ -191,6 +193,7 @@ async fn start_with_resume_checkpoint(
                     evidence: None,
                     lose_response: lose_response.clone(),
                     checkpoint: checkpoint.clone(),
+                    prepare_on_executor: false,
                 })
             })),
             ..overrides
@@ -374,6 +377,32 @@ struct LocalResumeProxy {
     evidence: Option<Arc<RemoteRpcEvidence>>,
     lose_response: Arc<AtomicBool>,
     checkpoint: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
+    /// Sends preparations to the test executor the way worker-service forwards them.
+    prepare_on_executor: bool,
+}
+
+/// Remote RPC whose target preparation reaches the test executor's `prepare_worker`, as it does
+/// through worker-service when the target lives on another executor.
+pub(crate) fn remote_rpc_preparing_on(
+    executor: &TestWorkerExecutor,
+    environment_id: EnvironmentId,
+    component_owner_account_id: AccountId,
+    inner: Arc<dyn WorkerProxy>,
+    shard_service: Arc<dyn ShardService>,
+) -> RemoteInvocationRpc {
+    RemoteInvocationRpc::new(
+        Arc::new(LocalResumeProxy {
+            inner,
+            client: Arc::new(Mutex::new(Some(executor.client.clone()))),
+            environment_id,
+            component_owner_account_id: Some(component_owner_account_id),
+            evidence: None,
+            lose_response: Arc::new(AtomicBool::new(false)),
+            checkpoint: Arc::new(Mutex::new(None)),
+            prepare_on_executor: true,
+        }),
+        shard_service,
+    )
 }
 
 #[async_trait]
@@ -391,6 +420,64 @@ impl WorkerProxy for LocalResumeProxy {
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
+        if self.prepare_on_executor {
+            let mut client = self
+                .client
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("test executor connected");
+            let response = client
+                .prepare_worker(CreateWorkerRequest {
+                    agent_id: Some(agent.agent_id().into()),
+                    env,
+                    config: config.into_iter().map(Into::into).collect(),
+                    component_owner_account_id: self.component_owner_account_id.map(Into::into),
+                    environment_id: Some(agent.environment_id.into()),
+                    ignore_already_existing: true,
+                    auth_ctx: Some(auth.clone().into()),
+                    principal: Some(principal.into()),
+                    invocation_context: Some(
+                        golem_api_grpc::proto::golem::worker::InvocationContext {
+                            parent: Some(caller.clone().into()),
+                            env: HashMap::new(),
+                            tracing: Some(stack.into()),
+                        },
+                    ),
+                    idempotency_key: key.map(Into::into),
+                    freshness_disposition: match freshness {
+                        InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
+                        InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+                    },
+                })
+                .await
+                .map_err(|status| {
+                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
+                        status.to_string(),
+                    ))
+                })?
+                .into_inner();
+            return match response.result {
+                Some(create_worker_response::Result::Success(success)) => Ok(AgentFingerprint(
+                    success
+                        .instance_id
+                        .ok_or_else(|| {
+                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(
+                                "prepare_worker returned no fingerprint",
+                            ))
+                        })?
+                        .into(),
+                )),
+                Some(create_worker_response::Result::Failure(error)) => {
+                    Err(WorkerProxyError::InternalError(
+                        WorkerExecutorError::unknown(format!("{error:?}")),
+                    ))
+                }
+                None => Err(WorkerProxyError::InternalError(
+                    WorkerExecutorError::unknown("prepare_worker returned no result"),
+                )),
+            };
+        }
         self.inner
             .prepare(
                 agent, method, caller, env, stack, config, principal, auth, key, freshness,

@@ -133,6 +133,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.invocation_principal = principal;
     }
 
+    /// Installs the ID of the running invocation, built from the current idempotency key, or
+    /// removes it when `running` is false. Admission always stores a finalized UUID key; a key
+    /// that is not a UUID, recorded by an internal path, maps to its UUIDv5.
+    pub(crate) fn set_invocation_id(&mut self, running: bool) {
+        self.invocation_id = running
+            .then(|| self.state.get_current_idempotency_key())
+            .flatten()
+            .map(|key| {
+                golem_common::model::InvocationId::new(
+                    self.state.owned_agent_id.agent_id.clone(),
+                    key.to_uuid(),
+                )
+            });
+    }
+
+    /// The ID of the agent invocation that runs the guest code of this Store. An entity Store
+    /// answers with the invocation that encloses its entity invocation.
+    pub(crate) fn current_invocation_id(&self) -> Option<golem_common::model::InvocationId> {
+        match &self.entity_invocation_scope {
+            Some(scope) => scope.enclosing_invocation_id().cloned(),
+            None => self.invocation_id.clone(),
+        }
+    }
+
     pub(crate) fn invocation_principal(&self) -> Principal {
         self.invocation_principal.clone().unwrap_or_else(|| {
             Principal::Agent(AgentPrincipal {

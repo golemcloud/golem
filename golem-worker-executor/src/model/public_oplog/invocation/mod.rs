@@ -173,7 +173,7 @@ pub(super) async fn agent_invocation_to_public(
 
             Ok(PublicAgentInvocation::AgentInitialization(
                 AgentInitializationParameters {
-                    idempotency_key,
+                    invocation_id: idempotency_key,
                     constructor_parameters,
                     trace_id: invocation_context.trace_id.clone(),
                     trace_states: invocation_context.trace_states.clone(),
@@ -222,7 +222,7 @@ pub(super) async fn agent_invocation_to_public(
 
             Ok(PublicAgentInvocation::AgentMethodInvocation(
                 AgentMethodInvocationParameters {
-                    idempotency_key,
+                    invocation_id: idempotency_key,
                     method_name,
                     function_input,
                     trace_id: invocation_context.trace_id.clone(),
@@ -242,7 +242,7 @@ pub(super) async fn agent_invocation_to_public(
             let span_data = invocation_context.to_oplog_data();
             Ok(PublicAgentInvocation::ExternalTool(
                 ExternalToolInvocationParameters {
-                    idempotency_key,
+                    invocation_id: idempotency_key,
                     tool_name: tool_name.into_inner(),
                     command_path,
                     input: *input,
@@ -264,7 +264,9 @@ pub(super) async fn agent_invocation_to_public(
         AgentInvocation::ProcessOplogEntries {
             idempotency_key, ..
         } => Ok(PublicAgentInvocation::ProcessOplogEntries(
-            ProcessOplogEntriesParameters { idempotency_key },
+            ProcessOplogEntriesParameters {
+                invocation_id: idempotency_key,
+            },
         )),
     }
 }

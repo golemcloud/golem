@@ -98,7 +98,11 @@ async fn stop_order(
             component.id,
             &name
                 .clone()
-                .with_ephemeral_invocation_phantom(&key)
+                .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                    &executor,
+                    &key,
+                    "tcp_collect_p3",
+                ))
                 .unwrap(),
         )
         .unwrap()
@@ -151,6 +155,9 @@ async fn stop_order(
         }
     })
     .await??;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "tcp_collect_p3")
+        .await?;
     let mode = if durable {
         AgentMode::Durable
     } else {
@@ -332,7 +339,7 @@ async fn stop_order(
     );
     shutdown.cancel();
 
-    assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+    assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
     assert_eq!(
         entries
             .values()

@@ -600,7 +600,6 @@ impl WorkerService for DefaultWorkerService {
                                     covered_through: OplogIndex::NONE,
                                     revert_generation: status_generation,
                                     current_idempotency_key: None,
-                                    cancelled_idempotency_key: None,
                                 };
                                 let encoded = serialize(&metadata).map_err(WorkerExecutorError::runtime)?;
                                 let deletions: Vec<&str> = snapshot
@@ -673,7 +672,6 @@ impl WorkerService for DefaultWorkerService {
                     let mut advanced = metadata.clone();
                     fold_invocation_result_entries(
                         &mut advanced.current_idempotency_key,
-                        &mut advanced.cancelled_idempotency_key,
                         &status.deleted_regions,
                         &entries,
                         |key, index| {

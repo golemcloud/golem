@@ -1,4 +1,5 @@
 use super::*;
+use golem_common::model::IdempotencyKey;
 
 /// Acceptance predicate of the unconditional positional readers of the Store whose entries are
 /// attributed to `scope` (`None` for the primary agent Store, the entity invocation `Start` index
@@ -1114,7 +1115,7 @@ impl ReplayState {
                 let (oplog_index, oplog_entry) = self.get_oplog_entry(None).await?;
                 match oplog_entry {
                     OplogEntry::AgentInvocationStarted {
-                        idempotency_key,
+                        invocation_id: idempotency_key,
                         payload,
                         trace_id,
                         trace_states,
@@ -1166,8 +1167,11 @@ impl ReplayState {
         }
     }
 
+    /// Reads the `AgentInvocationFinished` that ends the replayed invocation `invocation_id`.
+    /// A recorded terminal naming another invocation is a divergence.
     pub async fn get_oplog_entry_agent_invocation_finished(
         &self,
+        invocation_id: &IdempotencyKey,
     ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
         // The walk to the finished marker tolerates live-only abandoned durable-call records
         // (see `AbandonedStarts`): the replayed guest has already produced its invocation
@@ -1184,7 +1188,19 @@ impl ReplayState {
                     break Ok(None);
                 };
                 match oplog_entry {
-                    OplogEntry::AgentInvocationFinished { result, .. } => {
+                    OplogEntry::AgentInvocationFinished {
+                        invocation_id: recorded_invocation_id,
+                        result,
+                        ..
+                    } => {
+                        if recorded_invocation_id != *invocation_id {
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("AgentInvocationFinished for invocation {invocation_id}"),
+                                format!(
+                                    "AgentInvocationFinished for invocation {recorded_invocation_id}"
+                                ),
+                            ));
+                        }
                         std::mem::take(&mut abandoned).finish(&self.cursor.owned_agent_id)?;
 
                         let result: AgentInvocationResult = self

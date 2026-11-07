@@ -280,7 +280,7 @@ fn a_cut_between_a_manual_admission_and_its_failure_without_a_pending_update_is_
             OplogEntry::PendingAgentInvocation {
                 timestamp: Timestamp::now_utc(),
                 not_before: None,
-                idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+                invocation_id: golem_common::model::IdempotencyKey::fresh(),
                 payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(
                     golem_common::model::AgentInvocationPayload::ManualUpdate { target_revision },
                 )),
@@ -309,7 +309,7 @@ fn a_manual_admission_does_not_change_the_boundaries_of_a_snapshot_based_update(
     let admission = OplogEntry::PendingAgentInvocation {
         timestamp: Timestamp::now_utc(),
         not_before: None,
-        idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+        invocation_id: golem_common::model::IdempotencyKey::fresh(),
         payload: OplogPayload::Inline(Box::new(
             golem_common::model::AgentInvocationPayload::ManualUpdate {
                 target_revision: *update.target_revision(),

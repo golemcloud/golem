@@ -533,14 +533,16 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
-        let (owner, invocation_scope_card, interest) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            (
-                ctx.state.owned_agent_id.clone(),
-                ctx.current_invocation_scope_card(),
-                ctx.state.owner_wallet.interest.clone(),
-            )
-        });
+        let (owner, invocation_scope_card, enclosing_invocation_id, interest) =
+            store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                (
+                    ctx.state.owned_agent_id.clone(),
+                    ctx.current_invocation_scope_card(),
+                    ctx.current_invocation_id(),
+                    ctx.state.owner_wallet.interest.clone(),
+                )
+            });
         let invocation_id = EntityInvocationId::new(
             OwnedAgentEntityId {
                 owner: owner.clone(),
@@ -617,6 +619,7 @@ impl EntityInvocationDurability {
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(metadata.authority_wallet)
         .with_invocation_scope_card(invocation_scope_card)
+        .with_enclosing_invocation_id(enclosing_invocation_id)
         .with_span_started(span_started);
         Ok(Self {
             handle,
@@ -733,6 +736,7 @@ impl EntityInvocationDurability {
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(scope.authority_wallet().to_vec())
         .with_invocation_scope_card(scope.invocation_scope_card().cloned())
+        .with_enclosing_invocation_id(scope.enclosing_invocation_id().cloned())
         .with_span_started(
             scope
                 .span_started()

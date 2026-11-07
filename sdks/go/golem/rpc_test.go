@@ -251,6 +251,19 @@ func TestInvocationIDFromProjects(t *testing.T) {
 	}
 }
 
+// TestAsyncInvocationIDIsAbsentForARejectedCall — the host reports no metadata
+// for a call it rejected before it started; the future then has no identity
+// rather than a zero one.
+func TestAsyncInvocationIDIsAbsentForARejectedCall(t *testing.T) {
+	if id := asyncInvocationID(witTypes.None[host.InvocationMetadata]()); id != nil {
+		t.Fatalf("asyncInvocationID(none) = %+v, want nil", *id)
+	}
+	id := asyncInvocationID(witTypes.Some(host.InvocationMetadata{AgentId: "agent-7", IdempotencyKey: "key-9"}))
+	if id == nil || *id != (InvocationID{AgentID: "agent-7", IdempotencyKey: "key-9"}) {
+		t.Fatalf("asyncInvocationID(some) = %v, want {agent-7, key-9}", id)
+	}
+}
+
 // TestInstantFromConvertsTime — instantFrom converts a Go time into the wasi clock instant used for scheduling.
 // The interesting cases are sub-second nanoseconds and pre-epoch times, where the
 // seconds go negative while the nanoseconds stay in [0, 1e9).

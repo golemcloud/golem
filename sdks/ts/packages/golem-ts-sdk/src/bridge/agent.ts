@@ -401,7 +401,8 @@ function remoteTransport<Value>(
       disposeOwnedWitResources(input);
       throw error;
     }
-    const metadata = snapshotInvocationMetadata(invocation.metadata);
+    // Absent metadata means the host rejected the call; the future reports the error.
+    const metadata = invocation.metadata && snapshotInvocationMetadata(invocation.metadata);
     const future = invocation.future;
     let result;
     try {
@@ -409,6 +410,13 @@ function remoteTransport<Value>(
     } catch (error) {
       if (!isRpcError(error)) throw error;
       throw failure(`Remote agent ${agentId}.${method} errored`, error);
+    }
+    if (metadata === undefined) {
+      if (result !== undefined) disposeOwnedWitResources(result);
+      throw new RemoteCallError(`Remote agent ${agentId}.${method} errored`, {
+        tag: 'protocol-error',
+        details: 'completed invocation has no invocation metadata',
+      });
     }
     try {
       return {

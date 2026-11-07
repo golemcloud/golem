@@ -470,7 +470,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 || attached.epoch == 0
                 || !matches!(
                     self.oplog.read(attached.pending_invocation_oplog_index).await?,
-                    OplogEntry::PendingAgentInvocation { idempotency_key, .. }
+                    OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. }
                         if idempotency_key == prepared.attempt.session_key.idempotency_key
                 ))
         {

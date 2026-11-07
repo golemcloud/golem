@@ -44,7 +44,7 @@ async fn rejected_invocation_identity_conflict_returns_422_before_response_heade
     let response = ApiEndpointError::from(error).into_response();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body: serde_json::Value = response.into_body().into_json().await.unwrap();
-    assert_eq!(body["code"], "VALIDATION_ERROR");
+    assert_eq!(body["code"], "IDEMPOTENCY_CONFLICT");
     assert!(
         body["error"]
             .as_str()

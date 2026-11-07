@@ -128,7 +128,11 @@ fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
             .and_then(|entries| {
                 entries
                     .into_iter()
-                    .map(|(index, entry)| OplogEntry::try_from(entry).map(|entry| (index, entry)))
+                    .map(|(index, entry)| {
+                        let entry = OplogEntry::try_from(entry)?;
+                        entry.check_well_formed()?;
+                        Ok((index, entry))
+                    })
                     .collect::<Result<Vec<_>, _>>()
             });
     let request_entries = match &entries {

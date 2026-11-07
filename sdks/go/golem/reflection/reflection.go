@@ -27,6 +27,8 @@ import (
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
@@ -304,15 +306,33 @@ type agentRPC interface {
 // pendingRPC is an invocation in flight: its identity, its outcome, and a way
 // to cancel it.
 type pendingRPC struct {
-	id     golem.InvocationID
+	id     *golem.InvocationID
 	wait   func() (witTypes.Option[types.SchemaValueTree], error)
 	cancel func()
 }
 
+// await waits for the invocation's outcome. Only a call the host rejected has
+// no identity, and its wait reports the rejection, so a successful outcome
+// without an identity is a protocol error.
+func (p pendingRPC) await(target, method string) (witTypes.Option[types.SchemaValueTree], error) {
+	res, err := p.wait()
+	if err == nil && p.id == nil {
+		if res.IsSome() {
+			engine.ReleaseCardsIn(res.Some().ValueNodes, link.ReleaseCard)
+		}
+		return witTypes.None[types.SchemaValueTree](), &golem.RemoteCallError{
+			Target: target, Method: method, Kind: golem.RemoteProtocolError,
+			Message: "the host completed a call that has no invocation identity",
+		}
+	}
+	return res, err
+}
+
 // PendingCall is a reflected or dynamic invocation in flight.
 type PendingCall[T any] struct {
-	// ID identifies the invocation, available before the result is.
-	ID     golem.InvocationID
+	// ID identifies the invocation, available before the result is. It is nil
+	// when the call was rejected before it started; Get returns the rejection.
+	ID     *golem.InvocationID
 	wait   func() (T, error)
 	cancel func()
 	done   bool
@@ -371,11 +391,12 @@ func (c *AgentClient) pack(method string, args map[string]any) (Method, types.Sc
 
 // Call invokes a method with named arguments and waits for its result, as
 // canonical JSON (nil when the method returns nothing), together with the
-// invocation's identity.
-func (c *AgentClient) Call(method string, args map[string]any, opts ...CallOpt) (any, golem.InvocationID, error) {
+// invocation's identity, which is nil when the call was rejected before it
+// started.
+func (c *AgentClient) Call(method string, args map[string]any, opts ...CallOpt) (any, *golem.InvocationID, error) {
 	p, err := c.CallAsync(method, args, opts...)
 	if err != nil {
-		return nil, golem.InvocationID{}, err
+		return nil, nil, err
 	}
 	out, err := p.Get()
 	return out, p.ID, err
@@ -394,7 +415,7 @@ func (c *AgentClient) CallAsync(method string, args map[string]any, opts ...Call
 		return nil, err
 	}
 	return &PendingCall[any]{ID: p.id, cancel: p.cancel, wait: func() (any, error) {
-		res, err := p.wait()
+		res, err := p.await(c.agentID, method)
 		if err != nil {
 			return nil, err
 		}

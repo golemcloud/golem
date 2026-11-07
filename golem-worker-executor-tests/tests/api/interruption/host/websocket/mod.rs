@@ -85,7 +85,7 @@ fn assert_invocation(
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.idempotency_key == key);
+                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.invocation_id == key);
                 started += usize::from(current);
             }
             PublicOplogEntry::AgentInvocationFinished(_) if current => terminals += 1,
@@ -214,7 +214,11 @@ async fn pending_receive(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "connect_and_receive_first",
+            ))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -230,6 +234,9 @@ async fn pending_receive(
         Principal::anonymous(),
     )
     .await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "connect_and_receive_first")
+        .await?;
     let mut peer = Peer::start().await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -258,7 +265,7 @@ async fn pending_receive(
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 if entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == RECEIVE)) {
                     let start = receive_start(&entries, 0)?;
-                    assert_invocation(&entries, &key, 0)?;
+                    assert_invocation(&entries, &stored_key, 0)?;
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     return Ok::<_, anyhow::Error>(start);
                 }
@@ -339,7 +346,7 @@ async fn pending_receive(
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        assert_invocation(&stopped, &key, 0)?;
+        assert_invocation(&stopped, &stored_key, 0)?;
         ensure!(
             self::receive_start(&stopped, 0)? == receive_start,
             "interruption must leave the original receive Start open"
@@ -449,7 +456,7 @@ async fn pending_receive(
             executor.commit_oplog(&id).await?;
             let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::receive_start(&repairing, 0)? == receive_start);
-            assert_invocation(&repairing, &key, 0)?;
+            assert_invocation(&repairing, &stored_key, 0)?;
             peer.assert_counts(2, 0)?;
             second.send.send("recovered".to_string()).map_err(|_| anyhow::anyhow!("recovery frame gate closed"))?;
             let resumed = tokio::time::timeout(Duration::from_secs(15), &mut invocation)
@@ -458,7 +465,7 @@ async fn pending_receive(
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::receive_start(&recovered, 1)? == receive_start);
             assert_settled_history(&recovered)?;
-            assert_invocation(&recovered, &key, 1)?;
+            assert_invocation(&recovered, &stored_key, 1)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "connect_and_receive_first", data_value!(peer.url.clone())).await?;
             ensure!(cached.into_typed::<String>()? == "recovered");
@@ -478,6 +485,7 @@ async fn pending_receive(
 
             // Reconstruct completed history with an invocation that performs no network work.
             let noop_key = IdempotencyKey::fresh();
+            let stored_noop_key = executor.external_invocation_key(&id, &noop_key, "noop").await?;
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
             peer.assert_counts(2, 1)?;
@@ -485,11 +493,12 @@ async fn pending_receive(
             ensure!(self::receive_start(&replayed, 1)? == receive_start);
             ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL) == (3, 3));
             assert_settled_history(&replayed)?;
-            assert_invocation(&replayed, &key, 1)?;
-            assert_invocation(&replayed, &noop_key, 1)?;
+            assert_invocation(&replayed, &stored_key, 1)?;
+            assert_invocation(&replayed, &stored_noop_key, 1)?;
 
             // Only a fresh receive may reconnect the reconstructed, persisted handle.
             let fresh_key = IdempotencyKey::fresh();
+            let stored_fresh_key = executor.external_invocation_key(&id, &fresh_key, "receive_next_from_persisted").await?;
             let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "receive_next_from_persisted", data_value!());
             let response = async {
                 let third = peer.handshake().await?;
@@ -507,9 +516,9 @@ async fn pending_receive(
             ensure!(starts_named(&history, CONNECT) == starts_named(&recovered, CONNECT));
             for start in receives { assert_receive_terminal(&history, start, 1)?; }
             assert_settled_history(&history)?;
-            assert_invocation(&history, &key, 1)?;
-            assert_invocation(&history, &noop_key, 1)?;
-            assert_invocation(&history, &fresh_key, 1)?;
+            assert_invocation(&history, &stored_key, 1)?;
+            assert_invocation(&history, &stored_noop_key, 1)?;
+            assert_invocation(&history, &stored_fresh_key, 1)?;
             info!(?resource, %key, %receive_start, handshakes = 3, frames = 2, "Completed WebSocket history stayed offline; distinct fresh receive completed");
         } else {
             let retry = tokio::time::timeout(Duration::from_secs(10), executor.invoke_and_await_agent_with_key(&component, &name, &key, "connect_and_receive_first", data_value!(peer.url.clone()))).await?;
@@ -529,7 +538,7 @@ async fn pending_receive(
             ensure!(probe.into_typed::<String>()? == "probe");
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::receive_start(&failed, 0)? == receive_start);
-            assert_invocation(&failed, &key, 0)?;
+            assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);

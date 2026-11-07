@@ -282,7 +282,9 @@ fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceErr
         Ok(InvocationRejectionReason::Unauthorized) => {
             WorkerServiceError::AuthError(AuthServiceError::CouldNotAuthenticate)
         }
-        Ok(InvocationRejectionReason::Internal) => match rejected.worker_error {
+        Ok(
+            InvocationRejectionReason::Internal | InvocationRejectionReason::IdempotencyConflict,
+        ) => match rejected.worker_error {
             Some(worker_error) => worker_error
                 .try_into()
                 .map(WorkerServiceError::GolemError)
@@ -291,6 +293,12 @@ fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceErr
                         "failed to decode worker execution error: {error}"
                     ))
                 }),
+            None if rejected.reason() == InvocationRejectionReason::IdempotencyConflict => {
+                WorkerServiceError::GolemError(WorkerExecutorError::invalid_request(format!(
+                    "IdempotencyConflict: {}",
+                    rejected.error
+                )))
+            }
             None => WorkerServiceError::Internal(rejected.error),
         },
         _ => WorkerServiceError::TypeChecker(rejected.error),
@@ -4539,5 +4547,66 @@ mod file_read_tests {
             }
             assert!(body.next().await.is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod invocation_rejection_status {
+    use super::decode_invocation_rejection;
+    use crate::api::common::ApiEndpointError;
+    use golem_api_grpc::proto::golem::worker::v1::agent_error;
+    use golem_api_grpc::proto::golem::worker::{InvocationRejected, InvocationRejectionReason};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use poem::IntoResponse;
+    use test_r::test;
+
+    #[test]
+    fn pre_acceptance_idempotency_conflict_rejection_is_a_public_422() {
+        let error = WorkerExecutorError::invalid_request(
+            "IdempotencyConflict: invocation identity was already accepted with a different request",
+        );
+        let rejection = InvocationRejected {
+            reason: InvocationRejectionReason::IdempotencyConflict as i32,
+            error: error.to_string(),
+            worker_error: Some(error.into()),
+            ..Default::default()
+        };
+        let response =
+            ApiEndpointError::from(decode_invocation_rejection(rejection)).into_response();
+        assert_eq!(response.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn idempotency_conflict_rejection_without_worker_error_is_a_public_422() {
+        let rejection = InvocationRejected {
+            reason: InvocationRejectionReason::IdempotencyConflict as i32,
+            error: "invocation identity was already accepted with a different request".into(),
+            worker_error: None,
+            ..Default::default()
+        };
+        let response =
+            ApiEndpointError::from(decode_invocation_rejection(rejection)).into_response();
+        assert_eq!(response.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn idempotency_conflict_rejection_is_a_grpc_client_error() {
+        let error = WorkerExecutorError::invalid_request(
+            "IdempotencyConflict: invocation identity was already accepted with a different request",
+        );
+        let rejection = InvocationRejected {
+            reason: InvocationRejectionReason::IdempotencyConflict as i32,
+            error: error.to_string(),
+            worker_error: Some(error.into()),
+            ..Default::default()
+        };
+        let grpc_error = agent_error::Error::from(decode_invocation_rejection(rejection));
+        let agent_error::Error::BadRequest(body) = grpc_error else {
+            panic!("expected a bad request, got {grpc_error:?}");
+        };
+        assert_eq!(
+            body.code,
+            golem_common::base_model::api::error_code::IDEMPOTENCY_CONFLICT
+        );
     }
 }

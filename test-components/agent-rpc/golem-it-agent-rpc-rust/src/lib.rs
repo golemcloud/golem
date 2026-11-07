@@ -1824,9 +1824,9 @@ pub trait RpcAuthTester {
 
     async fn try_ephemeral_call_async(&self) -> RpcCallOutcome;
 
-    async fn denied_streaming_metadata(&self) -> String;
+    async fn denied_streaming_metadata(&self) -> Option<String>;
 
-    fn invalid_async_call_without_get(&self) -> String;
+    fn invalid_async_call_without_get(&self) -> Option<String>;
 }
 
 struct RpcAuthTesterImpl {
@@ -1986,7 +1986,7 @@ impl RpcAuthTester for RpcAuthTesterImpl {
         }
     }
 
-    async fn denied_streaming_metadata(&self) -> String {
+    async fn denied_streaming_metadata(&self) -> Option<String> {
         let rpc = WasmRpc::new(
             "EphemeralStreamingRpcTarget",
             encode_single_parameter("denied-streaming-target".to_string()),
@@ -1999,10 +1999,10 @@ impl RpcAuthTester for RpcAuthTesterImpl {
             result.future.get().await,
             Err(RpcError::Denied(_))
         ));
-        result.metadata.idempotency_key
+        result.metadata.map(|metadata| metadata.idempotency_key)
     }
 
-    fn invalid_async_call_without_get(&self) -> String {
+    fn invalid_async_call_without_get(&self) -> Option<String> {
         let rpc = WasmRpc::new(
             "RpcCounter",
             encode_single_parameter("invalid-async-target".to_string()),
@@ -2014,7 +2014,7 @@ impl RpcAuthTester for RpcAuthTesterImpl {
             encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap(),
             None,
         );
-        result.metadata.idempotency_key
+        result.metadata.map(|metadata| metadata.idempotency_key)
     }
 
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome {

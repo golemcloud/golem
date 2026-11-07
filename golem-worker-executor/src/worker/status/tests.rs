@@ -1059,7 +1059,7 @@ async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
     let idempotency_key = IdempotencyKey::fresh();
     let retry_from = OplogIndex::from_u64(2);
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], idempotency_key)
+        .agent_invocation_started("a", vec![], idempotency_key.clone())
         .add(
             OplogEntry::log(
                 None,
@@ -1074,6 +1074,7 @@ async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key.clone()),
                 AgentError::TransientError("failed".to_string()),
                 retry_from,
                 None,
@@ -1116,6 +1117,7 @@ async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key.clone()),
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 Some(retry_state.clone()),
@@ -1150,6 +1152,7 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key.clone()),
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 Some(retry_state.clone()),
@@ -1177,6 +1180,7 @@ async fn recovery_failure_remains_failed_until_recovery_succeeds() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1202,6 +1206,7 @@ async fn recovery_failure_remains_failed_until_recovery_succeeds() {
 
 #[test]
 async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
+    let idempotency_key = IdempotencyKey::fresh();
     let retry_from = OplogIndex::from_u64(1);
     let exhausted = RetryPolicyState::Counter(100);
     let test_case = TestCase::builder(0)
@@ -1209,6 +1214,7 @@ async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key.clone()),
                 AgentError::TransientError("semantic failure".to_string()),
                 retry_from,
                 Some(exhausted.clone()),
@@ -1227,6 +1233,7 @@ async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::Unknown("payload backend unavailable".to_string()),
                 retry_from,
                 None,
@@ -1252,6 +1259,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1268,7 +1276,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
         .add(
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                idempotency_key: idempotency_key.clone(),
+                invocation_id: idempotency_key.clone(),
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "a".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
@@ -1291,6 +1299,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
         .add(
             OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
+                invocation_id: idempotency_key.clone(),
                 result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
                 method_name: None,
                 consumed_fuel: 0,
@@ -1325,6 +1334,7 @@ async fn stale_recovery_success_must_not_clear_a_later_interrupt() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1361,6 +1371,7 @@ fn recovery_success_in_deleted_region_must_not_clear_failure() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1403,6 +1414,7 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(IdempotencyKey::fresh()),
                 AgentError::TransientError("invocation attempt failed".to_string()),
                 invocation_retry_from,
                 Some(RetryPolicyState::Counter(3)),
@@ -1413,6 +1425,7 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 recovery_retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1456,6 +1469,7 @@ fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_sta
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::Unknown("component service unavailable".to_string()),
                 recovery_retry_from,
                 None,
@@ -1485,12 +1499,14 @@ fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_sta
 
 #[test]
 async fn invocation_failure_is_classified_separately_from_recovery_failure() {
+    let idempotency_key = IdempotencyKey::fresh();
     let retry_from = OplogIndex::from_u64(1);
     let test_case = TestCase::builder(0)
         .add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key.clone()),
                 AgentError::PermanentError("application failed".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1517,6 +1533,7 @@ async fn recovery_permission_denied_is_not_treated_as_an_invocation_rejection() 
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::PermissionDenied("startup denied".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1600,7 +1617,7 @@ fn recovery_errors_are_not_invocation_results() {
             OplogIndex::from_u64(1),
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                idempotency_key: key.clone(),
+                invocation_id: key.clone(),
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "agent:method".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
@@ -1618,6 +1635,7 @@ fn recovery_errors_are_not_invocation_results() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1625,12 +1643,10 @@ fn recovery_errors_are_not_invocation_results() {
         ),
     ]);
     let mut current_idempotency_key = None;
-    let mut cancelled_idempotency_key = None;
     let mut results = Vec::new();
 
     fold_invocation_result_entries(
         &mut current_idempotency_key,
-        &mut cancelled_idempotency_key,
         &DeletedRegions::default(),
         &entries,
         |key, index| results.push((key.clone(), index)),
@@ -1638,6 +1654,127 @@ fn recovery_errors_are_not_invocation_results() {
 
     assert!(results.is_empty());
     assert_eq!(current_idempotency_key, Some(key));
+}
+
+fn started_invocation(key: &IdempotencyKey) -> OplogEntry {
+    OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc(),
+        invocation_id: key.clone(),
+        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            method_name: "agent:method".to_string(),
+            input: SchemaValue::Record { fields: Vec::new() },
+            principal: Principal::anonymous(),
+            scope_card: None,
+        })),
+        trace_id: TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Box::new(test_invocation_wallet_pin()),
+    }
+}
+
+fn finished_invocation(key: &IdempotencyKey) -> OplogEntry {
+    OplogEntry::AgentInvocationFinished {
+        timestamp: Timestamp::now_utc(),
+        invocation_id: key.clone(),
+        result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
+        method_name: None,
+        consumed_fuel: 0,
+        component_revision: ComponentRevision::INITIAL,
+    }
+}
+
+fn fold_results(
+    entries: Vec<OplogEntry>,
+) -> (Vec<(IdempotencyKey, OplogIndex)>, Option<IdempotencyKey>) {
+    let entries = entries
+        .into_iter()
+        .enumerate()
+        .map(|(offset, entry)| (OplogIndex::from_u64(offset as u64 + 1), entry))
+        .collect::<BTreeMap<_, _>>();
+    let mut current_idempotency_key = None;
+    let mut results = Vec::new();
+    fold_invocation_result_entries(
+        &mut current_idempotency_key,
+        &DeletedRegions::default(),
+        &entries,
+        |key, index| results.push((key.clone(), index)),
+    );
+    (results, current_idempotency_key)
+}
+
+fn invocation_error(invocation_id: &IdempotencyKey) -> OplogEntry {
+    OplogEntry::error(
+        None,
+        OplogErrorKind::Invocation,
+        Some(invocation_id.clone()),
+        AgentError::TransientError("failed".to_string()),
+        OplogIndex::INITIAL,
+        None,
+    )
+}
+
+#[test]
+fn invocation_error_naming_a_finished_invocation_keeps_its_result() {
+    let finished = IdempotencyKey::fresh();
+    let running = IdempotencyKey::fresh();
+
+    // A background retry of `finished` records its error while `running` runs. It must neither
+    // replace the finished result nor be attributed to `running`.
+    let (results, current) = fold_results(vec![
+        started_invocation(&finished),
+        finished_invocation(&finished),
+        started_invocation(&running),
+        invocation_error(&finished),
+        invocation_error(&running),
+    ]);
+
+    assert_eq!(
+        results,
+        vec![
+            (finished, OplogIndex::from_u64(2)),
+            (running.clone(), OplogIndex::from_u64(5)),
+        ]
+    );
+    assert_eq!(current, Some(running.clone()));
+
+    let (results, current) = fold_results(vec![
+        started_invocation(&running),
+        finished_invocation(&running),
+    ]);
+    assert_eq!(results, vec![(running, OplogIndex::from_u64(2))]);
+    assert_eq!(current, None);
+}
+
+#[test]
+fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_another_runs() {
+    let running = IdempotencyKey::fresh();
+    let denied = IdempotencyKey::fresh();
+
+    // A hint separates the cancellation from the error, so the error is not positionally adjacent
+    // to the `CancelPendingInvocation` of the invocation it names.
+    let (results, current) = fold_results(vec![
+        started_invocation(&running),
+        OplogEntry::cancel_pending_invocation(denied.clone()),
+        OplogEntry::log(
+            None,
+            golem_common::model::oplog::LogLevel::Stderr,
+            String::new(),
+            "denied\n".to_string(),
+            None,
+        ),
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            Some(denied.clone()),
+            AgentError::PermissionDenied("permission denied".to_string()),
+            OplogIndex::INITIAL,
+            None,
+        ),
+    ]);
+
+    assert_eq!(results, vec![(denied, OplogIndex::from_u64(4))]);
+    assert_eq!(current, Some(running));
 }
 
 #[test]
@@ -4214,7 +4351,7 @@ impl TestCaseBuilder {
         self.add(
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                idempotency_key: idempotency_key.clone(),
+                invocation_id: idempotency_key.clone(),
                 payload: OplogPayload::Inline(Box::new(payload)),
                 trace_id: TraceId::generate(),
                 trace_states: vec![],
@@ -4241,16 +4378,19 @@ impl TestCaseBuilder {
         self.add(
             OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
+                invocation_id: idempotency_key.clone(),
                 result: OplogPayload::Inline(Box::new(result)),
                 method_name: None,
                 consumed_fuel: 0,
                 component_revision,
             },
             move |mut status| {
+                if status.current_idempotency_key.as_ref() == Some(&idempotency_key) {
+                    status.current_idempotency_key = None;
+                }
                 status
                     .invocation_results
                     .insert(idempotency_key, status.oplog_idx);
-                status.current_idempotency_key = None;
                 status.status = AgentStatus::Idle;
                 status
             },
@@ -4499,7 +4639,6 @@ impl TestCaseBuilder {
             status
                 .pending_invocations
                 .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
-            status.cancelled_idempotency_key = Some(idempotency_key);
             status
         })
     }
@@ -4509,12 +4648,12 @@ impl TestCaseBuilder {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key.clone()),
                 AgentError::PermissionDenied("permission denied".to_string()),
                 OplogIndex::INITIAL,
                 None,
             ),
             move |mut status| {
-                status.cancelled_idempotency_key = None;
                 status
                     .invocation_results
                     .insert(idempotency_key, status.oplog_idx);
@@ -7482,7 +7621,7 @@ mod region_fold {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
             not_before: None,
-            idempotency_key: IdempotencyKey::fresh(),
+            invocation_id: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
             })),
@@ -8020,7 +8159,7 @@ mod invocation_payload_decodes {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 not_before,
-                idempotency_key,
+                invocation_id: idempotency_key,
                 payload: OplogPayload::Inline(payload),
                 trace_id,
                 trace_states,
@@ -8028,7 +8167,7 @@ mod invocation_payload_decodes {
             } => OplogEntry::PendingAgentInvocation {
                 timestamp,
                 not_before,
-                idempotency_key,
+                invocation_id: idempotency_key,
                 payload: OplogPayload::SerializedInline {
                     bytes: golem_common::serialization::serialize(payload.as_ref()).unwrap(),
                     cached: None,
@@ -8045,7 +8184,7 @@ mod invocation_payload_decodes {
         serialized(OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
             not_before: None,
-            idempotency_key: IdempotencyKey::fresh(),
+            invocation_id: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "a".to_string(),
                 input: SchemaValue::Record {

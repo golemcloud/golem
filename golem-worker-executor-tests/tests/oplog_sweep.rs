@@ -136,7 +136,13 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
     let agent_id = AgentId::from_agent_id(
         component.id,
         &parsed_agent_id
-            .with_ephemeral_invocation_phantom(&idempotency_key)
+            .with_ephemeral_invocation_phantom(
+                &golem_common::model::InvocationRequestKey::external(
+                    executor.auth_ctx().idempotency_scope(),
+                    Some(&idempotency_key),
+                )
+                .owner_key("increment"),
+            )
             .map_err(anyhow::Error::msg)?,
     )
     .map_err(anyhow::Error::msg)?;
@@ -170,6 +176,7 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
+            request_key: None,
         })
         .await?;
     assert!(

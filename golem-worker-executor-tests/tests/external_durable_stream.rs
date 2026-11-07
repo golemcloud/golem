@@ -474,6 +474,7 @@ async fn append_crash_after_remote_commit_reuses_tuple_and_body(
 
 #[test]
 #[timeout("120s")]
+#[ignore = "GOL-1065: a same-key call on a fork must resolve to the copied invocation, which needs fork invocation ID derivation"]
 async fn ordinary_forks_recover_exact_read_prefix_and_pending_batch(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

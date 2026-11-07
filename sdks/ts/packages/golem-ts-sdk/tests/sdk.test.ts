@@ -1236,6 +1236,48 @@ describe('RPC client', () => {
     }
   });
 
+  it('surfaces the future error of a rejected call without invocation metadata', async () => {
+    const def = defineAgent({
+      name: 'RejectedCallAgent',
+      id: {},
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    vi.mocked(makeAgentId).mockReturnValueOnce('RejectedCallAgent()');
+    const client = def.client.get({});
+    const rpc = latestRpc();
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: undefined,
+      future: {
+        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
+        get: vi.fn().mockRejectedValue({ tag: 'denied', val: 'scope card rejected' }),
+        cancel: vi.fn(),
+      },
+    });
+
+    const error = await client.ping().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(isRemoteCallError(error)).toBe(true);
+    expect(error).toMatchObject({ cause: { tag: 'denied', details: 'scope card rejected' } });
+
+    // Only a rejected call lacks metadata, so one that completes without it is a protocol error.
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: undefined,
+      future: {
+        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
+        get: vi.fn().mockResolvedValue({ valueNodes: [] }),
+        cancel: vi.fn(),
+      },
+    });
+    const completed = await client.ping().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(isRemoteCallError(completed)).toBe(true);
+    expect(completed).toMatchObject({ cause: { tag: 'protocol-error' } });
+  });
+
   it('narrows RemoteCallError structurally across package entry identities', () => {
     expect(
       isRemoteCallError({

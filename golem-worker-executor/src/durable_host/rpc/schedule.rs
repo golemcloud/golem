@@ -381,20 +381,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .map_err(|error| handle.trap(anyhow::anyhow!(error)))?;
             demand.fingerprint()
         } else {
-            let target_worker_fingerprint = match ensure_rpc_target_activated(
-                self,
-                &this,
-                handle.agent_auth_ctx(),
-                &method_name,
-            )
-            .await
+            match ensure_rpc_target_activated(self, &this, handle.agent_auth_ctx(), &method_name)
+                .await
             {
                 Ok(fingerprint) => fingerprint,
                 Err(err) => {
                     return Err(handle.trap(err));
                 }
-            };
-            target_worker_fingerprint
+            }
         };
 
         let invocation_id =

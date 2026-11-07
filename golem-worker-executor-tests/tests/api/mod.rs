@@ -3939,7 +3939,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
         .into_iter().filter(|entry| matches!(&entry.entry,
             PublicOplogEntry::AgentInvocationStarted(parameters)
                 if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.idempotency_key == final_key)
+                    if method.invocation_id == final_key)
         )).count();
     assert_eq!(starts, 1);
 
@@ -4070,13 +4070,61 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         .await?
         .into_typed::<u32>()?;
     assert_eq!(next_result, 33);
-    let starts = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?
-        .into_iter().filter(|entry| matches!(&entry.entry,
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let starts = oplog
+        .iter().filter(|entry| matches!(&entry.entry,
             PublicOplogEntry::AgentInvocationStarted(parameters)
                 if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.idempotency_key == final_key)
+                    if method.invocation_id == final_key)
         )).count();
     assert_eq!(starts, 1);
+
+    // Every terminal names the invocation that started before it, across the restart.
+    let mut started_invocation_id = None;
+    let mut started = 0;
+    let mut finished = 0;
+    for entry in &oplog {
+        match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(parameters) => {
+                started_invocation_id = match &parameters.invocation {
+                    PublicAgentInvocation::AgentInitialization(init) => {
+                        Some(init.invocation_id.clone())
+                    }
+                    PublicAgentInvocation::AgentMethodInvocation(method) => {
+                        Some(method.invocation_id.clone())
+                    }
+                    PublicAgentInvocation::ExternalTool(tool) => Some(tool.invocation_id.clone()),
+                    PublicAgentInvocation::ProcessOplogEntries(process) => {
+                        Some(process.invocation_id.clone())
+                    }
+                    PublicAgentInvocation::SaveSnapshot(_)
+                    | PublicAgentInvocation::LoadSnapshot(_)
+                    | PublicAgentInvocation::ManualUpdate(_) => None,
+                };
+                if started_invocation_id.is_some() {
+                    started += 1;
+                }
+            }
+            PublicOplogEntry::AgentInvocationFinished(parameters) => {
+                if let Some(started_invocation_id) = &started_invocation_id {
+                    assert_eq!(
+                        &parameters.invocation_id, started_invocation_id,
+                        "AgentInvocationFinished at {} names another invocation",
+                        entry.oplog_index
+                    );
+                    finished += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        finished, started,
+        "every started invocation must finish exactly once"
+    );
+    assert!(oplog.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::AgentInvocationFinished(parameters)
+            if parameters.invocation_id == final_key)));
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -7644,8 +7692,14 @@ async fn cancelling_pending_invocations(
         .invoke_agent_with_key(&component, &agent_id, &ik3, "inc_by", data_value!(7u64))
         .await?;
 
-    let cancel1 = executor.cancel_invocation(&worker_id, &ik1).await;
-    let cancel2 = executor.cancel_invocation(&worker_id, &ik2).await;
+    let stored_ik1 = executor
+        .external_invocation_key(&worker_id, &ik1, "inc_by")
+        .await?;
+    let stored_ik2 = executor
+        .external_invocation_key(&worker_id, &ik2, "inc_by")
+        .await?;
+    let cancel1 = executor.cancel_invocation(&worker_id, &stored_ik1).await;
+    let cancel2 = executor.cancel_invocation(&worker_id, &stored_ik2).await;
     let cancel4 = executor.cancel_invocation(&worker_id, &ik4).await;
 
     // Extract oplog_idx from promise value to complete it
@@ -7989,9 +8043,9 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
             match entry.entry {
                 PublicOplogEntry::PendingAgentInvocation(parameters) => {
                     raced_count += usize::from(
-                        matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == raced_key),
+                        matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == raced_key),
                     );
-                    if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == pending_key)
+                    if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == pending_key)
                     {
                         pending_count += 1;
                         assert_eq!(
@@ -8004,7 +8058,7 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
                     }
                 }
                 PublicOplogEntry::AgentInvocationStarted(parameters) => {
-                    if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == complete_key)
+                    if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == complete_key)
                     {
                         started_count += 1;
                     }
@@ -8151,14 +8205,14 @@ async fn grpc_schedule_commits_pending_without_loading_target(
         assert!(!entries.iter().any(|entry| matches!(&entry.entry,
             PublicOplogEntry::PendingAgentInvocation(parameters)
                 if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.idempotency_key == raw_key)
+                    if method.invocation_id == raw_key)
         )), "the raw external seed must not become a persisted invocation or alias");
         let pending = entries
         .iter()
         .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::PendingAgentInvocation(parameters)
                 if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.idempotency_key == key) => Some(parameters),
+                    if method.invocation_id == key) => Some(parameters),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -8255,14 +8309,14 @@ async fn due_wake_runs_scheduled_invocation_on_unloaded_target(
                         if let PublicAgentInvocation::AgentMethodInvocation(method) =
                             parameters.invocation
                         {
-                            key = Some(method.idempotency_key);
+                            key = Some(method.invocation_id);
                             not_before = parameters.not_before;
                         }
                     }
                     PublicOplogEntry::AgentInvocationStarted(parameters) => {
                         current = matches!(&parameters.invocation,
                             PublicAgentInvocation::AgentMethodInvocation(method)
-                                if Some(&method.idempotency_key) == key.as_ref());
+                                if Some(&method.invocation_id) == key.as_ref());
                         if current {
                             started += 1;
                             started_at.push(parameters.timestamp);
@@ -8458,13 +8512,13 @@ async fn owner_load_restores_lost_invocation_wake(
                         if let PublicAgentInvocation::AgentMethodInvocation(method) =
                             parameters.invocation
                         {
-                            scheduled = Some(method.idempotency_key);
+                            scheduled = Some(method.invocation_id);
                         }
                     }
                     PublicOplogEntry::AgentInvocationStarted(parameters) => {
                         current = matches!(&parameters.invocation,
                             PublicAgentInvocation::AgentMethodInvocation(method)
-                                if Some(&method.idempotency_key) == scheduled.as_ref());
+                                if Some(&method.invocation_id) == scheduled.as_ref());
                         started += usize::from(current);
                     }
                     PublicOplogEntry::AgentInvocationFinished(_) if current => finished = true,
@@ -8522,6 +8576,7 @@ async fn local_schedule_rejects_recreated_cached_target(
         .schedule_invocation(
             &owned,
             original,
+            golem_common::model::InvocationRequestKey::Internal(key.clone()),
             AgentInvocation::AgentMethod {
                 idempotency_key: key.clone(),
                 method_name: "inc_global_by".to_string(),
@@ -8703,8 +8758,8 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 PublicOplogEntry::AgentInvocationStarted(parameters) => {
                     current_key = match parameters.invocation {
                         PublicAgentInvocation::AgentMethodInvocation(method) => {
-                            pairs.entry(method.idempotency_key.clone()).or_default().0 += 1;
-                            Some(method.idempotency_key)
+                            pairs.entry(method.invocation_id.clone()).or_default().0 += 1;
+                            Some(method.invocation_id)
                         }
                         _ => None,
                     };

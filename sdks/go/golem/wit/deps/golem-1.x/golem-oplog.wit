@@ -278,6 +278,7 @@ interface oplog {
 
     record agent-invocation-finished-parameters {
         timestamp: datetime,
+        invocation-id: string,
         %result: agent-invocation-result,
         method-name: option<string>,
         consumed-fuel: s64,
@@ -292,6 +293,8 @@ interface oplog {
     record error-parameters {
         timestamp: datetime,
         kind: oplog-error-kind,
+        /// The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs.
+        invocation-id: option<string>,
         error: string,
         retry-from: oplog-index,
         /// Persistent retry policy state, if a semantic retry policy is active.
@@ -423,7 +426,7 @@ interface oplog {
     }
 
     record agent-initialization-parameters {
-        idempotency-key: string,
+        invocation-id: string,
         constructor-parameters: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
@@ -431,7 +434,7 @@ interface oplog {
     }
 
     record agent-method-invocation-parameters {
-        idempotency-key: string,
+        invocation-id: string,
         method-name: string,
         function-input: typed-schema-value,
         trace-id: string,
@@ -444,7 +447,7 @@ interface oplog {
     }
 
     record process-oplog-entries-parameters {
-        idempotency-key: string,
+        invocation-id: string,
     }
 
     record manual-update-parameters {
@@ -452,7 +455,7 @@ interface oplog {
     }
 
     record external-tool-invocation-parameters {
-        idempotency-key: string,
+        invocation-id: string,
         tool-name: string,
         command-path: list<string>,
         input: typed-schema-value,
@@ -622,7 +625,7 @@ interface oplog {
 
     record cancel-pending-invocation-parameters {
         timestamp: datetime,
-        idempotency-key: string
+        invocation-id: string
     }
 
     record begin-remote-transaction-parameters {
@@ -843,7 +846,7 @@ interface oplog {
 
     record raw-agent-invocation-started-parameters {
         timestamp: datetime,
-        idempotency-key: string,
+        invocation-id: string,
         payload: oplog-payload,
         trace-id: string,
         trace-states: list<string>,
@@ -853,6 +856,7 @@ interface oplog {
 
     record raw-agent-invocation-finished-parameters {
         timestamp: datetime,
+        invocation-id: string,
         %result: oplog-payload,
         method-name: option<string>,
         consumed-fuel: s64,
@@ -862,6 +866,8 @@ interface oplog {
     record raw-error-parameters {
         timestamp: datetime,
         kind: oplog-error-kind,
+        /// The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs.
+        invocation-id: option<string>,
         error: worker-error,
         retry-from: oplog-index,
         /// Persistent retry policy state, if a semantic retry policy is active.
@@ -871,7 +877,7 @@ interface oplog {
     record raw-pending-agent-invocation-parameters {
         timestamp: datetime,
         not-before: option<datetime>,
-        idempotency-key: string,
+        invocation-id: string,
         payload: oplog-payload,
         trace-id: string,
         trace-states: list<string>,

@@ -189,7 +189,10 @@ impl Rpc for RemoteInvocationRpc {
                 config,
                 principal,
                 auth_ctx,
-                idempotency_key,
+                // The receiving executor checks a fresh ephemeral phantom against the same owner
+                // key the caller derived it from.
+                idempotency_key
+                    .map(|key| InvocationRequestKey::Internal(key).owner_key(method_name)),
                 freshness_disposition,
             )
             .await?;

@@ -126,6 +126,7 @@ struct TaskRetryParams<Ctx: WorkerCtx> {
     worker: Arc<crate::worker::Worker<Ctx>>,
     retry_point: OplogIndex,
     entity_parent_start_index: Option<OplogIndex>,
+    invocation_id: Option<IdempotencyKey>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 }
 

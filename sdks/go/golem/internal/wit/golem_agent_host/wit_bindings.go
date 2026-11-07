@@ -266,9 +266,10 @@ func FutureInvokeResultFromBorrowHandle(handleValue int32) *FutureInvokeResult {
 	return &FutureInvokeResult{handle}
 }
 
-// Asynchronous invocation handle together with its final identity.
+// Asynchronous invocation handle together with its final identity, when
+// preparation succeeded. Rejected calls report their error through the future.
 type AsyncInvocationWithMetadata struct {
-	Metadata InvocationMetadata
+	Metadata witTypes.Option[InvocationMetadata]
 	Future   *FutureInvokeResult
 }
 
@@ -33418,7 +33419,7 @@ func (self *WasmRpc) AsyncInvokeAndAwait(methodName string, input golem_core_typ
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (5 * 4), 4))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (6 * 4), 4))
 	utf8 := unsafe.Pointer(unsafe.StringData(methodName))
 	pinner.Pin(utf8)
 	slice25 := (input).ValueNodes
@@ -33824,10 +33825,21 @@ func (self *WasmRpc) AsyncInvokeAndAwait(methodName string, input golem_core_typ
 		panic("unreachable")
 	}
 	wasm_import_method_wasm_rpc_async_invoke_and_await((self).Handle(), uintptr(utf8), uint32(len(methodName)), uintptr(result26), length27, (input).Root, option, option28, returnArea)
-	value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
-	value29 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-	result30 := AsyncInvocationWithMetadata{Metadata: InvocationMetadata{AgentId: value, IdempotencyKey: value29}, Future: FutureInvokeResultFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))))}
-	return result30
+	var option30 witTypes.Option[InvocationMetadata]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
+	case 0:
+
+		option30 = witTypes.None[InvocationMetadata]()
+	case 1:
+		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
+		value29 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+
+		option30 = witTypes.Some[InvocationMetadata](InvocationMetadata{AgentId: value, IdempotencyKey: value29})
+	default:
+		panic("unreachable")
+	}
+	result31 := AsyncInvocationWithMetadata{Metadata: option30, Future: FutureInvokeResultFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))))}
+	return result31
 
 }
 

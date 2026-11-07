@@ -35,7 +35,7 @@ use golem_common::model::invocation_session_public::{
     PublicResumeOperation, PublicServerMessage, PublicStreamDirection, decode_server_text,
     encode_text,
 };
-use golem_common::model::{AgentId, IdempotencyKey, RoutingTable};
+use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, RoutingTable};
 use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_schema::proto::golem::schema::{
@@ -367,6 +367,7 @@ async fn invoke_agent_session(
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
+            request_key: None,
         })),
     };
     let mut state = InvocationSessionState::default();
@@ -463,9 +464,13 @@ impl TrustedInvocationSession {
         ephemeral: bool,
     ) -> anyhow::Result<Self> {
         let idempotency_key = IdempotencyKey::fresh();
+        let request_key = InvocationRequestKey::external(
+            AuthCtx::System.idempotency_scope(),
+            Some(&idempotency_key),
+        );
         let agent_id = if ephemeral {
             agent_id
-                .with_ephemeral_invocation_phantom(&idempotency_key)
+                .with_ephemeral_invocation_phantom(&request_key.owner_key(method_name))
                 .map_err(|error| anyhow::anyhow!("invalid ephemeral agent id: {error}"))?
         } else {
             agent_id.clone()
@@ -500,6 +505,7 @@ impl TrustedInvocationSession {
                 scope_card: None,
                 origin_invocation: None,
                 external_tool: None,
+                request_key: Some(request_key.into()),
             })),
         };
         let mut state = InvocationSessionState::default();
@@ -2185,7 +2191,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
     assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry,
         PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.idempotency_key.value == key)
+                if method.invocation_id.value == key)
     )).count(), 1);
     assert_eq!(
         oplog

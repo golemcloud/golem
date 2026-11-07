@@ -64,10 +64,9 @@ pub enum ApiEndpointError {
     PayloadTooLarge(Json<ErrorBody>),
     #[oai(status = 415)]
     UnsupportedMediaType(Json<ErrorBody>),
+    /// A limit was exceeded, or the idempotency key was already used for a different request.
     #[oai(status = 422)]
-    LimitExceeded(Json<ErrorBody>),
-    #[oai(status = 422)]
-    InvocationIdentityConflict(Json<ErrorBody>),
+    UnprocessableEntity(Json<ErrorBody>),
     #[oai(status = 500)]
     InternalError(Json<ErrorBodyWithOptionalWorkerError>),
 }
@@ -82,8 +81,12 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::Conflict(_) => "Conflict",
             Self::PayloadTooLarge(_) => "PayloadTooLarge",
             Self::UnsupportedMediaType(_) => "UnsupportedMediaType",
-            Self::LimitExceeded(_) => "LimitExceeded",
-            Self::InvocationIdentityConflict(_) => "InvocationIdentityConflict",
+            Self::UnprocessableEntity(body)
+                if body.code == api::error_code::IDEMPOTENCY_CONFLICT =>
+            {
+                "InvocationIdentityConflict"
+            }
+            Self::UnprocessableEntity(_) => "LimitExceeded",
             Self::InternalError(_) => "InternalError",
         }
     }
@@ -95,8 +98,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::Conflict(_) => true,
             Self::PayloadTooLarge(_) => true,
             Self::UnsupportedMediaType(_) => true,
-            Self::LimitExceeded(_) => true,
-            Self::InvocationIdentityConflict(_) => true,
+            Self::UnprocessableEntity(_) => true,
             Self::Forbidden(_) => true,
             Self::Unauthorized(_) => true,
             Self::InternalError(_) => false,
@@ -112,8 +114,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::Forbidden(inner) => inner.cause.take(),
             Self::PayloadTooLarge(inner) => inner.cause.take(),
             Self::UnsupportedMediaType(inner) => inner.cause.take(),
-            Self::LimitExceeded(inner) => inner.cause.take(),
-            Self::InvocationIdentityConflict(inner) => inner.cause.take(),
+            Self::UnprocessableEntity(inner) => inner.cause.take(),
             Self::Conflict(inner) => inner.cause.take(),
         }
     }
@@ -185,7 +186,7 @@ impl ApiEndpointError {
     }
 
     pub fn limit_exceeded<T: SafeDisplay>(code: &str, error: T) -> Self {
-        Self::LimitExceeded(Json(ErrorBody {
+        Self::UnprocessableEntity(Json(ErrorBody {
             error: error.to_safe_string(),
             code: code.to_string(),
             cause: None,
@@ -299,9 +300,9 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::InvalidRequest { ref details }
                 if details.starts_with("IdempotencyConflict:") =>
             {
-                Self::InvocationIdentityConflict(Json(ErrorBody {
+                Self::UnprocessableEntity(Json(ErrorBody {
                     error: error.to_safe_string(),
-                    code: api::error_code::VALIDATION_ERROR.to_string(),
+                    code: api::error_code::IDEMPOTENCY_CONFLICT.to_string(),
                     cause: None,
                 }))
             }
@@ -556,7 +557,7 @@ mod tests {
                 let response = api_error.into_response();
                 assert_eq!(response.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
                 let body: serde_json::Value = response.into_body().into_json().await.unwrap();
-                assert_eq!(body["code"], api::error_code::VALIDATION_ERROR);
+                assert_eq!(body["code"], api::error_code::IDEMPOTENCY_CONFLICT);
                 assert_eq!(body["error"], format!("Invalid request: {details}"));
             }
         }

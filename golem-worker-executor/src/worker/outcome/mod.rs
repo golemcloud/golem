@@ -105,6 +105,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .add_and_commit_oplog(OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 error,
                 retry_from,
                 retry_policy_state,
@@ -399,12 +400,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 match entry {
                     OplogEntry::PendingAgentInvocation {
-                        idempotency_key,
+                        invocation_id: idempotency_key,
                         payload,
                         ..
                     }
                     | OplogEntry::AgentInvocationStarted {
-                        idempotency_key,
+                        invocation_id: idempotency_key,
                         payload,
                         ..
                     } if idempotency_key == key => {
@@ -559,7 +560,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         crate::metrics::workers::record_invocation_result_resolution("oplog_fallback");
         let mut current_idempotency_key = None;
-        let mut cancelled_idempotency_key = None;
         let mut result = None;
         let mut first = OplogIndex::INITIAL;
         let chunk_size = self
@@ -580,7 +580,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             fold_invocation_result_entries(
                 &mut current_idempotency_key,
-                &mut cancelled_idempotency_key,
                 &status.deleted_regions,
                 &entries,
                 |candidate, index| {

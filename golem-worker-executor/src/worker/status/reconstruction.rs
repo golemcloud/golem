@@ -549,7 +549,8 @@ pub(super) async fn hydrate_initial_pending_evidence(
         };
         match referent {
             Some(OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             }) => {
                 status.apply_pending_invocation(
                     attached.pending_invocation_oplog_index,

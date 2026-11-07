@@ -89,7 +89,6 @@ pub struct InvocationResultIndexMetadata {
     pub covered_through: OplogIndex,
     pub revert_generation: u64,
     pub current_idempotency_key: Option<IdempotencyKey>,
-    pub cancelled_idempotency_key: Option<IdempotencyKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]

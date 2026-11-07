@@ -418,7 +418,8 @@ impl Oplog for TestOplog {
                 continue;
             }
             if let OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } = entry
                 && let Some(mut status) = statuses.get(idempotency_key).cloned()
             {
