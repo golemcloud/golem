@@ -10,7 +10,7 @@ fn completed_invocation_payload(
         .iter()
         .filter_map(|(index, entry)| match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key,
+                invocation_id: idempotency_key,
                 payload,
                 ..
             } if idempotency_key == key => Some((*index, payload)),

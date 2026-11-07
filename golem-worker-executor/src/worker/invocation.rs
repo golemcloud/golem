@@ -277,19 +277,17 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     });
 
     let invocation_principal = call.principal();
-    store
-        .data_mut()
-        .durable_ctx_mut()
-        .set_invocation_principal(invocation_principal);
+    let durable_ctx = store.data_mut().durable_ctx_mut();
+    durable_ctx.set_invocation_principal(invocation_principal);
+    durable_ctx.set_invocation_id(call.has_invocation_id());
     let call_future = dispatch_call(&mut store, instance, call, &display_name);
 
     let call_outcome = std::panic::AssertUnwindSafe(call_future)
         .catch_unwind()
         .await;
-    store
-        .data_mut()
-        .durable_ctx_mut()
-        .set_invocation_principal(None);
+    let durable_ctx = store.data_mut().durable_ctx_mut();
+    durable_ctx.set_invocation_principal(None);
+    durable_ctx.set_invocation_id(false);
 
     if read_only_method.is_some() {
         store.data_mut().exit_read_only_mode();
@@ -1693,6 +1691,12 @@ enum PreparedCall {
 }
 
 impl PreparedCall {
+    /// Whether the call is an invocation with an invocation ID. Agent initialization, snapshot
+    /// save and load, and oplog processing are not.
+    fn has_invocation_id(&self) -> bool {
+        matches!(self, Self::Invoke { .. } | Self::ExternalTool { .. })
+    }
+
     fn principal(&self) -> Option<golem_common::model::agent::Principal> {
         match self {
             Self::Initialize { principal, .. } | Self::Invoke { principal, .. } => {

@@ -1246,7 +1246,7 @@ mod tests {
     ) -> OplogEntry {
         OplogEntry::AgentInvocationStarted(RawAgentInvocationStartedParameters {
             timestamp: instant(12, 0),
-            idempotency_key: idempotency_key.to_string(),
+            invocation_id: idempotency_key.to_string(),
             payload: OplogPayload::Inline(Vec::new()),
             trace_id: trace_id.to_string(),
             trace_states: Vec::new(),
@@ -1265,6 +1265,7 @@ mod tests {
     fn invocation_finished() -> OplogEntry {
         OplogEntry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
             timestamp: instant(20, 0),
+            invocation_id: "invocation".to_string(),
             result: OplogPayload::Inline(Vec::new()),
             method_name: None,
             consumed_fuel: 0,
@@ -1778,6 +1779,7 @@ mod tests {
                     OplogEntry::Error(RawErrorParameters {
                         timestamp: instant(18, 0),
                         kind: OplogErrorKind::Invocation,
+                        invocation_id: Some("failed-key".to_string()),
                         error: WorkerError::Unknown("boom".to_string()),
                         retry_from: 0,
                         retry_policy_state: None,

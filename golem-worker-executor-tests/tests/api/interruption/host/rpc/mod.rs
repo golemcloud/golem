@@ -254,7 +254,7 @@ async fn pending_rpc_scenario(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(&executor, &key, METHOD))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -285,6 +285,7 @@ async fn pending_rpc_scenario(
         Principal::anonymous(),
     )
     .await?;
+    let stored_key = executor.external_invocation_key(&id, &key, METHOD).await?;
     let (_caller_usage, mut caller_flushes) = refund_ordering::observe_usage(&worker);
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -307,18 +308,20 @@ async fn pending_rpc_scenario(
     let mut caller_waiter_joined = false;
     let mut refreshes = Vec::new();
     let result = async {
-        let (original, target_wait) = tokio::time::timeout(Duration::from_secs(15), async {
+        let (original, target_wait, target_key) = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
                 executor.commit_oplog(&target_id).await?;
                 let caller_entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
-                if let Some(call) = history::caller(&caller_entries, &key, &target_id, asynchronous, false, 0)?
-                    && let Some(wait) = history::target(&target_entries, &call.target_key, false)? {
+                if let Some(call) = history::caller(&caller_entries, &stored_key, &target_id, asynchronous, false, 0)? {
+                    let target_key = executor.finalized_invocation_key(&target_id, &golem_common::model::InvocationRequestKey::Internal(call.target_key.clone()), "inc_after_promise").await?;
+                    if let Some(wait) = history::target(&target_entries, &target_key, false)? {
                     ensure!(count_agent_invocation_pair_since(&caller_entries, OplogIndex::INITIAL) == (2, 1));
                     ensure!(count_agent_invocation_pair_since(&target_entries, OplogIndex::INITIAL) == (3, 2));
                     info!(?call, ?wait, ?caller_entries, ?target_entries, "Committed caller RPC Start and target accepted invocation with open promise result");
-                    return Ok::<_, anyhow::Error>((call, wait));
+                    return Ok::<_, anyhow::Error>((call, wait, target_key));
+                    }
                 }
                 ensure!(!invocation.is_finished(), "caller returned before target accepted pending result: {caller_entries:?} {target_entries:?}");
                 tokio::task::yield_now().await;
@@ -382,8 +385,8 @@ async fn pending_rpc_scenario(
             tokio::time::timeout(Duration::from_secs(10), selected).await??;
             executor.commit_oplog(&id).await?;
             executor.commit_oplog(&target_id).await?;
-            ensure!(history::caller(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &key, &target_id, asynchronous, true, 0)? == Some(original.clone()));
-            ensure!(history::target(&executor.get_oplog(&target_id, OplogIndex::INITIAL).await?, &original.target_key, true)? == Some(target_wait));
+            ensure!(history::caller(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &stored_key, &target_id, asynchronous, true, 0)? == Some(original.clone()));
+            ensure!(history::target(&executor.get_oplog(&target_id, OplogIndex::INITIAL).await?, &target_key, true)? == Some(target_wait));
             Some(release)
         } else { None };
         let mut raw = worker.raw_interrupt_for_test();
@@ -443,7 +446,7 @@ async fn pending_rpc_scenario(
                 refund_ordering::compute_suspension(&target).await?;
                 let target_stopped = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
                 ensure!(count_agent_invocation_pair_since(&target_stopped, OplogIndex::INITIAL) == (3, 2));
-                ensure!(history::target(&target_stopped, &original.target_key, false)? == Some(target_wait));
+                ensure!(history::target(&target_stopped, &target_key, false)? == Some(target_wait));
                 let (caller_entry, target_entry) = growth_entries.as_ref().unwrap();
                 refund_ordering::entry_count(&target, target_entry, 1).await?;
                 refund_ordering::entry_count(&worker, caller_entry, 0).await?;
@@ -502,7 +505,7 @@ async fn pending_rpc_scenario(
             ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await???.into_typed::<u64>()? == 7);
         }
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(history::caller(&stopped, &key, &target_id, asynchronous, completion_first, usize::from(completion_first))? == Some(original.clone()));
+        ensure!(history::caller(&stopped, &stored_key, &target_id, asynchronous, completion_first, usize::from(completion_first))? == Some(original.clone()));
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         let mut errors = Vec::new();
         let mut suspends = 0;
@@ -546,7 +549,7 @@ async fn pending_rpc_scenario(
         ensure!(dispatches.lock().unwrap().as_slice() == [Some(original.target_key.clone())]);
         if !completion_first {
             executor.commit_oplog(&target_id).await?;
-            ensure!(history::target(&executor.get_oplog(&target_id, OplogIndex::INITIAL).await?, &original.target_key, false)? == Some(target_wait));
+            ensure!(history::target(&executor.get_oplog(&target_id, OplogIndex::INITIAL).await?, &target_key, false)? == Some(target_wait));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         ensure!(!worker.is_loaded().await);
@@ -610,7 +613,7 @@ async fn pending_rpc_scenario(
             tokio::time::timeout(Duration::from_secs(5), refresh).await.context("join applied policy refresh after target completion")??;
         }
         let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
-        ensure!(history::target(&target_entries, &original.target_key, true)? == Some(target_wait));
+        ensure!(history::target(&target_entries, &target_key, true)? == Some(target_wait));
         history::settled(&target_entries)?;
         if durable {
             if !completion_first {
@@ -620,7 +623,7 @@ async fn pending_rpc_scenario(
                 if !caller_user_stop { ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await???.into_typed::<u64>()? == 7); }
             }
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::caller(&recovered, &key, &target_id, asynchronous, true, 1)? == Some(original.clone()));
+            ensure!(history::caller(&recovered, &stored_key, &target_id, asynchronous, true, 1)? == Some(original.clone()));
             if let Some(index) = user_interrupt_index {
                 history::settled_after_user_interrupt(&recovered, index)?;
             } else { history::settled(&recovered)?; }
@@ -641,8 +644,9 @@ async fn pending_rpc_scenario(
             let fresh_target_key = after.last().unwrap().as_ref().context("fresh RPC key")?;
             ensure!(fresh_target_key != &original.target_key);
             let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            history::invocation(&replayed, &key, METHOD, 1)?;
-            history::invocation(&replayed, &fresh_key, METHOD, 1)?;
+            history::invocation(&replayed, &stored_key, METHOD, 1)?;
+            let stored_fresh_key = executor.external_invocation_key(&id, &fresh_key, METHOD).await?;
+            history::invocation(&replayed, &stored_fresh_key, METHOD, 1)?;
             history::terminal(&replayed, original.start, true, usize::from(asynchronous))?;
             if let Some(index) = user_interrupt_index {
                 history::settled_after_user_interrupt(&replayed, index)?;
@@ -650,8 +654,9 @@ async fn pending_rpc_scenario(
             let value = executor.invoke_and_await_agent(&component, &target_name_id, "get_value", data_value!()).await?.into_typed::<u64>()?;
             ensure!(value == 14, "completed history must not repeat its target increment");
             let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
-            history::invocation(&target_entries, &original.target_key, "inc_after_promise", 1)?;
-            history::invocation(&target_entries, fresh_target_key, "inc_after_promise", 1)?;
+            history::invocation(&target_entries, &target_key, "inc_after_promise", 1)?;
+            let fresh_target_stored_key = executor.finalized_invocation_key(&target_id, &golem_common::model::InvocationRequestKey::Internal(fresh_target_key.clone()), "inc_after_promise").await?;
+            history::invocation(&target_entries, &fresh_target_stored_key, "inc_after_promise", 1)?;
             history::settled(&target_entries)?;
             info!(?original, ?attempts_before, ?after, value, "Caller repaired one RPC Start; completed reconstruction dispatched only the fresh logical increment");
         } else {
@@ -663,7 +668,7 @@ async fn pending_rpc_scenario(
             ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
             ensure!(tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!(target_name, promise.clone(), asynchronous))).await?.is_err());
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(history::caller(&failed, &key, &target_id, asynchronous, false, 0)? == Some(original.clone()));
+            ensure!(history::caller(&failed, &stored_key, &target_id, asynchronous, false, 0)? == Some(original.clone()));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);
             ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));

@@ -468,6 +468,7 @@ where
             TaskRetryContext {
                 retry_point: begin,
                 entity_parent_start_index: ctx.entity_parent_start_index(),
+                invocation_id: ctx.state.get_current_idempotency_key(),
                 environment_state_service: ctx.state.environment_state_service.clone(),
                 environment_id: ctx.state.owned_agent_id.environment_id,
                 default_retry_policy: golem_common::model::NamedRetryPolicy::default_from_config(

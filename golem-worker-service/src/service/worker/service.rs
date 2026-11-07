@@ -78,7 +78,8 @@ use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
-    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, ScanCursor,
+    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
+    ScanCursor,
 };
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
@@ -468,6 +469,13 @@ fn normalize_agent_invocation_identity(
 ) -> WorkerResult<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)> {
     let key_was_supplied = idempotency_key.is_some();
     let idempotency_key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
+    if observation_only {
+        return Ok((
+            agent_id.clone(),
+            idempotency_key,
+            InvocationFreshnessDisposition::MayExist,
+        ));
+    }
 
     let Ok(parsed_agent_id) = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata) else {
         return Ok((agent_id.clone(), idempotency_key, freshness_disposition));
@@ -484,13 +492,6 @@ fn normalize_agent_invocation_identity(
     }
 
     if parsed_agent_id.phantom_id.is_some() {
-        if observation_only {
-            return Ok((
-                agent_id.clone(),
-                idempotency_key,
-                InvocationFreshnessDisposition::MayExist,
-            ));
-        }
         if !allow_derived_ephemeral_phantom {
             crate::metrics::record_ephemeral_explicit_phantom_invocation_rejection();
             return Err(WorkerServiceError::TypeChecker(
@@ -1867,7 +1868,7 @@ impl WorkerService {
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
+        request_key: InvocationRequestKey,
         invocation_context: Option<InvocationContext>,
         allow_derived_ephemeral_phantom: bool,
         freshness_disposition: InvocationFreshnessDisposition,
@@ -1890,7 +1891,7 @@ impl WorkerService {
             method_parameters,
             mode,
             schedule_at,
-            idempotency_key,
+            request_key,
             invocation_context,
             allow_derived_ephemeral_phantom,
             freshness_disposition,
@@ -1918,6 +1919,44 @@ impl WorkerService {
         .await
     }
 
+    pub async fn lookup_agent_invocation(
+        &self,
+        mut start: InvocationStart,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<AgentInvocationOutput> {
+        let agent_id: AgentId = start
+            .agent_id
+            .clone()
+            .ok_or_else(|| WorkerServiceError::TypeChecker("agent_id not found".to_string()))?
+            .try_into()
+            .map_err(WorkerServiceError::TypeChecker)?;
+        if start.idempotency_key.is_none() {
+            return Err(WorkerServiceError::TypeChecker(
+                "lookup requires a final invocation key".to_string(),
+            ));
+        }
+        let component = self
+            .component_service
+            .get_current_by_id(agent_id.component_id)
+            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            &agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
+        start.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32;
+        start.freshness_disposition =
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32;
+        start.environment_id = Some(component.environment_id.into());
+        start.component_owner_account_id = Some(component.account_id.into());
+        start.auth_ctx = Some(auth_ctx.into());
+        self.worker_client
+            .invoke_agent_session_one_shot(&agent_id, start)
+            .await
+    }
+
     pub async fn invoke_agent_session(
         &self,
         mut start: InvocationStart,
@@ -1937,6 +1976,31 @@ impl WorkerService {
             .await?;
         let observation_only =
             start.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
+        let raw_key = start.idempotency_key.clone().map(Into::into);
+        if observation_only && raw_key.is_none() {
+            return Err(WorkerServiceError::TypeChecker(
+                "lookup requires a final invocation key".into(),
+            ));
+        }
+        let request_key = start
+            .request_key
+            .clone()
+            .map(InvocationRequestKey::try_from)
+            .transpose()
+            .map_err(WorkerServiceError::TypeChecker)?
+            .unwrap_or_else(|| {
+                InvocationRequestKey::external(auth_ctx.idempotency_scope(), raw_key.as_ref())
+            });
+        let operation = start
+            .external_tool
+            .as_ref()
+            .map(|tool| format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/")))
+            .unwrap_or_else(|| start.method_name.clone().unwrap_or_default());
+        let seed = if observation_only {
+            raw_key
+        } else {
+            Some(request_key.owner_key(&operation))
+        };
         let freshness_disposition = if start.freshness_disposition()
             == golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
         {
@@ -1944,17 +2008,21 @@ impl WorkerService {
         } else {
             InvocationFreshnessDisposition::MayExist
         };
-        let (agent_id, idempotency_key, mut freshness_disposition) =
-            normalize_agent_invocation_identity(
-                &component,
-                &agent_id,
-                start.idempotency_key.clone().map(Into::into),
-                allow_derived_ephemeral_phantom,
-                observation_only,
-                freshness_disposition,
-            )?;
+        let original_agent_id = agent_id.clone();
+        let (agent_id, _, mut freshness_disposition) = normalize_agent_invocation_identity(
+            &component,
+            &agent_id,
+            seed,
+            allow_derived_ephemeral_phantom,
+            observation_only,
+            freshness_disposition,
+        )?;
         if observation_only {
             freshness_disposition = InvocationFreshnessDisposition::MayExist;
+        } else if agent_id != original_agent_id
+            && matches!(request_key, InvocationRequestKey::Unkeyed(_))
+        {
+            freshness_disposition = InvocationFreshnessDisposition::KnownFresh;
         }
         authorize_agent_permission(
             &auth_ctx,
@@ -2012,7 +2080,7 @@ impl WorkerService {
         }
 
         start.agent_id = Some(agent_id.clone().into());
-        start.idempotency_key = Some(idempotency_key.into());
+        start.request_key = Some(request_key.into());
         start.environment_id = Some(component.environment_id.into());
         start.component_owner_account_id = Some(component.account_id.into());
         start.freshness_disposition = match freshness_disposition {
@@ -2152,6 +2220,8 @@ impl WorkerService {
         let agent_type_name = AgentTypeName(start.selector.agent_type);
         let method_name = start.selector.method;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
+        let request_key =
+            InvocationRequestKey::external(auth.idempotency_scope(), Some(&idempotency_key));
         let resolved = self
             .agent_resolution_cache
             .resolve(&app_name, &env_name, &agent_type_name, None, &auth)
@@ -2199,11 +2269,11 @@ impl WorkerService {
         let owner_app_name = app_name.clone();
         let owner_env_name = env_name.clone();
         let authorization_method_name = method_name.clone();
-        let (agent_id, idempotency_key, freshness_disposition, observation_only) = self
+        let (agent_id, _, mut freshness_disposition, observation_only) = self
             .prepare_agent_invocation_identity(
                 &component,
                 &agent_id,
-                Some(idempotency_key),
+                Some(request_key.owner_key(&method_name)),
                 false,
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 InvocationFreshnessDisposition::MayExist,
@@ -2226,6 +2296,11 @@ impl WorkerService {
                 },
             )?;
         debug_assert!(!observation_only);
+        if matches!(request_key, InvocationRequestKey::Unkeyed(_))
+            && agent_type.mode == AgentMode::Ephemeral
+        {
+            freshness_disposition = InvocationFreshnessDisposition::KnownFresh;
+        }
         let invocation_component = self
             .component_for_invocation(
                 &component,
@@ -2311,6 +2386,7 @@ impl WorkerService {
             agent_id: Some(agent_id.clone().into()),
             method_name: Some(method_name.clone()),
             input: Some(proto_method_parameters),
+            request_key: Some(request_key.into()),
             idempotency_key: Some(idempotency_key.into()),
             context: None,
             auth_ctx: Some(auth.into()),
@@ -2507,8 +2583,19 @@ impl WorkerService {
         let principal = Principal::GolemUser(GolemUserPrincipal {
             account_id: auth.account_id(),
         });
-        self.invoke_internal_tool_session_v1(start, tail, auth, principal, validate_identity)
-            .await
+        let request_key = InvocationRequestKey::external(
+            auth.idempotency_scope(),
+            Some(&IdempotencyKey::new(start.idempotency_key.clone())),
+        );
+        self.invoke_internal_tool_session_v1(
+            start,
+            tail,
+            auth,
+            principal,
+            request_key,
+            validate_identity,
+        )
+        .await
     }
 
     pub async fn invoke_internal_tool_session_v1(
@@ -2517,6 +2604,7 @@ impl WorkerService {
         tail: InvocationRequestStream,
         auth: AuthCtx,
         principal: Principal,
+        request_key: InvocationRequestKey,
         validate_identity: impl FnOnce(&SessionAgentIdentity) -> Result<(), PublicSchemaValueError>,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
         let app_name = ApplicationName::try_from(start.application)
@@ -2524,6 +2612,11 @@ impl WorkerService {
         let env_name = EnvironmentName::try_from(start.environment)
             .map_err(WorkerServiceError::TypeChecker)?;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
+        let owner_key = request_key.owner_key(&format!(
+            "tool:{}/{}",
+            start.tool_name,
+            start.command_path.join("/")
+        ));
         let (component_id, existing_agent_id) = match start.target {
             PublicNativeToolTarget::Agent {
                 component_id,
@@ -2552,7 +2645,7 @@ impl WorkerService {
         let fresh_owner = existing_agent_id.is_none();
         let agent_id = existing_agent_id.unwrap_or_else(|| AgentId {
             component_id,
-            agent_id: OwnerKind::external_tool_instance_name(&idempotency_key),
+            agent_id: OwnerKind::external_tool_instance_name(&owner_key),
         });
         if !fresh_owner && OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
             return Err(WorkerServiceError::TypeChecker(
@@ -2610,6 +2703,7 @@ impl WorkerService {
             agent_id: Some(agent_id.clone().into()),
             method_name: None,
             input: None,
+            request_key: Some(request_key.into()),
             idempotency_key: Some(idempotency_key.into()),
             context: None,
             auth_ctx: Some(auth.into()),
@@ -2800,7 +2894,7 @@ impl WorkerService {
 
     /// Shared invocation-dispatch core: normalizes the invocation identity,
     /// authorizes against the final agent id, dispatches to the executor, and
-    /// backfills the final identity into the invocation output.
+    /// preserves the executor's authoritative invocation identity in the output.
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_agent_invocation(
         &self,
@@ -2810,7 +2904,7 @@ impl WorkerService {
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
+        request_key: InvocationRequestKey,
         invocation_context: Option<InvocationContext>,
         allow_derived_ephemeral_phantom: bool,
         freshness_disposition: InvocationFreshnessDisposition,
@@ -2822,16 +2916,39 @@ impl WorkerService {
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         authorize: impl FnOnce(&AgentId) -> WorkerResult<()>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        let (agent_id, idempotency_key, freshness_disposition, observation_only) = self
+        let observation_only =
+            mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32;
+        let seed = if observation_only {
+            match &request_key {
+                InvocationRequestKey::External { key, .. }
+                | InvocationRequestKey::Internal(key)
+                | InvocationRequestKey::RouteSession { key, .. } => key.clone(),
+                InvocationRequestKey::Unkeyed(_) => {
+                    return Err(WorkerServiceError::TypeChecker(
+                        "lookup requires a final invocation key".to_string(),
+                    ));
+                }
+            }
+        } else {
+            request_key.owner_key(method_name.as_deref().unwrap_or_default())
+        };
+        let original_agent_id = agent_id;
+        let (agent_id, _, mut freshness_disposition, observation_only) = self
             .prepare_agent_invocation_identity(
                 component,
                 agent_id,
-                idempotency_key,
+                Some(seed),
                 allow_derived_ephemeral_phantom,
                 mode,
                 freshness_disposition,
                 authorize,
             )?;
+        if !observation_only
+            && agent_id != *original_agent_id
+            && matches!(request_key, InvocationRequestKey::Unkeyed(_))
+        {
+            freshness_disposition = InvocationFreshnessDisposition::KnownFresh;
+        }
 
         let validation_component = if observation_only {
             None
@@ -2872,7 +2989,7 @@ impl WorkerService {
             method_parameters,
             mode,
             schedule_at,
-            idempotency_key,
+            request_key,
             invocation_context,
             freshness_disposition,
             config,
@@ -2932,7 +3049,7 @@ impl WorkerService {
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: IdempotencyKey,
+        request_key: InvocationRequestKey,
         invocation_context: Option<InvocationContext>,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
@@ -2950,7 +3067,7 @@ impl WorkerService {
                 method_parameters,
                 mode,
                 schedule_at,
-                idempotency_key.clone(),
+                request_key,
                 invocation_context,
                 freshness_disposition,
                 config,
@@ -2962,7 +3079,6 @@ impl WorkerService {
             )
             .await?;
         output.agent_id.get_or_insert(agent_id);
-        output.idempotency_key.get_or_insert(idempotency_key);
         Ok(output)
     }
 
@@ -3079,10 +3195,11 @@ impl WorkerService {
         if lookup
             && (request.idempotency_key.is_none()
                 || request.input.is_some()
-                || request.schedule_at.is_some())
+                || request.schedule_at.is_some()
+                || request.agent_id.is_none())
         {
             return Err(WorkerServiceError::TypeChecker(
-                "lookup requires an idempotency key and forbids input and scheduling".to_string(),
+                "lookup requires the final agent ID and invocation key and forbids input and scheduling".to_string(),
             ));
         }
         if !lookup && request.input.is_none() {
@@ -3097,11 +3214,27 @@ impl WorkerService {
                 "schedule_at requires schedule mode".to_string(),
             ));
         }
-        let idempotency_key = request
-            .idempotency_key
-            .unwrap_or_else(IdempotencyKey::fresh);
+        let request_key = InvocationRequestKey::external(
+            auth.idempotency_scope(),
+            request.idempotency_key.as_ref(),
+        );
+        let idempotency_key = if lookup {
+            request
+                .idempotency_key
+                .clone()
+                .expect("lookup key validated")
+        } else {
+            request_key.owner_key(&format!(
+                "tool:{}/{}",
+                request.tool_name,
+                request.command_path.join("/")
+            ))
+        };
         let (component_id, fresh_owner) = match (&request.agent_id, request.component_id) {
-            (Some(agent_id), None) => (agent_id.component_id, false),
+            (Some(agent_id), None) => (
+                agent_id.component_id,
+                lookup && OwnerKind::is_reserved_instance_name(&agent_id.agent_id),
+            ),
             (None, Some(component_id)) => (component_id, true),
             _ => {
                 return Err(WorkerServiceError::TypeChecker(
@@ -3182,7 +3315,8 @@ impl WorkerService {
             agent_id: Some(agent_id.clone().into()),
             method_name: None,
             input: None,
-            idempotency_key: Some(idempotency_key.clone().into()),
+            request_key: Some(request_key.into()),
+            idempotency_key: request.idempotency_key.map(Into::into),
             context: None,
             auth_ctx: Some(auth.into()),
             principal: Some(principal),
@@ -3218,7 +3352,10 @@ impl WorkerService {
             .invoke_agent_session_one_shot(&agent_id, start)
             .await?;
         let response_agent_id = output.agent_id.take().unwrap_or(agent_id);
-        let response_key = output.idempotency_key.take().unwrap_or(idempotency_key);
+        let response_key = output
+            .idempotency_key
+            .take()
+            .ok_or_else(|| WorkerServiceError::Internal("Missing idempotency key".to_string()))?;
         let result = match output.result {
             golem_common::model::AgentInvocationResult::ExternalTool { result } => {
                 Some(match result {
@@ -3471,11 +3608,15 @@ impl WorkerService {
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32
             }
         };
-        let (agent_id, idempotency_key, freshness_disposition, observation_only) = self
+        let request_key = InvocationRequestKey::external(
+            auth.idempotency_scope(),
+            request.idempotency_key.as_ref(),
+        );
+        let (agent_id, _, mut freshness_disposition, observation_only) = self
             .prepare_agent_invocation_identity(
                 &component,
                 &agent_id,
-                request.idempotency_key.clone(),
+                Some(request_key.owner_key(&method_name)),
                 false,
                 proto_mode,
                 InvocationFreshnessDisposition::MayExist,
@@ -3498,6 +3639,11 @@ impl WorkerService {
                 },
             )?;
         debug_assert!(!observation_only);
+        if matches!(request_key, InvocationRequestKey::Unkeyed(_))
+            && agent_type.mode == AgentMode::Ephemeral
+        {
+            freshness_disposition = InvocationFreshnessDisposition::KnownFresh;
+        }
         let invocation_component = self
             .component_for_invocation(
                 &component,
@@ -3578,7 +3724,7 @@ impl WorkerService {
                 Some(proto_method_parameters),
                 proto_mode,
                 proto_schedule_at,
-                idempotency_key,
+                request_key,
                 None,
                 freshness_disposition,
                 request.config,
@@ -3716,7 +3862,8 @@ mod tests {
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::tool::{ToolBindingOwner, ToolName};
     use golem_common::model::{
-        AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, ScanCursor, Timestamp,
+        AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey,
+        ScanCursor, Timestamp,
     };
     use golem_common::schema::agent::AgentConfigDeclarationSchema;
     use golem_common::schema::public_json::PublicStreamReference;
@@ -4779,11 +4926,11 @@ mod tests {
         async fn invoke_agent(
             &self,
             agent_id: &AgentId,
-            _: Option<String>,
+            method_name: Option<String>,
             _: Option<golem_schema::proto::golem::schema::SchemaValue>,
             mode: i32,
             schedule_at: Option<::prost_types::Timestamp>,
-            idempotency_key: IdempotencyKey,
+            request_key: InvocationRequestKey,
             _: Option<InvocationContext>,
             freshness_disposition: InvocationFreshnessDisposition,
             _: Vec<AgentConfigEntryDto>,
@@ -4793,9 +4940,21 @@ mod tests {
             _: golem_api_grpc::proto::golem::component::Principal,
             _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         ) -> WorkerResult<AgentInvocationOutput> {
+            let idempotency_key = if mode
+                == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32
+            {
+                match &request_key {
+                    InvocationRequestKey::External { key, .. }
+                    | InvocationRequestKey::Internal(key)
+                    | InvocationRequestKey::RouteSession { key, .. } => key.clone(),
+                    InvocationRequestKey::Unkeyed(_) => panic!("lookup requires a final key"),
+                }
+            } else {
+                request_key.owner_key(method_name.as_deref().unwrap_or_default())
+            };
             self.invocations.lock().unwrap().push((
                 agent_id.clone(),
-                idempotency_key,
+                idempotency_key.clone(),
                 freshness_disposition,
             ));
             self.invocation_modes_and_schedules
@@ -4806,7 +4965,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(environment_id);
-            Ok(self.invocation_output.lock().unwrap().clone())
+            let mut output = self.invocation_output.lock().unwrap().clone();
+            output.agent_id = Some(agent_id.clone());
+            output.idempotency_key.get_or_insert(idempotency_key);
+            Ok(output)
         }
 
         async fn invoke_agent_session(
@@ -4839,11 +5001,33 @@ mod tests {
             agent_id: &AgentId,
             start: InvocationStart,
         ) -> WorkerResult<AgentInvocationOutput> {
+            let key = if start.mode()
+                == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
+            {
+                start.idempotency_key.clone().unwrap().into()
+            } else {
+                let prepared =
+                    InvocationRequestKey::try_from(start.request_key.clone().unwrap()).unwrap();
+                let operation = start
+                    .external_tool
+                    .as_ref()
+                    .map(|tool| format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/")))
+                    .unwrap_or_else(|| start.method_name.clone().unwrap_or_default());
+                IdempotencyKey::new(
+                    prepared
+                        .finalize(agent_id.clone(), self.fingerprint, &operation)
+                        .uuid()
+                        .to_string(),
+                )
+            };
             self.invocation_session_starts
                 .lock()
                 .unwrap()
                 .push((agent_id.clone(), start));
-            Ok(self.invocation_output.lock().unwrap().clone())
+            let mut output = self.invocation_output.lock().unwrap().clone();
+            output.agent_id = Some(agent_id.clone());
+            output.idempotency_key.get_or_insert(key);
+            Ok(output)
         }
 
         async fn deliver_card_transfer(
@@ -5321,6 +5505,14 @@ mod tests {
                 upper: Vec::new(),
             },
         )
+    }
+
+    fn scoped_invocation_auth() -> AuthCtx {
+        auth_ctx_with_permissions(vec![PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::AnyAgents,
+            verb: None,
+            resource: AgentResourcePattern::Any,
+        })])
     }
 
     fn oplog_target(agent_id: &AgentId, resource: OplogResourcePattern) -> PermissionTarget {
@@ -6004,13 +6196,18 @@ mod tests {
         let (routed_agent_id, start) = harness.worker_client.invocation_session_start();
         let trusted_agent_id: AgentId = start.agent_id.clone().unwrap().try_into().unwrap();
         let trusted_idempotency_key: IdempotencyKey = start.idempotency_key.clone().unwrap().into();
+        let request_key =
+            InvocationRequestKey::try_from(start.request_key.clone().unwrap()).unwrap();
+        assert!(matches!(request_key, InvocationRequestKey::Unkeyed(_)));
 
         assert_eq!(routed_agent_id, trusted_agent_id);
         assert_eq!(trusted_agent_id.component_id, harness.component_id);
         assert_eq!(trusted_idempotency_key, idempotency_key);
         assert_eq!(
             phantom_id(&trusted_agent_id),
-            Some(ephemeral_invocation_phantom_id(&idempotency_key))
+            Some(ephemeral_invocation_phantom_id(
+                &request_key.owner_key("run")
+            ))
         );
         assert_eq!(start.method_name.as_deref(), Some("run"));
         assert!(start.input.is_some());
@@ -6028,7 +6225,7 @@ mod tests {
         assert!(start.schedule_at.is_none());
         assert_eq!(
             start.freshness_disposition(),
-            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
         );
         assert!(start.attempt_id.is_some());
         assert!(start.expected_callee_fingerprint.is_none());
@@ -6432,7 +6629,7 @@ mod tests {
                     Some(input.try_into().unwrap()),
                     golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
                     None,
-                    Some(IdempotencyKey::fresh()),
+                    InvocationRequestKey::external(None, None),
                     None,
                     false,
                     InvocationFreshnessDisposition::MayExist,
@@ -6638,7 +6835,7 @@ mod tests {
                     Some(input.try_into().unwrap()),
                     golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                     None,
-                    None,
+                    InvocationRequestKey::external(None, None),
                     None,
                     false,
                     InvocationFreshnessDisposition::MayExist,
@@ -6661,7 +6858,7 @@ mod tests {
                     Some(SchemaValue::Record { fields: vec![] }.try_into().unwrap()),
                     golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                     None,
-                    None,
+                    InvocationRequestKey::external(None, None),
                     None,
                     false,
                     InvocationFreshnessDisposition::MayExist,
@@ -6806,25 +7003,28 @@ mod tests {
     async fn caller_supplied_key_derives_stable_ephemeral_identity_conservatively() {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let idempotency_key = IdempotencyKey::new("caller-selected-key".to_string());
+        let auth = scoped_invocation_auth();
+        let seed = InvocationRequestKey::external(auth.idempotency_scope(), Some(&idempotency_key))
+            .owner_key("run");
         let mut request = harness.invoke_request();
         request.idempotency_key = Some(idempotency_key.clone());
 
         harness
             .worker_service
-            .invoke_agent_rest(request.clone(), AuthCtx::system())
+            .invoke_agent_rest(request.clone(), auth.clone())
             .await
             .unwrap();
         harness
             .worker_service
-            .invoke_agent_rest(request, AuthCtx::system())
+            .invoke_agent_rest(request, auth)
             .await
             .unwrap();
 
         let invocations = harness.worker_client.invocations();
         assert_eq!(invocations.len(), 2);
         assert_eq!(invocations[0].0, invocations[1].0);
-        assert_eq!(invocations[0].1, idempotency_key);
-        assert_eq!(invocations[1].1, idempotency_key);
+        assert_eq!(invocations[0].1, seed);
+        assert_eq!(invocations[1].1, seed);
         assert!(
             invocations
                 .iter()
@@ -6836,6 +7036,9 @@ mod tests {
     async fn scheduled_ephemeral_invocation_preserves_supplied_identity_key_and_time() {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let idempotency_key = IdempotencyKey::new("scheduled-tool-call".to_string());
+        let auth = scoped_invocation_auth();
+        let seed = InvocationRequestKey::external(auth.idempotency_scope(), Some(&idempotency_key))
+            .owner_key("run");
         let schedule_at = Utc::now();
         let expected_schedule_at = ::prost_types::Timestamp {
             seconds: schedule_at.timestamp(),
@@ -6848,15 +7051,15 @@ mod tests {
 
         let response = harness
             .worker_service
-            .invoke_agent_rest(request, AuthCtx::system())
+            .invoke_agent_rest(request, auth)
             .await
             .unwrap();
 
         let invocations = harness.worker_client.invocations();
         assert_eq!(invocations.len(), 1);
         assert_eq!(response.agent_id, invocations[0].0);
-        assert_eq!(response.idempotency_key, idempotency_key);
-        assert_eq!(invocations[0].1, idempotency_key);
+        assert_eq!(response.idempotency_key, seed);
+        assert_eq!(invocations[0].1, seed);
         assert_eq!(
             phantom_id(&invocations[0].0),
             Some(ephemeral_invocation_phantom_id(&invocations[0].1))
@@ -6875,6 +7078,11 @@ mod tests {
     async fn ephemeral_session_entry_is_stable_and_lookup_is_observation_only() {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let idempotency_key = IdempotencyKey::new("session-tool-call".to_string());
+        let request_key = InvocationRequestKey::external(
+            scoped_invocation_auth().idempotency_scope(),
+            Some(&idempotency_key),
+        );
+        let seed = request_key.owner_key("run");
         let logical_agent_id = build_public_invocation_agent_id(
             harness.component_id,
             harness.agent_type_name.clone(),
@@ -6886,6 +7094,7 @@ mod tests {
             agent_id: Some(logical_agent_id.into()),
             method_name: Some("run".to_string()),
             input: None,
+            request_key: Some(request_key.into()),
             idempotency_key: Some(idempotency_key.clone().into()),
             context: None,
             auth_ctx: None,
@@ -6928,7 +7137,7 @@ mod tests {
         );
         assert_eq!(
             phantom_id(&admitted_agent_id),
-            Some(ephemeral_invocation_phantom_id(&idempotency_key))
+            Some(ephemeral_invocation_phantom_id(&seed))
         );
         assert_eq!(
             admitted_start.idempotency_key.clone().map(Into::into),
@@ -6989,6 +7198,92 @@ mod tests {
     }
 
     #[test]
+    async fn prepared_session_owners_are_scoped_by_caller_and_operation_and_survive_retry() {
+        let harness = RestHarness::new(AgentMode::Ephemeral);
+        let raw = IdempotencyKey::from("shared-raw-key");
+        let account = AccountId::new();
+        let requests = [
+            (
+                InvocationRequestKey::External {
+                    scope: golem_common::model::IdempotencyScope::User(account),
+                    key: raw.clone(),
+                },
+                "run",
+            ),
+            (
+                InvocationRequestKey::External {
+                    scope: golem_common::model::IdempotencyScope::User(AccountId::new()),
+                    key: raw.clone(),
+                },
+                "run",
+            ),
+            (
+                InvocationRequestKey::External {
+                    scope: golem_common::model::IdempotencyScope::User(account),
+                    key: raw.clone(),
+                },
+                "other",
+            ),
+            (InvocationRequestKey::external(None, Some(&raw)), "run"),
+            (InvocationRequestKey::external(None, Some(&raw)), "run"),
+        ];
+        let logical = build_public_invocation_agent_id(
+            harness.component_id,
+            harness.agent_type_name.clone(),
+            empty_constructor_parameters(),
+            None,
+        )
+        .unwrap();
+        let mut owners = BTreeSet::new();
+        for (prepared, method) in requests {
+            let start = InvocationStart {
+                agent_id: Some(logical.clone().into()),
+                method_name: Some(method.into()),
+                idempotency_key: Some(raw.clone().into()),
+                request_key: Some(prepared.clone().into()),
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+                ..Default::default()
+            };
+            let _ = harness
+                .worker_service
+                .invoke_agent_session(start, Box::pin(stream::empty()), true, AuthCtx::System)
+                .await
+                .unwrap();
+            let (owner, admitted) = harness
+                .worker_client
+                .invocation_session_starts()
+                .last()
+                .unwrap()
+                .clone();
+            assert!(owners.insert(owner.agent_id.clone()));
+            assert_eq!(
+                phantom_id(&owner),
+                Some(ephemeral_invocation_phantom_id(&prepared.owner_key(method)))
+            );
+            assert_eq!(
+                InvocationRequestKey::try_from(admitted.request_key.clone().unwrap()).unwrap(),
+                prepared
+            );
+            assert_eq!(admitted.idempotency_key, Some(raw.clone().into()));
+            let _ = harness
+                .worker_service
+                .invoke_agent_session(admitted, Box::pin(stream::empty()), true, AuthCtx::System)
+                .await
+                .unwrap();
+            assert_eq!(
+                harness
+                    .worker_client
+                    .invocation_session_starts()
+                    .last()
+                    .unwrap()
+                    .0,
+                owner
+            );
+        }
+        assert_eq!(owners.len(), 5);
+    }
+
+    #[test]
     async fn ephemeral_lookup_accepts_the_final_invocation_identity() {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let final_phantom_id = Uuid::new_v4();
@@ -7003,51 +7298,29 @@ mod tests {
 
         harness
             .worker_service
-            .invoke_agent(
-                &agent_id,
-                None,
-                None,
-                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
-                None,
-                Some(idempotency_key.clone()),
-                None,
-                false,
-                InvocationFreshnessDisposition::MayExist,
-                Vec::new(),
+            .lookup_agent_invocation(
+                InvocationStart {
+                    agent_id: Some(agent_id.clone().into()),
+                    idempotency_key: Some(idempotency_key.clone().into()),
+                    request_key: Some(InvocationRequestKey::external(None, None).into()),
+                    ..Default::default()
+                },
                 AuthCtx::system(),
-                Principal::anonymous().into(),
-                None,
-                None,
             )
             .await
             .unwrap();
 
-        let invocations = harness.worker_client.invocations();
-        assert_eq!(invocations.len(), 1);
-        assert_eq!(invocations[0].0, agent_id);
-        assert_eq!(invocations[0].1, idempotency_key);
-        assert_eq!(invocations[0].2, InvocationFreshnessDisposition::MayExist);
+        let (routed_agent_id, start) = harness.worker_client.invocation_session_start();
+        assert_eq!(routed_agent_id, agent_id);
+        assert_eq!(start.agent_id, Some(agent_id.into()));
+        assert_eq!(start.idempotency_key, Some(idempotency_key.into()));
+        assert_eq!(
+            start.freshness_disposition(),
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+        );
     }
 
-    /// A keyless invocation is given a key, and never a shared one.
-    ///
-    /// `call_worker_executor` retries on `InvalidShardId` and on transport
-    /// failure, re-sending the request as it stands, and `invoke_agent_internal`
-    /// mints a fresh key for any request that arrives without one. So a keyless
-    /// invocation that got retried used to look like work nobody had started and
-    /// run a second time on its new owner. `WorkerClient::invoke_agent` no longer
-    /// accepts an absent key, so the decision happens once, in
-    /// `normalize_agent_invocation_identity`, above the retry loop.
-    ///
-    /// What this checks is that a key is always minted and that unrelated
-    /// invocations never share one. That every *attempt* of a single invocation
-    /// carries the same key is structural rather than covered here: the key is
-    /// bound before the retry closure is built and the closure only clones what
-    /// it captured. `RecordingWorkerClient` stands above `call_worker_executor`,
-    /// so no test at this seam can see a second attempt at all.
-    ///
-    /// Both REST invocation modes go through the same mint and both are checked,
-    /// since a mint that covered only `Await` would look correct from one call.
+    /// Unrelated keyless requests receive distinct prepared seeds in both invocation modes.
     #[test]
     async fn keyless_invocations_are_each_given_their_own_key() {
         let harness = RestHarness::new(AgentMode::Durable);
@@ -7466,9 +7739,12 @@ mod tests {
             .lock()
             .unwrap();
         let (target, start) = &starts[0];
+        let prepared = InvocationRequestKey::try_from(start.request_key.clone().unwrap()).unwrap();
+        assert!(matches!(prepared, InvocationRequestKey::Unkeyed(_)));
+        assert_eq!(start.idempotency_key, Some(key.into()));
         assert_eq!(
             target.agent_id,
-            OwnerKind::external_tool_instance_name(&key)
+            OwnerKind::external_tool_instance_name(&prepared.owner_key("tool:weather/current"))
         );
         assert!(start.method_name.is_none());
         assert!(start.input.is_none());
@@ -7518,6 +7794,35 @@ mod tests {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32
         );
         assert!(!start.external_tool.as_ref().unwrap().fresh_owner);
+    }
+
+    #[test]
+    async fn native_tool_lookup_preserves_final_virtual_owner_and_key() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let mut request = harness.tool_request();
+        let final_owner = AgentId {
+            component_id: harness.component_id,
+            agent_id: OwnerKind::external_tool_instance_name(&IdempotencyKey::from(
+                "prepared-owner-seed",
+            )),
+        };
+        let final_key = IdempotencyKey::from("final-invocation-key");
+        request.agent_id = Some(final_owner.clone());
+        request.component_id = None;
+        request.mode = NativeToolInvocationMode::Lookup;
+        request.input = None;
+        request.idempotency_key = Some(final_key.clone());
+        harness
+            .worker_service
+            .invoke_tool_rest(request, AuthCtx::System)
+            .await
+            .unwrap();
+        let (target, start) = harness.worker_client.invocation_session_start();
+        assert_eq!(target, final_owner);
+        assert_eq!(start.agent_id, Some(final_owner.into()));
+        assert_eq!(start.idempotency_key, Some(final_key.into()));
+        assert!(start.external_tool.unwrap().fresh_owner);
+        assert!(harness.worker_client.effects.lock().unwrap().is_empty());
     }
 
     #[test]

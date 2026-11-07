@@ -51,6 +51,34 @@ fn durable_stream_test_session_key(key: &str) -> StreamInvocationId {
     }
 }
 
+fn test_route_scope() -> String {
+    crate::model::durable_stream::durable_stream_route_scope("environment", "1", "route")
+}
+
+#[test]
+fn durable_stream_route_scope_is_canonical_and_preserves_tuple_boundaries() {
+    use crate::model::durable_stream::{
+        durable_stream_route_scope, validate_durable_stream_route_scope,
+    };
+    let first = durable_stream_route_scope("a:b", "c", "雪\"route");
+    let second = durable_stream_route_scope("a", "b:c", "雪\"route");
+    assert_ne!(first, second);
+    assert!(validate_durable_stream_route_scope(&first).is_ok());
+    assert!(validate_durable_stream_route_scope(&second).is_ok());
+    for invalid in [
+        "",
+        "route",
+        "[\"a\",\"b\"]",
+        "[\"a\", \"b\",\"c\"]",
+        "[\"a\",\"b\",\"\"]",
+    ] {
+        assert!(
+            validate_durable_stream_route_scope(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
 fn fold_public_binding(
     current: &mut Option<DurableStreamPublicBinding>,
     record: &StreamSessionRecord,
@@ -66,6 +94,7 @@ fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
     let initialize = |invocation: &StreamInvocationId, deadline| {
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
             session_key: invocation.idempotency_key.clone(),
             source_invocation: invocation.clone(),
@@ -77,6 +106,7 @@ fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
     let refresh = |invocation: &StreamInvocationId, expected, deadline| {
         StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
             session_key: invocation.idempotency_key.clone(),
             expected_deadline_millis: expected,
@@ -87,6 +117,7 @@ fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
     let expire = |invocation: &StreamInvocationId, expected| {
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
             session_key: invocation.idempotency_key.clone(),
             expected_deadline_millis: expected,
@@ -167,6 +198,7 @@ fn durable_stream_absolute_expiry_cannot_be_refreshed_past_its_fixed_deadline() 
     let initialized =
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
             session_key: invocation.idempotency_key.clone(),
             source_invocation: invocation.clone(),
@@ -178,6 +210,7 @@ fn durable_stream_absolute_expiry_cannot_be_refreshed_past_its_fixed_deadline() 
         });
     let refreshed = StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
         format_version: 1,
+        route_scope: test_route_scope(),
         session_key: invocation.idempotency_key.clone(),
         public_session_id: public.to_string(),
         expected_deadline_millis: 10_000,
@@ -286,6 +319,7 @@ fn durable_stream_self_revert_preserves_retained_session() {
         OplogIndex::from_u64(2),
         &StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public_session_id.into(),
             session_key: source.idempotency_key.clone(),
             source_invocation: source.clone(),

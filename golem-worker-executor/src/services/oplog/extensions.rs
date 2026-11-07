@@ -363,7 +363,7 @@ pub trait OplogOps: Oplog {
         let invocation_context = ctx.to_oplog_data();
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            idempotency_key,
+            invocation_id: idempotency_key,
             payload,
             trace_id: ctx.trace_id,
             trace_states: ctx.trace_states,
@@ -374,6 +374,7 @@ pub trait OplogOps: Oplog {
 
     async fn add_agent_invocation_finished(
         &self,
+        invocation_id: IdempotencyKey,
         result: &AgentInvocationResult,
         method_name: Option<String>,
         consumed_fuel: u64,
@@ -388,6 +389,7 @@ pub trait OplogOps: Oplog {
         let payload = self.upload_payload(result).await?;
         let entry = OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
+            invocation_id,
             result: payload,
             method_name,
             consumed_fuel,

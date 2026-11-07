@@ -122,6 +122,9 @@ async fn durable_websocket_two_receive_interruption(
     )
     .await?;
     let mut peer = Peer::start().await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "receive_lock_contention")
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -143,7 +146,7 @@ async fn durable_websocket_two_receive_interruption(
     let result = async {
         let handshake = peer.handshake().await?;
         ensure!(handshake.number == 1);
-        establish_reader_order(&executor, &id, &key).await?;
+        establish_reader_order(&executor, &id, &stored_key).await?;
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let receives = starts_named(&entries, RECEIVE);
@@ -153,7 +156,7 @@ async fn durable_websocket_two_receive_interruption(
         for start in [receives[0], timed[0]] {
             assert_receive_terminal(&entries, start, 0)?;
         }
-        assert_invocation(&entries, &key, 0)?;
+        assert_invocation(&entries, &stored_key, 0)?;
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
         ensure!(worker.is_loaded().await);
         ensure!(!invocation.is_finished());
@@ -381,7 +384,11 @@ async fn pending_reader_lock(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "receive_lock_contention",
+            ))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -398,6 +405,9 @@ async fn pending_reader_lock(
     )
     .await?;
     let mut peer = Peer::start().await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "receive_lock_contention")
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -425,14 +435,14 @@ async fn pending_reader_lock(
         first_gate = Some(first.send);
         second_gate = Some(first.send_second);
         ensure!(first.number == 1);
-        establish_reader_order(&executor, &id, &key).await?;
+        establish_reader_order(&executor, &id, &stored_key).await?;
         let receive_starts = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 if entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == TIMED_RECEIVE)) {
                     let start = lock_receive_starts(&entries, 0)?;
-                    assert_invocation(&entries, &key, 0)?;
+                    assert_invocation(&entries, &stored_key, 0)?;
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     return Ok::<_, anyhow::Error>(start);
                 }
@@ -515,7 +525,7 @@ async fn pending_reader_lock(
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        assert_invocation(&stopped, &key, 0)?;
+        assert_invocation(&stopped, &stored_key, 0)?;
         ensure!(
             lock_receive_starts(&stopped, 0)?.1 == receive_start,
             "interruption must leave the original receive Start open"
@@ -629,7 +639,8 @@ async fn pending_reader_lock(
             let response = async {
                 let second = peer.handshake().await?;
                 ensure!(second.number == 2);
-                establish_reader_order(&executor, &probe_agent_id, &probe_key).await?;
+                let stored_probe_key = executor.external_invocation_key(&probe_agent_id, &probe_key, "receive_lock_contention").await?;
+                establish_reader_order(&executor, &probe_agent_id, &stored_probe_key).await?;
                 second.send.send("probe-1".to_string()).map_err(|_| anyhow::anyhow!("first probe frame gate closed"))?;
                 second.send_second.send("probe-2".to_string()).map_err(|_| anyhow::anyhow!("second probe frame gate closed"))?;
                 Ok::<_, anyhow::Error>(())
@@ -646,7 +657,7 @@ async fn pending_reader_lock(
             ensure!(payloads == vec!["probe-1".to_string(), "probe-2".to_string()]);
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(lock_receive_starts(&failed, 0)?.1 == receive_start);
-            assert_invocation(&failed, &key, 0)?;
+            assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);
@@ -790,6 +801,9 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
     )
     .await?;
     let mut peer = Peer::start().await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "receive_lock_contention")
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -811,7 +825,7 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
     let result = async {
         let handshake = peer.handshake().await?;
         ensure!(handshake.number == 1);
-        establish_reader_order(&executor, &id, &key).await?;
+        establish_reader_order(&executor, &id, &stored_key).await?;
         let mut raw = worker.raw_interrupt_for_test();
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -819,7 +833,7 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
         let timed = starts_named(&entries, TIMED_RECEIVE);
         ensure!(starts_named(&entries, CONNECT).len() == 1 && untimed.len() == 1 && timed.len() == 1 && untimed[0] < timed[0]);
         for start in [untimed[0], timed[0]] { assert_receive_terminal(&entries, start, 0)?; }
-        assert_invocation(&entries, &key, 0)?;
+        assert_invocation(&entries, &stored_key, 0)?;
         peer.assert_counts(1, 0)?;
         tokio::time::sleep(Duration::from_millis(800)).await;
         ensure!(!invocation.is_finished());
@@ -834,7 +848,7 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
         ensure!(raw.try_recv().is_err());
         let complete = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         for start in [untimed[0], timed[0]] { assert_receive_terminal(&complete, start, 1)?; }
-        assert_invocation(&complete, &key, 1)?;
+        assert_invocation(&complete, &stored_key, 1)?;
         assert_settled_history(&complete)?;
         ensure!(count_agent_invocation_pair_since(&complete, OplogIndex::INITIAL) == (2, 2));
         peer.assert_counts(1, 1)?;

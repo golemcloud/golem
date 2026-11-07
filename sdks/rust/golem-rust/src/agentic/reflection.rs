@@ -1043,7 +1043,7 @@ impl TestReflectedTransport {
     ) -> ReflectedTransportPending {
         let completion = self.completion();
         ReflectedTransportPending {
-            metadata: completion.metadata.clone(),
+            metadata: Some(completion.metadata.clone()),
             cancel: Rc::new(|| {}),
             future: Box::pin(std::future::ready(Ok(completion))),
         }
@@ -1424,7 +1424,7 @@ type PendingResult = Result<Invocation<Option<SchemaValue>>, GolemReflectError>;
 type PendingResultFuture = Pin<Box<dyn Future<Output = PendingResult>>>;
 
 struct ReflectedTransportPending {
-    metadata: InvocationMetadata,
+    metadata: Option<InvocationMetadata>,
     cancel: Rc<dyn Fn()>,
     future: PendingResultFuture,
 }
@@ -1437,8 +1437,10 @@ impl Future for ReflectedTransportPending {
     }
 }
 
+/// `metadata` is absent when the host rejected the call before accepting it; awaiting the
+/// invocation then returns the rejection.
 pub struct PendingInvocation {
-    pub metadata: InvocationMetadata,
+    pub metadata: Option<InvocationMetadata>,
     raw: Rc<host::FutureInvokeResult>,
     state: RefCell<Option<Pin<Box<dyn Future<Output = PendingResult>>>>>,
 }
@@ -1455,8 +1457,8 @@ struct CheckedReflectedOutput<F> {
 }
 
 impl ReflectedPendingInvocation {
-    pub fn metadata(&self) -> &InvocationMetadata {
-        &self.checked.inner.metadata
+    pub fn metadata(&self) -> Option<&InvocationMetadata> {
+        self.checked.inner.metadata.as_ref()
     }
 
     pub fn cancel(&self) {
@@ -1518,6 +1520,7 @@ impl Future for PendingInvocation {
             let metadata = this.metadata.clone();
             *this.state.borrow_mut() = Some(Box::pin(async move {
                 let result = raw.get().await.map_err(rpc_error_to_reflect)?;
+                let metadata = accepted_metadata(metadata)?;
                 let value = result
                     .map(crate::decode_schema_value)
                     .transpose()
@@ -1538,8 +1541,10 @@ type CallerPendingResult<T> = Result<Invocation<T>, GolemReflectError>;
 type CallerPendingFuture<T> = Pin<Box<dyn Future<Output = CallerPendingResult<T>>>>;
 
 /// A cancellable pending invocation generated for a full caller-owned client.
+/// `metadata` is absent when the host rejected the call before accepting it; awaiting the
+/// invocation then returns the rejection.
 pub struct CallerPendingInvocation<T> {
-    pub metadata: InvocationMetadata,
+    pub metadata: Option<InvocationMetadata>,
     raw: Rc<crate::golem_agentic::golem::agent::host::FutureInvokeResult>,
     state: RefCell<Option<CallerPendingFuture<T>>>,
     decode: Rc<dyn Fn(Option<SchemaValue>) -> Result<T, GolemReflectError>>,
@@ -1573,7 +1578,7 @@ impl<T: 'static> Future for CallerPendingInvocation<T> {
                     .transpose()
                     .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
                 Ok(Invocation {
-                    metadata,
+                    metadata: accepted_metadata(metadata)?,
                     value: decode(value)?,
                 })
             }));
@@ -1599,13 +1604,25 @@ pub fn start_caller_pending<T: 'static>(
         .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
     let invocation = crate::permissions::__async_invoke_and_await(rpc, method, input, scope_card);
     Ok(CallerPendingInvocation {
-        metadata: InvocationMetadata {
-            agent_id: ParsedAgentId::new(invocation.metadata.agent_id),
-            idempotency_key: invocation.metadata.idempotency_key,
-        },
+        metadata: invocation.metadata.map(|metadata| InvocationMetadata {
+            agent_id: ParsedAgentId::new(metadata.agent_id),
+            idempotency_key: metadata.idempotency_key,
+        }),
         raw: Rc::new(invocation.future),
         state: RefCell::new(None),
         decode: Rc::new(decode),
+    })
+}
+
+/// The host omits the metadata only for a call it rejected, and then completes the call with
+/// the rejection, so a successful completion always has it.
+fn accepted_metadata(
+    metadata: Option<InvocationMetadata>,
+) -> Result<InvocationMetadata, GolemReflectError> {
+    metadata.ok_or_else(|| {
+        GolemReflectError::ProtocolError(
+            "the host completed an RPC call it did not accept".to_string(),
+        )
     })
 }
 
@@ -1663,12 +1680,13 @@ impl RpcTransport {
         let invocation =
             self.raw
                 .async_invoke_and_await(method, input, scope_card.map(ScopeCard::raw));
-        let metadata = self.metadata(invocation.metadata);
-        let value = invocation
+        let result = invocation
             .future
             .get()
             .await
-            .map_err(rpc_error_to_reflect)?
+            .map_err(rpc_error_to_reflect)?;
+        let metadata = accepted_metadata(invocation.metadata.map(|raw| self.metadata(raw)))?;
+        let value = result
             .map(crate::decode_schema_value)
             .transpose()
             .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
@@ -1700,7 +1718,7 @@ impl RpcTransport {
         let pending =
             self.raw
                 .async_invoke_and_await(method, input, scope_card.map(ScopeCard::raw));
-        let metadata = self.metadata(pending.metadata);
+        let metadata = pending.metadata.map(|raw| self.metadata(raw));
         Ok(PendingInvocation {
             metadata,
             raw: Rc::new(pending.future),
@@ -3211,8 +3229,8 @@ pub struct TypedPendingInvocation<O> {
 }
 
 impl<O> TypedPendingInvocation<O> {
-    pub fn metadata(&self) -> &InvocationMetadata {
-        &self.inner.metadata
+    pub fn metadata(&self) -> Option<&InvocationMetadata> {
+        self.inner.metadata.as_ref()
     }
 
     pub fn cancel(&self) {

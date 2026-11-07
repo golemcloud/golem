@@ -49,7 +49,7 @@ pub(super) fn invocation(
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.idempotency_key == key);
+                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.invocation_id == key);
                 if current {
                     starts.push(entry.oplog_index);
                 }
@@ -341,6 +341,9 @@ mod tests {
         let id = executor.start_agent(&component.id, name.clone()).await?;
         wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
         let key = IdempotencyKey::fresh();
+        let stored_key = executor
+            .external_invocation_key(&id, &key, "sleep_p3")
+            .await?;
         let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let executor = executor.clone();
             let component = component.clone();
@@ -373,7 +376,7 @@ mod tests {
                         matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock)
                     })
                 }) {
-                    let record = sleep_record(&entries, &key, Abi::P3, false)?
+                    let record = sleep_record(&entries, &stored_key, Abi::P3, false)?
                         .context("complete recorded clock input")?;
                     return Ok::<_, anyhow::Error>((record, entries));
                 }
@@ -392,8 +395,8 @@ mod tests {
             .into_iter()
             .filter(|entry| entry.oplog_index <= record.clock)
             .collect();
-        let before_clock = sleep_record(&parent_prefix, &key, Abi::P3, false);
-        let before_clock_end = sleep_record(&clock_start_prefix, &key, Abi::P3, false);
+        let before_clock = sleep_record(&parent_prefix, &stored_key, Abi::P3, false);
+        let before_clock_end = sleep_record(&clock_start_prefix, &stored_key, Abi::P3, false);
         executor.interrupt(&id).await?;
         ensure!(
             tokio::time::timeout(Duration::from_secs(10), invocation)

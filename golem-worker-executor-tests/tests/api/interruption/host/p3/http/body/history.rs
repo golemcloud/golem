@@ -42,7 +42,7 @@ pub(super) fn assert_invocation(
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.idempotency_key == key);
+                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.invocation_id == key);
                 if current {
                     started.push(entry.oplog_index);
                 }

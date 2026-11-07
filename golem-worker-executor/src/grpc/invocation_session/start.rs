@@ -275,7 +275,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 response: Some(invocation_response::Response::Accepted(
                     InvocationAccepted {
                         agent_id: start.agent_id.clone(),
-                        idempotency_key: start.idempotency_key.clone(),
+                        idempotency_key: Some(accepted.idempotency_key.clone().into()),
                         component_revision: accepted
                             .component_revision
                             .map(|revision| revision.get()),
@@ -369,7 +369,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         result: Some(invocation_session_result::Result::MethodResult(result.value)),
                         component_revision: accepted.component_revision.map(|revision| revision.get()),
                         agent_id: start.agent_id.clone(),
-                        idempotency_key: start.idempotency_key.clone(),
+                        idempotency_key: Some(accepted.idempotency_key.clone().into()),
                         agent_fingerprint: start.expected_callee_fingerprint,
                         new_stream_mappings,
                         ..Default::default()
@@ -589,7 +589,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 .component_revision
                                 .map(|revision| revision.get()),
                             agent_id: start.agent_id.clone(),
-                            idempotency_key: start.idempotency_key.clone(),
+                            idempotency_key: Some(accepted.idempotency_key.clone().into()),
                             fuel_consumed: None,
                             status: None,
                             oplog_index: None,

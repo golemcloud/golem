@@ -345,6 +345,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
                     observational_owner: None,
                     invocation_id: Some(invocation_id),
                     logical_key_position: None,
+                    agent_invocation: None,
                 },
                 &InFunctionRetryController::new(
                     DurableFunctionType::ReadLocal,

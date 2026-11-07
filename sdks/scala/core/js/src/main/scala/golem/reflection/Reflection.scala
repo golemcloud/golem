@@ -574,7 +574,12 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
         FutureInterop
           .fromPromise(pending.get())
           .map { result =>
-            decodeOptional(result.toOption).map(value => Invocation(toMetadata(metadata), value))
+            metadata match {
+              case Some(started) =>
+                decodeOptional(result.toOption).map(value => Invocation(toMetadata(started), value))
+              case None =>
+                Left(GolemReflectError.Remote(AgentRpcError.Protocol("completed invocation has no metadata")))
+            }
           }
           .recover {
             case js.JavaScriptException(error) => Left(remoteError(WasmRpcApi.decodeRpcError(error)))

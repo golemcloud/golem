@@ -44,6 +44,7 @@ const makeRuntime = (
     readonly response?: CoreTypes.SchemaValueTree | undefined
     readonly error?: unknown
     readonly pending?: boolean
+    readonly rejected?: boolean
   } = {},
 ) => {
   const calls: Call[] = []
@@ -93,7 +94,7 @@ const makeRuntime = (
       asyncInvokeAndAwait: (methodName, input) => {
         record("await", methodName, input)
         return {
-          metadata: awaitedMetadata,
+          metadata: options.rejected ? undefined : awaitedMetadata,
           get: () => {
             if (options.error !== undefined) return Promise.reject(options.error)
             if (!options.pending) return Promise.resolve(options.response)
@@ -553,6 +554,31 @@ describe("Client 1.6 durable lifecycle", () => {
           expect(runtime.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
         }
       }
+    }),
+  )
+
+  it.effect("fails a rejected invocation with the error from its future", () =>
+    Effect.gen(function* () {
+      const response = yield* encode(Schema.String, "done")
+      const failureOf = (options: Parameters<typeof makeRuntime>[0]) => {
+        const runtime = makeRuntime({ ...options, rejected: true })
+        return Worker.client.newPhantom({ job: "rejected" }).pipe(
+          Effect.flatMap((remote) => remote.run({ times: 1 })),
+          Effect.scoped,
+          Effect.provide(runtime.layer),
+          Effect.flip,
+          Effect.map((failure) => ({ failure: failure as any, lifecycle: runtime.lifecycle })),
+        )
+      }
+      const denied = yield* failureOf({ error: { tag: "denied", val: "no permission" } })
+      expect(denied.failure).toEqual({
+        _tag: "RpcCallError",
+        cause: { tag: "denied", val: "no permission" },
+      })
+      expect(denied.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
+      const completed = yield* failureOf({ response })
+      expect(completed.failure._tag).toBe("RpcCallError")
+      expect(completed.failure.cause.tag).toBe("protocol-error")
     }),
   )
 

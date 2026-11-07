@@ -126,6 +126,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     } }
     AgentInvocationFinished { record AgentInvocationFinishedParams => AgentInvocationFinishedParameters {
         timestamp: timestamp.into(),
+        invocation_id: invocation_id.to_string(),
         result: result.try_into()?,
         method_name: method_name,
         consumed_fuel: consumed_fuel,
@@ -137,6 +138,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     Error { record ErrorParams => ErrorParameters {
         timestamp: timestamp.into(),
         kind: kind.into(),
+        invocation_id: invocation_id.map(|invocation_id| invocation_id.to_string()),
         error: error.to_string(),
         retry_from: retry_from.into(),
         retry_policy_state: retry_policy_state.map(|s| {
@@ -243,7 +245,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     } }
     CancelPendingInvocation { record CancelPendingInvocationParams => CancelPendingInvocationParameters {
         timestamp: timestamp.into(),
-        idempotency_key: idempotency_key.to_string(),
+        invocation_id: invocation_id.to_string(),
     } }
     BeginRemoteTransaction { record BeginRemoteTransactionParams => BeginRemoteTransactionParameters {
         timestamp: timestamp.into(),
@@ -418,7 +420,7 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
         Ok(match value {
             PublicAgentInvocation::AgentInitialization(params) => {
                 Self::AgentInitialization(oplog::AgentInitializationParameters {
-                    idempotency_key: params.idempotency_key.value,
+                    invocation_id: params.invocation_id.value,
                     constructor_parameters: encode_public_typed_schema_value(
                         params.constructor_parameters,
                     )?,
@@ -433,7 +435,7 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
             }
             PublicAgentInvocation::AgentMethodInvocation(params) => {
                 Self::AgentMethodInvocation(oplog::AgentMethodInvocationParameters {
-                    idempotency_key: params.idempotency_key.value,
+                    invocation_id: params.invocation_id.value,
                     method_name: params.method_name,
                     function_input: encode_public_typed_schema_value(params.function_input)?,
                     trace_id: params.trace_id.to_string(),
@@ -447,7 +449,7 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
             }
             PublicAgentInvocation::ExternalTool(params) => {
                 Self::ExternalTool(oplog::ExternalToolInvocationParameters {
-                    idempotency_key: params.idempotency_key.value,
+                    invocation_id: params.invocation_id.value,
                     tool_name: params.tool_name,
                     command_path: params.command_path,
                     input: encode_public_typed_schema_value(params.input)?,
@@ -478,7 +480,7 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
             }
             PublicAgentInvocation::ProcessOplogEntries(params) => {
                 Self::ProcessOplogEntries(oplog::ProcessOplogEntriesParameters {
-                    idempotency_key: params.idempotency_key.value,
+                    invocation_id: params.invocation_id.value,
                 })
             }
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {

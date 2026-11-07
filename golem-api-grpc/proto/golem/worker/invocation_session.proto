@@ -41,6 +41,7 @@ message InvocationStart {
   // Forks retain the authoring invocation even when their local stream producers diverge.
   StreamInvocationIdentity origin_invocation = 19;
   optional ExternalToolInvocation external_tool = 18;
+  golem.worker.InvocationRequestKey request_key = 20;
 }
 
 message ExternalToolInvocation {

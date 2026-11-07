@@ -12,7 +12,6 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_request, invocation_response, invocation_session_completion,
     invocation_session_result,
 };
-use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{OwnerKind, Principal};
 use golem_common::model::card::{
     AgentResourcePattern, AgentVerb, ClassPermissionTarget, EffectiveSurface, GrantSurface,
@@ -22,6 +21,7 @@ use golem_common::model::card::{
 use golem_common::model::invocation_session_public::{PublicNativeToolTarget, PublicTypedValue};
 use golem_common::model::oplog::PublicExternalToolResult;
 use golem_common::model::tool::{SerializableToolError, SerializableToolRpcError};
+use golem_common::model::{IdempotencyKey, InvocationRequestKey};
 use golem_common::schema::public_json::{PublicSchemaValueError, encode_public_schema_value};
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{FALLBACK_OUTPUT_FIELD_NAME, SchemaType, SchemaValue, TypedSchemaValue};
@@ -93,8 +93,7 @@ fn invocation_auth(
     )
 }
 
-/// Runs the native tool in a new external-tool instance. Without an idempotency key the
-/// invocation gets a fresh one.
+/// Runs the native tool in a new external-tool instance with an unkeyed request identity.
 pub async fn invoke(
     worker_service: &Arc<WorkerService>,
     deployment: &CompiledMcp,
@@ -105,8 +104,14 @@ pub async fn invoke(
     idempotency_key: Option<IdempotencyKey>,
 ) -> Result<CallToolResult, ErrorData> {
     let (_, body) = export.command().map_err(invalid)?;
+    let request_key = InvocationRequestKey::external(None, idempotency_key.as_ref());
     let key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
-    let auth = invocation_auth(deployment, export, &key);
+    let owner_key = request_key.owner_key(&format!(
+        "tool:{}/{}",
+        export.tool_name,
+        export.command_path.join("/")
+    ));
+    let auth = invocation_auth(deployment, export, &owner_key);
     let input = PublicTypedValue {
         graph: input.graph().clone(),
         value: encode_public_schema_value(
@@ -140,6 +145,7 @@ pub async fn invoke(
             Box::pin(ReceiverStream::new(receiver)),
             auth,
             Principal::anonymous(),
+            request_key,
             |_| Ok(()),
         )
         .await
@@ -1213,6 +1219,31 @@ mod tests {
         .await;
 
         assert!(refused.is_err(), "the harness refuses the session");
-        assert_eq!(harness.native_session_keys(), [Arc::from(key.value)]);
+        assert_eq!(
+            harness.native_session_keys(),
+            [Arc::from(key.value.clone())]
+        );
+        let (input, stdin) = export.parse_arguments(Default::default()).unwrap();
+        assert!(
+            invoke(
+                &harness.worker_service,
+                &deployment,
+                export,
+                input,
+                stdin,
+                CancellationToken::new(),
+                Some(key)
+            )
+            .await
+            .is_err()
+        );
+        let starts = &harness.native_sessions.lock().unwrap().starts;
+        assert_eq!(starts.len(), 2);
+        let first = InvocationRequestKey::try_from(starts[0].request_key.clone().unwrap()).unwrap();
+        let second =
+            InvocationRequestKey::try_from(starts[1].request_key.clone().unwrap()).unwrap();
+        assert!(matches!(first, InvocationRequestKey::Unkeyed(_)));
+        assert_ne!(first, second);
+        assert_ne!(starts[0].agent_id, starts[1].agent_id);
     }
 }

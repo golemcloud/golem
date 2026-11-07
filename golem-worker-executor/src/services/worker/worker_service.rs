@@ -509,10 +509,17 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, SessionError> {
         self.stream_session_index
-            .lookup_public_binding(owned_agent_id, agent_mode, fingerprint, public_session_id)
+            .lookup_public_binding(
+                owned_agent_id,
+                agent_mode,
+                fingerprint,
+                route_scope,
+                public_session_id,
+            )
             .await
     }
 
@@ -593,7 +600,6 @@ impl WorkerService for DefaultWorkerService {
                                     covered_through: OplogIndex::NONE,
                                     revert_generation: status_generation,
                                     current_idempotency_key: None,
-                                    cancelled_idempotency_key: None,
                                 };
                                 let encoded = serialize(&metadata).map_err(WorkerExecutorError::runtime)?;
                                 let deletions: Vec<&str> = snapshot
@@ -666,7 +672,6 @@ impl WorkerService for DefaultWorkerService {
                     let mut advanced = metadata.clone();
                     fold_invocation_result_entries(
                         &mut advanced.current_idempotency_key,
-                        &mut advanced.cancelled_idempotency_key,
                         &status.deleted_regions,
                         &entries,
                         |key, index| {

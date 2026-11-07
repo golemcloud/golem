@@ -75,7 +75,8 @@ const borrowScopeCard = (
  * it then stays as the caller supplied it.
  *
  * Once `asyncInvokeAndAwait` is called, nothing is restored, even when it throws: the host may
- * already own the input.
+ * already own the input. A handle without metadata is a rejected call: its future fails with the
+ * rejection error.
  */
 export const awaitInvocation = <R>(
   rpc: RpcConnection,
@@ -110,15 +111,22 @@ export const awaitInvocation = <R>(
             ),
             Effect.map((invocation) => ({
               invocation,
-              metadata: snapshotInvocationMetadata(invocation.metadata),
+              metadata: invocation.metadata && snapshotInvocationMetadata(invocation.metadata),
             })),
           ),
           ({ invocation, metadata }) =>
             Effect.tryPromise({ try: () => invocation.get(), catch: wrapHostThrow }).pipe(
-              Effect.map((result) => ({
-                metadata,
-                result,
-              })),
+              Effect.flatMap((result) =>
+                metadata === undefined
+                  ? Effect.fail<RemoteCallError>({
+                      _tag: "RpcCallError",
+                      cause: {
+                        tag: "protocol-error",
+                        val: `${method}: host completed a rejected invocation`,
+                      },
+                    })
+                  : Effect.succeed({ metadata, result }),
+              ),
             ),
           ({ invocation }) =>
             Effect.sync(() => {

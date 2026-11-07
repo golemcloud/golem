@@ -418,7 +418,8 @@ impl Oplog for TestOplog {
                 continue;
             }
             if let OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } = entry
                 && let Some(mut status) = statuses.get(idempotency_key).cloned()
             {
@@ -6161,6 +6162,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
                     move |bindings| StreamSessionPreparedRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         public_session_id: session_key.idempotency_key.value.clone(),
+                        route_scope: None,
                         session_key: session_key.idempotency_key.clone(),
                         expiry_policy: StreamSessionExpiryPolicy::None,
                         expiry_deadline_millis: None,
@@ -6309,6 +6311,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     let prepared = StreamSessionPreparedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         public_session_id: identity.invocation.idempotency_key.value.clone(),
+        route_scope: None,
         session_key: identity.invocation.idempotency_key.clone(),
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,

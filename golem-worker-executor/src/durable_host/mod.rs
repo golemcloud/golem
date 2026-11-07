@@ -394,6 +394,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
+    invocation_id: Option<golem_common::model::InvocationId>,
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     pub(crate) guest_imports: Arc<durability::GuestImportNumbering>,

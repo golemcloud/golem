@@ -103,7 +103,7 @@ fn assert_invocation(
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.idempotency_key == key);
+                current = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if &method.invocation_id == key);
                 started += usize::from(current);
             }
             PublicOplogEntry::AgentInvocationFinished(_) if current => terminals += 1,
@@ -239,7 +239,11 @@ async fn pending_receive(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "udp_receive_wait_p3",
+            ))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -255,6 +259,9 @@ async fn pending_receive(
         Principal::anonymous(),
     )
     .await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "udp_receive_wait_p3")
+        .await?;
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
     let _usage_source = (resource != Resource::Memory).then(|| {
         let source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
@@ -313,7 +320,7 @@ async fn pending_receive(
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let receive_start = receive_start(&entries, 0)?;
-        assert_invocation(&entries, &key, 0)?;
+        assert_invocation(&entries, &stored_key, 0)?;
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
         let initial = worker.owner_runtime_resources().with_monthly_capacity(mode, |capacity| capacity);
         let mut next_flush = async || {
@@ -412,7 +419,7 @@ async fn pending_receive(
         let stopped_raw = read_stored().await?;
         ensure!(stopped_raw.range(..=prefix_last).eq(prefix.iter()), "the full committed UDP prefix must survive stop");
         ensure!(stopped_raw.values().all(|entry| !matches!(entry, OplogEntry::Jump { .. })));
-        assert_invocation(&stopped, &key, 0)?;
+        assert_invocation(&stopped, &stored_key, 0)?;
         ensure!(
             self::receive_start(&stopped, 0)? == receive_start,
             "interruption must leave the original receive Start open"
@@ -524,7 +531,7 @@ async fn pending_receive(
             ensure!(recovered_raw.range(..=stopped_last).eq(stopped_raw.iter()), "the full stopped prefix must survive UDP reconstruction");
             ensure!(self::receive_start(&recovered, 1)? == receive_start);
             assert_settled_history(&recovered)?;
-            assert_invocation(&recovered, &key, 1)?;
+            assert_invocation(&recovered, &stored_key, 1)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "udp_receive_wait_p3", data_value!(port, ready_port)).await?;
             ensure!(cached.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"recovered".to_vec()));
@@ -546,6 +553,7 @@ async fn pending_receive(
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
             drop(tokio::net::UdpSocket::bind(address).await?);
             let fresh_key = IdempotencyKey::fresh();
+            let stored_fresh_key = executor.external_invocation_key(&id, &fresh_key, "udp_receive_wait_p3").await?;
             let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "udp_receive_wait_p3", data_value!(port, ready_port));
             let release_fresh = async {
                 // Only fresh work sends readiness; completed history needs no response.
@@ -573,8 +581,8 @@ async fn pending_receive(
                 ensure!(history.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(delivery) if delivery.start_index == start)).count() == 1);
             }
             assert_settled_history(&history)?;
-            assert_invocation(&history, &key, 1)?;
-            assert_invocation(&history, &fresh_key, 1)?;
+            assert_invocation(&history, &stored_key, 1)?;
+            assert_invocation(&history, &stored_fresh_key, 1)?;
             info!(?resource, %key, %receive_start,
                 "Original receive Start repaired once; completed history needed no datagram; fresh receive consumed its own datagram");
         }

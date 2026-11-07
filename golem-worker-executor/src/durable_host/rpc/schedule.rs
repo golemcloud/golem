@@ -46,6 +46,7 @@ use golem_common::model::oplog::HostResponseGolemRpcUnit;
 use golem_common::model::oplog::host_functions::GolemRpcCancellationTokenCancel;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcScheduleInvocation;
 use golem_common::model::oplog::types::SerializableScheduleId;
+use golem_common::model::{IdempotencyKey, InvocationRequestKey};
 use golem_common::serialization::deserialize;
 use golem_common::serialization::serialize;
 use golem_schema::schema::wit::PermissionCardHandleRep;
@@ -253,6 +254,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             begun.idempotency_key_position(self),
             &logical_remote_agent_id,
             ephemeral_logical_agent_id.as_ref(),
+            &method_name,
         );
         let call = match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
@@ -271,35 +273,35 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 Either::Left(begun)
             }
-            ResolvedCall::Replay(handle) => {
-                let start_index = handle.start_index();
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(result) => {
-                        let schedule_id = match result.result {
-                            Ok(schedule_id) => schedule_id,
-                            Err(error) => return Ok(Err(InternalRpcError::from(error).into())),
-                        };
-                        let (idempotency_key, remote_agent_id) = call_target.at(start_index)?;
-                        let schedule_id = serialize(&schedule_id).map_err(|err| {
-                            anyhow::Error::from(WorkerExecutorError::runtime(format!(
-                                "Failed to serialize schedule id: {err}"
-                            )))
-                        })?;
-                        let owner = self.owned_agent_id().clone();
-                        return self
-                            .table()
-                            .push(CancellationTokenEntry {
-                                schedule_id,
-                                metadata: invocation_metadata(&remote_agent_id, &idempotency_key),
-                                owner,
-                                recipient: remote_agent_id,
-                            })
-                            .map(Ok)
-                            .map_err(Into::into);
-                    }
-                    CallReplayOutcome::Incomplete(live) => Either::Right(live),
+            ResolvedCall::Replay(handle) => match handle.replay(self).await? {
+                CallReplayOutcome::Replayed(result) => {
+                    let (schedule_id, invocation_id) = match result.result {
+                        Ok(receipt) => receipt,
+                        Err(error) => return Ok(Err(InternalRpcError::from(error).into())),
+                    };
+                    let remote_agent_id = OwnedAgentId::new(
+                        self.owned_agent_id().environment_id,
+                        invocation_id.agent_id(),
+                    );
+                    let schedule_id = serialize(&schedule_id).map_err(|err| {
+                        anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                            "Failed to serialize schedule id: {err}"
+                        )))
+                    })?;
+                    let owner = self.owned_agent_id().clone();
+                    return self
+                        .table()
+                        .push(CancellationTokenEntry {
+                            schedule_id,
+                            metadata: invocation_metadata(&invocation_id),
+                            owner,
+                            recipient: remote_agent_id,
+                        })
+                        .map(Ok)
+                        .map_err(Into::into);
                 }
-            }
+                CallReplayOutcome::Incomplete(live) => Either::Right(live),
+            },
         };
 
         // The persisted request embeds an idempotency key derived from the call's own `Start`
@@ -320,7 +322,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         let (idempotency_key, remote_agent_id) = request_target.at(start_index)?;
                         Ok(HostRequestGolemRpcScheduledInvocation {
                             remote_agent_id: remote_agent_id.agent_id(),
-                            idempotency_key,
+                            request_key: InvocationRequestKey::Internal(idempotency_key),
                             method_name: request_method_name,
                             input: request_input,
                             datetime: request_datetime,
@@ -333,7 +335,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Either::Right(live) => live,
         };
         let (idempotency_key, remote_agent_id) = call_target.at(handle.start_index())?;
-        let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
+        let request_key = InvocationRequestKey::Internal(idempotency_key.clone());
 
         let stack = InvocationContextStack::new(
             self.state.invocation_context.trace_id.clone(),
@@ -341,15 +343,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.state.invocation_context.trace_states.clone(),
         );
 
-        let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: idempotency_key.clone(),
-            method_name: method_name.clone(),
-            input: input_value,
-            invocation_context: stack,
-            principal: scheduled_invocation_principal(self.owned_agent_id()),
-            scope_card: None,
-        };
-        let result = if ephemeral_logical_agent_id.is_some() {
+        let target_fingerprint = if ephemeral_logical_agent_id.is_some() {
             // The scheduled ephemeral target is created now, so the schedule commits in its oplog
             // and the wake pins this incarnation. The target runs nothing before the deadline.
             let freshness = if known_fresh_dispatch_allowed(first_live_dispatch, true) {
@@ -380,45 +374,45 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.clone_as_inherited_stack(&span_id),
                     config,
                     handle.agent_auth_ctx(),
-                    Some(idempotency_key.clone()),
+                    Some(idempotency_key),
                     freshness,
                 )
                 .await
                 .map_err(|error| handle.trap(anyhow::anyhow!(error)))?;
-            rpc.schedule_invocation(
-                &remote_agent_id,
-                demand.fingerprint(),
-                invocation,
-                scheduled_at,
-                handle.agent_auth_ctx(),
-            )
-            .await
-            .map_err(|error| handle.trap(anyhow::anyhow!(error)))?
+            demand.fingerprint()
         } else {
-            let target_worker_fingerprint = match ensure_rpc_target_activated(
-                self,
-                &this,
-                handle.agent_auth_ctx(),
-                &method_name,
-            )
-            .await
+            match ensure_rpc_target_activated(self, &this, handle.agent_auth_ctx(), &method_name)
+                .await
             {
                 Ok(fingerprint) => fingerprint,
                 Err(err) => {
                     return Err(handle.trap(err));
                 }
-            };
-            self.rpc()
-                .schedule_invocation(
-                    &remote_agent_id,
-                    target_worker_fingerprint,
-                    invocation,
-                    scheduled_at,
-                    handle.agent_auth_ctx(),
-                )
-                .await
-                .map_err(|error| handle.trap(anyhow::anyhow!(error)))?
+            }
         };
+
+        let invocation_id =
+            request_key.finalize(remote_agent_id.agent_id(), target_fingerprint, &method_name);
+        let invocation = AgentInvocation::AgentMethod {
+            idempotency_key: IdempotencyKey::from_uuid(invocation_id.uuid()),
+            method_name,
+            input: input_value,
+            invocation_context: stack,
+            principal: scheduled_invocation_principal(self.owned_agent_id()),
+            scope_card: None,
+        };
+        let result = self
+            .rpc()
+            .schedule_invocation(
+                &remote_agent_id,
+                target_fingerprint,
+                request_key,
+                invocation,
+                scheduled_at,
+                handle.agent_auth_ctx(),
+            )
+            .await
+            .map_err(|error| handle.trap(anyhow::anyhow!(error)))?;
 
         let schedule_id = SerializableScheduleId::from_domain(result);
 
@@ -426,12 +420,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .complete(
                 self,
                 HostResponseGolemRpcScheduledInvocationCompat {
-                    result: Ok(schedule_id),
+                    result: Ok((schedule_id, invocation_id)),
                 },
             )
             .await?;
 
-        let schedule_id = result.result.map_err(|error| {
+        let (schedule_id, invocation_id) = result.result.map_err(|error| {
             anyhow::anyhow!("live scheduled invocation returned an unexpected error: {error:?}")
         })?;
         let serialized_result = serialize(&schedule_id).map_err(|err| {
@@ -441,7 +435,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         })?;
         let cancellation_token = CancellationTokenEntry {
             schedule_id: serialized_result,
-            metadata,
+            metadata: invocation_metadata(&invocation_id),
             owner: self.owned_agent_id().clone(),
             recipient: remote_agent_id,
         };

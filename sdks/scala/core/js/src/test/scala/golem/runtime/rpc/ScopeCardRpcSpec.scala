@@ -139,6 +139,36 @@ object ScopeCardRpcSpec extends ZIOSpecDefault {
           rejected.left.exists(_.isInstanceOf[golem.reflection.GolemReflectError.Validation])
         )
       }
+    },
+    test("reflection clients report a completed invocation without metadata as a protocol error") {
+      js.Dynamic.global.globalThis.updateDynamic("__golemScalaTestHost")(
+        js.Dynamic.literal(
+          wasmRpcAsyncInvokeAndAwait = (
+            (_: String, _: js.Any, _: js.Any) =>
+              js.Dynamic.literal(
+                metadata = js.undefined,
+                future = js.Dynamic.literal(
+                  get = (() => js.Promise.resolve[js.Any](js.undefined)): js.Function0[js.Promise[js.Any]],
+                  cancel = (() => ()): js.Function0[Unit]
+                )
+              )
+          ): js.Function3[String, js.Any, js.Any, js.Any]
+        )
+      )
+      val client = golem.reflection.DynamicAgentClient
+        .ephemeral("Target", golem.schema.SchemaValue.StringValue("t"))
+        .fold(error => throw new IllegalStateException(error.toString), identity)
+      ZIO.fromFuture { implicit ec =>
+        client.method("m").invokeValue(golem.schema.SchemaValue.StringValue("x"), None).map { result =>
+          assertTrue(
+            result == Left(
+              golem.reflection.GolemReflectError.Remote(
+                golem.reflection.AgentRpcError.Protocol("completed invocation has no metadata")
+              )
+            )
+          )
+        }
+      }
     }
   ) @@ TestAspect.sequential
 

@@ -130,6 +130,49 @@ pub enum AgentInvocationPayload {
     },
 }
 
+impl AgentInvocationPayload {
+    /// Compares the caller's execution contract, not deployment-time tool resolution.
+    /// Tracing and scheduling metadata are stored outside the payload.
+    pub fn same_caller_request(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::ExternalTool {
+                    tool_name,
+                    command_path,
+                    input,
+                    stdin,
+                    stdout,
+                    stderr,
+                    principal,
+                    scope_card,
+                    ..
+                },
+                Self::ExternalTool {
+                    tool_name: other_tool,
+                    command_path: other_path,
+                    input: other_input,
+                    stdin: other_stdin,
+                    stdout: other_stdout,
+                    stderr: other_stderr,
+                    principal: other_principal,
+                    scope_card: other_card,
+                    ..
+                },
+            ) => {
+                tool_name == other_tool
+                    && command_path == other_path
+                    && input == other_input
+                    && stdin == other_stdin
+                    && stdout == other_stdout
+                    && stderr == other_stderr
+                    && principal == other_principal
+                    && scope_card == other_card
+            }
+            _ => self == other,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub enum AgentInvocationResult {

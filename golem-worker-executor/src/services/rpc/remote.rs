@@ -44,6 +44,7 @@ impl Rpc for RemoteInvocationRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
+        request_key: InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
@@ -74,6 +75,7 @@ impl Rpc for RemoteInvocationRpc {
                 ),
             })?),
             idempotency_key: Some(idempotency_key.clone().into()),
+            request_key: Some(request_key.into()),
             context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                 parent,
                 env: HashMap::new(),
@@ -187,7 +189,10 @@ impl Rpc for RemoteInvocationRpc {
                 config,
                 principal,
                 auth_ctx,
-                idempotency_key,
+                // The receiving executor checks a fresh ephemeral phantom against the same owner
+                // key the caller derived it from.
+                idempotency_key
+                    .map(|key| InvocationRequestKey::Internal(key).owner_key(method_name)),
                 freshness_disposition,
             )
             .await?;
@@ -270,6 +275,7 @@ impl Rpc for RemoteInvocationRpc {
                 agent_id: Some(owned_agent_id.agent_id().into()),
                 method_name: Some(method_name),
                 input: Some(method_parameters),
+                request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
                 idempotency_key: Some(idempotency_key.into()),
                 context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                     parent: Some(self_agent_id.clone().into()),

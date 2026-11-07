@@ -858,6 +858,9 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         .add(OplogEntry::error(
             Some(tool_start),
             golem_common::model::oplog::OplogErrorKind::Invocation,
+            Some(golem_common::model::IdempotencyKey::new(
+                "invocation".to_string(),
+            )),
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
             None,

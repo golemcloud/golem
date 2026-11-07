@@ -1315,7 +1315,7 @@ async fn cross_executor_schedule_commits_in_the_target_oplog(
             PublicOplogEntry::PendingAgentInvocation(pending) if pending.not_before.is_some() => {
                 match &pending.invocation {
                     PublicAgentInvocation::AgentMethodInvocation(method) => {
-                        Some(method.idempotency_key.clone())
+                        Some(method.invocation_id.clone())
                     }
                     _ => None,
                 }
@@ -1359,7 +1359,7 @@ async fn cross_executor_schedule_commits_in_the_target_oplog(
                 PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                     invocation: PublicAgentInvocation::AgentMethodInvocation(method),
                     ..
-                }) if method.idempotency_key == key)
+                }) if method.invocation_id == key)
         })
         .count();
     assert_eq!(starts, 1);

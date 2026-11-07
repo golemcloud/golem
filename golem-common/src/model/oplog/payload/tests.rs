@@ -995,7 +995,9 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
             component_id: ComponentId::new(),
             agent_id: "target".to_string(),
         },
-        idempotency_key: IdempotencyKey::new("scope-card-call".to_string()),
+        request_key: crate::model::InvocationRequestKey::Internal(IdempotencyKey::new(
+            "scope-card-call".to_string(),
+        )),
         method_name: "run".to_string(),
         input: SchemaValue::Tuple {
             elements: Vec::new(),
@@ -1042,24 +1044,34 @@ fn async_rpc_rejection_request_roundtrips_stable_identity() {
 }
 
 #[test]
-fn scheduled_invocation_typed_result_preserves_legacy_success_payload() {
+fn scheduled_invocation_typed_result_preserves_final_receipt() {
     let schedule_id = SerializableScheduleId {
         id: uuid::Uuid::from_u128(0x123456789abcdef00123456789abcdef),
     };
-    let legacy: HostResponse = HostResponseGolemRpcScheduledInvocation {
+    let invocation_id = crate::model::InvocationId::internal(
+        AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "target".to_string(),
+        },
+        AgentFingerprint(uuid::Uuid::from_u128(42)),
+        "run",
+        &IdempotencyKey::from("child"),
+    );
+    let response: HostResponse = HostResponseGolemRpcScheduledInvocation {
         schedule_id: schedule_id.clone(),
+        invocation_id: invocation_id.clone(),
     }
     .into();
     let compatible: HostResponse = HostResponseGolemRpcScheduledInvocationCompat {
-        result: Ok(schedule_id.clone()),
+        result: Ok((schedule_id.clone(), invocation_id.clone())),
     }
     .into();
 
-    assert_eq!(compatible, legacy);
+    assert_eq!(compatible, response);
     assert_eq!(
-        HostResponseGolemRpcScheduledInvocationCompat::try_from(legacy).unwrap(),
+        HostResponseGolemRpcScheduledInvocationCompat::try_from(response).unwrap(),
         HostResponseGolemRpcScheduledInvocationCompat {
-            result: Ok(schedule_id),
+            result: Ok((schedule_id, invocation_id)),
         }
     );
 
@@ -1960,6 +1972,26 @@ fn durable_rpc_activation_payload_pair_roundtrips() {
         },
         HostResponseGolemRpcActivate {
             result: Ok(target_fingerprint),
+        },
+    );
+}
+
+#[test]
+fn durable_rpc_preparation_payload_pair_roundtrips() {
+    assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcPrepareInvocation>(
+        super::HostRequestGolemRpcPrepareInvocation {
+            invocation_start_index: crate::model::OplogIndex::from_u64(42),
+            remote_agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "target".to_string(),
+            },
+            method_name: "run".to_string(),
+            request_key: crate::model::InvocationRequestKey::Internal(IdempotencyKey::from(
+                "child",
+            )),
+        },
+        super::HostResponseGolemRpcPrepareInvocation {
+            result: Ok(AgentFingerprint(uuid::Uuid::from_u128(43))),
         },
     );
 }

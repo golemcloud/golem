@@ -42,6 +42,14 @@ use uuid::Uuid;
 const MAX_ITEMS: u32 = 4096;
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+fn route_scope(route: &ResolvedRouteEntry) -> String {
+    golem_common::model::durable_stream::durable_stream_route_scope(
+        &route.route.environment_id.to_string(),
+        &route.route.deployment_revision.to_string(),
+        &route.route.route_id.to_string(),
+    )
+}
+
 fn route_stream_load_key(
     environment_id: EnvironmentId,
     deployment_revision: DeploymentRevision,
@@ -159,17 +167,25 @@ impl DurableStreamsHandler {
         {
             return Ok(response(StatusCode::NOT_FOUND));
         }
-        let root_phantom =
-            resolve_phantom_id(request, route, &behaviour.phantom_selection, |phantom| {
+        let root_phantom = resolve_phantom_id(
+            request,
+            route,
+            &behaviour.phantom_selection,
+            |phantom| {
                 phantom.then(|| {
                     let session = suffix.session.as_deref().unwrap_or_default();
                     if behaviour.agent_mode == AgentMode::Ephemeral {
-                        ephemeral_invocation_phantom_id(&IdempotencyKey::new(session.to_owned()))
+                        let prepared = golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
+                            scope: route_scope(route),
+                            key: IdempotencyKey::new(session.to_owned()),
+                        };
+                        ephemeral_invocation_phantom_id(&prepared.owner_key(&behaviour.method_name))
                     } else {
                         stable_phantom(session)
                     }
                 })
-            })?;
+            },
+        )?;
         let root_agent_id = CallAgentHandler::build_agent_id(
             route,
             behaviour.component_id,
@@ -185,7 +201,11 @@ impl DurableStreamsHandler {
                 &behaviour.agent_type,
                 &behaviour.constructor_input,
                 &behaviour.constructor_parameters,
-                Some(fork::fork_phantom_id(&root_agent_id, fork)),
+                Some(fork::fork_phantom_id(
+                    &root_agent_id,
+                    &route_scope(route),
+                    fork,
+                )),
             )?,
             None => root_agent_id.clone(),
         };
@@ -309,6 +329,7 @@ impl DurableStreamsHandler {
                     agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(route.route.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
+                    route_scope: route_scope(route),
                     session: session.into(),
                     slot: slot.into(),
                     from_offset,
@@ -338,7 +359,7 @@ pub(super) fn error_response(
     let status = match &error {
         RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
             WorkerExecutorError::InvalidRequest { details },
-        )) if details.starts_with("IdempotencyConflict:") => StatusCode::CONFLICT,
+        )) if details.starts_with("IdempotencyConflict:") => StatusCode::UNPROCESSABLE_ENTITY,
         RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
             WorkerExecutorError::InvalidRequest { details },
         )) if details.starts_with("NotFound:") => StatusCode::NOT_FOUND,
@@ -595,6 +616,38 @@ mod tests {
         DurableStreamRepresentation, DurableStreamSlot, DurableStreamSlotDirection,
     };
     use test_r::test;
+
+    #[test]
+    fn invocation_identity_conflict_is_unprocessable_but_other_stream_errors_are_unchanged() {
+        for (details, expected) in [
+            (
+                "IdempotencyConflict: invocation identity was already accepted with a different request",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "IdempotencyConflict: runtime card changed",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            ("NotFound: session is unavailable", StatusCode::NOT_FOUND),
+            ("StaleEpoch: stale attachment", StatusCode::BAD_REQUEST),
+            (
+                "InvalidAttachmentState: active attachment",
+                StatusCode::BAD_REQUEST,
+            ),
+            ("InputConflict: input changed", StatusCode::BAD_REQUEST),
+            (
+                "invalid IdempotencyConflict: other validation",
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let error = RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+                WorkerExecutorError::invalid_request(details),
+            ));
+            let response = error_response(error).unwrap();
+            assert_eq!(response.status, expected, "{details}");
+            assert!(!response.headers.contains_key(http::header::RETRY_AFTER));
+        }
+    }
 
     #[test]
     async fn selector_resource_urls_canonicalize_identity_and_omit_other_queries() {

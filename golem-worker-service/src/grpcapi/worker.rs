@@ -47,7 +47,9 @@ use golem_common::model::agent::ScheduleId;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{
+    AgentFingerprint, AgentId, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
+};
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty;
 use golem_service_base::grpc::proto_agent_id_string;
@@ -55,6 +57,22 @@ use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
+
+fn prepare_request_key(
+    auth: &AuthCtx,
+    raw_key: Option<&golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+    prepared: Option<golem_api_grpc::proto::golem::worker::InvocationRequestKey>,
+    trusted_internal_caller: bool,
+) -> Result<InvocationRequestKey, String> {
+    if trusted_internal_caller && let Some(prepared) = prepared {
+        return prepared.try_into();
+    }
+    let raw_key = raw_key.cloned().map(Into::into);
+    Ok(InvocationRequestKey::external(
+        auth.idempotency_scope(),
+        raw_key.as_ref(),
+    ))
+}
 
 fn service_failure_stream(
     reason: InvocationRejectionReason,
@@ -556,6 +574,24 @@ impl GrpcWorkerService for WorkerGrpcApi {
                 if !trusted_internal_caller {
                     start.origin_invocation = None;
                 }
+                let request_key = prepare_request_key(
+                    &auth,
+                    start.idempotency_key.as_ref(),
+                    start.request_key.take(),
+                    trusted_internal_caller,
+                );
+                let request_key = match request_key {
+                    Ok(key) => key,
+                    Err(error) => {
+                        return Ok(Response::new(service_failure_stream(
+                            InvocationRejectionReason::Validation,
+                            error,
+                            start.idempotency_key,
+                            start.agent_id,
+                        )));
+                    }
+                };
+                start.request_key = Some(request_key.into());
                 start.freshness_disposition = match sanitize_invocation_freshness_disposition(
                     start.freshness_disposition,
                     trusted_internal_caller,
@@ -964,6 +1000,13 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let trusted_internal_caller = matches!(&auth, AuthCtx::System | AuthCtx::Agent(_));
+        let request_key = prepare_request_key(
+            &auth,
+            request.idempotency_key.as_ref(),
+            request.request_key,
+            trusted_internal_caller,
+        )
+        .map_err(bad_request_error)?;
         if request.scope_card.is_some() && !trusted_internal_caller {
             return Err(bad_request_error(
                 "scope cards are accepted only from trusted internal callers",
@@ -1006,25 +1049,41 @@ impl WorkerGrpcApi {
             .transpose()
             .map_err(|e| bad_request_error(format!("invalid environment_id: {e}")))?;
 
-        let output = self
-            .worker_service
-            .invoke_agent(
-                &agent_id,
-                request.method_name,
-                request.method_parameters,
-                request.mode,
-                request.schedule_at,
-                request.idempotency_key.map(|k| k.into()),
-                request.context,
-                trusted_internal_caller,
-                freshness_disposition,
-                config,
-                auth,
-                principal,
-                environment_id,
-                request.scope_card,
-            )
-            .await?;
+        let output = if is_lookup {
+            self.worker_service
+                .lookup_agent_invocation(
+                    golem_api_grpc::proto::golem::worker::InvocationStart {
+                        agent_id: Some(agent_id.into()),
+                        idempotency_key: request.idempotency_key,
+                        request_key: Some(request_key.into()),
+                        context: request.context,
+                        principal: Some(principal),
+                        attempt_id: Some(uuid::Uuid::new_v4().into()),
+                        ..Default::default()
+                    },
+                    auth,
+                )
+                .await?
+        } else {
+            self.worker_service
+                .invoke_agent(
+                    &agent_id,
+                    request.method_name,
+                    request.method_parameters,
+                    request.mode,
+                    request.schedule_at,
+                    request_key,
+                    request.context,
+                    trusted_internal_caller,
+                    freshness_disposition,
+                    config,
+                    auth,
+                    principal,
+                    environment_id,
+                    request.scope_card,
+                )
+                .await?
+        };
 
         let result_value = match &output.result {
             golem_common::model::AgentInvocationResult::AgentMethod { output } => {
@@ -1309,12 +1368,85 @@ impl WorkerGrpcApi {
 
 #[cfg(test)]
 mod freshness_tests {
-    use super::sanitize_invocation_freshness_disposition;
+    use super::{prepare_request_key, sanitize_invocation_freshness_disposition};
+    use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::InvocationFreshnessDisposition;
+    use golem_common::model::{IdempotencyKey, IdempotencyScope, InvocationRequestKey};
+    use golem_service_base::model::auth::AuthCtx;
     use test_r::test;
 
     const KNOWN_FRESH_WIRE: i32 =
         golem_api_grpc::proto::golem::worker::v1::InvocationFreshnessDisposition::KnownFresh as i32;
+
+    #[test]
+    fn prepared_provenance_is_preserved_only_with_trusted_capability() {
+        let account = AccountId::new();
+        let auth = AuthCtx::agent_with_effective_surface(
+            account,
+            AccountEmail::new("caller@golem"),
+            Default::default(),
+        );
+        let raw = IdempotencyKey::from("public-key");
+        let wire_raw = raw.clone().into();
+        let forged = [
+            InvocationRequestKey::Internal(IdempotencyKey::from("internal-key")),
+            InvocationRequestKey::RouteSession {
+                scope: "route".into(),
+                key: raw.clone(),
+            },
+            InvocationRequestKey::External {
+                scope: IdempotencyScope::User(AccountId::new()),
+                key: raw.clone(),
+            },
+            InvocationRequestKey::Unkeyed(uuid::Uuid::new_v4()),
+        ];
+        for prepared in forged {
+            assert_eq!(
+                prepare_request_key(&auth, Some(&wire_raw), Some(prepared.clone().into()), false)
+                    .unwrap(),
+                InvocationRequestKey::external(auth.idempotency_scope(), Some(&raw))
+            );
+            assert_eq!(
+                prepare_request_key(&auth, Some(&wire_raw), Some(prepared.clone().into()), true)
+                    .unwrap(),
+                prepared
+            );
+        }
+        let malformed = golem_api_grpc::proto::golem::worker::InvocationRequestKey::default();
+        assert!(
+            prepare_request_key(&auth, Some(&wire_raw), Some(malformed.clone()), true).is_err()
+        );
+        assert!(prepare_request_key(&auth, Some(&wire_raw), Some(malformed), false).is_ok());
+    }
+
+    #[test]
+    fn system_without_explicit_provenance_remains_unkeyed() {
+        let raw = IdempotencyKey::from("looks-like-an-internal-key").into();
+        let first = prepare_request_key(&AuthCtx::System, Some(&raw), None, true).unwrap();
+        let second = prepare_request_key(&AuthCtx::System, Some(&raw), None, true).unwrap();
+        assert!(matches!(first, InvocationRequestKey::Unkeyed(_)));
+        assert_ne!(first, second);
+        assert_eq!(
+            prepare_request_key(
+                &AuthCtx::System,
+                Some(&raw),
+                Some(first.clone().into()),
+                true
+            )
+            .unwrap(),
+            first
+        );
+        assert_ne!(
+            prepare_request_key(
+                &AuthCtx::System,
+                Some(&raw),
+                Some(first.clone().into()),
+                false
+            )
+            .unwrap(),
+            first
+        );
+    }
 
     #[test]
     fn invocation_freshness_defaults_unknown_values_to_may_exist() {

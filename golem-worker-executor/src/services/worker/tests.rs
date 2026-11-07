@@ -317,7 +317,7 @@ fn invocation_pair(
         OplogIndex::from_u64(started_at),
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: key.clone(),
+            invocation_id: key.clone(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
             })),
@@ -338,6 +338,7 @@ fn invocation_pair(
         OplogIndex::from_u64(started_at + 1),
         OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
+            invocation_id: key.clone(),
             result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
             method_name: None,
             consumed_fuel: 0,
@@ -1571,7 +1572,6 @@ async fn stale_reset_cannot_delete_independent_newer_progress() {
         covered_through: OplogIndex::from_u64(2),
         revert_generation: 0,
         current_idempotency_key: None,
-        cancelled_idempotency_key: None,
     })
     .unwrap();
     malformed_metadata.pop();

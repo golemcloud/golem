@@ -217,6 +217,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
+                    invocation_id: agent_invocation_finished
+                        .invocation_id
+                        .ok_or("Missing invocation_id field")?
+                        .into(),
                     result: agent_invocation_finished
                         .result
                         .ok_or("Missing result field")?
@@ -232,6 +236,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
                 kind: oplog_error_kind_from_proto(error.kind)?,
+                invocation_id: error.invocation_id.map(Into::into),
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
                 retry_policy_state: error
@@ -428,9 +433,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::CancelInvocation(cancel) => Ok(
                 PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
                     timestamp: cancel.timestamp.ok_or("Missing timestamp field")?.into(),
-                    idempotency_key: cancel
-                        .idempotency_key
-                        .ok_or("Missing idempotency_key field")?
+                    invocation_id: cancel
+                        .invocation_id
+                        .ok_or("Missing invocation_id field")?
                         .into(),
                 }),
             ),
@@ -885,6 +890,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::AgentInvocationFinished(
                         golem_api_grpc::proto::golem::worker::AgentInvocationFinishedParameters {
                             timestamp: Some(agent_invocation_finished.timestamp.into()),
+                            invocation_id: Some(agent_invocation_finished.invocation_id.into()),
                             result: Some(agent_invocation_finished.result.try_into()?),
                             consumed_fuel: agent_invocation_finished.consumed_fuel,
                             component_revision: agent_invocation_finished.component_revision.get(),
@@ -907,6 +913,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::ErrorParameters {
                         timestamp: Some(error.timestamp.into()),
                         kind: oplog_error_kind_to_proto(error.kind) as i32,
+                        invocation_id: error.invocation_id.map(Into::into),
                         error: error.error,
                         retry_from: error.retry_from.0,
                         retry_policy_state: error.retry_policy_state.map(Into::into),
@@ -1119,7 +1126,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::CancelInvocation(
                         golem_api_grpc::proto::golem::worker::CancelInvocationParameters {
                             timestamp: Some(cancel.timestamp.into()),
-                            idempotency_key: Some(cancel.idempotency_key.into()),
+                            invocation_id: Some(cancel.invocation_id.into()),
                         },
                     )),
                 }
@@ -1967,6 +1974,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 let raw_result = public_agent_invocation_result_to_raw(finished.result)?;
                 Ok(OplogEntry::AgentInvocationFinished {
                     timestamp: finished.timestamp,
+                    invocation_id: finished.invocation_id,
                     result: OplogPayload::Inline(Box::new(raw_result)),
                     method_name: finished.method_name,
                     consumed_fuel: finished.consumed_fuel,
@@ -1980,6 +1988,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 timestamp: error.timestamp,
                 entity_parent_start_index: None,
                 kind: error.kind,
+                invocation_id: error.invocation_id,
                 error: AgentError::Unknown(error.error),
                 retry_from: error.retry_from,
                 retry_policy_state: error.retry_policy_state.map(Into::into),
@@ -2092,7 +2101,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::CancelPendingInvocation(p) => {
                 Ok(OplogEntry::CancelPendingInvocation {
                     timestamp: p.timestamp,
-                    idempotency_key: p.idempotency_key,
+                    invocation_id: p.invocation_id,
                 })
             }
             PublicOplogEntry::BeginRemoteTransaction(_) => {

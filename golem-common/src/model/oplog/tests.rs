@@ -321,6 +321,11 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
     let session_expired =
         StreamSessionRecord::Expired(crate::model::durable_stream::StreamSessionExpiredRecord {
             format_version: 1,
+            route_scope: crate::model::durable_stream::durable_stream_route_scope(
+                "environment",
+                "1",
+                "route",
+            ),
             public_session_id: "public-stream".to_string(),
             session_key: session_key.idempotency_key().clone(),
             expected_deadline_millis: 100,
@@ -329,6 +334,11 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
     let irrelevant_session = StreamSessionRecord::ExpiryRefreshed(
         crate::model::durable_stream::StreamSessionExpiryRefreshedRecord {
             format_version: 1,
+            route_scope: crate::model::durable_stream::durable_stream_route_scope(
+                "environment",
+                "1",
+                "route",
+            ),
             public_session_id: "public-stream".to_string(),
             session_key: session_key.idempotency_key().clone(),
             expected_deadline_millis: 100,
@@ -1135,7 +1145,7 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            invocation_id: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
             function_input: typed(
                 SchemaType::tuple(vec![
@@ -1189,6 +1199,7 @@ fn agent_invocation_finished_serialization_poem_serde_equivalence() {
 
     let entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
+        invocation_id: IdempotencyKey::new("finished-invocation".to_string()),
         result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
             output: typed(
                 SchemaType::r#enum(vec![
@@ -1238,6 +1249,7 @@ fn error_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Error(ErrorParams {
             timestamp: Timestamp::now_utc().rounded(),
             kind: OplogErrorKind::Invocation,
+            invocation_id: Some(IdempotencyKey::new("failed-invocation".to_string())),
             error: "test".to_string(),
             retry_from: OplogIndex::INITIAL,
             retry_policy_state,
@@ -1288,7 +1300,7 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
     let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            invocation_id: IdempotencyKey::new("idempotency_key".to_string()),
             constructor_parameters: typed(
                 SchemaType::tuple(vec![SchemaType::string()]),
                 SchemaValue::Tuple {
@@ -1325,7 +1337,7 @@ fn pending_agent_invocation_with_initialization_serialization_poem_serde_equival
         timestamp: Timestamp::now_utc().rounded(),
         not_before: None,
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            invocation_id: IdempotencyKey::new("idempotency_key".to_string()),
             constructor_parameters: typed(
                 SchemaType::tuple(vec![SchemaType::tuple(vec![])]),
                 SchemaValue::Tuple {
@@ -1355,7 +1367,7 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         not_before: Some(Timestamp::from(123_456)),
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            invocation_id: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
             function_input: typed(
                 SchemaType::tuple(vec![
@@ -1573,7 +1585,7 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
         let raw = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
             not_before,
-            idempotency_key: IdempotencyKey::new("pending".to_string()),
+            invocation_id: IdempotencyKey::new("pending".to_string()),
             payload: OplogPayload::SerializedInline {
                 bytes: crate::serialization::serialize(
                     &crate::model::AgentInvocationPayload::SaveSnapshot,
@@ -1605,6 +1617,108 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
         assert_eq!(public, decoded);
         let decoded: PublicOplogEntry = serde_json::from_str(&public.to_json_string()).unwrap();
         assert_eq!(public, decoded);
+    }
+}
+
+#[test]
+fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
+    use crate::model::oplog::AgentError;
+
+    let finished = OplogEntry::AgentInvocationFinished {
+        timestamp: Timestamp::from(1_000),
+        invocation_id: IdempotencyKey::new("finished-invocation".to_string()),
+        result: OplogPayload::SerializedInline {
+            bytes: crate::serialization::serialize(
+                &crate::model::AgentInvocationResult::AgentInitialization,
+            )
+            .unwrap(),
+            cached: None,
+        },
+        method_name: None,
+        consumed_fuel: 7,
+        component_revision: ComponentRevision::INITIAL,
+    };
+    let invocation_error = OplogEntry::Error {
+        timestamp: Timestamp::from(2_000),
+        entity_parent_start_index: None,
+        kind: OplogErrorKind::Invocation,
+        invocation_id: Some(IdempotencyKey::new("failed-invocation".to_string())),
+        error: AgentError::TransientError("failed".to_string()),
+        retry_from: OplogIndex::from_u64(3),
+        retry_policy_state: None,
+    };
+    let recovery_error = OplogEntry::Error {
+        timestamp: Timestamp::from(3_000),
+        entity_parent_start_index: None,
+        kind: OplogErrorKind::Recovery,
+        invocation_id: None,
+        error: AgentError::TransientError("recovery".to_string()),
+        retry_from: OplogIndex::from_u64(3),
+        retry_policy_state: None,
+    };
+
+    for entry in [finished, invocation_error, recovery_error] {
+        let bytes = crate::serialization::serialize(&entry).unwrap();
+        let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, entry);
+
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+    }
+}
+
+#[test]
+fn raw_recovery_error_naming_an_invocation_is_rejected() {
+    use crate::model::oplog::AgentError;
+
+    let malformed = OplogEntry::Error {
+        timestamp: Timestamp::from(3_000),
+        entity_parent_start_index: None,
+        kind: OplogErrorKind::Recovery,
+        invocation_id: Some(IdempotencyKey::new("some-invocation".to_string())),
+        error: AgentError::TransientError("recovery".to_string()),
+        retry_from: OplogIndex::from_u64(3),
+        retry_policy_state: None,
+    };
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry = malformed.try_into().unwrap();
+    assert!(OplogEntry::try_from(proto).is_err());
+}
+
+#[test]
+fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
+    let finished = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        invocation_id: IdempotencyKey::new("finished-invocation".to_string()),
+        result: PublicAgentInvocationResult::ManualUpdate(Empty {}),
+        method_name: None,
+        consumed_fuel: 7,
+        component_revision: ComponentRevision::INITIAL,
+    });
+    let invocation_error = PublicOplogEntry::Error(ErrorParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        kind: OplogErrorKind::Invocation,
+        invocation_id: Some(IdempotencyKey::new("failed-invocation".to_string())),
+        error: "failed".to_string(),
+        retry_from: OplogIndex::from_u64(3),
+        retry_policy_state: None,
+    });
+    let recovery_error = PublicOplogEntry::Error(ErrorParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        kind: OplogErrorKind::Recovery,
+        invocation_id: None,
+        error: "recovery".to_string(),
+        retry_from: OplogIndex::from_u64(3),
+        retry_policy_state: None,
+    });
+
+    for entry in [finished, invocation_error, recovery_error] {
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            entry.clone().try_into().unwrap();
+        let decoded: PublicOplogEntry = proto.try_into().unwrap();
+        assert_eq!(decoded, entry);
+        let decoded: PublicOplogEntry = serde_json::from_str(&entry.to_json_string()).unwrap();
+        assert_eq!(decoded, entry);
     }
 }
 
@@ -1677,7 +1791,7 @@ fn revert_serialization_poem_serde_equivalence() {
 fn cancel_pending_invocation_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
-        idempotency_key: IdempotencyKey::new("cancel-key".to_string()),
+        invocation_id: IdempotencyKey::new("cancel-key".to_string()),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -2148,7 +2262,7 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     };
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
-        idempotency_key: IdempotencyKey::new("wallet-pin".to_string()),
+        invocation_id: IdempotencyKey::new("wallet-pin".to_string()),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "test".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
@@ -2645,6 +2759,7 @@ mod scope_projection {
                 OplogEntry::error(
                     Some(idx(10)),
                     OplogErrorKind::Invocation,
+                    Some(crate::model::IdempotencyKey::new("invocation".to_string())),
                     AgentError::TransientError("entity-owned".to_string()),
                     idx(99),
                     None,
@@ -2655,6 +2770,7 @@ mod scope_projection {
                 OplogEntry::error(
                     None,
                     OplogErrorKind::Invocation,
+                    Some(crate::model::IdempotencyKey::new("invocation".to_string())),
                     AgentError::TransientError("agent-owned".to_string()),
                     idx(10),
                     None,

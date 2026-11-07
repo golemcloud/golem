@@ -568,7 +568,6 @@ pub struct AgentStatusRecord {
     pub pending_durable_stream_cancellations:
         HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
     pub current_idempotency_key: Option<IdempotencyKey>,
-    pub cancelled_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -636,7 +635,6 @@ impl Default for AgentStatusRecord {
             ephemeral_execution_begun: false,
             pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
-            cancelled_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
@@ -770,6 +768,7 @@ pub struct DurableStreamSessionStatus {
     pub tombstoned_slots: HashSet<String>,
     pub cancellation_requested: bool,
     pub public_session_id: Option<String>,
+    pub route_scope: Option<String>,
     pub expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
     pub expired: bool,
@@ -844,6 +843,7 @@ impl DurableStreamSessionStatus {
                 // ordinary fork. A target-only export identity is replaced on initialization.
                 if self.first_prepared.is_none() {
                     self.public_session_id = None;
+                    self.route_scope = None;
                 }
                 self.expiry_policy = crate::model::durable_stream::StreamSessionExpiryPolicy::None;
                 self.expiry_deadline_millis = None;
@@ -910,12 +910,14 @@ impl DurableStreamSessionStatus {
                     self.prepared = Some(oplog_idx);
                     self.prepared_attempt_id = Some(v.attempt.attempt_id);
                     self.public_session_id = Some(v.public_session_id.clone());
+                    self.route_scope = v.route_scope.clone();
                     self.expiry_policy = v.expiry_policy;
                     self.expiry_deadline_millis = v.expiry_deadline_millis;
                 }
             }
             StreamSessionRecord::ExpiryRefreshed(v)
                 if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.route_scope.as_deref() == Some(&v.route_scope)
                     && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
                     && matches!(
                         self.expiry_policy,
@@ -927,6 +929,7 @@ impl DurableStreamSessionStatus {
             }
             StreamSessionRecord::Expired(v)
                 if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.route_scope.as_deref() == Some(&v.route_scope)
                     && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
                     && !self.expired =>
             {
@@ -934,6 +937,7 @@ impl DurableStreamSessionStatus {
             }
             StreamSessionRecord::ExportForkInitialized(v) if self.public_session_id.is_none() => {
                 self.public_session_id = Some(v.public_session_id.clone());
+                self.route_scope = Some(v.route_scope.clone());
                 self.expiry_policy = v.expiry_policy;
                 self.expiry_deadline_millis = v.expiry_deadline_millis;
                 self.expired = false;
@@ -1120,14 +1124,11 @@ impl DurableStreamSessionIndex {
     ) -> Result<(), String> {
         use crate::model::oplog::OplogPayload;
 
-        if let OplogEntry::PendingAgentInvocation {
-            idempotency_key, ..
-        } = entry
-        {
-            if let Some(status) = self.get(idempotency_key).cloned() {
+        if let OplogEntry::PendingAgentInvocation { invocation_id, .. } = entry {
+            if let Some(status) = self.get(invocation_id).cloned() {
                 let mut status = status;
-                status.apply_pending_invocation(index, idempotency_key);
-                self.insert(idempotency_key.clone(), status);
+                status.apply_pending_invocation(index, invocation_id);
+                self.insert(invocation_id.clone(), status);
             }
             return Ok(());
         }

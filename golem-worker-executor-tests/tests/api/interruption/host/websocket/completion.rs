@@ -68,6 +68,9 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
     let free = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
     drop(free);
     let mut peer = Peer::start_with_held_handshake(true).await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "connect_and_receive_first")
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -110,7 +113,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         ensure!(completed.into_typed::<String>()? == "completed");
         let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(pool::connect_start(&history, 1, 1)? == connect);
-        assert_invocation(&history, &key, 1)?;
+        assert_invocation(&history, &stored_key, 1)?;
         assert_settled_history(&history)?;
         peer.assert_effects(1, 1, 1)?;
         let mut exhausted = policy;
@@ -131,7 +134,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         ensure!(cached.into_typed::<String>()? == "completed");
         peer.assert_effects(1, 1, 1)?;
         let after = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        assert_invocation(&after, &key, 1)?;
+        assert_invocation(&after, &stored_key, 1)?;
         ensure!(pool::connect_start(&after, 1, 1)? == connect);
         Ok::<_, anyhow::Error>(())
     }

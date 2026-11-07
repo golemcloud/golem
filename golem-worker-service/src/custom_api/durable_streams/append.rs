@@ -212,6 +212,7 @@ impl DurableStreamsHandler {
                     agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(route.route.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
+                    route_scope: super::route_scope(route),
                     session: session.into(),
                     slot: slot.into(),
                     payload,

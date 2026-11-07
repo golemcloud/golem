@@ -14,6 +14,7 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, invocation_session_result,
 };
+use golem_common::model::{AgentId, IdempotencyKey as ModelIdempotencyKey};
 use golem_schema::proto::golem::common::{Empty, Uuid};
 use golem_schema::proto::golem::schema::{
     ListValue, SchemaValue, SchemaValueStreamReference, schema_value,
@@ -208,6 +209,7 @@ fn start() -> InvocationStart {
         method_name: Some("run".into()),
         input: Some(stream_value(INPUT_STREAM_ID)),
         idempotency_key: Some(key()),
+        request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
         ..Default::default()
     }
 }
@@ -506,15 +508,16 @@ fn event_bytes(event: HttpSessionEvent) -> Option<Vec<u8>> {
 #[test_timeout("10s")]
 async fn input_is_held_until_acceptance_and_empty_chunk_is_not_eof() {
     let mut h = harness(1);
+    let prepared = start();
     let mut session =
-        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+        HttpSession::start_with_transport(prepared.clone(), h.transport.clone(), limits()).unwrap();
     session.input.send_chunk(vec![7]).await.unwrap();
     session.input.send_chunk(Vec::new()).await.unwrap();
     session.input.finish().await.unwrap();
     let Call::Start(sent_start, mut tail) = call(&mut h.calls).await else {
         panic!()
     };
-    assert_eq!(*sent_start, start());
+    assert_eq!(*sent_start, prepared);
     assert!(
         timeout(Duration::from_millis(30), tail.next())
             .await
@@ -827,8 +830,12 @@ async fn first_acceptance_lost_fails_without_resume_or_second_start() {
 #[test_timeout("10s")]
 async fn cancellation_while_awaiting_acceptance_cleans_prepared_identity() {
     let mut h = harness(1);
+    let mut prepared = start();
+    prepared.idempotency_key = Some(golem_api_grpc::proto::golem::worker::IdempotencyKey {
+        value: "raw-request-key-not-final".into(),
+    });
     let mut session =
-        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+        HttpSession::start_with_transport(prepared, h.transport.clone(), limits()).unwrap();
     let Call::Start(_, _) = call(&mut h.calls).await else {
         panic!()
     };
@@ -975,10 +982,18 @@ async fn finished_failure_does_not_cleanup() {
 
 #[test]
 #[test_timeout("10s")]
-async fn rejected_start_cleans_up_exactly_once() {
+async fn rejected_start_cleans_up_its_prepared_unkeyed_identity_exactly_once() {
     let mut h = harness(1);
+    let prepared = start();
+    let Some(golem_common::model::InvocationRequestKey::Unkeyed(uuid)) = prepared
+        .request_key
+        .clone()
+        .map(|key| golem_common::model::InvocationRequestKey::try_from(key).unwrap())
+    else {
+        panic!("test start is unkeyed")
+    };
     let mut session =
-        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+        HttpSession::start_with_transport(prepared, h.transport.clone(), limits()).unwrap();
     let _ = call(&mut h.calls).await;
     send(
         &h.response_txs[0],
@@ -998,10 +1013,12 @@ async fn rejected_start_cleans_up_exactly_once() {
         event(&mut session).await,
         HttpSessionEvent::Error(HttpSessionError::Rejected)
     ));
-    timeout(Duration::from_secs(1), h.cleanups.recv())
+    let (agent, key) = timeout(Duration::from_secs(1), h.cleanups.recv())
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(agent, AgentId::try_from(proto_agent()).unwrap());
+    assert_eq!(key, ModelIdempotencyKey::from_uuid(uuid));
     assert!(
         timeout(Duration::from_millis(50), h.cleanups.recv())
             .await

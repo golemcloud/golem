@@ -14,8 +14,8 @@
 
 use super::{
     DurableStreamingTaskParams, PreparedRpcInvocation, RpcTargetActivation, RpcTask, RpcTaskError,
-    TaskRetryParams, WasmRpcEntry, WasmRpcEntryPayload, activate_rpc_target,
-    ensure_rpc_target_activated, rpc_span_finished,
+    TaskRetryParams, WasmRpcEntry, activate_rpc_target, ensure_rpc_target_activated,
+    prepare_rpc_invocation_identity, rpc_span_finished,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::InternalRetryResult;
@@ -34,7 +34,6 @@ use crate::services::HasOplog;
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::services::rpc::Rpc;
-use crate::services::rpc::RpcDemand;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::InvocationContextManagement;
 use crate::workerctx::WorkerCtx;
@@ -44,6 +43,7 @@ use futures::future::Either;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationId;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
@@ -158,47 +158,28 @@ pub(super) async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
 pub(super) async fn streaming_target_fingerprint<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: &Resource<WasmRpcEntry>,
+    start_index: OplogIndex,
     prepared: &PreparedRpcInvocation,
     remote_agent_id: &OwnedAgentId,
     auth_ctx: Option<&AuthCtx>,
     idempotency_key: IdempotencyKey,
     freshness_disposition: InvocationFreshnessDisposition,
-) -> Result<(AgentFingerprint, Option<Box<dyn RpcDemand>>), Error> {
-    if let Some(fingerprint) = ctx
-        .table()
-        .get(resource)?
-        .payload
-        .downcast_ref::<WasmRpcEntryPayload>()
-        .expect("wasm RPC resource has the wrong payload")
-        .target_activation
-        .target_fingerprint()
-    {
-        if ctx.state.is_live() {
-            let auth_ctx = auth_ctx.ok_or_else(|| {
-                anyhow::anyhow!("live durable streaming RPC has no captured agent authority")
-            })?;
-            ensure_rpc_target_activated(ctx, resource, auth_ctx, &prepared.method_name).await?;
-        }
-        return Ok((fingerprint, None));
-    }
+) -> Result<Result<(InvocationId, AgentFingerprint), InternalRpcError>, Error> {
     let auth_ctx = auth_ctx.cloned().unwrap_or_else(|| ctx.agent_auth_ctx());
-    let demand = ctx
-        .rpc()
-        .create_demand(
-            remote_agent_id,
-            &prepared.method_name,
-            ctx.created_by(),
-            ctx.agent_id(),
-            &prepared.env,
-            ctx.clone_as_inherited_stack(&prepared.connection_span_id),
-            prepared.config.clone(),
-            &auth_ctx,
-            prepared.is_ephemeral().then_some(idempotency_key),
-            freshness_disposition,
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    Ok((demand.fingerprint(), Some(demand)))
+    let identity = prepare_rpc_invocation_identity(
+        ctx,
+        resource,
+        start_index,
+        remote_agent_id,
+        &idempotency_key,
+        &prepared.method_name,
+        freshness_disposition,
+    )
+    .await?;
+    if identity.is_ok() && ctx.state.is_live() && !prepared.is_ephemeral() {
+        ensure_rpc_target_activated(ctx, resource, &auth_ctx, &prepared.method_name).await?;
+    }
+    Ok(identity)
 }
 
 pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
@@ -211,12 +192,7 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
     mut handle: DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>,
     scope_card: Option<ScopeCard>,
 ) -> anyhow::Result<Result<SchemaValue, RpcError>> {
-    let mut freshness_disposition =
-        if known_fresh_dispatch_allowed(handle.is_live(), prepared.is_ephemeral()) {
-            InvocationFreshnessDisposition::KnownFresh
-        } else {
-            InvocationFreshnessDisposition::MayExist
-        };
+    let mut freshness_disposition = InvocationFreshnessDisposition::MayExist;
 
     let result: Result<SchemaValue, InternalRpcError> = 'result: {
         if !handle.is_live() {
@@ -341,12 +317,7 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
     span: Arc<InvocationContextSpan>,
     mut handle: DurableCallSession<GolemRpcWasmRpcInvoke, NotCancellable>,
 ) -> anyhow::Result<Result<(), RpcError>> {
-    let mut freshness_disposition =
-        if known_fresh_dispatch_allowed(handle.is_live(), prepared.is_ephemeral()) {
-            InvocationFreshnessDisposition::KnownFresh
-        } else {
-            InvocationFreshnessDisposition::MayExist
-        };
+    let mut freshness_disposition = InvocationFreshnessDisposition::MayExist;
 
     let result = 'result: {
         if !handle.is_live() {
@@ -597,6 +568,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     let task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: retry_params.retry_point,
                         entity_parent_start_index: retry_params.entity_parent_start_index,
+                        invocation_id: retry_params.invocation_id,
                         environment_state_service: retry_params.environment_state_service,
                         environment_id: retry_params.environment_id,
                         default_retry_policy: retry_params.default_retry_policy,
@@ -670,6 +642,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
             worker: ctx.public_state.worker(),
             retry_point,
             entity_parent_start_index: ctx.entity_parent_start_index(),
+            invocation_id: ctx.state.get_current_idempotency_key(),
             execution_status: ctx.execution_status.clone(),
         })
     };

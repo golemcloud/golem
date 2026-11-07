@@ -579,7 +579,7 @@ function summary(e) {
     case 'AgentInvocationStarted': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 110) + ')') : null]; }
     case 'AgentInvocationFinished': { const r = p.result; const err = resultError(r); const out = resultOutput(r); return [span('val', p.methodName || (r && r.type) || ''), ' ', err ? [span('err', 'error: ' + err)] : out ? [arrow(), span('val', typedText(out, 120))] : r && r.type === 'SaveSnapshot' ? [arrow(), span('val', snapshotText(r.snapshot))] : span('ok', 'ok')]; }
     case 'PendingAgentInvocation': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, span('val', ' · queued')]; }
-    case 'CancelPendingInvocation': return [span('val', 'idempotency key ' + (p.idempotencyKey && p.idempotencyKey.value || p.idempotencyKey))];
+    case 'CancelPendingInvocation': return [span('val', 'invocation id ' + (p.invocationId && p.invocationId.value || p.invocationId))];
     case 'Error': return [span('err', (p.kind || '') + ': ' + trunc(String(p.error || ''), 200)), span('val', ` · retry from #${idxOf(p.retryFrom)}` + (e.attempt ? ` · attempt ${e.attempt}` : ''))];
     case 'Jump': return [span('val', `replay skips #${idxOf(p.jump.start)} … #${idxOf(p.jump.end)}`)];
     case 'Revert': return [span('val', `dropped #${idxOf(p.droppedRegion.start)} … #${idxOf(p.droppedRegion.end)} · reverted to #${idxOf(p.droppedRegion.start) - 1}`)];

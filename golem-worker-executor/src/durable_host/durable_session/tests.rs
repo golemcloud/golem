@@ -1778,6 +1778,7 @@ async fn append_prepared_pending(
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 public_session_id: identity.invocation.idempotency_key.value.clone(),
+                route_scope: None,
                 session_key: identity.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
                 expiry_deadline_millis: None,
@@ -2821,6 +2822,7 @@ impl Rpc for AttachedProducerRpc {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _expected_fingerprint: AgentFingerprint,
+        _request_key: golem_common::model::InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
         _scheduled_at: chrono::DateTime<chrono::Utc>,
         _auth_ctx: &AuthCtx,
@@ -9039,6 +9041,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 public_session_id: identity.invocation.idempotency_key.value.clone(),
+                route_scope: None,
                 session_key: identity.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
                 expiry_deadline_millis: None,
@@ -9680,6 +9683,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 public_session_id: consumer.invocation.idempotency_key.value.clone(),
+                route_scope: None,
                 session_key: consumer.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
                 expiry_deadline_millis: None,
@@ -10177,6 +10181,7 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 public_session_id: identity.invocation.idempotency_key.value.clone(),
+                route_scope: None,
                 session_key: identity.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
                 expiry_deadline_millis: None,
@@ -10633,6 +10638,7 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 public_session_id: session_key.idempotency_key.value.clone(),
+                route_scope: None,
                 session_key: session_key.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
                 expiry_deadline_millis: None,
@@ -10848,6 +10854,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 public_session_id: session_key.idempotency_key.value.clone(),
+                route_scope: None,
                 session_key: session_key.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
                 expiry_deadline_millis: None,
@@ -11373,6 +11380,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 public_session_id: consumer.invocation.idempotency_key.value.clone(),
+                route_scope: None,
                 session_key: consumer.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
                 expiry_deadline_millis: None,

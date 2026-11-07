@@ -4656,6 +4656,9 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
 
     let key = IdempotencyKey::fresh();
     let invocation_key = key.clone();
+    let stored_key = executor
+        .external_invocation_key(&worker_id, &key, "tcp_collect_p3")
+        .await?;
     let method_counts = |oplog: &[PublicOplogEntryWithIndex]| {
         let mut current_is_method = false;
         let mut admitted = 0;
@@ -4668,7 +4671,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
                 PublicOplogEntry::AgentInvocationStarted(start) => {
                     current_is_method = matches!(&start.invocation,
                         PublicAgentInvocation::AgentMethodInvocation(method)
-                        if method.idempotency_key == key && method.method_name == "tcp_collect_p3");
+                        if method.invocation_id == stored_key && method.method_name == "tcp_collect_p3");
                     admitted += usize::from(current_is_method);
                 }
                 PublicOplogEntry::AgentInvocationFinished(_) if current_is_method => {

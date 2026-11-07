@@ -115,7 +115,14 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     .await?;
     let fingerprint = executor.get_worker_metadata(&id).await?.fingerprint;
     let key = IdempotencyKey::fresh();
-    let mut result_wait = crate::invocation_waits::result_wait(&id, &key);
+    let request_key = golem_common::model::InvocationRequestKey::external(
+        executor.auth_ctx().idempotency_scope(),
+        Some(&key),
+    );
+    let stored_key = executor
+        .finalized_invocation_key(&id, &request_key, "tool:streaming/run")
+        .await?;
+    let mut result_wait = crate::invocation_waits::result_wait(&id, &stored_key);
     let input = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -155,6 +162,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
                     fresh_owner: false,
                     expected_deployment_revision: None,
                 }),
+                request_key: Some(request_key.into()),
                 ..Default::default()
             })),
         })
@@ -368,7 +376,8 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     for (index, entry) in committed {
         match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } => eprintln!(
                 "STDIN_COMMITTED index={index} kind=AgentInvocationStarted key={idempotency_key:?}"
             ),

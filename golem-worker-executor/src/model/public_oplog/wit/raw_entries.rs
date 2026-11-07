@@ -118,8 +118,8 @@ before (value) {}
                         .collect::<Result<Vec<_>, _>>()?;
                     Ok(Self::AgentInvocationStarted {
                         timestamp: timestamp_from_datetime(params.timestamp),
-                        idempotency_key: golem_common::model::IdempotencyKey::new(
-                            params.idempotency_key,
+                        invocation_id: golem_common::model::IdempotencyKey::new(
+                            params.invocation_id,
                         ),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
@@ -130,6 +130,7 @@ before (value) {}
                 } }
     AgentInvocationFinished { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
+        invocation_id: golem_common::model::IdempotencyKey::new(params.invocation_id),
         result: oplog_payload_from_wit(params.result),
         method_name: params.method_name,
         consumed_fuel: params.consumed_fuel,
@@ -145,6 +146,7 @@ before (value) {}
         timestamp: timestamp_from_datetime(params.timestamp),
         entity_parent_start_index: None,
         kind: params.kind.into(),
+        invocation_id: params.invocation_id.map(golem_common::model::IdempotencyKey::new),
         error: params.error.into(),
         retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
         retry_policy_state: params.retry_policy_state.map(|s| {
@@ -181,8 +183,8 @@ before (value) {}
                     Ok(Self::PendingAgentInvocation {
                         timestamp: timestamp_from_datetime(params.timestamp),
                         not_before: params.not_before.map(timestamp_from_datetime),
-                        idempotency_key: golem_common::model::IdempotencyKey::new(
-                            params.idempotency_key,
+                        invocation_id: golem_common::model::IdempotencyKey::new(
+                            params.invocation_id,
                         ),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
@@ -315,8 +317,8 @@ before (value) {}
     } }
     CancelPendingInvocation { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
-        idempotency_key: golem_common::model::IdempotencyKey::new(
-            params.idempotency_key,
+        invocation_id: golem_common::model::IdempotencyKey::new(
+            params.invocation_id,
         ),
     } }
     BeginRemoteTransaction { record (params) {
@@ -605,7 +607,7 @@ before (value) {}
     } }
     AgentInvocationStarted { record () => RawAgentInvocationStartedParameters {
         timestamp: timestamp.into(),
-        idempotency_key: idempotency_key.value,
+        invocation_id: invocation_id.value,
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
@@ -614,6 +616,7 @@ before (value) {}
     } }
     AgentInvocationFinished { record () => RawAgentInvocationFinishedParameters {
         timestamp: timestamp.into(),
+        invocation_id: invocation_id.value,
         result: oplog_payload_to_wit(result)?,
         method_name: method_name,
         consumed_fuel: consumed_fuel,
@@ -623,6 +626,7 @@ before (value) {}
     Error { record (entity_parent_start_index) => RawErrorParameters {
         timestamp: timestamp.into(),
         kind: kind.into(),
+        invocation_id: invocation_id.map(|invocation_id| invocation_id.value),
         error: error.into(),
         retry_from: retry_from.into(),
         retry_policy_state: retry_policy_state.map(|s| s.into()),
@@ -640,7 +644,7 @@ before (value) {}
     PendingAgentInvocation { record () => RawPendingAgentInvocationParameters {
         timestamp: timestamp.into(),
         not_before: not_before.map(Into::into),
-        idempotency_key: idempotency_key.value,
+        invocation_id: invocation_id.value,
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
@@ -725,7 +729,7 @@ before (value) {}
     } }
     CancelPendingInvocation { record () => CancelPendingInvocationParameters {
         timestamp: timestamp.into(),
-        idempotency_key: idempotency_key.value,
+        invocation_id: invocation_id.value,
     } }
     BeginRemoteTransaction { record () => RawBeginRemoteTransactionParameters {
         timestamp: timestamp.into(),

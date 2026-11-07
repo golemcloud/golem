@@ -32,7 +32,8 @@ fn roots(
         .iter()
         .filter_map(|(index, entry)| match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } if idempotency_key == key => Some(*index),
             _ => None,
         })
@@ -97,7 +98,8 @@ fn finished_for_key(
     for (index, entry) in entries {
         match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } => {
                 current = idempotency_key == key;
             }
@@ -216,6 +218,9 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
         .context("custom owner not cached")?
         .primary();
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "concurrent_promises")
+        .await?;
     let inputs = (first.clone(), second.clone());
     let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
@@ -240,7 +245,7 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
     physical_stop(&worker).await?;
     assert!(!invocation.is_finished());
     let stopped = history(&worker).await?;
-    let original = roots(&stopped, &key);
+    let original = roots(&stopped, &stored_key);
     assert_eq!(original.len(), 2);
     assert_eq!(
         stopped
@@ -266,7 +271,7 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
             .into_typed::<Vec<String>>()?,
         vec!["first", "second"]
     );
-    assert_completed(&history(&worker).await?, &original, &key);
+    assert_completed(&history(&worker).await?, &original, &stored_key);
     let after = executor.stored_oplog(&id).await;
     assert!(after.len() >= prefix.len());
     assert_eq!(&after[..prefix.len()], prefix.as_slice());
@@ -348,6 +353,9 @@ async fn quota_custom_finish(
         .context("custom owner not cached")?
         .primary();
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "concurrent_promises")
+        .await?;
     let inputs = (first.clone(), second.clone());
     let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
@@ -370,7 +378,7 @@ async fn quota_custom_finish(
         loop {
             worker.commit_oplog_and_update_state(CommitLevel::Always).await?;
             let entries = history(&worker).await?;
-            let calls = roots(&entries, &key);
+            let calls = roots(&entries, &stored_key);
             if calls.len() == 2 && calls.iter().all(|(start, _)| entries.values().any(|entry| matches!(entry,
                 OplogEntry::Start { function_name, observational_owner: Some(owner), .. }
                     if owner == start && function_name.to_string() == "golem::api::get_promise_result"))) {
@@ -418,7 +426,7 @@ async fn quota_custom_finish(
     physical_stop(&worker).await?;
     refresh.await?;
     let stopped = history(&worker).await?;
-    assert_eq!(roots(&stopped, &key), original);
+    assert_eq!(roots(&stopped, &stored_key), original);
     let completed: Vec<_> = original.iter().filter(|(start, _)| stopped.values().any(|entry| matches!(entry, OplogEntry::End { start_index, .. } if start_index == start))).map(|(start, _)| *start).collect();
     assert_eq!(
         completed,
@@ -434,7 +442,7 @@ async fn quota_custom_finish(
             .count(),
         1
     );
-    assert!(finished_for_key(&stopped, &key).is_empty());
+    assert!(finished_for_key(&stopped, &stored_key).is_empty());
     let stopped_prefix = executor.stored_oplog(&id).await;
     assert!(stopped_prefix.len() >= prefix.len());
     assert_eq!(&stopped_prefix[..prefix.len()], prefix.as_slice());
@@ -455,7 +463,7 @@ async fn quota_custom_finish(
         vec!["first", "second"]
     );
     let after = history(&worker).await?;
-    assert_completed(&after, &original, &key);
+    assert_completed(&after, &original, &stored_key);
     assert_eq!(
         observations(&after, completed[0]),
         observations(&stopped, completed[0]),

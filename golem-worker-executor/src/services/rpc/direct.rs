@@ -243,6 +243,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
+        request_key: InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
@@ -258,6 +259,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .schedule_invocation(
                     owned_agent_id,
                     expected_fingerprint,
+                    request_key,
                     invocation,
                     scheduled_at,
                     auth_ctx,
@@ -265,6 +267,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .await;
         }
         let AgentInvocation::AgentMethod {
+            idempotency_key,
             method_name,
             input,
             principal,
@@ -295,6 +298,17 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .await?;
         if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint {
             return Err(WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()).into());
+        }
+        let final_id = request_key.finalize(
+            worker.get_initial_worker_metadata().agent_id,
+            expected_fingerprint,
+            method_name,
+        );
+        if idempotency_key.value != final_id.uuid().to_string() {
+            return Err(RpcError::ProtocolError {
+                details: "scheduled invocation identity does not match its prepared request"
+                    .to_string(),
+            });
         }
         let status = worker.get_last_known_status().await;
         let component = self
@@ -359,7 +373,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Worker::<Ctx>::validate_invocation_freshness(
                     self,
                     owned_agent_id,
-                    key,
+                    &InvocationRequestKey::Internal(key.clone()).owner_key(method_name),
                     freshness_disposition,
                 )
                 .await?;
@@ -464,11 +478,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             }
 
             let principal = caller_agent_principal(self_agent_id);
-            let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+            let request_key = idempotency_key
+                .map(InvocationRequestKey::Internal)
+                .unwrap_or_else(|| InvocationRequestKey::external(None, None));
             Worker::<Ctx>::validate_invocation_freshness(
                 self,
                 owned_agent_id,
-                &idempotency_key,
+                &request_key.owner_key(&method_name),
                 freshness_disposition,
             )
             .await?;
@@ -484,6 +500,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 freshness_disposition,
             )
             .await?;
+            let metadata = worker.get_initial_worker_metadata();
+            let idempotency_key = IdempotencyKey::new(
+                request_key
+                    .finalize(metadata.agent_id, metadata.fingerprint, &method_name)
+                    .uuid()
+                    .to_string(),
+            );
 
             let invocation = AgentInvocation::AgentMethod {
                 idempotency_key,
@@ -585,7 +608,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         Worker::<Ctx>::validate_invocation_freshness(
             self,
             owned_agent_id,
-            &idempotency_key,
+            &InvocationRequestKey::Internal(idempotency_key.clone()).owner_key(&method_name),
             InvocationFreshnessDisposition::MayExist,
         )
         .await?;
@@ -639,6 +662,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             method_name: Some(method_name.clone()),
             input: None,
             idempotency_key: Some(idempotency_key.clone().into()),
+            request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
             context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                 parent: Some(self_agent_id.clone().into()),
                 env: HashMap::from_iter(self_env.to_vec()),
@@ -665,6 +689,16 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map_err(|details| RpcError::ProtocolError { details })?,
             external_tool: None,
         };
+        let idempotency_key = IdempotencyKey::new(
+            InvocationRequestKey::Internal(idempotency_key)
+                .finalize(
+                    owned_agent_id.agent_id(),
+                    expected_callee_fingerprint,
+                    &method_name,
+                )
+                .uuid()
+                .to_string(),
+        );
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: idempotency_key.clone(),
             method_name,
@@ -704,7 +738,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             })?;
         let _ = accepted_inputs.send(InvocationAccepted {
             agent_id: start.agent_id.clone(),
-            idempotency_key: start.idempotency_key.clone(),
+            idempotency_key: Some(idempotency_key.clone().into()),
             component_revision: Some(component.revision.get()),
             attachment_id: (!acceptance.joined_origin_observer)
                 .then(|| acceptance.prepared.attempt.attachment_id.0.into()),
@@ -950,11 +984,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             }
 
             let principal = caller_agent_principal(self_agent_id);
-            let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+            let request_key = idempotency_key
+                .map(InvocationRequestKey::Internal)
+                .unwrap_or_else(|| InvocationRequestKey::external(None, None));
             Worker::<Ctx>::validate_invocation_freshness(
                 self,
                 owned_agent_id,
-                &idempotency_key,
+                &request_key.owner_key(&method_name),
                 freshness_disposition,
             )
             .await?;
@@ -970,6 +1006,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 freshness_disposition,
             )
             .await?;
+            let metadata = worker.get_initial_worker_metadata();
+            let idempotency_key = IdempotencyKey::new(
+                request_key
+                    .finalize(metadata.agent_id, metadata.fingerprint, &method_name)
+                    .uuid()
+                    .to_string(),
+            );
 
             let invocation = AgentInvocation::AgentMethod {
                 idempotency_key,

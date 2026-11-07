@@ -52,7 +52,7 @@ fn manual_invocation(target: u64) -> OplogEntry {
     OplogEntry::PendingAgentInvocation {
         timestamp: Timestamp::from(1_000),
         not_before: None,
-        idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+        invocation_id: golem_common::model::IdempotencyKey::fresh(),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
             target_revision: revision(target),
         })),

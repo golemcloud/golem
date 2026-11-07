@@ -19,13 +19,18 @@ final case class InvocationResult[+A](metadata: InvocationMetadata, value: A)
 final case class InvocationReceipt(metadata: InvocationMetadata)
 
 private[rpc] final case class AsyncInvocation[+A](
-  metadata: InvocationMetadata,
+  metadata: Option[InvocationMetadata],
   result: Future[A],
   cancellationToken: CancellationToken
 )
 
+/**
+ * A started asynchronous invocation. `metadata` is `None` when the host
+ * rejected the call before it started; `result` then fails with the rejection
+ * error.
+ */
 final case class CancelableAsyncInvocation[+A](
-  metadata: InvocationMetadata,
+  metadata: Option[InvocationMetadata],
   result: Future[A],
   cancellationToken: CancellationToken
 )

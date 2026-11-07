@@ -17,7 +17,7 @@ use crate::preview2::golem::agent::host::InvocationMetadata;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::OwnedAgentId;
+use golem_common::model::InvocationId;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::invocation_context::SpanId;
@@ -30,13 +30,10 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub(super) fn invocation_metadata(
-    remote_agent_id: &OwnedAgentId,
-    idempotency_key: &IdempotencyKey,
-) -> InvocationMetadata {
+pub(super) fn invocation_metadata(invocation_id: &InvocationId) -> InvocationMetadata {
     InvocationMetadata {
-        agent_id: remote_agent_id.agent_id.agent_id.clone(),
-        idempotency_key: idempotency_key.value.clone(),
+        agent_id: invocation_id.agent_id().agent_id.clone(),
+        idempotency_key: invocation_id.uuid().to_string(),
     }
 }
 

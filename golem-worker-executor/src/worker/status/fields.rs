@@ -55,7 +55,7 @@ pub(super) fn calculate_pending_invocations(
                 OplogEntry::PendingAgentInvocation {
                     timestamp,
                     not_before,
-                    idempotency_key,
+                    invocation_id: idempotency_key,
                     ..
                 } => {
                     // A manual update is the only invocation variant without a semantic
@@ -78,10 +78,12 @@ pub(super) fn calculate_pending_invocations(
                     });
                 }
                 OplogEntry::AgentInvocationStarted {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 }
                 | OplogEntry::CancelPendingInvocation {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } => {
                     result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
                 }
@@ -603,14 +605,9 @@ pub(super) fn calculate_update_fields(
 pub(super) fn calculate_invocation_results(
     invocation_results: InvocationResultMembership,
     current_idempotency_key: Option<IdempotencyKey>,
-    cancelled_idempotency_key: Option<IdempotencyKey>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (
-    InvocationResultMembership,
-    Option<IdempotencyKey>,
-    Option<IdempotencyKey>,
-) {
+) -> (InvocationResultMembership, Option<IdempotencyKey>) {
     let mut invocation_results = invocation_results;
     let revert_count = entries
         .values()
@@ -622,26 +619,28 @@ pub(super) fn calculate_invocation_results(
             .wrapping_add(revert_count),
     );
     let mut current_idempotency_key = current_idempotency_key;
-    let mut cancelled_idempotency_key = cancelled_idempotency_key;
 
     fold_invocation_result_entries(
         &mut current_idempotency_key,
-        &mut cancelled_idempotency_key,
         deleted_regions,
         entries,
         |key, index| invocation_results.insert(key.clone(), index),
     );
 
-    (
-        invocation_results,
-        current_idempotency_key,
-        cancelled_idempotency_key,
-    )
+    (invocation_results, current_idempotency_key)
 }
 
+/// Gives every invocation result in `entries` to `observe_result`, and keeps
+/// `current_idempotency_key` as the running invocation.
+///
+/// `AgentInvocationFinished` entries name their invocation, so they are attributed by that name
+/// and not by their position. An invocation `Error` is attributed to the invocation it names only
+/// while that invocation runs, or when it is the agent's `PermissionDenied` rejection of a
+/// cancelled pending invocation. A retry error of a background task that outlives its invocation, or of an
+/// entity body, therefore never replaces a finished result. `Exited` names no invocation and is
+/// attributed to the running one.
 pub(crate) fn fold_invocation_result_entries(
     current_idempotency_key: &mut Option<IdempotencyKey>,
-    cancelled_idempotency_key: &mut Option<IdempotencyKey>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     mut observe_result: impl FnMut(&IdempotencyKey, OplogIndex),
@@ -649,58 +648,37 @@ pub(crate) fn fold_invocation_result_entries(
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
-            *cancelled_idempotency_key = None;
             continue;
         }
 
         match entry {
-            OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
-            } => {
-                *cancelled_idempotency_key = None;
-                *current_idempotency_key = Some(idempotency_key.clone());
+            OplogEntry::AgentInvocationStarted { invocation_id, .. } => {
+                *current_idempotency_key = Some(invocation_id.clone());
             }
-            OplogEntry::AgentInvocationFinished { .. } => {
-                *cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &*current_idempotency_key {
-                    observe_result(idempotency_key, *oplog_idx);
-                }
-                *current_idempotency_key = None;
-            }
-            OplogEntry::CancelPendingInvocation {
-                idempotency_key, ..
-            } => {
-                *cancelled_idempotency_key = Some(idempotency_key.clone());
-            }
-            OplogEntry::Error {
-                kind: OplogErrorKind::Invocation,
-                error: AgentError::PermissionDenied(_),
-                ..
-            } => {
-                if let Some(idempotency_key) = cancelled_idempotency_key.take() {
-                    observe_result(&idempotency_key, *oplog_idx);
-                } else if let Some(idempotency_key) = &*current_idempotency_key {
-                    observe_result(idempotency_key, *oplog_idx);
+            OplogEntry::AgentInvocationFinished { invocation_id, .. } => {
+                observe_result(invocation_id, *oplog_idx);
+                if current_idempotency_key.as_ref() == Some(invocation_id) {
+                    *current_idempotency_key = None;
                 }
             }
             OplogEntry::Error {
                 kind: OplogErrorKind::Invocation,
+                invocation_id: Some(invocation_id),
+                entity_parent_start_index,
+                error,
                 ..
-            } => {
-                *cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &*current_idempotency_key {
-                    observe_result(idempotency_key, *oplog_idx);
-                }
+            } if current_idempotency_key.as_ref() == Some(invocation_id)
+                || (entity_parent_start_index.is_none()
+                    && matches!(error, AgentError::PermissionDenied(_))) =>
+            {
+                observe_result(invocation_id, *oplog_idx);
             }
             OplogEntry::Exited { .. } => {
-                *cancelled_idempotency_key = None;
                 if let Some(idempotency_key) = &*current_idempotency_key {
                     observe_result(idempotency_key, *oplog_idx);
                 }
             }
-            _ => {
-                *cancelled_idempotency_key = None;
-            }
+            _ => {}
         }
     }
 }

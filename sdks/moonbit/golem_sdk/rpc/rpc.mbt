@@ -221,15 +221,20 @@ pub async fn AgentClient::invoke_and_await(
     errdefer invocation.future.cancel()
     invocation.future.get()
   }
-  match result {
-    Ok(value) => {
-      let metadata : InvocationMetadata = {
-        agent_id: invocation.metadata.agent_id,
-        idempotency_key: invocation.metadata.idempotency_key,
+  match (result, invocation.metadata) {
+    (Ok(value), Some(metadata)) =>
+      {
+        metadata: {
+          agent_id: metadata.agent_id,
+          idempotency_key: metadata.idempotency_key,
+        },
+        value,
       }
-      { metadata, value, }
-    }
-    Err(e) => panic_on_rpc_error(e)
+    (Ok(_), None) =>
+      abort(
+        "RPC protocol error: completed invocation has no invocation metadata",
+      )
+    (Err(e), _) => panic_on_rpc_error(e)
   }
 }
 

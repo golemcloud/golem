@@ -75,6 +75,7 @@ pub mod error_code {
     pub const TOOL_RELEASE_NOT_FOUND: &str = "TOOL_RELEASE_NOT_FOUND";
 
     // --- Already exists / conflicts ---
+    pub const IDEMPOTENCY_CONFLICT: &str = "IDEMPOTENCY_CONFLICT";
     pub const ACCOUNT_EMAIL_ALREADY_IN_USE: &str = "ACCOUNT_EMAIL_ALREADY_IN_USE";
     pub const AGENT_CONFIG_DUPLICATE_VALUE: &str = "AGENT_CONFIG_DUPLICATE_VALUE";
     pub const AGENT_CONFIG_NOT_DECLARED: &str = "AGENT_CONFIG_NOT_DECLARED";

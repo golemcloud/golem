@@ -343,6 +343,7 @@ pub(crate) struct RecordedInvocationContext {
     pub principal: golem_api_grpc::proto::golem::component::Principal,
     pub context: Option<InvocationContext>,
     pub idempotency_key: IdempotencyKey,
+    pub request_key: golem_common::model::InvocationRequestKey,
     pub freshness: golem_common::model::agent::InvocationFreshnessDisposition,
 }
 
@@ -361,6 +362,7 @@ pub(crate) struct NativeSessionLog {
     pub(crate) mode: NativeSessions,
     /// The idempotency key of each session's start.
     pub(crate) keys: Vec<Arc<str>>,
+    pub(crate) starts: Vec<golem_api_grpc::proto::golem::worker::InvocationStart>,
     /// The rest of each held session's request stream, after its start.
     pub(crate) tails: VecDeque<crate::service::worker::InvocationRequestStream>,
     /// The number of sessions received so far.
@@ -672,11 +674,11 @@ impl WorkerClient for RecordingWorkerClient {
     async fn invoke_agent(
         &self,
         agent_id: &AgentId,
-        _: Option<String>,
+        method_name: Option<String>,
         method_params: Option<golem_schema::proto::golem::schema::SchemaValue>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
-        idempotency_key: IdempotencyKey,
+        request_key: golem_common::model::InvocationRequestKey,
         context: Option<InvocationContext>,
         freshness: golem_common::model::agent::InvocationFreshnessDisposition,
         _: Vec<golem_common::model::agent::AgentConfigEntryDto>,
@@ -695,7 +697,8 @@ impl WorkerClient for RecordingWorkerClient {
                 auth,
                 principal,
                 context,
-                idempotency_key,
+                idempotency_key: request_key.owner_key(method_name.as_deref().unwrap_or_default()),
+                request_key,
                 freshness,
             });
         Ok(self.invocation_output.clone())
@@ -707,6 +710,17 @@ impl WorkerClient for RecordingWorkerClient {
         request: crate::service::worker::InvocationRequestStream,
     ) -> WorkerResult<crate::service::worker::InvocationResponseStream> {
         let (start, tail) = futures::StreamExt::into_future(request).await;
+        if let Some(golem_api_grpc::proto::golem::worker::InvocationRequest {
+            request:
+                Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(start)),
+        }) = &start
+        {
+            self.native_sessions
+                .lock()
+                .unwrap()
+                .starts
+                .push(start.clone());
+        }
         let key = match start.and_then(|start| start.request) {
             Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(
                 start,
@@ -943,6 +957,7 @@ impl InvocationHarness {
         let native_sessions = Arc::new(Mutex::new(NativeSessionLog {
             mode: NativeSessions::Refuse,
             keys: Vec::new(),
+            starts: Vec::new(),
             tails: VecDeque::new(),
             opened: tokio::sync::watch::Sender::new(0),
         }));
