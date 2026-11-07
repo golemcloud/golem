@@ -144,12 +144,19 @@ struct CtrfResults {
 }
 
 #[derive(Deserialize)]
+struct CtrfTestExtra {
+    flaky: Option<bool>,
+    non_flaky: Option<bool>,
+}
+
+#[derive(Deserialize)]
 struct CtrfTest {
     name: Option<String>,
     status: Option<String>,
     duration: Option<f64>,
     retries: Option<u64>,
     flaky: Option<bool>,
+    extra: Option<CtrfTestExtra>,
 }
 
 pub fn observations_from_archive(
@@ -181,9 +188,17 @@ pub fn observations_from_archive(
         };
         found_report = true;
         for test in report.results.tests {
+            let flaky = test
+                .flaky
+                .or_else(|| test.extra.as_ref().and_then(|extra| extra.flaky))
+                .or_else(|| {
+                    test.extra
+                        .as_ref()
+                        .and_then(|extra| extra.non_flaky.map(|nf| !nf))
+                });
             let retries = match test.retries.unwrap_or(0) {
-                _ if test.flaky == Some(false) => 0,
-                0 if test.flaky == Some(true) => 1,
+                _ if flaky == Some(false) => 0,
+                0 if flaky == Some(true) => 1,
                 retries => retries,
             };
             observations.push(Observation {
