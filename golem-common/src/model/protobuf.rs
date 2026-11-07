@@ -686,35 +686,32 @@ impl TryFrom<golem::worker::LogEvent> for AgentEvent {
                 golem::worker::log_event::Event::Stdout(event) => Ok(AgentEvent::StdOut {
                     timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                     bytes: event.message.into_bytes(),
+                    invocation_id: event.invocation_id.map(Into::into),
                 }),
                 golem::worker::log_event::Event::Stderr(event) => Ok(AgentEvent::StdErr {
                     timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                     bytes: event.message.into_bytes(),
+                    invocation_id: event.invocation_id.map(Into::into),
                 }),
                 golem::worker::log_event::Event::Log(event) => Ok(AgentEvent::Log {
                     timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                     level: event.level().into(),
                     context: event.context,
                     message: event.message,
+                    invocation_id: event.invocation_id.map(Into::into),
                 }),
                 golem::worker::log_event::Event::InvocationStarted(event) => {
                     Ok(AgentEvent::InvocationStart {
                         timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                         function: event.function,
-                        idempotency_key: event
-                            .idempotency_key
-                            .ok_or("Missing idempotency key")?
-                            .into(),
+                        invocation_id: event.invocation_id.ok_or("Missing invocation ID")?.into(),
                     })
                 }
                 golem::worker::log_event::Event::InvocationFinished(event) => {
                     Ok(AgentEvent::InvocationFinished {
                         timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                         function: event.function,
-                        idempotency_key: event
-                            .idempotency_key
-                            .ok_or("Missing idempotency key")?
-                            .into(),
+                        invocation_id: event.invocation_id.ok_or("Missing invocation ID")?.into(),
                     })
                 }
                 golem::worker::log_event::Event::ClientLagged(event) => {
@@ -753,19 +750,29 @@ impl TryFrom<AgentEvent> for golem::worker::LogEvent {
 
     fn try_from(value: AgentEvent) -> Result<Self, Self::Error> {
         match value {
-            AgentEvent::StdOut { timestamp, bytes } => Ok(golem::worker::LogEvent {
+            AgentEvent::StdOut {
+                timestamp,
+                bytes,
+                invocation_id,
+            } => Ok(golem::worker::LogEvent {
                 event: Some(golem::worker::log_event::Event::Stdout(
                     golem::worker::StdOutLog {
                         message: String::from_utf8_lossy(&bytes).to_string(),
                         timestamp: Some(timestamp.into()),
+                        invocation_id: invocation_id.map(Into::into),
                     },
                 )),
             }),
-            AgentEvent::StdErr { timestamp, bytes } => Ok(golem::worker::LogEvent {
+            AgentEvent::StdErr {
+                timestamp,
+                bytes,
+                invocation_id,
+            } => Ok(golem::worker::LogEvent {
                 event: Some(golem::worker::log_event::Event::Stderr(
                     golem::worker::StdErrLog {
                         message: String::from_utf8_lossy(&bytes).to_string(),
                         timestamp: Some(timestamp.into()),
+                        invocation_id: invocation_id.map(Into::into),
                     },
                 )),
             }),
@@ -774,6 +781,7 @@ impl TryFrom<AgentEvent> for golem::worker::LogEvent {
                 level,
                 context,
                 message,
+                invocation_id,
             } => Ok(golem::worker::LogEvent {
                 event: Some(golem::worker::log_event::Event::Log(golem::worker::Log {
                     level: match level {
@@ -787,17 +795,18 @@ impl TryFrom<AgentEvent> for golem::worker::LogEvent {
                     context,
                     message,
                     timestamp: Some(timestamp.into()),
+                    invocation_id: invocation_id.map(Into::into),
                 })),
             }),
             AgentEvent::InvocationStart {
                 timestamp,
                 function,
-                idempotency_key,
+                invocation_id,
             } => Ok(golem::worker::LogEvent {
                 event: Some(golem::worker::log_event::Event::InvocationStarted(
                     golem::worker::InvocationStarted {
                         function,
-                        idempotency_key: Some(idempotency_key.into()),
+                        invocation_id: Some(invocation_id.into()),
                         timestamp: Some(timestamp.into()),
                     },
                 )),
@@ -805,12 +814,12 @@ impl TryFrom<AgentEvent> for golem::worker::LogEvent {
             AgentEvent::InvocationFinished {
                 timestamp,
                 function,
-                idempotency_key,
+                invocation_id,
             } => Ok(golem::worker::LogEvent {
                 event: Some(golem::worker::log_event::Event::InvocationFinished(
                     golem::worker::InvocationFinished {
                         function,
-                        idempotency_key: Some(idempotency_key.into()),
+                        invocation_id: Some(invocation_id.into()),
                         timestamp: Some(timestamp.into()),
                     },
                 )),

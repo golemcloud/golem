@@ -77,6 +77,7 @@ use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest, WorkersMetadataRequest,
 };
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::typed_constructor_parameters;
 use golem_common::model::agent::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
@@ -88,9 +89,11 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
+use golem_common::model::{
+    AgentFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationRequestKey,
+    OplogIndex,
+};
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
-use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
@@ -228,6 +231,7 @@ impl AgentCommandHandler {
                     agent_type_name,
                     parameters,
                     idempotency_key,
+                    method_name,
                     phantom_id,
                     stream_args,
                 } => {
@@ -235,6 +239,7 @@ impl AgentCommandHandler {
                         agent_type_name,
                         parameters,
                         idempotency_key,
+                        method_name,
                         phantom_id,
                         stream_args,
                     )
@@ -466,14 +471,6 @@ impl AgentCommandHandler {
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
         validate_public_invocation_agent_id(&agent_id, &agent_type)?;
-        let stream_agent_id =
-            if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
-                agent_id
-                    .with_ephemeral_invocation_phantom(&idempotency_key)
-                    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?
-            } else {
-                agent_id.clone()
-            };
 
         let matched_method_name = resolve_agent_method_name(function_name, &agent_type);
         let method_name = match matched_method_name {
@@ -524,6 +521,14 @@ impl AgentCommandHandler {
             },
         };
 
+        let stream_agent_id = invocation_agent_id(
+            &agent_id,
+            &agent_type,
+            self.ctx.account_id().await?,
+            &idempotency_key,
+            &method_name,
+        )?;
+
         // Update agent_id with normalized agent id (and keep the parsed form
         // for language-specific display).
         let agent_id_match = agent_id_match
@@ -573,6 +578,7 @@ impl AgentCommandHandler {
 
         if method_uses_streams {
             let selected_agent_name = stream_agent_id.to_string();
+            let mut invocation_goal = None;
             let mut connect_handle = if !no_stream && stdout_format == InvocationStdoutFormat::Value
             {
                 let connection = AgentConnection::new(
@@ -584,9 +590,10 @@ impl AgentCommandHandler {
                     self.ctx.allow_insecure(),
                     self.ctx.format(),
                     self.ctx.agent_stream_ping_interval(),
-                    Some(idempotency_key.clone()),
+                    true,
                 )
                 .await?;
+                invocation_goal = connection.invocation_goal();
                 Some(tokio::spawn(async move { connection.run_forever().await }))
             } else {
                 None
@@ -598,7 +605,7 @@ impl AgentCommandHandler {
                     application_name: agent_id_match.environment.application_name.to_string(),
                     environment_name: agent_id_match.environment.environment_name.to_string(),
                     agent_type,
-                    parsed_agent_id: stream_agent_id,
+                    parsed_agent_id: agent_id,
                     method_name,
                     arguments,
                     config: Vec::new(),
@@ -607,6 +614,7 @@ impl AgentCommandHandler {
                     stdout_format,
                     selected_agent_name,
                     session_mode,
+                    invocation_goal,
                 },
             )
             .await;
@@ -637,15 +645,13 @@ impl AgentCommandHandler {
                 self.ctx.allow_insecure(),
                 self.ctx.format(),
                 self.ctx.agent_stream_ping_interval(),
-                if trigger {
-                    None
-                } else {
-                    Some(idempotency_key.clone())
-                },
+                !trigger,
             )
             .await?;
-            Some(tokio::task::spawn(
-                async move { connection.run_forever().await },
+            let goal = connection.invocation_goal();
+            Some((
+                goal,
+                tokio::task::spawn(async move { connection.run_forever().await }),
             ))
         } else {
             None
@@ -681,7 +687,11 @@ impl AgentCommandHandler {
                 self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
             })?;
 
-        if let Some(handle) = connect_handle.take() {
+        if let Some((goal, handle)) = connect_handle.take() {
+            if let Some(goal) = goal {
+                goal.set_target(IdempotencyKey::new(result.idempotency_key.clone()).to_uuid());
+                goal.set_output_written();
+            }
             let _ = timeout(Duration::from_secs(3), handle).await;
         }
 
@@ -729,7 +739,7 @@ impl AgentCommandHandler {
             self.ctx.allow_insecure(),
             self.ctx.format(),
             self.ctx.agent_stream_ping_interval(),
-            None,
+            false,
         )
         .await?;
 
@@ -746,6 +756,7 @@ impl AgentCommandHandler {
         agent_type_name: AgentTypeName,
         parameters: String,
         idempotency_key: IdempotencyKey,
+        method_name: String,
         phantom_id: Option<Uuid>,
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
@@ -774,11 +785,18 @@ impl AgentCommandHandler {
         })?;
         let typed_parameters =
             typed_constructor_parameters(&agent_type.agent_type, value.into_inner());
-        let agent_id = build_repl_agent_id(
-            &agent_type.agent_type,
+        let agent_id = ParsedAgentId::try_new(
+            agent_type.agent_type.type_name.clone(),
             typed_parameters,
             phantom_id,
+        )
+        .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
+        let agent_id = invocation_agent_id(
+            &agent_id,
+            &agent_type.agent_type,
+            self.ctx.account_id().await?,
             &idempotency_key,
+            &method_name,
         )?;
         let agent_id = RawAgentId(agent_id.to_string());
 
@@ -791,9 +809,21 @@ impl AgentCommandHandler {
             self.ctx.allow_insecure(),
             self.ctx.format(),
             self.ctx.agent_stream_ping_interval(),
-            Some(idempotency_key),
+            true,
         )
         .await?;
+
+        // The REPL writes the accepted invocation ID to stdin once the call returns.
+        if let Some(goal) = connection.invocation_goal() {
+            tokio::spawn(async move {
+                use tokio::io::AsyncBufReadExt;
+                let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+                if let Ok(Some(line)) = lines.next_line().await {
+                    goal.set_target(IdempotencyKey::new(line.trim().to_string()).to_uuid());
+                    goal.set_output_written();
+                }
+            });
+        }
 
         connection.run_forever().await?;
 
@@ -3535,22 +3565,27 @@ fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<
     Ok(())
 }
 
-fn build_repl_agent_id(
+/// The agent that runs a user's invocation of `method_name` with `idempotency_key`. The server
+/// derives an ephemeral agent's phantom ID from the owner key of the caller-scoped request key,
+/// so the CLI derives it the same way to stream that agent's output.
+fn invocation_agent_id(
+    agent_id: &ParsedAgentId,
     agent_type: &AgentTypeSchema,
-    typed_parameters: TypedSchemaValue,
-    phantom_id: Option<Uuid>,
+    account_id: AccountId,
     idempotency_key: &IdempotencyKey,
+    method_name: &str,
 ) -> anyhow::Result<ParsedAgentId> {
-    let agent_id =
-        ParsedAgentId::try_new(agent_type.type_name.clone(), typed_parameters, phantom_id)
-            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
-
     if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
+        let owner_key = InvocationRequestKey::external(
+            Some(IdempotencyScope::User(account_id)),
+            Some(idempotency_key),
+        )
+        .owner_key(method_name);
         agent_id
-            .with_ephemeral_invocation_phantom(idempotency_key)
+            .with_ephemeral_invocation_phantom(&owner_key)
             .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
     } else {
-        Ok(agent_id)
+        Ok(agent_id.clone())
     }
 }
 
@@ -3580,7 +3615,7 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, AgentUpdateMode, apply_list_mode_filter, build_repl_agent_id,
+        AgentListMode, AgentUpdateMode, apply_list_mode_filter, invocation_agent_id,
         is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
         parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
         split_agent_id, validate_ordinary_agent_type, validate_public_invocation_agent_id,
@@ -3589,6 +3624,7 @@ mod tests {
     use crate::context::GlobalEnvironmentSelector;
     use crate::model::agent::RawAgentId;
     use crate::model::environment::EnvironmentReference;
+    use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
@@ -3905,53 +3941,68 @@ mod tests {
         assert_eq!(split_agent_id("a(/"), vec!["a(/"]);
     }
 
-    #[test]
-    fn repl_agent_id_derives_stable_phantom_for_ephemeral_invocation() {
-        let idempotency_key = IdempotencyKey::new("repl-invocation".to_string());
-        let first = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Ephemeral),
+    fn logical_agent_id(
+        mode: AgentMode,
+        phantom_id: Option<Uuid>,
+    ) -> (ParsedAgentId, AgentTypeSchema) {
+        let agent_type = test_agent_type_schema(mode);
+        let agent_id = ParsedAgentId::try_new(
+            agent_type.type_name.clone(),
             empty_typed_parameters(),
-            None,
-            &idempotency_key,
+            phantom_id,
         )
         .unwrap();
-        let second = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Ephemeral),
-            empty_typed_parameters(),
-            None,
-            &idempotency_key,
-        )
-        .unwrap();
-
-        assert!(first.phantom_id.is_some());
-        assert_eq!(first.phantom_id, second.phantom_id);
+        (agent_id, agent_type)
     }
 
     #[test]
-    fn repl_agent_id_keeps_durable_agents_non_phantom() {
-        let agent_id = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Durable),
-            empty_typed_parameters(),
-            None,
-            &IdempotencyKey::new("repl-invocation".to_string()),
-        )
-        .unwrap();
+    fn invocation_agent_id_scopes_the_ephemeral_phantom_like_the_server() {
+        let (agent_id, agent_type) = logical_agent_id(AgentMode::Ephemeral, None);
+        let key = IdempotencyKey::new("repl-invocation".to_string());
+        let account = AccountId(Uuid::new_v4());
+        let phantom = |account, method| {
+            invocation_agent_id(&agent_id, &agent_type, account, &key, method)
+                .unwrap()
+                .phantom_id
+                .unwrap()
+        };
 
-        assert!(agent_id.phantom_id.is_none());
+        assert_eq!(phantom(account, "run"), phantom(account, "run"));
+        assert_ne!(phantom(account, "run"), phantom(account, "other"));
+        assert_ne!(
+            phantom(account, "run"),
+            phantom(AccountId(Uuid::new_v4()), "run")
+        );
+        // The raw key alone names a different agent than the one the server runs.
+        assert_ne!(
+            Some(phantom(account, "run")),
+            agent_id
+                .with_ephemeral_invocation_phantom(&key)
+                .unwrap()
+                .phantom_id
+        );
     }
 
     #[test]
-    fn repl_agent_id_preserves_explicit_phantom_id() {
-        let explicit_phantom_id = Uuid::new_v4();
-        let agent_id = build_repl_agent_id(
-            &test_agent_type_schema(AgentMode::Ephemeral),
-            empty_typed_parameters(),
-            Some(explicit_phantom_id),
-            &IdempotencyKey::new("repl-invocation".to_string()),
-        )
-        .unwrap();
+    fn invocation_agent_id_keeps_durable_and_explicit_phantom_ids() {
+        let key = IdempotencyKey::new("repl-invocation".to_string());
+        let account = AccountId(Uuid::new_v4());
+        let (agent_id, agent_type) = logical_agent_id(AgentMode::Durable, None);
+        assert!(
+            invocation_agent_id(&agent_id, &agent_type, account, &key, "run")
+                .unwrap()
+                .phantom_id
+                .is_none()
+        );
 
-        assert_eq!(agent_id.phantom_id, Some(explicit_phantom_id));
+        let explicit = Uuid::new_v4();
+        let (agent_id, agent_type) = logical_agent_id(AgentMode::Ephemeral, Some(explicit));
+        assert_eq!(
+            invocation_agent_id(&agent_id, &agent_type, account, &key, "run")
+                .unwrap()
+                .phantom_id,
+            Some(explicit)
+        );
     }
 
     #[test]

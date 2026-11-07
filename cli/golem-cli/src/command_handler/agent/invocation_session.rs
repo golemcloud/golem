@@ -238,6 +238,8 @@ pub(super) struct InvocationSessionArgs {
     pub stdout_format: InvocationStdoutFormat,
     pub selected_agent_name: String,
     pub session_mode: InvocationSessionMode,
+    /// Receives the accepted invocation ID, which ends the live output stream.
+    pub invocation_goal: Option<super::stream::InvocationGoal>,
 }
 
 pub(super) fn load_session_idempotency_key(path: &Path) -> anyhow::Result<IdempotencyKey> {
@@ -513,8 +515,15 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     };
     let (output_result_tx, mut output_result_rx) = oneshot::channel();
     let colorize = ctx.should_colorize();
+    let writer_goal = args.invocation_goal.clone();
     std::thread::spawn(move || {
-        let _ = output_result_tx.send(write_output(output_rx, format, colorize));
+        let result = write_output(output_rx, format, colorize);
+        // The writer ends after the invocation returns, on success and on failure, so the
+        // target's finish is shown after the last value.
+        if let Some(goal) = writer_goal {
+            goal.set_output_written();
+        }
+        let _ = output_result_tx.send(result);
     });
 
     let mut output_streams = HashMap::<u32, OutputStream>::new();
@@ -638,10 +647,15 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
             frame = session.receive() => {
                 let mut frame = frame?;
                 let server_frame = frame.frame().clone();
-                if let ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. }) =
-                    &server_frame
+                if let ServerFrame::Message(PublicServerMessage::InvocationAccepted {
+                    idempotency_key,
+                    ..
+                }) = &server_frame
                 {
                     accepted = true;
+                    if let Some(goal) = &args.invocation_goal {
+                        goal.set_target(IdempotencyKey::new(idempotency_key.clone()).to_uuid());
+                    }
                     output_streams.clear();
                     if let Some(binding) = input_binding.as_mut() {
                         let (channel, stream_token) = session

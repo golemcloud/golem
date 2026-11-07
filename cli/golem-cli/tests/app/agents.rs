@@ -215,6 +215,64 @@ pub(super) fn assert_generated_driver(output: std::process::Output, language: &s
     );
 }
 
+/// Each streamed line names the invocation that wrote it, and the stream of an invocation ends
+/// at the finish of that invocation.
+#[test]
+#[timeout("15 minutes")]
+async fn test_agent_invoke_stream_attributes_lines_to_their_invocation() {
+    let ctx = streaming_invocation_context().await;
+    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+    let mut ids = Vec::new();
+    for round in 0..2 {
+        let invoked = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "bug_golem1265",
+                &format!("\"round {round}\""),
+                flag::FORMAT,
+                "json",
+            ])
+            .await;
+        assert!(invoked.success_or_dump());
+        let events = invoked
+            .stdout_json::<serde_json::Value>()
+            .into_iter()
+            .filter(|document| document["$type"] == "agent.stream")
+            .collect::<Vec<_>>();
+        let id_of = |kind: &str, message: Option<&str>| {
+            events
+                .iter()
+                .filter(|event| {
+                    event["kind"] == kind
+                        && message.is_none_or(|message| {
+                            event["message"]
+                                .as_str()
+                                .is_some_and(|text| text.ends_with(message))
+                        })
+                })
+                .map(|event| {
+                    event["invocationId"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+        };
+        let logged = id_of("log", Some(&format!("Got round {round}")));
+        let finished = id_of("invocation-finished", None);
+        assert_eq!(logged.len(), 1, "{events:#?}");
+        assert_eq!(finished, logged, "{events:#?}");
+        let (owner, uuid) = logged[0].split_at(logged[0].len() - 37);
+        assert_eq!(owner, agent);
+        assert!(Uuid::parse_str(&uuid[1..]).is_ok(), "{}", logged[0]);
+        ids.push(logged[0].clone());
+    }
+    assert_ne!(ids[0], ids[1]);
+}
+
 #[test]
 #[timeout("15 minutes")]
 async fn test_agent_stream_ends_when_stdout_is_closed() {

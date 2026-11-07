@@ -713,29 +713,34 @@ impl Display for LogLevel {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AgentEvent {
+    /// `invocation_id` is the unique part of the invocation that wrote the output, or none when
+    /// no invocation runs, such as during initialization or a snapshot.
     StdOut {
         timestamp: Timestamp,
         bytes: Vec<u8>,
+        invocation_id: Option<Uuid>,
     },
     StdErr {
         timestamp: Timestamp,
         bytes: Vec<u8>,
+        invocation_id: Option<Uuid>,
     },
     Log {
         timestamp: Timestamp,
         level: LogLevel,
         context: String,
         message: String,
+        invocation_id: Option<Uuid>,
     },
     InvocationStart {
         timestamp: Timestamp,
         function: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: Uuid,
     },
     InvocationFinished {
         timestamp: Timestamp,
         function: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: Uuid,
     },
     PluginError {
         timestamp: Timestamp,
@@ -783,17 +788,17 @@ impl Display for AgentEvent {
             }
             AgentEvent::InvocationStart {
                 function,
-                idempotency_key,
+                invocation_id,
                 ..
             } => {
-                write!(f, "<invocation-start> {function} {idempotency_key}")
+                write!(f, "<invocation-start> {function} {invocation_id}")
             }
             AgentEvent::InvocationFinished {
                 function,
-                idempotency_key,
+                invocation_id,
                 ..
             } => {
-                write!(f, "<invocation-finished> {function} {idempotency_key}")
+                write!(f, "<invocation-finished> {function} {invocation_id}")
             }
             AgentEvent::PluginError {
                 plugin_name,

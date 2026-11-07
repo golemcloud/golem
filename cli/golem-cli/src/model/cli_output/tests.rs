@@ -3776,7 +3776,7 @@ fn arb_agent_stream_event() -> OutputDocumentStrategy {
                     context,
                     message,
                     function_name,
-                    idempotency_key,
+                    invocation_id,
                     number_of_missed_messages,
                     error,
                 )| crate::model::agent::stream::AgentStreamEvent {
@@ -3786,7 +3786,7 @@ fn arb_agent_stream_event() -> OutputDocumentStrategy {
                     context,
                     message,
                     function_name,
-                    idempotency_key,
+                    invocation_id,
                     number_of_missed_messages,
                     error,
                 },

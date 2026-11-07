@@ -2370,8 +2370,9 @@
         "functionName": {
           "type": "string"
         },
-        "idempotencyKey": {
-          "type": "string"
+        "invocationId": {
+          "type": "string",
+          "description": "The invocation that produced the event, as `<agent-id>.<uuid>`. Absent for output written outside an invocation."
         },
         "numberOfMissedMessages": {
           "type": "integer",

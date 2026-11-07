@@ -1771,15 +1771,18 @@ pub mod worker {
             #[command(flatten)]
             stream_args: StreamArgs,
         },
-        /// Like stream, but for helping Bridge SDK-based REPLs
+        /// Like stream, but for helping Bridge SDK-based REPLs. Shows the output of the
+        /// invocation whose accepted ID arrives as the first line of stdin, then exits.
         #[clap(hide = true)]
         ReplStream {
             /// Agent type name
             agent_type_name: AgentTypeName,
             /// Agent parameters in UntypedDataValue JSON format
             parameters: String,
-            /// Idempotency key, used for filtering
+            /// Idempotency key of the invocation
             idempotency_key: IdempotencyKey,
+            /// Method name of the invocation, which selects an ephemeral agent's phantom ID
+            method_name: String,
             /// Phantom ID
             phantom_id: Option<Uuid>,
             #[command(flatten)]

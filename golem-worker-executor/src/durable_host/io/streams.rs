@@ -274,11 +274,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
         self.observe_function_call("io::streams::output_stream", "write");
+        let invocation_id = self.current_invocation_id().map(|id| id.uuid());
         let output = self.table().get(&self_)?;
         let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-            Some(InternalWorkerEvent::stdout(contents.clone()))
+            Some(InternalWorkerEvent::stdout(contents.clone(), invocation_id))
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-            Some(InternalWorkerEvent::stderr(contents.clone()))
+            Some(InternalWorkerEvent::stderr(contents.clone(), invocation_id))
         } else {
             None
         };
