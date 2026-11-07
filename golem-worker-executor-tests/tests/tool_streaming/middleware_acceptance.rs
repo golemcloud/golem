@@ -2040,6 +2040,8 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
             Vec::new(),
         )
         .await?;
+    let mut loser_completion =
+        executor.gate_next_live_entity_body_completion(&worker_id, "middleware-probe");
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
         &agent_id,
@@ -2069,8 +2071,72 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
             vec![],
         )
         .await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        loser_completion.entered(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for loser body completion"))?;
+    let detached = tokio::select! {
+        result = invocation.as_mut() => panic!("parent settled before detached child: {result:?}"),
+        arrival = next_crash_checkpoint(&mut arrivals, "middleware-race-detached") => arrival?,
+    };
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    // Flush the other terminals before releasing the loser, so their commits cannot
+    // incidentally make its later cancellation visible to the public oplog reader.
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
+            executor.commit_oplog(&worker_id).await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let leaves = entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe");
+            let middleware = entity_starts(
+                &oplog,
+                PublicAgentEntityKind::ToolMiddleware,
+                "streaming-race-settlement",
+            );
+            let sibling_end = leaves.iter().find(|start| {
+                start.oplog_index != cancelled_start
+                    && oplog.iter().any(|entry| {
+                        matches!(
+                            &entry.entry,
+                            PublicOplogEntry::End(end) if end.start_index == start.oplog_index
+                        )
+                    })
+            });
+            let middleware_ended = middleware.len() == 1
+                && oplog.iter().any(|entry| {
+                    matches!(
+                        &entry.entry,
+                        PublicOplogEntry::End(end) if end.start_index == middleware[0].oplog_index
+                    )
+                });
+            if leaves.len() == 3
+                && middleware_ended
+                && let Some(sibling) = sibling_end
+                && executor
+                    .active_entity_metadata(&owner)
+                    .await
+                    .is_some_and(|active| {
+                        active
+                            .tool_operations
+                            .operations
+                            .iter()
+                            .all(|operation| operation.start_index != Some(sibling.oplog_index))
+                    })
+            {
+                executor.commit_oplog(&worker_id).await?;
+                break Ok::<_, anyhow::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for sibling and middleware settlement"))??;
+    loser_completion.release();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            // Cancellation can remain buffered while the detached child holds the owner open.
+            executor.commit_oplog(&worker_id).await?;
             if executor
                 .get_oplog(&worker_id, OplogIndex::INITIAL)
                 .await?
@@ -2091,10 +2157,6 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
     .await
     .map_err(|_| anyhow::anyhow!("timed out waiting for loser Cancelled terminal"))??;
     drop(cancelled);
-    let detached = tokio::select! {
-        result = invocation.as_mut() => panic!("parent settled before detached child: {result:?}"),
-        arrival = next_crash_checkpoint(&mut arrivals, "middleware-race-detached") => arrival?,
-    };
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(200), invocation.as_mut())
             .await
