@@ -12,3 +12,9 @@ Find details in the [contribution guide](CONTRIBUTING.md) about how to compile t
 
 ## Documentation
 The source for [learn.golem.cloud](https://learn.golem.cloud) lives in [`docs/`](docs/) (Next.js / Nextra, see [`docs/AGENTS.md`](docs/AGENTS.md)). It is built and deployed by [`.github/workflows/docs.yaml`](.github/workflows/docs.yaml).
+
+## Troubleshooting
+If the Golem Cloud CLI login gets stuck on GitHub's *Reauthorization required* page
+(``This application has made an unusually high number of requests to access your account``),
+the step-by-step recovery walkthrough is at
+[the CLI login troubleshooting guide](https://blog.golem.network/cloud-cli/).
