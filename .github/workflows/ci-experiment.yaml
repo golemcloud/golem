@@ -1,13 +1,20 @@
-name: Warm baseline and same-worker overlap experiment
+name: Temporary prime warm changed campaign
 
+# Select the driver revision and both workload commits explicitly before launch.
+# Confirm A contains the reviewed HTTP repair. B must contain another real,
+# reviewed native Rust change, not only comments/touches. Review source.diff.
+# No push trigger and no automatic extra allocation.
 on:
-  push:
-    branches: [ci/main-only-experiment]
-    paths:
-      - .github/workflows/ci-experiment.yaml
-      - .github/scripts/ci-experiment.py
-      - .github/scripts/ci-overlap-experiment.py
   workflow_dispatch:
+    inputs:
+      source_a:
+        description: Full 40-hex baseline commit SHA
+        required: true
+        type: string
+      source_b:
+        description: Full 40-hex descendant with a native Rust source change
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -18,10 +25,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SOURCE_A: ${{ inputs.source_a }}
+      SOURCE_B: ${{ inputs.source_b }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Validate exact source pair before allocating expensive workers
+        run: python3 .github/scripts/ci-campaign.py --preflight --source-a "$SOURCE_A" --source-b "$SOURCE_B"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ci-campaign-source-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/experiment-results
+          if-no-files-found: error
+          retention-days: 14
+
   linux:
+    needs: validate-sources
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 720
     env:
+      SOURCE_A: ${{ inputs.source_a }}
+      SOURCE_B: ${{ inputs.source_b }}
       GH_TOKEN: ${{ github.token }}
       RUSTUP_TOOLCHAIN: '1.99.1'
       CARGO_BUILD_JOBS: 20
@@ -30,14 +60,15 @@ jobs:
       WASM_RQUICKJS_VERSION: '0.4.13'
       NPM_CONFIG_AUDIT: 'false'
     steps:
+      - name: Record allocation start before checkout and setup
+        run: date +%s > "$RUNNER_TEMP/campaign-allocation-start"
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Record allocation start and source
+      - name: Record allocation resources
         run: |
           mkdir -p tmp/experiment-results
-          date +%s > tmp/experiment-results/allocation-start
-          git rev-parse HEAD > tmp/experiment-results/source-sha
+          cp "$RUNNER_TEMP/campaign-allocation-start" tmp/experiment-results/allocation-start
           lscpu > tmp/experiment-results/cpu.txt
           free -h > tmp/experiment-results/memory.txt
           df -h > tmp/experiment-results/disk.txt
@@ -52,7 +83,6 @@ jobs:
       - name: Verify pinned and explicit stable Rust targets
         timeout-minutes: 5
         run: |
-          # The Scala guest generator explicitly selects stable, bypassing RUSTUP_TOOLCHAIN.
           rustup target add --toolchain stable wasm32-wasip1 wasm32-wasip2 wasm32-unknown-unknown
           rustup run "$RUSTUP_TOOLCHAIN" rustc -vV > tmp/experiment-results/rust-pinned.txt
           rustup run stable rustc -vV > tmp/experiment-results/rust-stable.txt
@@ -99,109 +129,38 @@ jobs:
           curl -fsSL https://github.com/golangci/golangci-lint/releases/download/v2.13.2/golangci-lint-2.13.2-linux-amd64.tar.gz | tar -xz -C "$RUNNER_TEMP"
           sudo install "$RUNNER_TEMP/golangci-lint-2.13.2-linux-amd64/golangci-lint" /usr/local/bin/
           python3 -m pip install --user --break-system-packages PyYAML==6.0.3
-      - name: Verify complete ordinary-CI inventory
+      - name: Prime A then warm A then changed B within one allocation
         run: |
-          python3 .github/scripts/ci-experiment.py --inventory > tmp/experiment-results/inventory.json
           { rustc -vV; cargo --version; node --version; go version; moon version; java -version; } > tmp/experiment-results/toolchains.txt 2>&1
-          git worktree add --detach "$GITHUB_WORKSPACE-clippy" HEAD
-          git -C "$GITHUB_WORKSPACE-clippy" rev-parse HEAD > tmp/experiment-results/clippy-source-sha
-      - name: Cold single-worker priming
-        id: cold
-        continue-on-error: true
-        timeout-minutes: 330
-        run: |
-          python3 -u .github/scripts/ci-experiment.py --cycle cold --test-retries 2 --clippy-workspace "$GITHUB_WORKSPACE-clippy"
-      - name: Checkpoint cold measurements
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: ci-experiment-linux-cold-${{ github.run_id }}-${{ github.run_attempt }}
-          path: tmp/experiment-results
-          if-no-files-found: error
-          retention-days: 14
-      - name: Warm single-worker baseline
-        id: warm
-        if: ${{ !cancelled() && steps.cold.outcome == 'success' }}
-        continue-on-error: true
-        timeout-minutes: 240
-        run: |
-          rm -rf tmp/experiment-products tmp/test-components-wasm
-          python3 -u .github/scripts/ci-experiment.py --cycle warm --clippy-workspace "$GITHUB_WORKSPACE-clippy"
-      - name: Checkpoint warm measurements
-        if: ${{ !cancelled() && steps.warm.outcome != 'skipped' }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: ci-experiment-linux-warm-${{ github.run_id }}-${{ github.run_attempt }}
-          path: tmp/experiment-results
-          if-no-files-found: error
-          retention-days: 14
-      - name: Reconcile full baseline and check overlap value
-        id: overlap-gate
-        if: ${{ !cancelled() && steps.cold.outcome == 'success' && (steps.warm.outcome == 'success' || steps.warm.outcome == 'failure') }}
-        run: |
-          python3 .github/scripts/ci-overlap-experiment.py gate --clippy-workspace "$GITHUB_WORKSPACE-clippy"
-      - name: Matched serial service slice
-        id: serial-slice
-        if: ${{ !cancelled() && steps.overlap-gate.outputs.eligible == 'true' }}
-        continue-on-error: true
-        timeout-minutes: 40
-        run: |
-          python3 -u .github/scripts/ci-overlap-experiment.py serial-slice --clippy-workspace "$GITHUB_WORKSPACE-clippy"
-      - name: Checkpoint serial slice
-        if: ${{ !cancelled() && steps.serial-slice.outcome != 'skipped' }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: ci-experiment-linux-serial-slice-${{ github.run_id }}-${{ github.run_attempt }}
-          path: tmp/experiment-results
-          if-no-files-found: error
-          retention-days: 14
-      - name: Matched overlapping service slice
-        id: slices
-        if: ${{ !cancelled() && steps.serial-slice.outcome == 'success' && steps.serial-slice.outputs.completed == 'true' }}
-        continue-on-error: true
-        timeout-minutes: 40
-        run: |
-          python3 -u .github/scripts/ci-overlap-experiment.py overlap --clippy-workspace "$GITHUB_WORKSPACE-clippy"
+          python3 -u .github/scripts/ci-campaign.py --source-a "$SOURCE_A" --source-b "$SOURCE_B" \
+            --allocation-start "$RUNNER_TEMP/campaign-allocation-start"
       - name: Record allocation end
         if: always()
         run: |
+          mkdir -p tmp/experiment-results
           date +%s > tmp/experiment-results/allocation-end
           df -h > tmp/experiment-results/disk-final.txt
-      - name: Upload measurements and complete logs
+      - uses: actions/upload-artifact@v6
         if: always()
-        uses: actions/upload-artifact@v6
         with:
-          name: ci-experiment-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ci-campaign-linux-${{ github.run_id }}-${{ github.run_attempt }}
           path: tmp/experiment-results
           if-no-files-found: error
           retention-days: 14
-      - name: Preserve failure status
-        if: ${{ !cancelled() }}
-        run: |
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          root = Path('tmp/experiment-results')
-          for cycle, outcome in (
-              ('cold', '${{ steps.cold.outcome }}'),
-              ('warm', '${{ steps.warm.outcome }}'),
-          ):
-              assert outcome == 'success', f'{cycle}: {outcome}'
-              report = json.loads((root / cycle / 'all-0.json').read_text())
-              assert report['fully_green'], f'{cycle}: initial failures retained; not fully green'
-          assert '${{ steps.overlap-gate.outcome }}' == 'success', 'baseline reconciliation did not pass'
-          assert '${{ steps.serial-slice.outcome }}' in ('success', 'skipped'), 'serial slice failed'
-          assert '${{ steps.slices.outcome }}' in ('success', 'skipped'), 'slice comparison failed'
-          PY
 
   macos:
+    needs: validate-sources
     runs-on: blacksmith-6vcpu-macos-latest
     timeout-minutes: 120
     env:
+      SOURCE_A: ${{ inputs.source_a }}
+      SOURCE_B: ${{ inputs.source_b }}
       RUSTUP_TOOLCHAIN: '1.99.1'
       CARGO_BUILD_JOBS: 4
       RUST_MIN_STACK: '33554432'
     steps:
+      - name: Record allocation start before checkout and setup
+        run: date +%s > "$RUNNER_TEMP/campaign-allocation-start"
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -211,35 +170,19 @@ jobs:
         with:
           use-cache: 'false'
           install-cargo-make: 'false'
-      - name: Cold and warm native APFS validation
+      - name: Install report parser
         run: |
-          mkdir -p tmp/apfs-experiment
-          status=0
-          for cycle in cold warm; do
-            start=$(date +%s)
-            result=0
-            cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor \
-              --features test-utils --lib --no-run --message-format=json-render-diagnostics \
-              > "tmp/apfs-experiment/${cycle}-cargo.jsonl" 2> "tmp/apfs-experiment/${cycle}-build.log" || result=$?
-            if [ "$result" -eq 0 ]; then
-              integration-tests/scripts/managed-filesystem/test-select-cargo-test-executables.py
-              python3 integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py \
-                "tmp/apfs-experiment/${cycle}-cargo.jsonl" "$PWD" lib > tmp/apfs-experiment/executable.tsv
-              IFS=$'\t' read -r target executable < tmp/apfs-experiment/executable.tsv
-              test "$target" = lib
-              bash integration-tests/scripts/apfs/run-native-tests.sh "$executable" \
-                :tag:native_apfs --include-ignored --test-threads 1 --report-time \
-                > "tmp/apfs-experiment/${cycle}-tests.log" 2>&1 || result=$?
-            fi
-            end=$(date +%s)
-            printf '{"cycle":"%s","seconds":%s,"exit_code":%s}\n' "$cycle" "$((end-start))" "$result" >> tmp/apfs-experiment/results.jsonl
-            if [ "$result" -ne 0 ]; then status=1; fi
-          done
-          exit "$status"
+          python3 -m venv "$RUNNER_TEMP/campaign-venv"
+          "$RUNNER_TEMP/campaign-venv/bin/pip" install PyYAML==6.0.3
+      - name: Native APFS prime A then warm A then changed B
+        run: |
+          "$RUNNER_TEMP/campaign-venv/bin/python" -u .github/scripts/ci-campaign.py \
+            --platform macos --source-a "$SOURCE_A" --source-b "$SOURCE_B" \
+            --allocation-start "$RUNNER_TEMP/campaign-allocation-start"
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: ci-experiment-macos-${{ github.run_id }}-${{ github.run_attempt }}
-          path: tmp/apfs-experiment
+          name: ci-campaign-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/experiment-results
           if-no-files-found: error
           retention-days: 14

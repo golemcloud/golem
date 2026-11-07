@@ -1,7 +1,11 @@
 import copy
 import importlib.util
+import io
 import json
 import os
+import shlex
+import shutil
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -204,7 +208,15 @@ class ExperimentInventoryTests(unittest.TestCase):
 
 
 class ExperimentRetryTests(unittest.TestCase):
-    def simulate(self, outcomes, retries, elapsed_per_attempt=0, stage_timeout=360):
+    def simulate(
+        self,
+        outcomes,
+        retries,
+        elapsed_per_attempt=0,
+        stage_timeout=360,
+        command="test-command",
+        test_reports=None,
+    ):
         stages = [
             {
                 "id": job,
@@ -213,7 +225,7 @@ class ExperimentRetryTests(unittest.TestCase):
                 "definition": {
                     "needs": needs,
                     "timeout-minutes": stage_timeout,
-                    "steps": [{"name": "Run tests", "run": "test-command"}],
+                    "steps": [{"name": "Run tests", "run": command}],
                 },
             }
             for job, needs in (
@@ -235,7 +247,33 @@ class ExperimentRetryTests(unittest.TestCase):
                 log.write_text(output)
                 report = root / "target/ctrf.json"
                 report.parent.mkdir(exist_ok=True)
-                report.write_text(json.dumps({"attempt_marker": index}))
+                tests = (
+                    test_reports[index]
+                    if test_reports is not None
+                    else [
+                        {
+                            "name": "suite::case",
+                            "status": "failed"
+                            if code
+                            and (
+                                "ℹ fail 1" in output or "test result: FAILED;" in output
+                            )
+                            else "passed",
+                        }
+                    ]
+                )
+                if tests is not None:
+                    report.write_text(
+                        json.dumps(
+                            {
+                                "attempt_marker": index,
+                                "results": {
+                                    "summary": {"tests": len(tests)},
+                                    "tests": tests,
+                                },
+                            }
+                        )
+                    )
                 return {"exit_code": code, "seconds": 1, "resources": []}
 
             args = SimpleNamespace(
@@ -252,6 +290,7 @@ class ExperimentRetryTests(unittest.TestCase):
                 patch.object(experiment, "ROOT", root),
                 patch.object(experiment, "inventory", return_value=stages),
                 patch.object(experiment, "execute", side_effect=execute),
+                patch.object(experiment, "publish_sdk"),
                 patch.object(
                     experiment.subprocess,
                     "check_output",
@@ -283,6 +322,9 @@ class ExperimentRetryTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(report["success"])
         self.assertFalse(report["fully_green"])
+        self.assertEqual(report["outcome"], "passed_after_retry")
+        self.assertEqual(report["initial_command_seconds"], 2)
+        self.assertEqual(report["retry_seconds"], 2)
         self.assertEqual(
             [s["status"] for s in report["stages"]], ["passed_after_retry", "passed"]
         )
@@ -338,6 +380,231 @@ class ExperimentRetryTests(unittest.TestCase):
         )
         self.assertEqual([s["status"] for s in report["stages"]], ["failed", "blocked"])
 
+    def test_focused_retry_requires_every_failed_test_to_execute_and_pass(self):
+        failed = {"name": "suite::nested::failed", "status": "failed"}
+        passed = {"name": "suite::nested::passed", "status": "passed"}
+        for retry in (None, [], [passed], [{**failed, "status": "skipped"}]):
+            with self.subTest(retry=retry):
+                code, report, _ = self.simulate(
+                    [(1, "ℹ fail 1"), (0, "done")],
+                    2,
+                    command="cargo-test-r run --package p --test suite ':tag:group1' -- --test-threads=4",
+                    test_reports=[[failed, passed], retry],
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(report["stages"][0]["status"], "failed")
+                self.assertIn("validation_error", report["stages"][0]["steps"][-1])
+        code, report, files = self.simulate(
+            [(1, "ℹ fail 1"), (0, "done"), (0, "passed")],
+            2,
+            command="cargo-test-r run --package p --test suite ':tag:group1' -- --test-threads=4",
+            test_reports=[[failed, passed], [{**failed, "status": "passed"}], [passed]],
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            report["stages"][0]["steps"][-1]["retry_scope"], "failed_tests"
+        )
+        self.assertIn('"status": "failed"', files["ctrf-0-0-0.json"])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for name, data in files.items():
+                if name.startswith("ctrf-"):
+                    (directory / name).write_text(data)
+            self.assertEqual(
+                experiment.resolved_test_inventory(directory, report["stages"][0]),
+                [["", "suite::nested::failed", 1], ["", "suite::nested::passed", 1]],
+            )
+
+    def test_retry_keeps_task_environment_and_filters_only_failed_names(self):
+        root = Path(__file__).resolve().parents[2]
+        tests = [
+            {"name": "integration::http::post_failed", "status": "failed"},
+            {"name": "integration::http::post_passed", "status": "passed"},
+        ]
+        for task, threads, skip in (
+            ("worker-executor-tests-group1", None, ":tag:group5"),
+            ("cli-integration-tests-deploy", "--test-threads=4", ":tag:deploy_runtime"),
+        ):
+            with self.subTest(task=task):
+                command, env, scope = experiment.retry_test_command(
+                    f"cargo make --profile ci {task}", root, {"KEEP": "value"}, tests
+                )
+                args = shlex.split(command)
+                self.assertEqual(scope, "failed_tests")
+                self.assertIn("--exact", args)
+                self.assertIn("http::post_failed", args)
+                self.assertNotIn("http::post_passed", args)
+                self.assertIn(skip, args)
+                self.assertIn("--logfile", args)
+                self.assertEqual(env["KEEP"], "value")
+                if threads:
+                    self.assertIn(threads, args)
+                else:
+                    self.assertEqual(env["RUST_MIN_STACK"], "33554432")
+        command = "cargo make --profile ci worker-executor-tests-group2"
+        self.assertEqual(
+            experiment.retry_test_command(command, root, {}, tests),
+            (command, {}, "step_group"),
+        )
+
+
+class SDKProductTests(unittest.TestCase):
+    def setUp(self):
+        source = patch.object(
+            experiment.subprocess, "check_output", return_value="same-source"
+        )
+        source.start()
+        self.addCleanup(source.stop)
+
+    def fixture(self, directory, job):
+        root = directory / "consumer"
+        producer = directory / "producer"
+        temporary = directory / "archives"
+        home = directory / "home"
+        for path in (root, producer, temporary, home):
+            path.mkdir()
+        sha = "same-source"
+        paths = []
+        for name, prefixes in experiment.SDK_PRODUCTS[job].items():
+            with tarfile.open(temporary / name, "w:gz") as archive:
+                for prefix in prefixes:
+                    info = tarfile.TarInfo(f"{prefix}/executable")
+                    info.size = len(b"fresh product")
+                    info.mode = 0o755
+                    archive.addfile(info, io.BytesIO(b"fresh product"))
+                    destination = home / ".ivy2" if prefix == "local" else root
+                    output = destination / prefix
+                    output.mkdir(parents=True)
+                    (output / "stale").write_text("leftover")
+                    (output / "executable").write_text("old product")
+                    paths.append(output)
+                    if prefix == "local":
+                        local = home / ".ivy2/local"
+                        (local / "executable").write_bytes(b"fresh product")
+                        (local / "executable").chmod(0o755)
+                        (local / "stale").unlink()
+        products = producer / "tmp/experiment-products"
+        products.mkdir(parents=True)
+        with patch.object(Path, "home", return_value=home):
+            experiment.publish_sdk(job, producer, temporary, sha, "attempt-one")
+        shutil.copytree(products, root / "tmp/experiment-products")
+        products = root / "tmp/experiment-products"
+        (products / "sdk-publication-id").write_text("attempt-one")
+        # Ivy is a consumer output too, not a fallback for missing publications.
+        for output in paths:
+            (output / "stale").write_text("leftover")
+            (output / "executable").write_text("old product")
+        return root, home, products, paths
+
+    def test_transfer_replaces_stale_outputs_and_retains_executable_mode(self):
+        for job in experiment.SDK_PRODUCTS:
+            with self.subTest(job=job), tempfile.TemporaryDirectory() as temporary:
+                root, home, _, paths = self.fixture(Path(temporary), job)
+                with patch.object(Path, "home", return_value=home):
+                    experiment.restore_sdk(job, root)
+                for output in paths:
+                    self.assertFalse((output / "stale").exists())
+                    executable = output / "executable"
+                    self.assertEqual(executable.read_bytes(), b"fresh product")
+                    self.assertEqual(executable.stat().st_mode & 0o777, 0o755)
+
+    def test_consumer_only_run_keeps_the_preparation_publication_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, home, products, paths = self.fixture(
+                Path(temporary), "build-golem-ts"
+            )
+            workflow = root / ".github/workflows/ci.yaml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("jobs: {}")
+            stages = [
+                {
+                    "id": "it-cli",
+                    "job": "it-cli",
+                    "matrix": {},
+                    "definition": {
+                        "steps": [{"name": "Consume SDK", "run": "consume"}]
+                    },
+                }
+            ]
+
+            def execute(command, env, cwd, log, timeout):
+                experiment.restore_sdk("build-golem-ts", root)
+                log.write_text("consumed")
+                return {"exit_code": 0, "seconds": 1, "resources": []}
+
+            args = SimpleNamespace(
+                cycle="consumer",
+                phase="cli",
+                workers=1,
+                shard=0,
+                cli_test_threads=4,
+                test_retries=0,
+                inventory=False,
+                check_cli_baseline=None,
+            )
+            with (
+                patch.object(experiment, "ROOT", root),
+                patch.object(Path, "home", return_value=home),
+                patch.object(experiment, "inventory", return_value=stages),
+                patch.object(experiment, "execute", side_effect=execute),
+                patch.object(experiment.subprocess, "run"),
+                patch.object(
+                    experiment.subprocess,
+                    "check_output",
+                    side_effect=lambda cmd, **kw: (
+                        b"[]" if cmd[0] == "bash" else "same-source"
+                    ),
+                ),
+                patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
+            ):
+                self.assertEqual(experiment.run(args), 0)
+            self.assertEqual(
+                (products / "sdk-publication-id").read_text(), "attempt-one"
+            )
+            self.assertEqual((paths[0] / "executable").read_bytes(), b"fresh product")
+
+    def test_leftovers_cannot_satisfy_invalid_publications(self):
+        for job in experiment.SDK_PRODUCTS:
+            for corruption in (
+                "manifest",
+                "archive",
+                "hash",
+                "source",
+                "attempt",
+                "marker",
+            ):
+                with (
+                    self.subTest(job=job, corruption=corruption),
+                    tempfile.TemporaryDirectory() as temporary,
+                ):
+                    root, home, products, paths = self.fixture(Path(temporary), job)
+                    manifest_path = products / f"{job}.json"
+                    manifest = json.loads(manifest_path.read_text())
+                    archive = products / next(iter(experiment.SDK_PRODUCTS[job]))
+                    if corruption == "manifest":
+                        manifest_path.unlink()
+                    elif corruption == "archive":
+                        archive.unlink()
+                    elif corruption == "hash":
+                        archive.write_bytes(archive.read_bytes() + b"corrupt")
+                    elif corruption in ("source", "attempt"):
+                        key = (
+                            "source_sha" if corruption == "source" else "publication_id"
+                        )
+                        manifest[key] = "other-identity"
+                        manifest_path.write_text(json.dumps(manifest))
+                    else:
+                        (products / "sdk-publication-id").unlink()
+                    with (
+                        patch.object(Path, "home", return_value=home),
+                        self.assertRaises((ValueError, OSError)),
+                    ):
+                        experiment.restore_sdk(job, root)
+                    for output in paths:
+                        self.assertEqual(
+                            (output / "executable").read_text(), "old product"
+                        )
+
 
 class OverlapGateTests(unittest.TestCase):
     def reports(self):
@@ -348,9 +615,10 @@ class OverlapGateTests(unittest.TestCase):
                 "steps": [{"log": "00.log", "attempt": 0, "seconds": seconds}],
             }
             for name, seconds in (
-                (overlap.CLIPPY, 120),
-                (overlap.SERVICES[0], 110),
-                (overlap.SERVICES[1], 40),
+                (overlap.CLI, 120),
+                (overlap.SDKS[0], 60),
+                (overlap.SDKS[1], 40),
+                (overlap.SDKS[2], 20),
             )
         ]
         report = {
@@ -360,6 +628,8 @@ class OverlapGateTests(unittest.TestCase):
             "fully_green": True,
             "test_retries": 0,
             "cli_test_threads": 4,
+            "sdk_workspace": "/disjoint/sdk",
+            "prerequisite_mode": "serial",
             "stages": stages,
         }
         return copy.deepcopy(report), report
@@ -377,6 +647,9 @@ class OverlapGateTests(unittest.TestCase):
             ("test_retries", 1),
             ("cli_test_threads", 6),
             ("source_sha", "other"),
+            ("sdk_workspace", None),
+            ("sdk_workspace", ""),
+            ("prerequisite_mode", "overlap"),
         ):
             with self.subTest(field=field):
                 self.assertFalse(
@@ -386,7 +659,7 @@ class OverlapGateTests(unittest.TestCase):
             changed = copy.deepcopy(warm)
             changed["stages"][1]["status"] = status
             self.assertFalse(overlap.complete_baseline(cold, changed, expected))
-        for stages in (warm["stages"][:-1], [warm["stages"][0]] * 3):
+        for stages in (warm["stages"][:-1], [warm["stages"][0]] * 4):
             self.assertFalse(
                 overlap.complete_baseline(cold, {**warm, "stages": stages}, expected)
             )
@@ -402,8 +675,6 @@ class OverlapGateTests(unittest.TestCase):
                 for stage in report["stages"]:
                     directory = root / cycle / stage["id"].replace("/", "--")
                     directory.mkdir(parents=True)
-                    if stage["id"] == overlap.CLIPPY:
-                        continue
                     (directory / "ctrf-0-0-0.json").write_text(
                         json.dumps(
                             {
@@ -443,6 +714,19 @@ class OverlapGateTests(unittest.TestCase):
                 self.assertTrue(
                     json.loads((root / "overlap-gate.json").read_text())["eligible"]
                 )
+                self.assertEqual(
+                    json.loads((root / "overlap-gate.json").read_text())[
+                        "maximum_hideable_seconds"
+                    ],
+                    120,
+                )
+                warm["stages"][1]["steps"][0]["seconds"] = 59.99
+                (root / "warm/all-0.json").write_text(json.dumps(warm))
+                overlap.gate()
+                self.assertFalse(
+                    json.loads((root / "overlap-gate.json").read_text())["eligible"]
+                )
+                warm["stages"][1]["steps"][0]["seconds"] = 60
                 warm["stages"][0]["steps"][0]["seconds"] = 119.99
                 (root / "warm/all-0.json").write_text(json.dumps(warm))
                 overlap.gate()
@@ -452,61 +736,130 @@ class OverlapGateTests(unittest.TestCase):
                 changed = (
                     root
                     / "warm"
-                    / overlap.SERVICES[0].replace("/", "--")
+                    / overlap.SDKS[0].replace("/", "--")
                     / "ctrf-0-0-0.json"
                 )
                 changed.unlink()
                 with self.assertRaisesRegex(ValueError, "inventory differs"):
                     overlap.gate()
 
-    def test_two_equally_reduced_replays_do_not_validate_the_baseline(self):
+    def replay_fixture(self, root):
         _, warm = self.reports()
+        warm["sdk_workspace"] = str(root / "sdk")
+        (root / "overlap-gate.json").write_text('{"eligible":true}')
+        (root / "allocation-start").write_text(str(int(overlap.time.time())))
+        for cycle in ("warm", "serial-slice", "overlap"):
+            directory = root / cycle
+            directory.mkdir()
+            if cycle != "warm":
+                (directory / "prerequisites").mkdir()
+                (directory / "prerequisites/slice.json").write_text('{"seconds": 120}')
+            report = copy.deepcopy(warm)
+            if cycle == "overlap":
+                report["prerequisite_mode"] = "overlap"
+            for stage in report["stages"]:
+                stage["cache_before"] = {}
+                reports = directory / stage["id"].replace("/", "--")
+                reports.mkdir()
+                self.write_tests(reports, ["shared-test", "second-test"])
+            (directory / "all-0.json").write_text(json.dumps(report))
+        return warm
+
+    def write_tests(self, directory, names):
+        tests = [{"name": name, "status": "passed"} for name in names]
+        (directory / "ctrf-0-0-0.json").write_text(
+            json.dumps({"results": {"summary": {"tests": len(tests)}, "tests": tests}})
+        )
+
+    def compare(self, root, mode="overlap"):
+        stages = json.loads((root / mode / "all-0.json").read_text())["stages"]
+        with (
+            patch.object(overlap, "RESULTS", root),
+            patch.object(
+                overlap.subprocess, "check_output", return_value="same-source"
+            ),
+            patch.object(overlap, "run_window", return_value=stages) as window,
+            patch.dict(os.environ, {"GITHUB_OUTPUT": str(root / "output")}),
+        ):
+            overlap.slices(root / "sdk", mode)
+        self.assertEqual(window.call_count, 1)
+        args, kwargs = window.call_args
+        self.assertEqual(
+            args[:3], (overlap.ROOT, root / "sdk", root / mode / "prerequisites")
+        )
+        actual_mode = kwargs.get("mode", args[3] if len(args) > 3 else None)
+        self.assertEqual(actual_mode, "serial" if mode == "serial-slice" else "overlap")
+        self.assertEqual(kwargs.get("retries", args[4] if len(args) > 4 else 0), 0)
+
+    def test_complete_serial_and_overlap_replays_match(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "warm").mkdir()
-            (root / "warm/all-0.json").write_text(json.dumps(warm))
-            (root / "overlap-gate.json").write_text('{"eligible":true}')
-            (root / "allocation-start").write_text(str(int(overlap.time.time())))
-            for cycle in ("warm", "serial-slice", "overlap"):
-                for stage in warm["stages"]:
-                    directory = root / cycle
-                    if stage["id"] == overlap.CLIPPY:
-                        if cycle == "warm":
-                            continue
-                        directory /= "clippy-results"
-                        stages = [dict(stage, cache_before={})]
-                    else:
-                        stages = warm["stages"][1:]
-                    directory.mkdir(parents=True, exist_ok=True)
-                    (directory / "all-0.json").write_text(
-                        json.dumps({**warm, "stages": stages})
-                    )
-                    reports = directory / stage["id"].replace("/", "--")
-                    reports.mkdir()
-                    tests = [{"name": "shared-test", "status": "passed"}]
-                    if cycle == "warm":
-                        tests.append(
-                            {"name": "missing-from-both-replays", "status": "passed"}
-                        )
-                    (reports / "ctrf-0-0-0.json").write_text(
-                        json.dumps(
-                            {
-                                "results": {
-                                    "summary": {"tests": len(tests)},
-                                    "tests": tests,
-                                }
-                            }
-                        )
-                    )
+            self.replay_fixture(root)
+            self.compare(root, "serial-slice")
+            self.compare(root)
+            comparison = json.loads((root / "slice-comparison.json").read_text())
+            self.assertTrue(comparison["inventories_match"])
+
+    def test_progressive_cache_warming_invalidates_the_comparison(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.replay_fixture(root)
+            path = root / "serial-slice/all-0.json"
+            report = json.loads(path.read_text())
+            report["stages"][0]["cache_before"] = {
+                "crate/invoked.timestamp": ["hash", 1]
+            }
+            path.write_text(json.dumps(report))
+            with self.assertRaisesRegex(ValueError, "cache inputs changed"):
+                self.compare(root)
+            comparison = json.loads((root / "slice-comparison.json").read_text())
+            self.assertFalse(comparison["cache_input_markers_match"])
+
+    def test_two_equally_reduced_replays_do_not_validate_the_baseline(self):
+        for job in experiment.PREREQUISITES:
+            with self.subTest(job=job), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.replay_fixture(root)
+                for mode in ("serial-slice", "overlap"):
+                    self.write_tests(root / mode / job, ["shared-test"])
+                with self.assertRaisesRegex(ValueError, "admitted warm test inventory"):
+                    self.compare(root)
+
+    def test_slice_requires_exact_stage_inventory_and_clean_fixed_concurrency(self):
+        for corruption in (
+            "missing",
+            "duplicate",
+            "extra",
+            "retry",
+            "threads",
+            "source",
+            "status",
+        ):
             with (
-                patch.object(overlap, "RESULTS", root),
-                patch.object(
-                    overlap.subprocess, "check_output", return_value="same-source"
-                ),
-                patch.object(overlap, "run_slice"),
-                self.assertRaisesRegex(ValueError, "admitted warm test inventory"),
+                self.subTest(corruption=corruption),
+                tempfile.TemporaryDirectory() as temporary,
             ):
-                overlap.slices(root / "clippy")
+                root = Path(temporary)
+                self.replay_fixture(root)
+                path = root / "serial-slice/all-0.json"
+                report = json.loads(path.read_text())
+                if corruption == "missing":
+                    report["stages"].pop()
+                elif corruption == "duplicate":
+                    report["stages"].append(copy.deepcopy(report["stages"][0]))
+                elif corruption == "extra":
+                    report["stages"].append({**report["stages"][0], "id": "unselected"})
+                elif corruption == "retry":
+                    report["test_retries"] = 1
+                elif corruption == "threads":
+                    report["cli_test_threads"] = 6
+                elif corruption == "source":
+                    report["source_sha"] = "different-source"
+                else:
+                    report["stages"][0]["status"] = "passed_after_retry"
+                path.write_text(json.dumps(report))
+                with self.assertRaises(ValueError):
+                    self.compare(root)
 
 
 if __name__ == "__main__":

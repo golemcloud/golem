@@ -1,4 +1,4 @@
-"""Gate and measure a Clippy/service slice on one worker with disjoint workspaces."""
+"""Gate and measure the CLI/SDK prerequisite window in disjoint workspaces."""
 
 import argparse
 import collections
@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,8 +19,8 @@ HARNESS = Path(__file__).with_name("ci-experiment.py")
 SPEC = importlib.util.spec_from_file_location("experiment", HARNESS)
 experiment = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(experiment)
-CLIPPY = "check-clippy-and-format"
-SERVICES = ["it/integration-tests-group2", "it/integration-tests-group3"]
+CLI = experiment.PREREQUISITES[0]
+SDKS = list(experiment.SDK_PRODUCTS)
 RESULTS = ROOT / "tmp/experiment-results"
 
 
@@ -65,6 +66,9 @@ def complete_baseline(cold, warm, expected):
         and warm.get("fully_green") is True
         and warm.get("test_retries") == 0
         and warm.get("cli_test_threads") == 4
+        and bool(warm.get("sdk_workspace"))
+        and cold.get("sdk_workspace") == warm["sdk_workspace"]
+        and cold.get("prerequisite_mode") == warm.get("prerequisite_mode") == "serial"
         and all(s["status"] == "passed" for s in warm["stages"])
     )
 
@@ -100,7 +104,7 @@ def gate():
         seconds = {
             s["id"]: sum(t["seconds"] for t in s["steps"]) for s in warm["stages"]
         }
-        hideable = min(seconds[CLIPPY], sum(seconds[s] for s in SERVICES))
+        hideable = min(seconds[CLI], sum(seconds[s] for s in SDKS))
         decision = {
             "eligible": hideable >= 120,
             "reason": "eligible"
@@ -129,21 +133,70 @@ def resource_boundary():
     }
 
 
-def run_slice(mode, clippy_root):
+def run_window(
+    root, sdk_root, directory, mode, retries=0, publication_id=None, clippy_root=None
+):
+    if mode not in {"serial", "overlap"}:
+        raise ValueError(f"Unknown prerequisite mode: {mode}")
+    roots = [root.resolve(), sdk_root.resolve()]
+    if clippy_root:
+        roots.append(Path(clippy_root).resolve())
+    for i, left in enumerate(roots):
+        for right in roots[i + 1 :]:
+            if left.is_relative_to(right) or right.is_relative_to(left):
+                raise ValueError("Prerequisite and Clippy workspaces must be disjoint")
+    source_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    if (
+        subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=sdk_root, text=True
+        ).strip()
+        != source_sha
+    ):
+        raise ValueError("Prerequisite workspace source SHAs differ")
+    workflow = experiment.yaml.safe_load(
+        (root / ".github/workflows/ci.yaml").read_text()
+    )
+    if any(
+        experiment.dependencies(workflow["jobs"][job])
+        for job in experiment.PREREQUISITES
+    ):
+        raise ValueError(
+            "Prerequisite window now has dependencies; review the allowlist"
+        )
     experiment.adopt_orphans()
-    directory = RESULTS / mode
-    directory.mkdir()
-    plan = [("clippy", clippy_root, [CLIPPY]), ("services", ROOT, SERVICES)]
+    directory.mkdir(parents=True)
+    plan = [("cli", root, [CLI]), ("sdk", sdk_root, SDKS)]
+    publication_id = publication_id or str(uuid.uuid4())
+    for workspace in (root, sdk_root):
+        products = workspace / "tmp/experiment-products"
+        products.mkdir(parents=True, exist_ok=True)
+        (products / "sdk-publication-id").write_text(publication_id)
+        for job, files in experiment.SDK_PRODUCTS.items():
+            (products / f"{job}.json").unlink(missing_ok=True)
+            for name in files:
+                (products / name).unlink(missing_ok=True)
+    cycle = directory.parent.name + "-prerequisites"
     running = []
     outputs = []
-    record = {"mode": mode, "started_at": time.time(), "samples": [], "lanes": []}
+    record = {
+        "mode": mode,
+        "passed": False,
+        "source_sha": source_sha,
+        "publication_id": publication_id,
+        "started_at": time.time(),
+        "samples": [],
+        "lanes": [],
+    }
     low_memory = 0
-    deadline = time.monotonic() + 35 * 60
+    deadline = time.monotonic() + 90 * 60
 
     def save():
         (directory / "slice.json").write_text(json.dumps(record, indent=2) + "\n")
 
     def launch(lane, workspace, stages):
+        shutil.rmtree(workspace / "tmp/experiment-results" / cycle, ignore_errors=True)
         command = [
             sys.executable,
             "-u",
@@ -151,33 +204,41 @@ def run_slice(mode, clippy_root):
             "--workspace",
             str(workspace),
             "--cycle",
-            mode,
+            cycle,
+            "--test-retries",
+            str(retries),
         ]
         for stage in stages:
             command.extend(["--stage", stage])
         output = (directory / f"{lane}.log").open("w")
         outputs.append(output)
         process = subprocess.Popen(
-            command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True
+            command,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env={**os.environ, "CI_PREREQUISITE_ID": publication_id},
         )
         running.append(process)
         record["lanes"].append(
             {"lane": lane, "pid": process.pid, "started_at": time.time()}
         )
 
-    initial = experiment.host_sample(ROOT)
+    initial = experiment.host_sample(root)
     if (
         initial["memory_available_kib"] < initial["memory_total_kib"] * 0.20
         or initial["disk_free_bytes"] < initial["disk_total_bytes"] * 0.20
     ):
-        raise RuntimeError("Insufficient memory/disk headroom for slice admission")
+        raise RuntimeError(
+            "Insufficient memory/disk headroom for prerequisite admission"
+        )
     record["resources_before"] = resource_boundary()
     try:
         launch(*plan[0])
         if mode == "overlap":
             launch(*plan[1])
         while True:
-            sample = {"time": time.time(), **experiment.host_sample(ROOT)}
+            sample = {"time": time.time(), **experiment.host_sample(root)}
             table = experiment.processes()
             sample["owned_processes"] = {
                 str(p): table[p]
@@ -203,12 +264,12 @@ def run_slice(mode, clippy_root):
             ):
                 raise RuntimeError("Slice resource safety guard triggered")
             if time.monotonic() >= deadline:
-                raise TimeoutError("Slice exceeded 35-minute limit")
-            if any(p.poll() not in (None, 0) for p in running):
-                raise RuntimeError("Slice child failed")
+                raise TimeoutError("Prerequisite window exceeded 90-minute limit")
+            for process, lane in zip(running, record["lanes"]):
+                if process.poll() is not None and "finished_at" not in lane:
+                    lane["finished_at"] = time.time()
             if all(p.poll() is not None for p in running):
-                if mode == "serial-slice" and len(running) == 1:
-                    record["lanes"][0]["finished_at"] = time.time()
+                if mode == "serial" and len(running) == 1:
                     launch(*plan[1])
                 else:
                     break
@@ -218,7 +279,6 @@ def run_slice(mode, clippy_root):
             raise RuntimeError(
                 "Slice left changed listeners or containers; refusing to continue"
             )
-        record["passed"] = True
     except BaseException as error:
         record["passed"] = False
         record["error"] = str(error) or type(error).__name__
@@ -262,11 +322,11 @@ def run_slice(mode, clippy_root):
             record["cleanup_errors"] = cleanup_errors
             if cleanup_errors:
                 record["passed"] = False
-            # Keep the Clippy child's complete raw reports in the uploaded source tree.
             try:
-                child_results = clippy_root / "tmp/experiment-results" / mode
-                if child_results.exists():
-                    shutil.copytree(child_results, directory / "clippy-results")
+                for lane, workspace, _ in plan:
+                    child_results = workspace / "tmp/experiment-results" / cycle
+                    if child_results.exists():
+                        shutil.copytree(child_results, directory / f"{lane}-results")
             finally:
                 save()
             if cleanup_errors:
@@ -275,16 +335,52 @@ def run_slice(mode, clippy_root):
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)
 
+    stages = []
+    for (lane, _, expected), outcome in zip(plan, record["lanes"]):
+        evidence = directory / f"{lane}-results"
+        report = json.loads((evidence / "all-0.json").read_text())
+        if (
+            report["source_sha"] != source_sha
+            or not report.get("finished_at")
+            or report["cli_test_threads"] != 4
+            or report["test_retries"] != retries
+            or [s["id"] for s in report["stages"]] != expected
+            or outcome["exit_code"] != int(not report["success"])
+        ):
+            raise ValueError(f"Incomplete or mismatched prerequisite report: {lane}")
+        stages.extend(report["stages"])
+        for stage in report["stages"]:
+            name = stage["id"].replace("/", "--")
+            shutil.copytree(evidence / name, directory.parent / name)
+            if stage["id"] in SDKS and stage["status"] in {
+                "passed",
+                "passed_after_retry",
+            }:
+                origin = sdk_root / "tmp/experiment-products"
+                products = root / "tmp/experiment-products"
+                for name in (
+                    *experiment.SDK_PRODUCTS[stage["id"]],
+                    f"{stage['id']}.json",
+                ):
+                    shutil.copy2(origin / name, products / name)
+                experiment.restore_sdk(stage["id"], root)
+                record.setdefault("sdk_publications", {})[stage["id"]] = json.loads(
+                    (products / f"{stage['id']}.json").read_text()
+                )
+    record["passed"] = all(
+        s["status"] in {"passed", "passed_after_retry"} for s in stages
+    )
+    record["finished_at"] = time.time()
+    record["seconds"] = record["finished_at"] - record["started_at"]
+    save()
+    return stages
 
-def slices(clippy_root, selected_mode="overlap"):
-    if (
-        ROOT == clippy_root
-        or ROOT in clippy_root.parents
-        or clippy_root in ROOT.parents
-    ):
-        raise ValueError("Clippy and suite workspaces must be disjoint")
+
+def slices(sdk_root, selected_mode="overlap"):
     warm = json.loads((RESULTS / "warm/all-0.json").read_text())
-    for root in (ROOT, clippy_root):
+    if warm.get("sdk_workspace") != str(sdk_root):
+        raise ValueError("SDK workspace differs from the admitted baseline")
+    for root in (ROOT, sdk_root):
         if (
             subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=root, text=True
@@ -297,13 +393,33 @@ def slices(clippy_root, selected_mode="overlap"):
         raise RuntimeError("Overlap gate did not admit a comparison")
     start = int((RESULTS / "allocation-start").read_text())
     # Reserve each bounded slice and at least 15 minutes for finalization.
-    reserve = 90 if selected_mode == "serial-slice" else 45
+    reserve = 195 if selected_mode == "serial-slice" else 105
     if time.time() - start > (12 * 60 - reserve) * 60:
         (RESULTS / "overlap-skipped.json").write_text(
             '{"reason":"insufficient remaining job budget"}\n'
         )
         return
-    run_slice(selected_mode, clippy_root)
+    stages = run_window(
+        ROOT,
+        sdk_root,
+        RESULTS / selected_mode / "prerequisites",
+        "serial" if selected_mode == "serial-slice" else "overlap",
+    )
+    (RESULTS / selected_mode / "all-0.json").write_text(
+        json.dumps(
+            {
+                "source_sha": warm["source_sha"],
+                "finished_at": time.time(),
+                "fully_green": all(s["status"] == "passed" for s in stages),
+                "cli_test_threads": 4,
+                "test_retries": 0,
+                "stages": stages,
+            },
+            indent=2,
+        )
+    )
+    if any(s["status"] != "passed" for s in stages):
+        raise ValueError("Prerequisite slice did not pass cleanly")
     if selected_mode == "serial-slice":
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             print("completed=true", file=output)
@@ -312,52 +428,63 @@ def slices(clippy_root, selected_mode="overlap"):
     caches = []
     for mode in ("serial-slice", "overlap"):
         stages = {}
-        for root in (RESULTS / mode, RESULTS / mode / "clippy-results"):
+        for root in (RESULTS / mode,):
             report = json.loads((root / "all-0.json").read_text())
             if (
                 not report["fully_green"]
                 or report["test_retries"]
+                or report["cli_test_threads"] != 4
                 or report["source_sha"] != warm["source_sha"]
+                or not report.get("finished_at")
+                or any(s["status"] != "passed" for s in report["stages"])
             ):
                 raise ValueError(f"Slice did not pass cleanly: {mode}")
             for stage in report["stages"]:
                 stages[stage["id"]] = test_inventory(
                     root / stage["id"].replace("/", "--"), stage
                 )
-                if stage["id"] == CLIPPY:
-                    caches.append(stage["cache_before"])
-        if set(stages) != {CLIPPY, *SERVICES} or any(not stages[s] for s in SERVICES):
+        if set(stages) != {CLI, *SDKS} or len(report["stages"]) != len(
+            experiment.PREREQUISITES
+        ):
             raise ValueError(f"Incomplete slice: {mode}")
         for stage in warm["stages"]:
-            if stage["id"] in SERVICES and stages[stage["id"]] != test_inventory(
+            if stage["id"] in experiment.PREREQUISITES and stages[
+                stage["id"]
+            ] != test_inventory(
                 RESULTS / "warm" / stage["id"].replace("/", "--"), stage
             ):
                 raise ValueError(
                     f"Slice differs from admitted warm test inventory: {mode} {stage['id']}"
                 )
         inventories.append(stages)
+        caches.append({s["id"]: s["cache_before"] for s in report["stages"]})
     if inventories[0] != inventories[1]:
         raise ValueError("Serial/overlap test inventories differ")
     (RESULTS / "slice-comparison.json").write_text(
         json.dumps(
             {
                 "inventories_match": True,
-                "clippy_rebuild_markers_match": caches[0] == caches[1],
+                "cache_input_markers_match": caches[0] == caches[1],
+                "cache_evidence_limit": "Fingerprint markers are necessary, not complete cache identity proof; inspect dependency/cache warming before attributing a speedup.",
+                "serial_seconds": json.loads(
+                    (RESULTS / "serial-slice/prerequisites/slice.json").read_text()
+                )["seconds"],
+                "overlap_seconds": json.loads(
+                    (RESULTS / "overlap/prerequisites/slice.json").read_text()
+                )["seconds"],
             },
             indent=2,
         )
         + "\n"
     )
     if caches[0] != caches[1]:
-        raise ValueError(
-            "Clippy compilation cache changed between serial and overlap inputs"
-        )
+        raise ValueError("Prerequisite cache inputs changed between serial and overlap")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("gate", "serial-slice", "overlap"))
-    parser.add_argument("--clippy-workspace", type=Path, required=True)
+    parser.add_argument("--sdk-workspace", type=Path, required=True)
     args = parser.parse_args()
     if os.getenv("GITHUB_ACTIONS") != "true":
         raise SystemExit("Execution requires the isolated experiment worker")
@@ -365,4 +492,4 @@ if __name__ == "__main__":
     if args.mode == "gate":
         gate()
     else:
-        slices(args.clippy_workspace.resolve(), args.mode)
+        slices(args.sdk_workspace.resolve(), args.mode)

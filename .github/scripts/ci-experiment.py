@@ -7,16 +7,23 @@ explicitly replaced; unknown jobs, actions, and expressions fail the inventory.
 
 import argparse
 import ast
+import collections
 import copy
 import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
+import sys
+import tarfile
 import time
+import tomllib
+import uuid
 from pathlib import Path
 
 import yaml
@@ -45,6 +52,33 @@ PREPARE = {
     "merge-test-components",
 }
 CLI_JOBS = {"it-cli", "it-cli-agents", "it-cli-streaming"}
+SDK_PRODUCTS = {
+    "build-golem-scala": {
+        "agent-guest-wasm.tar.gz": (
+            "sdks/scala/sbt/src/main/resources/golem/wasm",
+            "sdks/scala/mill/resources/golem/wasm",
+            "sdks/scala/wit/dts",
+        ),
+        "scala-sdk-ivy-local.tar.gz": ("local",),
+    },
+    "build-golem-ts": {
+        "golem-ts-sdk.tar.gz": (
+            "sdks/ts/packages/golem-ts-sdk/dist",
+            "sdks/ts/packages/golem-ts-sdk/types",
+            "sdks/ts/packages/golem-ts-sdk/wasm",
+            "sdks/ts/packages/golem-ts-bridge/dist",
+            "sdks/ts/packages/golem-ts-repl/dist",
+        ),
+    },
+    "build-golem-effect": {
+        "golem-effect-sdk.tar.gz": (
+            "sdks/effect/dist",
+            "sdks/effect/wasm",
+            "sdks/effect/golem-types",
+        ),
+    },
+}
+PREREQUISITES = ["build-cli-test-bins", *SDK_PRODUCTS]
 EXPECTED = (
     PREPARE
     | set(EXCLUDED)
@@ -223,12 +257,94 @@ def cli_baseline_eligible(report, stages):
     )
 
 
+def publish_sdk(job, root, temporary, source_sha, publication_id):
+    products = root / "tmp/experiment-products"
+    manifest = {
+        "source_sha": source_sha,
+        "publication_id": publication_id,
+        "files": {},
+    }
+    for name in SDK_PRODUCTS[job]:
+        archive = temporary / name
+        if name == "scala-sdk-ivy-local.tar.gz":
+            with tarfile.open(archive, "w:gz") as output:
+                output.add(Path.home() / ".ivy2/local", arcname="local")
+        destination = products / name
+        shutil.copy2(archive, destination)
+        with destination.open("rb") as source:
+            manifest["files"][name] = hashlib.file_digest(source, "sha256").hexdigest()
+    (products / f"{job}.json").write_text(json.dumps(manifest, indent=2))
+
+
+def restore_sdk(job, root):
+    products = root / "tmp/experiment-products"
+    manifest = json.loads((products / f"{job}.json").read_text())
+    source_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    if (
+        manifest["source_sha"] != source_sha
+        or manifest["publication_id"]
+        != (products / "sdk-publication-id").read_text().strip()
+        or set(manifest["files"]) != set(SDK_PRODUCTS[job])
+    ):
+        raise ValueError(f"SDK publication identity differs: {job}")
+    # Validate the complete publication before replacing any consumer outputs.
+    for name, prefixes in SDK_PRODUCTS[job].items():
+        archive = products / name
+        with archive.open("rb") as source:
+            if (
+                hashlib.file_digest(source, "sha256").hexdigest()
+                != manifest["files"][name]
+            ):
+                raise ValueError(f"SDK archive hash differs: {name}")
+        with tarfile.open(archive) as source:
+            members = source.getmembers()
+            for prefix in prefixes:
+                if not any(
+                    m.isfile() and Path(m.name).is_relative_to(prefix) for m in members
+                ):
+                    raise ValueError(f"SDK archive has no files under {prefix}")
+            if any(
+                ".." in Path(m.name).parts
+                or not any(Path(m.name).is_relative_to(prefix) for prefix in prefixes)
+                for m in members
+            ):
+                raise ValueError(f"SDK archive contains unexpected paths: {name}")
+    for name, prefixes in SDK_PRODUCTS[job].items():
+        destination = (
+            Path.home() / ".ivy2" if name == "scala-sdk-ivy-local.tar.gz" else root
+        )
+        for prefix in prefixes:
+            output = destination / prefix
+            if output.exists():
+                shutil.rmtree(output)
+        with tarfile.open(products / name) as source:
+            source.extractall(destination, filter="data")
+
+
 def commands(stage, context, cli_test_threads=4):
     """Translate only setup/publication boundaries; preserve validation commands."""
     job = stage["job"]
     for step in stage["definition"]["steps"]:
         action = step.get("uses", "").split("@")[0]
         name = step.get("name", action)
+        if action == "actions/download-artifact" and condition(step.get("if"), context):
+            artifact = step["with"].get("name", "")
+            producer = next(
+                (
+                    job
+                    for job, files in SDK_PRODUCTS.items()
+                    if f"{artifact}.tar.gz" in files
+                ),
+                None,
+            )
+            if producer:
+                yield {
+                    "name": name,
+                    "run": f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).resolve()))} --workspace {shlex.quote(str(context['github']['workspace']))} --restore-sdk-product {producer}",
+                }
+                continue
         if action in SETUP | TRANSPORT:
             continue
         if name in {"Compute built-in artifact cache key", "Identify fixture compiler"}:
@@ -285,8 +401,10 @@ def commands(stage, context, cli_test_threads=4):
         elif action == "./.github/actions/restore-binary-publication":
             if step["with"]["file"] != "scala-sdk-ivy-local.tar.gz":
                 raise ValueError(f"Unknown publication: {step}")
-            # The producing Scala stage already published into ~/.ivy2/local.
-            continue
+            yield {
+                "name": name,
+                "run": f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).resolve()))} --workspace {shlex.quote(str(context['github']['workspace']))} --restore-sdk-product build-golem-scala",
+            }
         elif action == "./.github/actions/check-scala-sdk-generated":
             yield {"name": name, "run": "git diff --exit-code sdks/scala/wit/dts"}
         elif action == "golangci/golangci-lint-action":
@@ -326,12 +444,121 @@ def cache_fingerprints(root):
             hashlib.sha256(path.read_bytes()).hexdigest(),
             path.stat().st_mtime_ns,
         ]
-        for path in root.glob("**/target/debug/.fingerprint/*/invoked.timestamp")
+        for pattern in (
+            "**/target/debug/.fingerprint/*/invoked.timestamp",
+            "target/dev-release-ci/.fingerprint/*/invoked.timestamp",
+            "sdks/scala/.generated/agent-guest-target/*/*/.fingerprint/*/invoked.timestamp",
+        )
+        for path in root.glob(pattern)
     }
 
 
 def interrupt(*_):
     raise KeyboardInterrupt
+
+
+def attempt_tests(paths):
+    tests = []
+    for path in paths:
+        results = json.loads(path.read_text())["results"]
+        entries = results["tests"]
+        if results["summary"]["tests"] != len(entries):
+            raise ValueError(f"Inconsistent test inventory: {path}")
+        for test in entries:
+            if test["status"] not in {"passed", "failed", "skipped"}:
+                raise ValueError(f"Incomplete test result: {path}")
+            tests.append(test)
+    return tests
+
+
+def resolved_test_inventory(directory, stage):
+    """Keep initial coverage when a retry in this stage folder selects only failures."""
+    attempts = collections.defaultdict(collections.Counter)
+    recorded = {
+        (int(step["log"].split("-", 1)[0].split(".", 1)[0]), step["attempt"])
+        for step in stage["steps"]
+    }
+    for path in directory.glob("ctrf-*.json"):
+        match = re.fullmatch(r"ctrf-(\d+)-(\d+)-(\d+)\.json", path.name)
+        if not match:
+            raise ValueError(f"Unexpected report: {path}")
+        index, attempt, _ = map(int, match.groups())
+        if (index, attempt) not in recorded:
+            raise ValueError(f"Report has no recorded attempt: {path}")
+        attempts[index, attempt].update(
+            (test.get("suite", ""), test["name"]) for test in attempt_tests([path])
+        )
+    commands = collections.defaultdict(collections.Counter)
+    for (index, _), tests in attempts.items():
+        commands[index] |= tests
+    inventory = sum(commands.values(), collections.Counter())
+    return sorted([*key, count] for key, count in inventory.items())
+
+
+def retry_test_command(command, root, env, tests):
+    """Narrow a single test-r task without changing its environment or options."""
+    if any(char in command.strip() for char in ("\n", ";", "&", "|", "`", "$")):
+        return command, env, "step_group"
+    parts = shlex.split(command)
+    retry_env = dict(env)
+    if parts[:4] == ["cargo", "make", "--profile", "ci"] and len(parts) == 5:
+        with (root / "Makefile.toml").open("rb") as source:
+            makefile = tomllib.load(source)
+        task = makefile["tasks"][parts[4]]
+        script = task.get("script", "").strip()
+        if "\n" in script or not script.startswith(
+            "exec --fail-on-error cargo-test-r run "
+        ):
+            return command, env, "step_group"
+        values = {
+            **{
+                k: v
+                for k, v in makefile.get("env", {}).items()
+                if not isinstance(v, dict)
+            },
+            **makefile.get("env", {}).get("ci", {}),
+            **task.get("env", {}),
+        }
+        retry_env.update({k: str(v) for k, v in values.items()})
+        script = re.sub(r"%\{(\w+)\}", lambda m: str(values[m[1]]), script)
+        parts = shlex.split(script.removeprefix("exec --fail-on-error "))
+    if parts[:2] != ["cargo-test-r", "run"] or "--" not in parts:
+        return command, env, "step_group"
+    split = parts.index("--")
+    selection = []
+    index = 2
+    while index < split:
+        value = parts[index]
+        if value in {"--package", "-p", "--test", "--exclude"}:
+            selection.extend(parts[index : index + 2])
+            index += 2
+        elif value in {"--lib", "--workspace"}:
+            selection.append(value)
+            index += 1
+        elif value.startswith("-"):
+            return command, env, "step_group"
+        else:
+            # Initial name/tag filters are replaced by exact failed test names.
+            index += 1
+    failed = [t["name"] for t in tests if t["status"] == "failed"]
+    if not failed or any("::" not in name for name in failed):
+        return command, env, "step_group"
+    names = sorted({name.split("::", 1)[1] for name in failed})
+    return (
+        shlex.join(
+            [
+                "cargo-test-r",
+                "run",
+                *selection,
+                "--",
+                *parts[split + 1 :],
+                "--exact",
+                *names,
+            ]
+        ),
+        retry_env,
+        "failed_tests",
+    )
 
 
 def adopt_orphans():
@@ -450,6 +677,9 @@ def host_sample(cwd):
 
 
 def execute(command, env, cwd, log, timeout):
+    if timeout <= 0:
+        log.write_text("Stage budget exhausted before invocation\n")
+        return {"exit_code": 124, "seconds": 0, "resources": []}
     adopt_orphans()
     started = time.monotonic()
     samples = []
@@ -506,6 +736,13 @@ def execute(command, env, cwd, log, timeout):
 def run(args):
     if args.cli_test_threads != 4 and args.test_retries:
         raise ValueError("CLI concurrency comparisons must not retry tests")
+    if getattr(args, "restore_sdk_product", None):
+        restore_sdk(args.restore_sdk_product, ROOT)
+        return 0
+    if getattr(args, "prerequisite_mode", "serial") == "overlap" and not getattr(
+        args, "sdk_workspace", None
+    ):
+        raise ValueError("Prerequisite overlap requires an SDK workspace")
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yaml").read_text())
     chunks = json.loads(
         subprocess.check_output(
@@ -571,6 +808,26 @@ def run(args):
         if wanted - {s["id"] for s in selected}:
             raise ValueError(f"Unknown selected stage: {wanted}")
         selected = [s for s in selected if s["id"] in wanted]
+        selected.sort(key=lambda s: args.stage.index(s["id"]))
+    publication_id = os.getenv("CI_PREREQUISITE_ID")
+    if any(s["job"] in SDK_PRODUCTS for s in selected):
+        publication_id = publication_id or str(uuid.uuid4())
+        (products / "sdk-publication-id").write_text(publication_id)
+    sdk_root = getattr(args, "sdk_workspace", None)
+    if sdk_root:
+        if args.phase not in {"all", "prepare", "cli-prime"} or getattr(
+            args, "stage", None
+        ):
+            raise ValueError(
+                "The prerequisite window requires a complete preparation selection"
+            )
+        if not set(PREREQUISITES) <= {s["id"] for s in selected}:
+            raise ValueError("Incomplete prerequisite window")
+        spec = importlib.util.spec_from_file_location(
+            "overlap", Path(__file__).with_name("ci-overlap-experiment.py")
+        )
+        overlap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(overlap)
     clippy_root = getattr(args, "clippy_workspace", None)
     if clippy_root:
         clippy_root = Path(clippy_root).resolve()
@@ -609,11 +866,34 @@ def run(args):
         "shard": args.shard,
         "cli_test_threads": args.cli_test_threads,
         "test_retries": args.test_retries,
+        "sdk_workspace": str(Path(sdk_root).resolve()) if sdk_root else None,
+        "prerequisite_mode": getattr(args, "prerequisite_mode", "serial"),
         "started_at": time.time(),
         "stages": [],
     }
     failures = set()
     for stage in selected:
+        if sdk_root and stage["id"] in PREREQUISITES:
+            if stage["id"] == PREREQUISITES[0]:
+                window = overlap.run_window(
+                    ROOT,
+                    Path(sdk_root).resolve(),
+                    evidence / "prerequisites",
+                    report["prerequisite_mode"],
+                    args.test_retries,
+                    publication_id,
+                    clippy_root=clippy_root,
+                )
+                report["stages"].extend(window)
+                failures.update(
+                    s["id"]
+                    for s in window
+                    if s["status"] not in {"passed", "passed_after_retry"}
+                )
+                (evidence / f"{args.phase}-{args.shard}.json").write_text(
+                    json.dumps(report, indent=2)
+                )
+            continue
         stage_root = (
             clippy_root
             if clippy_root and stage["job"] == "check-clippy-and-format"
@@ -622,6 +902,11 @@ def run(args):
         stage_context = {
             **context,
             "github": {**context["github"], "workspace": str(stage_root)},
+            "runner": {
+                "temp": str(
+                    stage_root / "tmp/experiment-temp" / stage["id"].replace("/", "--")
+                )
+            },
             "matrix": stage["matrix"],
         }
         stage_dir = evidence / stage["id"].replace("/", "--")
@@ -633,7 +918,7 @@ def run(args):
             "started_at": time.time(),
             "workspace": str(stage_root),
         }
-        if stage["job"] == "check-clippy-and-format":
+        if stage["job"] == "check-clippy-and-format" or stage["job"] in PREREQUISITES:
             result["cache_before"] = cache_fingerprints(stage_root)
         report["stages"].append(result)
         deadline = (
@@ -650,6 +935,17 @@ def run(args):
             subprocess.run(
                 ["git", "restore", "--worktree", "."], cwd=stage_root, check=True
             )
+            temporary = Path(stage_context["runner"]["temp"])
+            temporary.mkdir(parents=True, exist_ok=True)
+            if stage["job"] in SDK_PRODUCTS:
+                (products / f"{stage['job']}.json").unlink(missing_ok=True)
+                for name in SDK_PRODUCTS[stage["job"]]:
+                    (temporary / name).unlink(missing_ok=True)
+            if stage["job"] == "build-golem-scala":
+                # Only the SDK producer owns Ivy local during this window. Keep download caches.
+                ivy_local = Path.home() / ".ivy2/local"
+                if ivy_local.exists():
+                    shutil.rmtree(ivy_local)
             for path in stage_root.glob("**/target/ctrf*.json"):
                 path.unlink()
             if stage["job"] == "build-test-components":
@@ -670,6 +966,7 @@ def run(args):
             }
             env["PATH"] = f"{stage_root}/target/debug:{env['PATH']}"
             env["GITHUB_WORKSPACE"] = str(stage_root)
+            env["RUNNER_TEMP"] = str(temporary)
             # GITHUB_ENV/PATH writes are scoped to the logical stage, not the host job.
             for key in ("GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT"):
                 env[key] = str(stage_dir / key)
@@ -687,6 +984,9 @@ def run(args):
                 if step["name"] == "Select prebuilt built-ins":
                     env["GOLEM_BUILTIN_ARTIFACTS_PREBUILT"] = "1"
                 name = render(step.get("name", f"step-{i}"), stage_context)
+                original_command = render(step["run"], stage_context)
+                command, attempt_env, scope = original_command, step_env, "initial"
+                previous_tests = []
                 for attempt in range(args.test_retries + 1):
                     suffix = f"-retry{attempt}" if attempt else ""
                     log = stage_dir / f"{i:02}{suffix}.log"
@@ -702,8 +1002,8 @@ def run(args):
                         ),
                     )
                     observation = execute(
-                        render(step["run"], stage_context),
-                        step_env,
+                        command,
+                        attempt_env,
                         stage_root
                         / render(step.get("working-directory", "."), stage_context),
                         log,
@@ -714,10 +1014,60 @@ def run(args):
                         attempt=attempt,
                         log=log.name,
                         timeout_seconds=timeout,
+                        retry_scope=scope,
                     )
                     result["steps"].append(observation)
+                    reports = []
                     for j, path in enumerate(stage_root.glob("**/target/ctrf*.json")):
-                        shutil.move(path, stage_dir / f"ctrf-{i}-{attempt}-{j}.json")
+                        destination = stage_dir / f"ctrf-{i}-{attempt}-{j}.json"
+                        shutil.move(path, destination)
+                        reports.append(destination)
+                    try:
+                        tests = attempt_tests(reports)
+                        if attempt and previous_tests:
+                            expected = collections.Counter(
+                                (t.get("suite", ""), t["name"])
+                                for t in previous_tests
+                                if scope != "failed_tests" or t["status"] == "failed"
+                            )
+                            observed = collections.Counter(
+                                (t.get("suite", ""), t["name"]) for t in tests
+                            )
+                            if not expected <= observed or (
+                                scope == "failed_tests" and expected != observed
+                            ):
+                                raise ValueError(
+                                    "Retry did not execute its required test inventory"
+                                )
+                            unresolved = {
+                                (t.get("suite", ""), t["name"])
+                                for t in previous_tests
+                                if t["status"] == "failed"
+                            }
+                            if any(
+                                (t.get("suite", ""), t["name"]) in unresolved
+                                and t["status"] == "skipped"
+                                for t in tests
+                            ):
+                                raise ValueError(
+                                    "Retry skipped a previously failed test"
+                                )
+                        if not observation["exit_code"] and any(
+                            t["status"] == "failed" for t in tests
+                        ):
+                            raise ValueError("Successful command reported failed tests")
+                        if (
+                            attempt
+                            and not previous_tests
+                            and not re.search(
+                                r"test result: ok; [1-9]\d* passed;",
+                                log.read_text(errors="replace"),
+                            )
+                        ):
+                            raise ValueError("Retry has no executed-test evidence")
+                    except (OSError, ValueError, KeyError, TypeError) as error:
+                        tests = []
+                        observation["validation_error"] = str(error)
                     report_path.write_text(json.dumps(report, indent=2))
                     print(
                         json.dumps(
@@ -726,7 +1076,10 @@ def run(args):
                         flush=True,
                     )
                     print("::endgroup::", flush=True)
-                    if not observation["exit_code"]:
+                    if (
+                        observation.get("validation_error")
+                        or not observation["exit_code"]
+                    ):
                         break
                     output = log.read_text(errors="replace")
                     print(output[-20000:], flush=True)
@@ -734,15 +1087,27 @@ def run(args):
                     # processes, and timeouts do not qualify as flaky test evidence.
                     if (
                         attempt == args.test_retries
+                        or not any(t["status"] == "failed" for t in tests)
+                        and (
+                            bool(tests)
+                            or not re.search(
+                                r"^test result: FAILED;.*[1-9]\d* failed",
+                                output,
+                                re.MULTILINE,
+                            )
+                        )
                         # cargo-make wraps a test-r exit of 101 as 105.
                         or observation["exit_code"] not in {1, 101, 105}
-                        or not re.search(
-                            r"ℹ fail [1-9]\d*\b|test result: FAILED;", output
-                        )
                     ):
                         break
-                    time.sleep(2**attempt)
-                if observation["exit_code"]:
+                    command, attempt_env, scope = retry_test_command(
+                        original_command, stage_root, step_env, tests
+                    )
+                    previous_tests = tests
+                    delay = min(2**attempt, max(0, deadline - time.monotonic()))
+                    observation["retry_backoff_seconds"] = delay
+                    time.sleep(delay)
+                if observation["exit_code"] or observation.get("validation_error"):
                     result["status"] = "failed"
                     failures.add(stage["job"])
                     break
@@ -760,6 +1125,19 @@ def run(args):
                     check=True,
                 )
             if result["status"] in {"passed", "passed_after_retry"}:
+                if stage["job"] in SDK_PRODUCTS:
+                    try:
+                        publish_sdk(
+                            stage["job"],
+                            stage_root,
+                            temporary,
+                            report["source_sha"],
+                            publication_id,
+                        )
+                    except (OSError, ValueError, tarfile.TarError) as error:
+                        result["status"] = "failed"
+                        result["publication_error"] = str(error)
+                        failures.add(stage["job"])
                 if stage["job"] == "build-cli-test-bins":
                     for binary in ("golem", "golem-cli"):
                         shutil.copy2(
@@ -774,7 +1152,7 @@ def run(args):
                     for path in (products / "fixtures").glob("*.wasm"):
                         shutil.copy2(path, ROOT / "test-components" / path.name)
         result["finished_at"] = time.time()
-        if stage["job"] == "check-clippy-and-format":
+        if stage["job"] == "check-clippy-and-format" or stage["job"] in PREREQUISITES:
             result["cache_after"] = cache_fingerprints(stage_root)
         report["updated_at"] = time.time()
         (evidence / f"{args.phase}-{args.shard}.json").write_text(
@@ -785,6 +1163,26 @@ def run(args):
     report["fully_green"] = not failures and all(
         stage["status"] == "passed" for stage in report["stages"]
     )
+    report["outcome"] = (
+        "passed_first_attempt"
+        if report["fully_green"]
+        else "passed_after_retry"
+        if report["success"]
+        else "failed"
+    )
+    report["initial_command_seconds"] = sum(
+        step["seconds"]
+        for stage in report["stages"]
+        for step in stage["steps"]
+        if not step["attempt"]
+    )
+    report["retry_seconds"] = sum(
+        (step["seconds"] if step["attempt"] else 0)
+        + step.get("retry_backoff_seconds", 0)
+        for stage in report["stages"]
+        for step in stage["steps"]
+    )
+    report["total_seconds"] = report["finished_at"] - report["started_at"]
     (evidence / f"{args.phase}-{args.shard}.json").write_text(
         json.dumps(report, indent=2)
     )
@@ -807,6 +1205,11 @@ if __name__ == "__main__":
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--clippy-workspace", type=Path)
+    parser.add_argument("--sdk-workspace", type=Path)
+    parser.add_argument(
+        "--prerequisite-mode", choices=("serial", "overlap"), default="serial"
+    )
+    parser.add_argument("--restore-sdk-product", choices=SDK_PRODUCTS)
     parser.add_argument("--stage", action="append")
     args = parser.parse_args()
     if args.workspace:
