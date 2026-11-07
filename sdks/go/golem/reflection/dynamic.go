@@ -93,13 +93,13 @@ func (c *DynamicAgentClient) Parsed() RawAgentID { return c.parsed }
 // its result, none for a method that returns nothing, together with the
 // invocation's identity, which is nil when the call was rejected before it
 // started.
-func (c *DynamicAgentClient) Call(method string, input core.SchemaValue, opts ...CallOpt) (golem.Option[core.SchemaValue], *golem.InvocationID, error) {
+func (c *DynamicAgentClient) Call(method string, input core.SchemaValue, opts ...CallOpt) (golem.Option[core.SchemaValue], *golem.InvocationMetadata, error) {
 	p, err := c.CallAsync(method, input, opts...)
 	if err != nil {
 		return golem.None[core.SchemaValue](), nil, err
 	}
 	out, err := p.Get()
-	return out, p.ID, err
+	return out, p.Metadata, err
 }
 
 // CallAsync invokes a method with an already-packed parameter record and
@@ -115,7 +115,7 @@ func (c *DynamicAgentClient) CallAsync(method string, input core.SchemaValue, op
 	if err != nil {
 		return nil, err
 	}
-	return &PendingCall[golem.Option[core.SchemaValue]]{ID: p.id, cancel: p.cancel, wait: func() (golem.Option[core.SchemaValue], error) {
+	return &PendingCall[golem.Option[core.SchemaValue]]{Metadata: p.metadata, cancel: p.cancel, wait: func() (golem.Option[core.SchemaValue], error) {
 		res, err := p.await(c.agentID, method)
 		if err != nil {
 			return golem.None[core.SchemaValue](), err
@@ -133,10 +133,10 @@ func (c *DynamicAgentClient) CallAsync(method string, input core.SchemaValue, op
 }
 
 // Trigger invokes a method without waiting for its result.
-func (c *DynamicAgentClient) Trigger(method string, input core.SchemaValue) (golem.InvocationID, error) {
+func (c *DynamicAgentClient) Trigger(method string, input core.SchemaValue) (golem.InvocationMetadata, error) {
 	tree, err := witschema.ValueToWit(input)
 	if err != nil {
-		return golem.InvocationID{}, fmt.Errorf("golem: %s: %w", method, err)
+		return golem.InvocationMetadata{}, fmt.Errorf("golem: %s: %w", method, err)
 	}
 	return c.rpc.trigger(method, tree)
 }

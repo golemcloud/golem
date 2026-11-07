@@ -19,12 +19,8 @@
 // symmetric by construction. Reuses the host `WasmRpc` resource (no decorator
 // `Type.Type`/metadata).
 
-import type {
-  Datetime,
-  CancellationToken,
-  InvocationMetadata,
-  CancelableScheduledInvocationReceipt,
-} from 'golem:agent/host@2.0.0';
+import type { Datetime, CancellationToken } from 'golem:agent/host@2.0.0';
+import type { CancelableScheduledInvocationReceipt, InvocationMetadata } from './invocationId';
 import {
   encodeChild,
   v,

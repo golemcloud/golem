@@ -105,13 +105,13 @@ if err != nil {
 	}
 	panic(err)
 }
-fmt.Println(client.AgentID(), total, invocation.IdempotencyKey)
+fmt.Println(client.AgentID(), total, invocation.InvocationID)
 ```
 
 - `Get` takes the constructor arguments by name and creates the agent if it does not exist; `reflection.WithPhantomID(uuid)` addresses a phantom instance and `NewPhantom` allocates one. `Bind(agentID)` addresses an existing id of this type.
 - `reflection.WithConfigJSON(path, value)` overrides one declared configuration value at creation, as canonical JSON (`reflection.WithConfigValue(path, schema.SchemaValue)` takes a schema-model value); `Get`, `NewPhantom` and `Bind` accept it. Undeclared paths, secrets and invalid values are refused before anything is sent. An agent that already exists keeps the configuration it was created with.
-- `Trigger` and `Schedule` return the invocation's `golem.InvocationID` (agent id and idempotency key) — for an ephemeral agent, the only record of which instance ran. `Call` returns it as a `*golem.InvocationID`, which is nil when Golem rejected the call; the error then says why.
-- `CallAsync` returns a `*reflection.PendingCall`: its `ID` is known at once, `Get()` returns the result (`MustGet()` panics on an error, and a second `Get` returns the same result), and `Cancel()` stops waiting (the call may already have run; `Get` then reports `golem.ErrCallCancelled`). It behaves like the `*golem.Future` that a typed `CallAsync` returns. A scheduled call is cancelled through the `*golem.ScheduledInvocation` that `Schedule` returns.
+- `Trigger` returns the invocation's `golem.InvocationMetadata`, and the `*golem.ScheduledInvocation` that `Schedule` returns holds it as `Metadata`. `AgentID` names the agent that runs the invocation — for an ephemeral agent, the only record of which instance ran — and `InvocationID` is a `golem.InvocationID`, whose `String()` is `<agent-id>.<uuid>`; `golem.ParseInvocationID` reads that form back. `Call` returns the metadata as a `*golem.InvocationMetadata`, which is nil when Golem rejected the call; the error then says why.
+- `CallAsync` returns a `*reflection.PendingCall`: its `Metadata` is known at once, `Get()` returns the result (`MustGet()` panics on an error, and a second `Get` returns the same result), and `Cancel()` stops waiting (the call may already have run; `Get` then reports `golem.ErrCallCancelled`). It behaves like the `*golem.Future` that a typed `CallAsync` returns. A scheduled call is cancelled through the `*golem.ScheduledInvocation` that `Schedule` returns.
 - Missing, unexpected or invalid arguments fail with `*schema.ValidationError`, listing every problem, before anything is sent.
 - Remote failures are `*golem.RemoteCallError`; for a remote agent error, its `Cause` is a `*golem.AgentError`.
 

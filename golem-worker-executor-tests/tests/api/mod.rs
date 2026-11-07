@@ -8168,7 +8168,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
                 match response.response {
                     Some(invocation_response::Response::Accepted(acceptance)) => {
                         assert_eq!(acceptance.idempotency_key, Some(key.clone().into()));
-                        assert_eq!(acceptance.callee_fingerprint, Some(fingerprint.0.into()));
+                        assert_eq!(acceptance.callee_fingerprint, None);
                         accepted = true;
                     }
                     Some(invocation_response::Response::Rejected(error)) => {

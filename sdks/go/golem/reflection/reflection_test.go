@@ -278,7 +278,13 @@ type fakeRPC struct {
 	scope     witTypes.Option[*types.PermissionCard]
 }
 
-var fakeID = golem.InvocationID{AgentID: "Greeter(\"ada\")", IdempotencyKey: "k1"}
+var fakeID = golem.InvocationMetadata{
+	AgentID: "Greeter(\"ada\")",
+	InvocationID: golem.InvocationID{
+		AgentID: "Greeter(\"ada\")",
+		UUID:    golem.UUID{0x0b, 0x9f, 0x3d, 0x9e, 0x5f, 0x43, 0x4c, 0x3a, 0x9e, 0x7c, 0x0d, 0x6f, 0x1f, 0x2a, 0x3b, 0x4c},
+	},
+}
 
 func (f *fakeRPC) start(method string, _ types.SchemaValueTree, scope witTypes.Option[*types.PermissionCard]) (pendingRPC, error) {
 	f.gotMethod, f.gotForm, f.scope = method, "call", scope
@@ -287,7 +293,7 @@ func (f *fakeRPC) start(method string, _ types.SchemaValueTree, scope witTypes.O
 		id = nil
 	}
 	return pendingRPC{
-		id: id,
+		metadata: id,
 		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
 			if !f.has {
 				return witTypes.None[types.SchemaValueTree](), f.err
@@ -298,14 +304,14 @@ func (f *fakeRPC) start(method string, _ types.SchemaValueTree, scope witTypes.O
 	}, nil
 }
 
-func (f *fakeRPC) trigger(method string, _ types.SchemaValueTree) (golem.InvocationID, error) {
+func (f *fakeRPC) trigger(method string, _ types.SchemaValueTree) (golem.InvocationMetadata, error) {
 	f.gotMethod, f.gotForm = method, "trigger"
 	return fakeID, f.err
 }
 
 func (f *fakeRPC) schedule(_ time.Time, method string, _ types.SchemaValueTree) (*golem.ScheduledInvocation, error) {
 	f.gotMethod, f.gotForm = method, "schedule"
-	return &golem.ScheduledInvocation{ID: fakeID}, f.err
+	return &golem.ScheduledInvocation{Metadata: fakeID}, f.err
 }
 
 func greetResult(t *testing.T, r AgentType, value string) types.SchemaValueTree {
@@ -336,7 +342,7 @@ func TestReflectedClientCallsAndDecodes(t *testing.T) {
 		t.Errorf("Trigger: %v %q %+v", err, rpc.gotForm, triggered)
 	}
 	sched, err := client.Schedule(time.Now(), "greet", map[string]any{"greeting": "hi", "times": 1})
-	if err != nil || rpc.gotForm != "schedule" || sched.ID != fakeID {
+	if err != nil || rpc.gotForm != "schedule" || sched.Metadata != fakeID {
 		t.Errorf("Schedule: %v %q %+v", err, rpc.gotForm, sched)
 	}
 }
@@ -538,7 +544,7 @@ func TestAPendingCallIsCancelledOrAwaited(t *testing.T) {
 	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
 
 	p, err := client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
-	if err != nil || p.ID == nil || *p.ID != fakeID {
+	if err != nil || p.Metadata == nil || *p.Metadata != fakeID {
 		t.Fatalf("CallAsync gave %+v, %v", p, err)
 	}
 	if got, err := p.Get(); got != "hi" || err != nil {
@@ -565,8 +571,8 @@ func TestARejectedCallHasNoIdentity(t *testing.T) {
 	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
 
 	p, err := client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
-	if err != nil || p.ID != nil {
-		t.Fatalf("CallAsync gave id %v, %v; want no id and no error", p.ID, err)
+	if err != nil || p.Metadata != nil {
+		t.Fatalf("CallAsync gave metadata %v, %v; want no metadata and no error", p.Metadata, err)
 	}
 	if _, err := p.Get(); !errors.Is(err, denied) {
 		t.Errorf("awaiting a rejected call gave %v, want the rejection", err)

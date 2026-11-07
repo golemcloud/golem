@@ -58,7 +58,10 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
       val invoker   = new RecordingRpcInvoker
       val resolved  = resolvedAgent(invoker, agentType)
       val method    = findMethod[RpcParityAgent, SampleInput, SampleOutput](agentType, "rpcCall")
-      val started   = InvocationMetadata("RpcParityAgent(\"t\")", "key-1")
+      val started   = InvocationMetadata(
+        "RpcParityAgent(\"t\")",
+        golem.InvocationId("RpcParityAgent(\"t\")", java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
+      )
 
       invoker.enqueueInvokeResult(Left("denied: missing permission"))
       invoker.enqueueInvokeResult(Left("denied: missing permission"))

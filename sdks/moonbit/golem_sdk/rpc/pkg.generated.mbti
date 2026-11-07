@@ -8,12 +8,16 @@ import {
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
   "golemcloud/golem_sdk/permissions",
   "golemcloud/golem_sdk/schema",
+  "moonbitlang/core/debug",
 }
 
 // Values
 pub fn[T : @schema.IntoSchema] typed_config_value(Array[String], T) -> @common.TypedAgentConfigValue raise @common.AgentError
 
 // Errors
+pub suberror InvocationIdParseError {
+  InvocationIdParseError(String)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct AgentClient {
@@ -46,9 +50,21 @@ pub(all) struct CancelableScheduledInvocationReceipt {
   cancellation_token : @host.CancellationToken
 }
 
+pub struct InvocationId {
+  agent_id : String
+  uuid : @schema.Uuid
+} derive(Eq, Hash, @debug.Debug)
+pub fn InvocationId::agent_id(Self) -> String
+pub fn InvocationId::from_host(@host.InvocationMetadata) -> Self
+pub fn InvocationId::new(String, @schema.Uuid) -> Self
+pub fn InvocationId::parse(String) -> Self raise InvocationIdParseError
+pub fn InvocationId::to_string(Self) -> String
+pub fn InvocationId::uuid(Self) -> @schema.Uuid
+pub impl Show for InvocationId
+
 pub(all) struct InvocationMetadata {
   agent_id : String
-  idempotency_key : String
+  invocation_id : InvocationId
 }
 
 pub(all) struct InvocationResult[T] {

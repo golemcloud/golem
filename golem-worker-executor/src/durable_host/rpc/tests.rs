@@ -1067,8 +1067,15 @@ fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
     );
     let metadata = invocation_metadata(&invocation_id);
     assert_eq!(metadata.agent_id, first.agent_id.agent_id);
-    assert_eq!(metadata.idempotency_key, invocation_id.uuid().to_string());
-    assert_ne!(metadata.idempotency_key, first_key.value);
+    let golem_schema::schema::wit::wire::InvocationOwner::Agent(owner) =
+        metadata.invocation_id.owner
+    else {
+        panic!("RPC invocation metadata must name the target agent as the owner");
+    };
+    assert_eq!(AgentId::from(owner), first.agent_id());
+    let id = Uuid::from(metadata.invocation_id.id);
+    assert_eq!(id, invocation_id.uuid());
+    assert_ne!(id.to_string(), first_key.value);
 }
 
 #[test]
@@ -1118,8 +1125,8 @@ fn final_rpc_metadata_uses_recorded_preparation_and_schedule_receipts() {
     let final_id = key.finalize(target.clone(), preparation.result.unwrap(), "run");
     let replayed_id = key.finalize(target.clone(), replayed.result.unwrap(), "run");
     assert_eq!(
-        invocation_metadata(&final_id).idempotency_key,
-        invocation_metadata(&replayed_id).idempotency_key
+        Uuid::from(invocation_metadata(&final_id).invocation_id.id),
+        Uuid::from(invocation_metadata(&replayed_id).invocation_id.id)
     );
     assert_ne!(
         final_id,
@@ -1137,8 +1144,12 @@ fn final_rpc_metadata_uses_recorded_preparation_and_schedule_receipts() {
         desert_rust::deserialize(&bytes).unwrap();
     assert_eq!(replayed.invocation_id, final_id);
     assert_eq!(
-        invocation_metadata(&replayed.invocation_id).idempotency_key,
-        final_id.uuid().to_string()
+        Uuid::from(
+            invocation_metadata(&replayed.invocation_id)
+                .invocation_id
+                .id
+        ),
+        final_id.uuid()
     );
 }
 

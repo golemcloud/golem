@@ -11430,7 +11430,7 @@ async fn ts_ephemeral_final_identity_cannot_be_reused(
     let [
         value,
         final_agent_id,
-        idempotency_key,
+        invocation_id,
         category,
         error_tag,
         details,
@@ -11440,14 +11440,8 @@ async fn ts_ephemeral_final_identity_cannot_be_reused(
     };
 
     assert_eq!(value, &SchemaValue::String("captured".to_string()));
-    assert!(
-        matches!(final_agent_id, SchemaValue::String(value) if !value.is_empty()),
-        "final ephemeral agent ID must be non-empty"
-    );
-    assert!(
-        matches!(idempotency_key, SchemaValue::String(value) if !value.is_empty()),
-        "ephemeral invocation idempotency key must be non-empty"
-    );
+    assert_names_the_capture_invocation(&executor, &component, final_agent_id, invocation_id)
+        .await?;
     assert_eq!(
         category,
         &SchemaValue::String("remote-agent-error".to_string())
@@ -11563,21 +11557,57 @@ async fn ts_reflected_ephemeral_invocation_returns_final_metadata(
     let SchemaValue::Record { fields } = report else {
         panic!("expected a reflected ephemeral report record");
     };
-    let [value, final_agent_id, idempotency_key, proxy_has_agent_id] = fields.as_slice() else {
+    let [value, final_agent_id, invocation_id, proxy_has_agent_id] = fields.as_slice() else {
         panic!("expected four fields in the reflected ephemeral report");
     };
 
     assert_eq!(value, &SchemaValue::String("reflected".to_string()));
-    assert!(
-        matches!(final_agent_id, SchemaValue::String(value) if !value.is_empty()),
-        "final reflected ephemeral agent ID must be non-empty"
-    );
-    assert!(
-        matches!(idempotency_key, SchemaValue::String(value) if !value.is_empty()),
-        "reflected ephemeral idempotency key must be non-empty"
-    );
     assert_eq!(proxy_has_agent_id, &SchemaValue::Bool(false));
+    assert_names_the_capture_invocation(&executor, &component, final_agent_id, invocation_id)
+        .await?;
 
+    Ok(())
+}
+
+/// Asserts that an ephemeral call's reported metadata names the final agent and its only started
+/// `capture` invocation, in the `<agent-id>.<uuid>` text form.
+async fn assert_names_the_capture_invocation(
+    executor: &impl TestDsl,
+    component: &ComponentDto,
+    final_agent_id: &SchemaValue,
+    invocation_id: &SchemaValue,
+) -> anyhow::Result<()> {
+    let SchemaValue::String(final_agent_id) = final_agent_id else {
+        panic!("expected the final ephemeral agent ID as a string");
+    };
+    let final_agent = AgentId {
+        component_id: component.id,
+        agent_id: final_agent_id.clone(),
+    };
+    let capture_invocation_ids: Vec<SchemaValue> = executor
+        .get_oplog(&final_agent, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(call)
+                    if call.method_name == "capture" =>
+                {
+                    Some(SchemaValue::String(format!(
+                        "{final_agent_id}.{}",
+                        call.invocation_id
+                    )))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        capture_invocation_ids,
+        vec![invocation_id.clone()],
+        "the ephemeral invocation metadata must name the callee's capture invocation"
+    );
     Ok(())
 }
 

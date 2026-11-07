@@ -130,7 +130,7 @@ agent.Handle(worker.RunReport, func(_ *golem.Context[state], in worker.RunReport
 })
 ```
 
-`Trigger` returns a `golem.InvocationID` (and an error if the invocation could not be enqueued) and does not wait; a failure after the invocation is accepted is not reported at the trigger site — the worker signals completion (or failure) through its promise.
+`Trigger` returns a `golem.InvocationMetadata`, whose `InvocationID` identifies the invocation (and an error if the invocation could not be enqueued). It does not wait; a failure after the invocation is accepted is not reported at the trigger site — the worker signals completion (or failure) through its promise.
 
 ## Approach 3: `golem.ForkSelf`
 
@@ -159,7 +159,7 @@ Fork in a loop for N-way fan-out: each iteration's copy takes slice `i` and retu
 |----------|------------------------|----------------------|
 | Short calls, want results inline | ✅ Best fit | Works but heavier |
 | Long-running work, don't hold a call open | ⚠️ Call stays in flight | ✅ Best fit |
-| Need the invocation identity for other work | `Future.ID` (nil if the call was rejected) | `Trigger` returns `InvocationID` |
+| Need the invocation identity for other work | `Future.Metadata` (nil if the call was rejected) | `Trigger` returns `InvocationMetadata` |
 | Per-item error as a value | Return `golem.Result` in the method | Encode outcome in the promise payload |
 | Workers need the current state | Pass it as arguments | Pass it as arguments — or use `golem.ForkSelf`, whose copy inherits it |
 

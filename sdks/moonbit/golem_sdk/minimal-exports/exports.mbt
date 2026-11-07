@@ -37,6 +37,18 @@ pub extern "wasm" fn invoke(_args : Int) -> Int =
   #|(func (param i32) (result i32) unreachable)
 
 ///|
+/// Agent `initialize` and `invoke` take a name string and a schema value tree,
+/// which flatten to five core parameters.
+pub extern "wasm" fn invoke_agent(
+  _name : Int,
+  _name_length : Int,
+  _value_nodes : Int,
+  _value_nodes_length : Int,
+  _root : Int,
+) -> Int =
+  #|(func (param i32 i32 i32 i32 i32) (result i32) unreachable)
+
+///|
 pub extern "wasm" fn definition() -> Int =
   #|(func (result i32) unreachable)
 

@@ -29,7 +29,6 @@ pub async fn invoke_tool_middleware(
   ]?,
   stdout : @streams.ToolOutputWriter?,
   stderr : @streams.ToolOutputWriter?,
-  principal : @common0.Principal,
   wrapped : @underlying.UnderlyingTool,
   background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
@@ -37,7 +36,16 @@ pub async fn invoke_tool_middleware(
     wrapped, background_group,
   )
   @toolMiddleware.invoke_registered_tool_middleware_wire(
-    middleware_name, tool_name, tool_metadata, parameters, command_path, input, stdin,
-    stdout, stderr, principal, underlying,
+    middleware_name,
+    tool_name,
+    tool_metadata,
+    parameters,
+    command_path,
+    input,
+    stdin,
+    stdout,
+    stderr,
+    @invocationContext.caller().immediate,
+    underlying,
   )
 }

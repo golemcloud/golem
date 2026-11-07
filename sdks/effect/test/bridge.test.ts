@@ -4,6 +4,7 @@ import { Effect, Fiber, Layer, Stream } from "effect"
 import * as Bridge from "../src/Bridge.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { RpcClient, type RpcConnection } from "../src/host/RpcClient.js"
+import { hostInvocationMetadata } from "./invocation-metadata.js"
 
 describe("Bridge", () => {
   it.live("keeps resolution and invocation lazy and cancels an interrupted await", () => {
@@ -12,20 +13,20 @@ describe("Bridge", () => {
     let cancels = 0
     let drops = 0
     const connection: RpcConnection = {
-      invokeAndAwait: () => ({ metadata: { agentId: "agent", idempotencyKey: "sync" } }),
-      invoke: () => ({ agentId: "agent", idempotencyKey: "trigger" }),
+      invokeAndAwait: () => ({ metadata: hostInvocationMetadata("agent") }),
+      invoke: () => hostInvocationMetadata("agent"),
       asyncInvokeAndAwait: () => {
         invokes++
         return {
-          metadata: { agentId: "agent", idempotencyKey: "await" },
+          metadata: hostInvocationMetadata("agent"),
           get: () => new Promise(() => undefined),
           cancel: () => cancels++,
           drop: () => drops++,
         }
       },
-      scheduleInvocation: () => ({ metadata: { agentId: "agent", idempotencyKey: "schedule" } }),
+      scheduleInvocation: () => ({ metadata: hostInvocationMetadata("agent") }),
       scheduleCancelableInvocation: () => ({
-        metadata: { agentId: "agent", idempotencyKey: "schedule" },
+        metadata: hostInvocationMetadata("agent"),
         token: { cancel: () => undefined, drop: () => undefined },
       }),
       drop: () => undefined,

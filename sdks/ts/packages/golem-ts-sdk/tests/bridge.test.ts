@@ -16,6 +16,7 @@ import {
   scopeCardFromRaw,
 } from './permissionCardTestSupport';
 import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
+import { hostInvocationMetadata, sdkInvocationMetadata } from './invocationMetadataTestSupport';
 
 const graph = (root: bridge.SchemaType): bridge.SchemaGraph => ({ defs: new Map(), root });
 const streamFailures = [
@@ -757,7 +758,7 @@ describe('public bridge runtime', () => {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('example'),
       future: {
         get: vi.fn().mockResolvedValue({ tag: 'not-a-schema-value' }),
         cancel: vi.fn(),
@@ -826,7 +827,7 @@ describe('public bridge runtime', () => {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('example'),
       future: {
         get: vi.fn().mockRejectedValue(raw),
         cancel: vi.fn(),
@@ -844,12 +845,12 @@ describe('public bridge runtime', () => {
     const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
       scheduleInvocation: ReturnType<typeof vi.fn>;
     };
-    const receipt = { metadata: { agentId: 'example', idempotencyKey: 'scheduled' } };
+    const receipt = { metadata: hostInvocationMetadata('example') };
     rpc.scheduleInvocation.mockReturnValue(receipt);
     const at = { seconds: 1n, nanoseconds: 0 };
 
     const scheduled = remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]));
-    expect(scheduled).toStrictEqual(receipt);
+    expect(scheduled).toStrictEqual({ metadata: sdkInvocationMetadata('example') });
     expect(scheduled).not.toBe(receipt);
     expect(Object.isFrozen(scheduled.metadata)).toBe(true);
     expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
@@ -861,7 +862,7 @@ describe('public bridge runtime', () => {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('example'),
       future: {
         get: vi.fn().mockResolvedValue(undefined),
         cancel: vi.fn(),
@@ -877,7 +878,7 @@ describe('public bridge runtime', () => {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('example'),
       future: {
         get: vi.fn().mockResolvedValue(undefined),
         cancel: vi.fn(),
@@ -1094,7 +1095,10 @@ describe('public bridge runtime', () => {
       const reason = new Error('start failed');
       rpc.asyncInvokeAndAwait.mockImplementation(() => {
         if (fails) throw reason;
-        return { metadata: {}, future: { get: async () => undefined, cancel: vi.fn() } };
+        return {
+          metadata: hostInvocationMetadata('example'),
+          future: { get: async () => undefined, cancel: vi.fn() },
+        };
       });
       const pending = remote.invokeAndAwait('forward', params);
       if (fails) {
@@ -1138,7 +1142,7 @@ describe('public bridge runtime', () => {
     const cancel = vi.fn();
     const get = vi.fn().mockReturnValue(new Promise<never>(() => {}));
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('example'),
       future: {
         get,
         cancel,

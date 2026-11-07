@@ -208,10 +208,11 @@ sealed trait JsExternalSpanData extends js.Object {
 
 @js.native
 sealed trait JsErrorParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def kind: String          = js.native
-  def error: String         = js.native
-  def retryFrom: js.BigInt  = js.native
+  def timestamp: JsDatetime            = js.native
+  def kind: String                     = js.native
+  def invocationId: js.UndefOr[String] = js.native
+  def error: String                    = js.native
+  def retryFrom: js.BigInt             = js.native
 }
 
 // --- OplogRegion ---
@@ -258,7 +259,7 @@ sealed trait JsEndRemoteWriteParameters extends js.Object {
 
 @js.native
 sealed trait JsAgentInitializationParameters extends js.Object {
-  def idempotencyKey: String                            = js.native
+  def invocationId: String                              = js.native
   def constructorParameters: JsTypedSchemaValue         = js.native
   def traceId: String                                   = js.native
   def traceStates: js.Array[String]                     = js.native
@@ -269,7 +270,7 @@ sealed trait JsAgentInitializationParameters extends js.Object {
 
 @js.native
 sealed trait JsAgentMethodInvocationParameters extends js.Object {
-  def idempotencyKey: String                            = js.native
+  def invocationId: String                              = js.native
   def methodName: String                                = js.native
   def functionInput: JsTypedSchemaValue                 = js.native
   def traceId: String                                   = js.native
@@ -288,7 +289,7 @@ sealed trait JsLoadSnapshotParameters extends js.Object {
 
 @js.native
 sealed trait JsProcessOplogEntriesParameters extends js.Object {
-  def idempotencyKey: String = js.native
+  def invocationId: String = js.native
 }
 
 // --- ManualUpdateParameters ---
@@ -394,6 +395,7 @@ sealed trait JsAgentInvocationStartedParameters extends js.Object {
 @js.native
 sealed trait JsAgentInvocationFinishedParameters extends js.Object {
   def timestamp: JsDatetime           = js.native
+  def invocationId: String            = js.native
   def result: JsAgentInvocationResult = js.native
   def consumedFuel: js.BigInt         = js.native
   def componentRevision: js.BigInt    = js.native
@@ -548,8 +550,8 @@ sealed trait JsRevertParameters extends js.Object {
 
 @js.native
 sealed trait JsCancelPendingInvocationParameters extends js.Object {
-  def timestamp: JsDatetime  = js.native
-  def idempotencyKey: String = js.native
+  def timestamp: JsDatetime = js.native
+  def invocationId: String  = js.native
 }
 
 // --- BeginRemoteTransactionParameters ---

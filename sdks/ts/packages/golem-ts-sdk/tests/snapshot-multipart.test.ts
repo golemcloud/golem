@@ -120,7 +120,12 @@ describe('explicit multipart snapshots', () => {
         (globalThis as { currentAgentId?: string }).currentAgentId =
           `PromiseSnapshot(${JSON.stringify(input)})`;
         const initial = await register();
-        await initial.golemAgent200Guest.initialize('PromiseSnapshot', input, principal);
+        const invocationContext = await import('golem:agent/invocation-context@2.0.0');
+        vi.mocked(invocationContext.caller).mockReturnValueOnce({
+          original: principal,
+          immediate: principal,
+        });
+        await initial.golemAgent200Guest.initialize('PromiseSnapshot', input);
         const saved = await initial.saveSnapshot.save();
         expect(saved.mimeType).toMatch(
           mode === 'json' ? /^application\/json$/ : /^multipart\/mixed;/,
@@ -129,9 +134,7 @@ describe('explicit multipart snapshots', () => {
         const restored = await register();
         await restored.loadSnapshot.load(saved);
         expect(initCalls).toBe(1);
-        await expect(
-          restored.golemAgent200Guest.invoke('check', input, principal),
-        ).resolves.toBeUndefined();
+        await expect(restored.golemAgent200Guest.invoke('check', input)).resolves.toBeUndefined();
         const resaved = await restored.saveSnapshot.save();
         const readState = (snapshot: typeof saved) => {
           const body =
@@ -655,7 +658,7 @@ describe('explicit multipart snapshots', () => {
         (globalThis as { currentAgentId?: string }).currentAgentId =
           `DollarDbParts(${JSON.stringify(input)})`;
         const initial = await register();
-        await initial.golemAgent200Guest.initialize('DollarDbParts', input, { tag: 'anonymous' });
+        await initial.golemAgent200Guest.initialize('DollarDbParts', input);
         const snapshot = await initial.saveSnapshot.save();
         const parts = decodeMultipart(snapshot.payload, extractBoundary(snapshot.mimeType)!);
         expect(parts[1].name).toBe(`db:${fieldName}`);

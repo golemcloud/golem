@@ -112,8 +112,27 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Error],
         e.params.kind == OplogErrorKind.Recovery,
+        e.params.invocationId.isEmpty,
         e.params.error == "something failed",
         e.params.retryFrom == BigInt(5)
+      )
+    },
+    test("Error with invocation ID from dynamic") {
+      val raw = wrapEntry(
+        "error",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          kind = "invocation",
+          invocationId = "Counter(\"a\").3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9",
+          error = "boom",
+          retryFrom = js.BigInt("6")
+        )
+      )
+      val e = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.Error]
+      assertTrue(
+        e.params.kind == OplogErrorKind.Invocation,
+        e.params.invocationId.contains("Counter(\"a\").3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"),
+        e.params.error == "boom"
       )
     },
     test("EndRemoteWrite from dynamic") {
@@ -149,13 +168,13 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "cancel-invocation",
         js.Dynamic.literal(
           timestamp = ts(),
-          idempotencyKey = "idem-123"
+          invocationId = "idem-123"
         )
       )
       val parsed = OplogEntry.fromJs(raw)
       assertTrue(
         parsed.isInstanceOf[OplogEntry.CancelPendingInvocation],
-        parsed.asInstanceOf[OplogEntry.CancelPendingInvocation].params.idempotencyKey == "idem-123"
+        parsed.asInstanceOf[OplogEntry.CancelPendingInvocation].params.invocationId == "idem-123"
       )
     },
     test("BeginRemoteTransaction from dynamic") {
@@ -325,6 +344,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "agent-invocation-finished",
         js.Dynamic.literal(
           timestamp = ts(),
+          invocationId = "inv-1",
           result = js.Dynamic.literal(
             tag = "agent-method",
             `val` = js.Dynamic.literal(output = sampleTypedJs)
@@ -339,7 +359,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.isInstanceOf[OplogEntry.AgentInvocationFinished],
         c.params.response.isDefined == true,
         c.params.response.map(_.value).contains(SchemaValue.S32Value(42)),
-        c.params.consumedFuel == 1000L
+        c.params.consumedFuel == 1000L,
+        c.params.invocationId == "inv-1"
       )
     },
     test("AgentInvocationFinished without response from dynamic (manual-update result)") {
@@ -347,6 +368,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "agent-invocation-finished",
         js.Dynamic.literal(
           timestamp = ts(),
+          invocationId = "inv-2",
           result = js.Dynamic.literal(tag = "manual-update"),
           consumedFuel = js.BigInt("0"),
           componentRevision = js.BigInt("1")
@@ -837,7 +859,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           invocation = js.Dynamic.literal(
             tag = "exported-function",
             `val` = js.Dynamic.literal(
-              idempotencyKey = "idem-1",
+              invocationId = "idem-1",
               methodName = "increment",
               functionInput = sampleTypedJs,
               traceId = "trace-1",
@@ -860,6 +882,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           ),
         inv.isInstanceOf[AgentInvocation.ExportedFunction],
         inv.asInstanceOf[AgentInvocation.ExportedFunction].params.functionName == "increment",
+        inv.asInstanceOf[AgentInvocation.ExportedFunction].params.invocationId == "idem-1",
         inv
           .asInstanceOf[AgentInvocation.ExportedFunction]
           .params

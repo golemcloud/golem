@@ -68,7 +68,7 @@ type witRPC struct {
 func (w witRPC) start(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (pendingRPC, error) {
 	inv := w.rpc.AsyncInvokeAndAwait(method, input, scopeCard)
 	return pendingRPC{
-		id: asyncInvocationID(inv.Metadata),
+		metadata: asyncInvocationMetadata(inv.Metadata),
 		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
 			res := inv.Future.Get()
 			inv.Future.Drop()
@@ -84,12 +84,12 @@ func (w witRPC) start(method string, input types.SchemaValueTree, scopeCard witT
 	}, nil
 }
 
-func (w witRPC) trigger(method string, input types.SchemaValueTree) (golem.InvocationID, error) {
+func (w witRPC) trigger(method string, input types.SchemaValueTree) (golem.InvocationMetadata, error) {
 	res := w.rpc.Invoke(method, input, noScopeCard())
 	if res.IsErr() {
-		return golem.InvocationID{}, link.RemoteCallError(w.target, method, res.Err())
+		return golem.InvocationMetadata{}, link.RemoteCallError(w.target, method, res.Err())
 	}
-	return invocationIDFrom(res.Ok()), nil
+	return invocationMetadataFrom(res.Ok()), nil
 }
 
 func (w witRPC) schedule(at time.Time, method string, input types.SchemaValueTree) (*golem.ScheduledInvocation, error) {
@@ -98,7 +98,7 @@ func (w witRPC) schedule(at time.Time, method string, input types.SchemaValueTre
 		return nil, link.RemoteCallError(w.target, method, res.Err())
 	}
 	receipt := res.Ok()
-	return link.ScheduledInvocation(receipt.Metadata.AgentId, receipt.Metadata.IdempotencyKey, receipt.CancellationToken).(*golem.ScheduledInvocation), nil
+	return link.ScheduledInvocation(receipt.Metadata, receipt.CancellationToken).(*golem.ScheduledInvocation), nil
 }
 
 func (r AgentType) hostGet(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
@@ -235,18 +235,19 @@ func noScopeCard() witTypes.Option[*types.PermissionCard] {
 	return witTypes.None[*types.PermissionCard]()
 }
 
-func invocationIDFrom(m host.InvocationMetadata) golem.InvocationID {
-	return golem.InvocationID{AgentID: m.AgentId, IdempotencyKey: m.IdempotencyKey}
+func invocationMetadataFrom(m host.InvocationMetadata) golem.InvocationMetadata {
+	return link.InvocationMetadata(m).(golem.InvocationMetadata)
 }
 
-// asyncInvocationID is the identity of an asynchronous invocation, or nil when
-// the host rejected the call before it started; its future reports the rejection.
-func asyncInvocationID(m witTypes.Option[host.InvocationMetadata]) *golem.InvocationID {
+// asyncInvocationMetadata is the identity of an asynchronous invocation, or nil
+// when the host rejected the call before it started; its future reports the
+// rejection.
+func asyncInvocationMetadata(m witTypes.Option[host.InvocationMetadata]) *golem.InvocationMetadata {
 	if m.IsNone() {
 		return nil
 	}
-	id := invocationIDFrom(m.Some())
-	return &id
+	metadata := invocationMetadataFrom(m.Some())
+	return &metadata
 }
 
 func instantFrom(t time.Time) clock.Instant {

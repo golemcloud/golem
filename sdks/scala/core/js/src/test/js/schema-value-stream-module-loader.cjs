@@ -116,6 +116,13 @@ Module._load = function (request) {
       },
     };
   }
+  if (request === "golem:agent/invocation-context@2.0.0") {
+    const anonymousCaller = () => ({ original: { tag: "anonymous" }, immediate: { tag: "anonymous" } });
+    return {
+      invocationId: missingHostImport("invocationId"),
+      caller: (...args) => (globalThis.__golemScalaTestHost?.caller ?? anonymousCaller)(...args),
+    };
+  }
   if (request === "golem:tool/host@0.1.0") {
     return {
       createStdin: missingHostImport("createStdin"),

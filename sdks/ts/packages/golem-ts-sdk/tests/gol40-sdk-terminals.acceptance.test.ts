@@ -419,7 +419,6 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         undefined,
         stdout,
         stderr,
-        { tag: 'anonymous' },
       );
       if (kind === 'success' || kind === 'cancelled-success') {
         const terminal = await invocation;
@@ -486,9 +485,7 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         },
       });
     const outcome = tool
-      .invoke('blocked-sibling', [], emptyInput(), undefined, stdout, stderr, {
-        tag: 'anonymous',
-      })
+      .invoke('blocked-sibling', [], emptyInput(), undefined, stdout, stderr)
       .then(
         (value) => ({ status: 'fulfilled', value }),
         (reason) => ({ status: 'rejected', reason }),
@@ -815,9 +812,7 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
 
     let ownerOutcome = 'pending';
     const terminal = await tool
-      .invoke('gol40-terminal-provider-acceptance', [], input, stdin, stdout, stderr, {
-        tag: 'anonymous',
-      })
+      .invoke('gol40-terminal-provider-acceptance', [], input, stdin, stdout, stderr)
       .then((result) => {
         ownerOutcome = 'completed';
         return result;

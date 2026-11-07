@@ -90,7 +90,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
         validate_cancellation_token_owner(entry, &current_agent)?;
         let recipient = entry.recipient.clone();
         let invocation_key =
-            golem_common::model::IdempotencyKey::new(entry.metadata.idempotency_key.clone());
+            golem_common::model::IdempotencyKey::from_uuid(entry.metadata.invocation_id.id.into());
         let serialized_schedule_id: SerializableScheduleId = deserialize(&entry.schedule_id)
             .map_err(|err| {
                 anyhow::Error::from(WorkerExecutorError::runtime(format!(

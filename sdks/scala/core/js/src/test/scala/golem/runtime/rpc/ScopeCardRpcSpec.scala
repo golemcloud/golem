@@ -32,7 +32,13 @@ object ScopeCardRpcSpec extends ZIOSpecDefault {
     val scopeCards = scala.collection.mutable.ListBuffer.empty[js.Any]
 
     def install(): Unit = {
-      val metadata                                             = js.Dynamic.literal(agentId = "Target(\"a\")", idempotencyKey = "k")
+      val metadata = js.Dynamic.literal(
+        agentId = "Target(\"a\")",
+        invocationId = js.Dynamic.literal(
+          owner = js.Dynamic.literal(tag = "agent", `val` = js.Dynamic.literal()),
+          id = js.Dynamic.literal(highBits = js.BigInt("1"), lowBits = js.BigInt("2"))
+        )
+      )
       val record: js.Function3[String, js.Any, js.Any, js.Any] = (_, _, scopeCard) => {
         scopeCards += scopeCard
         ()

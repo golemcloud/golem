@@ -845,6 +845,49 @@ type AgentId struct {
 	AgentId string
 }
 
+const (
+	// An agent. A tool invocation is owned by the agent of its external-tool owner.
+	InvocationOwnerAgent uint8 = 0
+	// A tool. The runtime does not produce this case yet.
+	InvocationOwnerTool uint8 = 1
+)
+
+// The owner whose oplog records an invocation
+type InvocationOwner struct {
+	tag   uint8
+	value any
+}
+
+func (self InvocationOwner) Tag() uint8 {
+	return self.tag
+}
+
+func (self InvocationOwner) Agent() AgentId {
+	if self.tag != InvocationOwnerAgent {
+		panic("tag mismatch")
+	}
+	return self.value.(AgentId)
+}
+func (self InvocationOwner) Tool() string {
+	if self.tag != InvocationOwnerTool {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+
+func MakeInvocationOwnerAgent(value AgentId) InvocationOwner {
+	return InvocationOwner{InvocationOwnerAgent, value}
+}
+func MakeInvocationOwnerTool(value string) InvocationOwner {
+	return InvocationOwner{InvocationOwnerTool, value}
+}
+
+// Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's `agent-id` string without the component.
+type InvocationId struct {
+	Owner InvocationOwner
+	Id    Uuid
+}
+
 // Represents a Golem account
 type AccountId struct {
 	Uuid Uuid

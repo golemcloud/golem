@@ -255,7 +255,7 @@ pub trait ScheduledInvocationClient {
 struct ScheduledInvocationClientImpl {
     _name: String,
     global: u64,
-    token: Option<golem_rust::golem_agentic::golem::agent::host::CancellationToken>,
+    token: Option<golem_rust::CancellationToken>,
 }
 
 #[agent_implementation]
@@ -1999,7 +1999,9 @@ impl RpcAuthTester for RpcAuthTesterImpl {
             result.future.get().await,
             Err(RpcError::Denied(_))
         ));
-        result.metadata.map(|metadata| metadata.idempotency_key)
+        result
+            .metadata
+            .map(|metadata| golem_rust::Uuid::from(metadata.invocation_id.id).to_string())
     }
 
     fn invalid_async_call_without_get(&self) -> Option<String> {
@@ -2014,7 +2016,9 @@ impl RpcAuthTester for RpcAuthTesterImpl {
             encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap(),
             None,
         );
-        result.metadata.map(|metadata| metadata.idempotency_key)
+        result
+            .metadata
+            .map(|metadata| golem_rust::Uuid::from(metadata.invocation_id.id).to_string())
     }
 
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome {

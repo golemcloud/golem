@@ -1020,7 +1020,7 @@ impl TestReflectedTransport {
         Invocation {
             metadata: InvocationMetadata {
                 agent_id: ParsedAgentId::new("test-agent"),
-                idempotency_key: "test-key".to_string(),
+                invocation_id: InvocationId::new(ParsedAgentId::new("test-agent"), Uuid::nil()),
             },
             value: self.value.clone(),
         }
@@ -1386,10 +1386,76 @@ impl DynamicAgentMethod {
     }
 }
 
+/// Identifies one invocation. Its text form is `<agent-id>.<uuid>`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct InvocationId {
+    agent_id: ParsedAgentId,
+    uuid: Uuid,
+}
+
+impl InvocationId {
+    pub fn new(agent_id: ParsedAgentId, uuid: Uuid) -> Self {
+        Self { agent_id, uuid }
+    }
+
+    pub fn agent_id(&self) -> &ParsedAgentId {
+        &self.agent_id
+    }
+
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+}
+
+impl Display for InvocationId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.agent_id, self.uuid)
+    }
+}
+
+impl std::str::FromStr for InvocationId {
+    type Err = String;
+
+    /// Splits off the last 37 characters (`.` and the UUID), because the agent ID can contain `.`.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let invalid = || format!("invalid invocation id: expected <agent-id>.<uuid>, got {value}");
+        let suffix_start = value.len().checked_sub(37).ok_or_else(invalid)?;
+        let agent_id = value.get(..suffix_start).ok_or_else(invalid)?;
+        let uuid = value
+            .get(suffix_start..)
+            .and_then(|suffix| suffix.strip_prefix('.'))
+            .and_then(|uuid| Uuid::parse_str(uuid).ok())
+            .ok_or_else(invalid)?;
+        if agent_id.is_empty() {
+            return Err(invalid());
+        }
+        Ok(Self::new(ParsedAgentId::new(agent_id), uuid))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct InvocationMetadata {
     pub agent_id: ParsedAgentId,
-    pub idempotency_key: String,
+    pub invocation_id: InvocationId,
+}
+
+impl From<crate::golem_agentic::golem::agent::host::InvocationMetadata> for InvocationMetadata {
+    fn from(metadata: crate::golem_agentic::golem::agent::host::InvocationMetadata) -> Self {
+        Self::from_host(metadata.agent_id, metadata.invocation_id)
+    }
+}
+
+impl InvocationMetadata {
+    fn from_host(agent_id: String, invocation_id: crate::schema::wit::wire::InvocationId) -> Self {
+        let agent_id = ParsedAgentId::new(agent_id);
+        Self {
+            invocation_id: InvocationId::new(
+                agent_id.clone(),
+                crate::wire_uuid_to_schema(invocation_id.id),
+            ),
+            agent_id,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1398,13 +1464,31 @@ pub struct Invocation<T> {
     pub value: T,
 }
 
+/// Cancels a scheduled invocation. Generated clients and the reflection API create it from
+/// different host bindings of the same `cancellation-token` resource.
 pub struct CancellationToken {
-    raw: host::CancellationToken,
+    cancel: Box<dyn Fn() + Send + Sync>,
+}
+
+impl From<host::CancellationToken> for CancellationToken {
+    fn from(raw: host::CancellationToken) -> Self {
+        Self {
+            cancel: Box::new(move || raw.cancel()),
+        }
+    }
+}
+
+impl From<crate::golem_agentic::golem::agent::host::CancellationToken> for CancellationToken {
+    fn from(raw: crate::golem_agentic::golem::agent::host::CancellationToken) -> Self {
+        Self {
+            cancel: Box::new(move || raw.cancel()),
+        }
+    }
 }
 
 impl CancellationToken {
     pub fn cancel(&self) {
-        self.raw.cancel();
+        (self.cancel)();
     }
 }
 
@@ -1418,6 +1502,19 @@ impl std::fmt::Debug for CancellationToken {
 pub struct ScheduledInvocation {
     pub metadata: InvocationMetadata,
     pub cancellation_token: CancellationToken,
+}
+
+impl From<crate::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt>
+    for ScheduledInvocation
+{
+    fn from(
+        receipt: crate::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt,
+    ) -> Self {
+        Self {
+            metadata: receipt.metadata.into(),
+            cancellation_token: receipt.cancellation_token.into(),
+        }
+    }
 }
 
 type PendingResult = Result<Invocation<Option<SchemaValue>>, GolemReflectError>;
@@ -1604,9 +1701,8 @@ pub fn start_caller_pending<T: 'static>(
         .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
     let invocation = crate::permissions::__async_invoke_and_await(rpc, method, input, scope_card);
     Ok(CallerPendingInvocation {
-        metadata: invocation.metadata.map(|metadata| InvocationMetadata {
-            agent_id: ParsedAgentId::new(metadata.agent_id),
-            idempotency_key: metadata.idempotency_key,
+        metadata: invocation.metadata.map(|metadata| {
+            InvocationMetadata::from_host(metadata.agent_id, metadata.invocation_id)
         }),
         raw: Rc::new(invocation.future),
         state: RefCell::new(None),
@@ -1740,17 +1836,12 @@ impl RpcTransport {
             .map_err(rpc_error_to_reflect)?;
         Ok(ScheduledInvocation {
             metadata: self.metadata(receipt.metadata),
-            cancellation_token: CancellationToken {
-                raw: receipt.cancellation_token,
-            },
+            cancellation_token: receipt.cancellation_token.into(),
         })
     }
 
     fn metadata(&self, raw: host::InvocationMetadata) -> InvocationMetadata {
-        InvocationMetadata {
-            agent_id: ParsedAgentId::new(raw.agent_id),
-            idempotency_key: raw.idempotency_key,
-        }
+        InvocationMetadata::from_host(raw.agent_id, raw.invocation_id)
     }
 }
 
@@ -1920,6 +2011,31 @@ mod tests {
     use std::collections::HashSet;
     use std::rc::Rc;
     use test_r::test;
+
+    #[test]
+    fn invocation_id_text_form_splits_off_the_trailing_uuid() {
+        let agent_id = super::ParsedAgentId::new(r#"shop.v2/cart("a.b", "x/y")"#);
+        let uuid = crate::Uuid::parse_str("0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c").unwrap();
+        let id = super::InvocationId::new(agent_id.clone(), uuid);
+        let text = id.to_string();
+        assert_eq!(
+            text,
+            r#"shop.v2/cart("a.b", "x/y").0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"#
+        );
+        let parsed: super::InvocationId = text.parse().unwrap();
+        assert_eq!(parsed.agent_id(), &agent_id);
+        assert_eq!(parsed.uuid(), uuid);
+        assert!(
+            ".0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"
+                .parse::<super::InvocationId>()
+                .is_err()
+        );
+        assert!(
+            "agent-0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"
+                .parse::<super::InvocationId>()
+                .is_err()
+        );
+    }
 
     #[test]
     fn schema_ref_packs_validates_and_unpacks_canonical_json() {

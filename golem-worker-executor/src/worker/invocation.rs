@@ -899,16 +899,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, WorkerExecutorError> {
     match call {
         PreparedCall::Initialize {
-            agent_type,
-            input,
-            principal,
+            agent_type, input, ..
         } => {
             let guest = load_agent_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
-                guest
-                    .call_initialize(accessor, agent_type, input, principal)
-                    .await
+                guest.call_initialize(accessor, agent_type, input).await
             })
             .await;
             let consumed_fuel =
@@ -932,8 +928,8 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::Invoke {
             method_name,
             input,
-            principal,
             expected_output,
+            ..
         } => {
             let guest = load_agent_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
@@ -954,9 +950,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                         {
                             runtime.certify_root(activity);
                         }
-                        guest
-                            .call_invoke(accessor, method_name, input, principal)
-                            .await
+                        guest.call_invoke(accessor, method_name, input).await
                     });
                 let result = match runtime {
                     Some(runtime) => {
@@ -971,9 +965,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 classify_guest_call_settlement(store.data().agent_id(), result, None, interrupted)
             } else {
                 run_guest_call_settled(store, async |accessor| {
-                    guest
-                        .call_invoke(accessor, method_name, input, principal)
-                        .await
+                    guest.call_invoke(accessor, method_name, input).await
                 })
                 .await
             };
@@ -1615,12 +1607,12 @@ enum LoweredCall {
     Initialize {
         agent_type: String,
         input: SchemaValue,
-        principal: golem_agent::common::Principal,
+        principal: golem_common::model::agent::Principal,
     },
     Invoke {
         method_name: String,
         input: SchemaValue,
-        principal: golem_agent::common::Principal,
+        principal: golem_common::model::agent::Principal,
         expected_output: Box<ExpectedInvokeOutput>,
     },
     SaveSnapshot,
@@ -1657,12 +1649,12 @@ enum PreparedCall {
     Initialize {
         agent_type: String,
         input: core_wire::SchemaValueTree,
-        principal: golem_agent::common::Principal,
+        principal: golem_common::model::agent::Principal,
     },
     Invoke {
         method_name: String,
         input: core_wire::SchemaValueTree,
-        principal: golem_agent::common::Principal,
+        principal: golem_common::model::agent::Principal,
         expected_output: Box<ExpectedInvokeOutput>,
     },
     SaveSnapshot,
@@ -1699,10 +1691,9 @@ impl PreparedCall {
 
     fn principal(&self) -> Option<golem_common::model::agent::Principal> {
         match self {
-            Self::Initialize { principal, .. } | Self::Invoke { principal, .. } => {
-                Some(principal.clone().into())
-            }
-            Self::ExternalTool { principal, .. } => Some(principal.clone()),
+            Self::Initialize { principal, .. }
+            | Self::Invoke { principal, .. }
+            | Self::ExternalTool { principal, .. } => Some(principal.clone()),
             Self::SaveSnapshot | Self::LoadSnapshot { .. } | Self::ProcessOplogEntries { .. } => {
                 None
             }
@@ -1823,7 +1814,7 @@ pub fn lower_invocation(
                 call: LoweredCall::Initialize {
                     agent_type: agent_type.type_name.to_string(),
                     input,
-                    principal: principal.into(),
+                    principal,
                 },
             })
         }
@@ -1873,7 +1864,7 @@ pub fn lower_invocation(
                 call: LoweredCall::Invoke {
                     method_name,
                     input,
-                    principal: principal.into(),
+                    principal,
                     expected_output,
                 },
             })

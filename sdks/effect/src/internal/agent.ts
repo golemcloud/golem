@@ -11,6 +11,7 @@ import * as AgentIdentity from "../AgentIdentity.js"
 import { AgentHostClient } from "../host/AgentHostClient.js"
 import { EnvironmentClient } from "../host/EnvironmentClient.js"
 import { HostLive, type HostServices } from "../host/HostLive.js"
+import { immediateCaller } from "../host/InvocationContextClient.js"
 import { SqliteHostExtClient } from "../host/SqliteHostExtClient.js"
 import {
   HttpRouteError,
@@ -1137,7 +1138,6 @@ const initAgentInstance = async (
 export const dispatchInitialize = async (
   agentTypeName: string,
   input: CoreTypes.SchemaValueTree,
-  principal: AgentCommon.Principal,
 ): Promise<void> => {
   const compiled = registry.get(agentTypeName)
   if (!compiled) {
@@ -1149,6 +1149,7 @@ export const dispatchInitialize = async (
     throw new Error(`agent already initialized in this container: ${activeAgent.name}`)
   }
 
+  const principal = await runUserPromise(immediateCaller)
   const constructorInput = await decodeConstructorInput(compiled, input)
   const { scope, handlers, snapshot, state } = await initAgentInstance(
     agentTypeName,
@@ -1169,7 +1170,6 @@ export const dispatchInitialize = async (
 export const dispatchInvoke = async (
   methodName: string,
   input: CoreTypes.SchemaValueTree,
-  principal: AgentCommon.Principal,
 ): Promise<CoreTypes.SchemaValueTree | undefined> => {
   if (activeAgent === null) {
     throw new Error(`agent is not initialized; cannot invoke ${methodName}`)
@@ -1206,6 +1206,7 @@ export const dispatchInvoke = async (
     input,
   ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
   if (mc.readOnly === undefined || mc.readOnly.usesPrincipal) {
+    const principal = await runUserPromise(immediateCaller)
     program = program.pipe(Effect.provideService(Principal, principal)) as typeof program
   }
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {

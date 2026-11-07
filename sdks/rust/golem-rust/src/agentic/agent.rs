@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, Principal};
+use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType};
+use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::schema::wit::{direct, wire};
 

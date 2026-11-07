@@ -41,7 +41,7 @@ fn invocation_metadata(
 ) -> InvocationMetadata {
   {
     agent_id: { value: metadata.agent_id, },
-    idempotency_key: metadata.idempotency_key,
+    invocation_id: @rpc.InvocationId::from_host(metadata),
   }
 }
 

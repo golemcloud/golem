@@ -12,6 +12,8 @@ pub fn get(Int, Int) -> Int
 
 pub fn invoke(Int) -> Int
 
+pub fn invoke_agent(Int, Int, Int, Int, Int) -> Int
+
 pub fn load(Int, Int, Int, Int) -> Int
 
 pub fn post_definition(Int) -> Unit

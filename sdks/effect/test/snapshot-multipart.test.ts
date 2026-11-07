@@ -18,6 +18,7 @@ import { v } from "../src/internal/schema-model/model.js"
 import { __setParseAgentIdImpl, __resetParseAgentIdImpl } from "./mocks/golem-agent-host.js"
 import { __setEnvironment, __resetEnvironment } from "./mocks/wasi-cli-environment.js"
 import { __setRestoreDatabaseSync, __resetSqliteExtensions } from "./mocks/node-sqlite.js"
+import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const principal = {
   tag: "oidc",
@@ -164,7 +165,7 @@ describe("explicit multipart snapshots", () => {
   })
 
   it("projects saved state, restores fresh Ref state without initialization, and preserves all parts/principal", async () => {
-    await guest.initialize("MultipartIndex", wire, principal)
+    await withCaller(principal, () => guest.initialize("MultipartIndex", wire))
     const snapshot = await dispatchSaveSnapshot()
     const decoded = decodeEnvelope(snapshot, { tag: "anonymous" })
     expect(decoded.kind).toBe("multipart")
@@ -178,7 +179,7 @@ describe("explicit multipart snapshots", () => {
     expect(restoreCalls).toBe(1)
     expect(methodsCalls).toBe(2)
     expect(restoredBytes).toEqual(bytes)
-    await guest.invoke("ping", wire, principal)
+    await withCaller(principal, () => guest.invoke("ping", wire))
   })
 
   it("round-trips PromiseId and union state without changing binary parts", async () => {
@@ -227,8 +228,8 @@ describe("explicit multipart snapshots", () => {
           }),
       },
     })
-    await guest.initialize("MultipartPromise", wire, principal)
-    await guest.invoke("check", wire, principal)
+    await withCaller(principal, () => guest.initialize("MultipartPromise", wire))
+    await withCaller(principal, () => guest.invoke("check", wire))
     const snapshot = await dispatchSaveSnapshot()
     const decoded = decodeEnvelope(snapshot, { tag: "anonymous" })
     expect(decoded.kind).toBe("multipart")
@@ -237,11 +238,11 @@ describe("explicit multipart snapshots", () => {
     await __resetAgents()
     setLoad("MultipartPromise")
     await dispatchLoadSnapshot(snapshot)
-    await guest.invoke("check", wire, principal)
+    await withCaller(principal, () => guest.invoke("check", wire))
   })
 
   it("always emits multipart for JSON null and an empty part map", async () => {
-    await guest.initialize("MultipartNull", wire, principal)
+    await withCaller(principal, () => guest.initialize("MultipartNull", wire))
     const snapshot = await dispatchSaveSnapshot()
     expect(snapshot.mimeType).toMatch(/^multipart\/mixed;/)
     const decoded = decodeEnvelope(snapshot, principal)
@@ -252,7 +253,7 @@ describe("explicit multipart snapshots", () => {
   })
 
   it("failed restoration installs no active instance or methods", async () => {
-    await guest.initialize("MultipartIndex", wire, principal)
+    await withCaller(principal, () => guest.initialize("MultipartIndex", wire))
     const snapshot = await dispatchSaveSnapshot()
     await __resetAgents()
     setLoad("MultipartIndex")

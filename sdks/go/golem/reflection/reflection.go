@@ -44,7 +44,7 @@ import (
 //	agentType, found := reflection.DiscoverAgentType("Greeter")
 //	if !found { ... }
 //	client, err := agentType.Get(map[string]any{"name": "ada"})
-//	result, id, err := client.Call("greet", map[string]any{"greeting": "hi"})
+//	result, metadata, err := client.Call("greet", map[string]any{"greeting": "hi"})
 //
 // Arguments and results are canonical JSON — ordinary Go values read against
 // the snapshot's schema — because the caller has none of the target's types.
@@ -299,16 +299,16 @@ func (c *AgentClient) WithScopeCard(card golem.ScopeCard) *AgentClient {
 // without a host.
 type agentRPC interface {
 	start(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (pendingRPC, error)
-	trigger(method string, input types.SchemaValueTree) (golem.InvocationID, error)
+	trigger(method string, input types.SchemaValueTree) (golem.InvocationMetadata, error)
 	schedule(at time.Time, method string, input types.SchemaValueTree) (*golem.ScheduledInvocation, error)
 }
 
 // pendingRPC is an invocation in flight: its identity, its outcome, and a way
 // to cancel it.
 type pendingRPC struct {
-	id     *golem.InvocationID
-	wait   func() (witTypes.Option[types.SchemaValueTree], error)
-	cancel func()
+	metadata *golem.InvocationMetadata
+	wait     func() (witTypes.Option[types.SchemaValueTree], error)
+	cancel   func()
 }
 
 // await waits for the invocation's outcome. Only a call the host rejected has
@@ -316,7 +316,7 @@ type pendingRPC struct {
 // without an identity is a protocol error.
 func (p pendingRPC) await(target, method string) (witTypes.Option[types.SchemaValueTree], error) {
 	res, err := p.wait()
-	if err == nil && p.id == nil {
+	if err == nil && p.metadata == nil {
 		if res.IsSome() {
 			engine.ReleaseCardsIn(res.Some().ValueNodes, link.ReleaseCard)
 		}
@@ -330,14 +330,15 @@ func (p pendingRPC) await(target, method string) (witTypes.Option[types.SchemaVa
 
 // PendingCall is a reflected or dynamic invocation in flight.
 type PendingCall[T any] struct {
-	// ID identifies the invocation, available before the result is. It is nil
-	// when the call was rejected before it started; Get returns the rejection.
-	ID     *golem.InvocationID
-	wait   func() (T, error)
-	cancel func()
-	done   bool
-	out    T
-	err    error
+	// Metadata identifies the invocation, available before the result is. It
+	// is nil when the call was rejected before it started; Get returns the
+	// rejection.
+	Metadata *golem.InvocationMetadata
+	wait     func() (T, error)
+	cancel   func()
+	done     bool
+	out      T
+	err      error
 }
 
 // Get waits for the invocation to finish and returns its result, as
@@ -393,13 +394,13 @@ func (c *AgentClient) pack(method string, args map[string]any) (Method, types.Sc
 // canonical JSON (nil when the method returns nothing), together with the
 // invocation's identity, which is nil when the call was rejected before it
 // started.
-func (c *AgentClient) Call(method string, args map[string]any, opts ...CallOpt) (any, *golem.InvocationID, error) {
+func (c *AgentClient) Call(method string, args map[string]any, opts ...CallOpt) (any, *golem.InvocationMetadata, error) {
 	p, err := c.CallAsync(method, args, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
 	out, err := p.Get()
-	return out, p.ID, err
+	return out, p.Metadata, err
 }
 
 // CallAsync invokes a method with named arguments and returns at once; the
@@ -414,7 +415,7 @@ func (c *AgentClient) CallAsync(method string, args map[string]any, opts ...Call
 	if err != nil {
 		return nil, err
 	}
-	return &PendingCall[any]{ID: p.id, cancel: p.cancel, wait: func() (any, error) {
+	return &PendingCall[any]{Metadata: p.metadata, cancel: p.cancel, wait: func() (any, error) {
 		res, err := p.await(c.agentID, method)
 		if err != nil {
 			return nil, err
@@ -455,10 +456,10 @@ func (c *AgentClient) protocolError(method, message string) error {
 }
 
 // Trigger invokes a method without waiting for its result.
-func (c *AgentClient) Trigger(method string, args map[string]any) (golem.InvocationID, error) {
+func (c *AgentClient) Trigger(method string, args map[string]any) (golem.InvocationMetadata, error) {
 	_, input, err := c.pack(method, args)
 	if err != nil {
-		return golem.InvocationID{}, err
+		return golem.InvocationMetadata{}, err
 	}
 	return c.rpc.trigger(method, input)
 }

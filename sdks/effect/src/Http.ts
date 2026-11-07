@@ -43,7 +43,7 @@ export type {
  * `effect-golem` is a *metadata-only* SDK on the HTTP side: agent code
  * never sees raw HTTP requests. The Golem host owns the HTTP server —
  * it matches the request, enforces auth/CORS, decodes path/query/header
- * values, and ultimately calls `invoke(methodName, dataValue, principal)`
+ * values, and ultimately calls `invoke(methodName, dataValue)`
  * with the resulting `DataValue`. The SDK's job is to *advertise* the
  * routing structure via `discoverAgentTypes()` so the host knows how to
  * route incoming requests.

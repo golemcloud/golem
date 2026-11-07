@@ -165,7 +165,7 @@ object OplogApi {
     timestamp: ContextApi.DateTime,
     functionName: String,
     request: List[TypedSchemaValue],
-    idempotencyKey: String,
+    invocationId: String,
     traceId: String,
     traceStates: List[String],
     invocationContext: List[List[SpanData]],
@@ -174,6 +174,7 @@ object OplogApi {
 
   final case class AgentInvocationFinishedParameters(
     timestamp: ContextApi.DateTime,
+    invocationId: String,
     response: Option[TypedSchemaValue],
     consumedFuel: Long
   )
@@ -187,6 +188,7 @@ object OplogApi {
   final case class ErrorParameters(
     timestamp: ContextApi.DateTime,
     kind: OplogErrorKind,
+    invocationId: Option[String],
     error: String,
     retryFrom: OplogIndex
   )
@@ -217,7 +219,7 @@ object OplogApi {
   )
 
   final case class AgentMethodInvocationParameters(
-    idempotencyKey: String,
+    invocationId: String,
     functionName: String,
     input: Option[List[TypedSchemaValue]],
     traceId: String,
@@ -228,10 +230,10 @@ object OplogApi {
   sealed trait AgentInvocation extends Product with Serializable
   object AgentInvocation {
     final case class ExportedFunction(params: AgentMethodInvocationParameters) extends AgentInvocation
-    final case class AgentInitialization(idempotencyKey: String)               extends AgentInvocation
+    final case class AgentInitialization(invocationId: String)                 extends AgentInvocation
     case object SaveSnapshot                                                   extends AgentInvocation
     case object LoadSnapshot                                                   extends AgentInvocation
-    final case class ProcessOplogEntries(idempotencyKey: String)               extends AgentInvocation
+    final case class ProcessOplogEntries(invocationId: String)                 extends AgentInvocation
     final case class ManualUpdate(componentRevision: BigInt)                   extends AgentInvocation
   }
 
@@ -337,7 +339,7 @@ object OplogApi {
 
   final case class CancelPendingInvocationParameters(
     timestamp: ContextApi.DateTime,
-    idempotencyKey: String
+    invocationId: String
   )
 
   final case class BeginRemoteTransactionParameters(
@@ -789,7 +791,7 @@ object OplogApi {
             if (js.isUndefined(fi) || fi == null) Nil
             else List(typedFromJs(fi.asInstanceOf[JsTypedSchemaValue]))
           },
-          idempotencyKey = p.idempotencyKey,
+          invocationId = p.invocationId,
           traceId = p.traceId,
           traceStates = p.traceStates.toList,
           invocationContext = parseSpanDataLists(p.invocationContext),
@@ -801,7 +803,7 @@ object OplogApi {
           timestamp = parseDateTime(raw.timestamp),
           functionName = "<agent-initialization>",
           request = Nil,
-          idempotencyKey = p.idempotencyKey,
+          invocationId = p.invocationId,
           traceId = p.traceId,
           traceStates = p.traceStates.toList,
           invocationContext = parseSpanDataLists(p.invocationContext),
@@ -812,7 +814,7 @@ object OplogApi {
           timestamp = parseDateTime(raw.timestamp),
           functionName = "<save-snapshot>",
           request = Nil,
-          idempotencyKey = "",
+          invocationId = "",
           traceId = "",
           traceStates = Nil,
           invocationContext = Nil,
@@ -823,7 +825,7 @@ object OplogApi {
           timestamp = parseDateTime(raw.timestamp),
           functionName = "<load-snapshot>",
           request = Nil,
-          idempotencyKey = "",
+          invocationId = "",
           traceId = "",
           traceStates = Nil,
           invocationContext = Nil,
@@ -835,7 +837,7 @@ object OplogApi {
           timestamp = parseDateTime(raw.timestamp),
           functionName = "<process-oplog-entries>",
           request = Nil,
-          idempotencyKey = p.idempotencyKey,
+          invocationId = p.invocationId,
           traceId = "",
           traceStates = Nil,
           invocationContext = Nil,
@@ -846,7 +848,7 @@ object OplogApi {
           timestamp = parseDateTime(raw.timestamp),
           functionName = s"<$other>",
           request = Nil,
-          idempotencyKey = "",
+          invocationId = "",
           traceId = "",
           traceStates = Nil,
           invocationContext = Nil,
@@ -868,6 +870,7 @@ object OplogApi {
     }
     AgentInvocationFinishedParameters(
       timestamp = parseDateTime(raw.timestamp),
+      invocationId = raw.invocationId,
       response = response,
       consumedFuel = BigInt(raw.consumedFuel.toString).toLong
     )
@@ -881,6 +884,7 @@ object OplogApi {
         case "recovery"   => OplogErrorKind.Recovery
         case other        => throw new IllegalArgumentException(s"Unknown oplog error kind: $other")
       },
+      invocationId = raw.invocationId.toOption,
       error = raw.error,
       retryFrom = BigInt(raw.retryFrom.toString)
     )
@@ -930,7 +934,7 @@ object OplogApi {
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsAgentMethodInvocationParameters]
         AgentInvocation.ExportedFunction(
           AgentMethodInvocationParameters(
-            idempotencyKey = p.idempotencyKey,
+            invocationId = p.invocationId,
             functionName = p.methodName,
             input = Some(List(typedFromJs(p.functionInput))),
             traceId = p.traceId,
@@ -940,14 +944,14 @@ object OplogApi {
         )
       case "agent-initialization" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsAgentInitializationParameters]
-        AgentInvocation.AgentInitialization(idempotencyKey = p.idempotencyKey)
+        AgentInvocation.AgentInitialization(invocationId = p.invocationId)
       case "save-snapshot" =>
         AgentInvocation.SaveSnapshot
       case "load-snapshot" =>
         AgentInvocation.LoadSnapshot
       case "process-oplog-entries" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsProcessOplogEntriesParameters]
-        AgentInvocation.ProcessOplogEntries(idempotencyKey = p.idempotencyKey)
+        AgentInvocation.ProcessOplogEntries(invocationId = p.invocationId)
       case "manual-update" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsManualUpdateParameters]
         AgentInvocation.ManualUpdate(BigInt(p.targetRevision.toString))
@@ -1051,7 +1055,7 @@ object OplogApi {
   ): CancelPendingInvocationParameters =
     CancelPendingInvocationParameters(
       timestamp = parseDateTime(raw.timestamp),
-      idempotencyKey = raw.idempotencyKey
+      invocationId = raw.invocationId
     )
 
   private def parseBeginRemoteTransactionParameters(

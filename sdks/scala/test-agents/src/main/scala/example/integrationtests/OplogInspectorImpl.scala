@@ -92,7 +92,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
 
       case OplogApi.OplogEntry.AgentInvocationStarted(p) =>
         val reqCount = p.request.size
-        s"EXPORT @ $ts func=${p.functionName} params=$reqCount idem=${p.idempotencyKey}"
+        s"EXPORT @ $ts func=${p.functionName} params=$reqCount inv=${p.invocationId}"
 
       case OplogApi.OplogEntry.AgentInvocationFinished(p) =>
         val resp = p.response.map(summarizeTyped).getOrElse("void")
@@ -150,7 +150,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.ActivatePlugin(p)               => s"ACTIVATE_PLUGIN @ $ts ${p.plugin.name}@${p.plugin.version}"
       case OplogApi.OplogEntry.DeactivatePlugin(p)             => s"DEACTIVATE_PLUGIN @ $ts ${p.plugin.name}@${p.plugin.version}"
       case OplogApi.OplogEntry.Revert(p)                       => s"REVERT @ $ts range=[${p.start},${p.end}]"
-      case OplogApi.OplogEntry.CancelPendingInvocation(p)      => s"CANCEL @ $ts idem=${p.idempotencyKey}"
+      case OplogApi.OplogEntry.CancelPendingInvocation(p)      => s"CANCEL @ $ts inv=${p.invocationId}"
       case OplogApi.OplogEntry.BeginRemoteTransaction(p)       => s"BEGIN_TX @ $ts id=${p.transactionId}"
       case OplogApi.OplogEntry.PreCommitRemoteTransaction(p)   => s"PRE_COMMIT_TX @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.PreRollbackRemoteTransaction(p) => s"PRE_ROLLBACK_TX @ $ts begin=${p.beginIndex}"

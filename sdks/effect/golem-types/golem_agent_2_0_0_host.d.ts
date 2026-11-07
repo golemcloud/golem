@@ -114,6 +114,7 @@ declare module 'golem:agent/host@2.0.0' {
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type PermissionCard = golemCore200Types.PermissionCard;
+  export type InvocationId = golemCore200Types.InvocationId;
   export type Datetime = wasiClocks030SystemClock.Instant;
   export type AgentError = golemAgent200Common.AgentError;
   export type AgentType = golemAgent200Common.AgentType;
@@ -171,7 +172,7 @@ declare module 'golem:agent/host@2.0.0' {
    */
   export type InvocationMetadata = {
     agentId: string;
-    idempotencyKey: string;
+    invocationId: InvocationId;
   };
   /**
    * Result of an awaited invocation together with its final identity.

@@ -116,7 +116,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.ActivatePlugin(p)               => s"activate(${p.plugin.name})"
     case OplogEntry.DeactivatePlugin(p)             => s"deactivate(${p.plugin.name})"
     case OplogEntry.Revert(p)                       => s"revert(${p.start})"
-    case OplogEntry.CancelPendingInvocation(p)      => s"cancel(${p.idempotencyKey})"
+    case OplogEntry.CancelPendingInvocation(p)      => s"cancel(${p.invocationId})"
     case OplogEntry.BeginRemoteTransaction(p)       => s"begin-tx(${p.transactionId})"
     case OplogEntry.PreCommitRemoteTransaction(p)   => s"pre-commit(${p.beginIndex})"
     case OplogEntry.PreRollbackRemoteTransaction(p) => s"pre-rollback(${p.beginIndex})"
@@ -154,8 +154,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.BeginRemoteWrite(ts),
       OplogEntry.Restart(ts),
       OplogEntry.Resumed(ts),
-      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Invocation, "boom", BigInt(5))),
-      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Recovery, "replay failed", BigInt(5))),
+      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Invocation, Some("inv-1"), "boom", BigInt(5))),
+      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Recovery, None, "replay failed", BigInt(5))),
       OplogEntry.RecoverySucceeded(ts),
       OplogEntry.Jump(JumpParameters(ts, oplogRegion)),
       OplogEntry.SetRetryPolicy(
@@ -174,8 +174,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         .Snapshot(ts, Array[Byte](1), "application/octet-stream", Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")),
       OplogEntry.SnapshotConfirmed(ts, "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"),
       OplogEntry.SpanClosed(ts, Some(BigInt(7)), SpanFinished("span-1", ts, SpanOutcome.Completed)),
-      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTyped), 1000L)),
-      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, None, 0L)),
+      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, "inv-1", Some(sampleTyped), 1000L)),
+      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, "inv-2", None, 0L)),
       OplogEntry.HostCall(
         HostCallParameters(
           ts,

@@ -1,17 +1,27 @@
 import { Effect, Exit } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import type { RemoteCallError } from "../Client.js"
+import { uuidToString } from "golem:core/types@2.0.0"
+import type { InvocationMetadata, RemoteCallError } from "../Client.js"
 import type { RpcCancellationToken, RpcConnection } from "../host/RpcClient.js"
+import type { Uuid } from "../Ids.js"
+import { makeInvocationId } from "./invocationId.js"
 import { type GuestScopeCard, isScopeCard, peekScopeCard } from "./scopeCard.js"
 import { restoreEncodedCapabilities } from "./schema-model/wit.js"
 
-const snapshotInvocationMetadata = (
+/**
+ * Convert host invocation metadata to the SDK form. The invocation ID combines the agent ID text
+ * with the UUID of the invocation; the owner case of the host ID is not used.
+ */
+export const invocationMetadataFromHost = (
   metadata: AgentHost.InvocationMetadata,
-): AgentHost.InvocationMetadata =>
+): InvocationMetadata =>
   Object.freeze({
     agentId: metadata.agentId,
-    idempotencyKey: metadata.idempotencyKey,
+    invocationId: makeInvocationId(
+      metadata.agentId,
+      uuidToString(metadata.invocationId.id) as Uuid,
+    ),
   })
 
 const RPC_TAGS = new Set<AgentHost.RpcError["tag"]>([
@@ -111,7 +121,7 @@ export const awaitInvocation = <R>(
             ),
             Effect.map((invocation) => ({
               invocation,
-              metadata: invocation.metadata && snapshotInvocationMetadata(invocation.metadata),
+              metadata: invocation.metadata && invocationMetadataFromHost(invocation.metadata),
             })),
           ),
           ({ invocation, metadata }) =>
@@ -166,7 +176,7 @@ export const scheduleCancelableInvocation = (
     ({ token }) => Effect.sync(() => bestEffort(() => token.drop())),
   ).pipe(
     Effect.map(({ metadata, token }) => ({
-      metadata: snapshotInvocationMetadata(metadata),
+      metadata: invocationMetadataFromHost(metadata),
       cancel: cancelOnce(token),
     })),
   )

@@ -33,9 +33,10 @@ import (
 // It wraps the host resource rather than replacing it — a handle, not data, so
 // nothing here crosses the schema marshaler.
 type Future[Out any] struct {
-	// ID identifies the invocation, available before the result is. It is nil
-	// when the call was rejected before it started; Get returns the rejection.
-	ID *InvocationID
+	// Metadata identifies the invocation, available before the result is. It
+	// is nil when the call was rejected before it started; Get returns the
+	// rejection.
+	Metadata *InvocationMetadata
 
 	fut    *host.FutureInvokeResult
 	method string
@@ -74,7 +75,7 @@ func (f *Future[Out]) Get() (Out, error) {
 	switch {
 	case res.IsErr():
 		f.err = rpcErrorToGo(f.target, f.method, res.Err())
-	case f.ID == nil:
+	case f.Metadata == nil:
 		// Only a rejected call has no identity, and its future reports the
 		// rejection, so a successful one without an identity is a protocol error.
 		if out := res.Ok(); out.IsSome() {

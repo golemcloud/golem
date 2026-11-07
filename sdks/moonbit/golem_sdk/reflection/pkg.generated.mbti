@@ -169,7 +169,7 @@ pub(all) struct Invocation[T] {
 
 pub(all) struct InvocationMetadata {
   agent_id : ParsedAgentId
-  idempotency_key : String
+  invocation_id : @rpc.InvocationId
 } derive(Eq, @debug.Debug)
 
 pub(all) struct MethodOnlyAgentClient {

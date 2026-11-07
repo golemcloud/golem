@@ -94,7 +94,7 @@ interface types {
         tool(string),
     }
 
-    /// Identifies one invocation. With an agent owner, its text form is `<agent-id>.<uuid>`.
+    /// Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's `agent-id` string without the component.
     record invocation-id {
         owner: invocation-owner,
         id: uuid,
