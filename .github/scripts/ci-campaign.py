@@ -330,8 +330,9 @@ def campaign(args):
                 ):
                     raise ValueError(f"Driver/workload contract mismatch: {path}")
         for name, path in workspaces.items():
+            # sbt's JGit needs a standalone repository, not a linked worktree.
             subprocess.run(
-                ["git", "worktree", "add", "--detach", str(path), sources[0]],
+                ["git", "clone", "--shared", "--no-checkout", str(ROOT), str(path)],
                 cwd=ROOT,
                 check=True,
             )
@@ -386,6 +387,19 @@ def campaign(args):
                 )
             )
             if args.platform == "linux":
+                if phase == "prime":
+                    sdk = workspaces["sdk"]
+                    check = experiment.execute(
+                        "sbt -batch -mem 4096 'show version'",
+                        {**env, "GITHUB_WORKSPACE": str(sdk)},
+                        sdk / "sdks/scala",
+                        output / "scala-project-load.log",
+                        max(0, min(600, deadline - time.time() - 30)),
+                    )
+                    summary["scala_project_load"] = {**check, "source_sha": sha}
+                    summary_path.write_text(json.dumps(summary, indent=2))
+                    if check["exit_code"]:
+                        return 1
                 command = shlex.join(
                     [
                         sys.executable,

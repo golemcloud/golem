@@ -299,7 +299,10 @@ class CampaignTests(unittest.TestCase):
             harness = Mock()
             harness.yaml = yaml
             harness.inventory.return_value = []
-            harness.execute.return_value = {"exit_code": 1, "seconds": 1}
+            harness.execute.side_effect = [
+                {"exit_code": 0, "seconds": 1},
+                {"exit_code": 1, "seconds": 1},
+            ]
             args = SimpleNamespace(
                 source_a=A, source_b=B, allocation_start=start, platform="linux"
             )
@@ -316,7 +319,7 @@ class CampaignTests(unittest.TestCase):
                 patch.object(campaign.time, "time", return_value=10),
             ):
                 self.assertEqual(campaign.campaign(args), 1)
-            self.assertEqual(harness.execute.call_count, 1)
+            self.assertEqual(harness.execute.call_count, 2)
             report = json.loads(
                 (root / "tmp/experiment-results/campaign-linux.json").read_text()
             )
@@ -343,6 +346,23 @@ class CampaignTests(unittest.TestCase):
                 (root / "tmp/experiment-results/campaign-linux.json").read_text()
             )
             self.assertEqual(report["phases"][0]["status"], "incomplete_budget")
+            harness.execute.side_effect = [{"exit_code": 1, "seconds": 1}]
+            with (
+                patch.object(campaign, "ROOT", root),
+                patch.object(campaign, "load_harness", return_value=harness),
+                patch.object(campaign, "git", side_effect=fake_git),
+                patch.object(campaign.subprocess, "run"),
+                patch.object(campaign.subprocess, "check_output", return_value="[]"),
+                patch.object(campaign.time, "time", return_value=10),
+            ):
+                self.assertEqual(campaign.campaign(args), 1)
+            self.assertEqual(harness.execute.call_count, 1)
+            report = json.loads(
+                (root / "tmp/experiment-results/campaign-linux.json").read_text()
+            )
+            self.assertEqual(report["scala_project_load"]["exit_code"], 1)
+            self.assertEqual(report["scala_project_load"]["source_sha"], A)
+            self.assertFalse(report["success"])
 
     def test_all_three_worktrees_transition_together_and_workloads_use_exact_shas(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -370,6 +390,8 @@ class CampaignTests(unittest.TestCase):
 
             def execute(command, env, cwd, log, timeout):
                 self.assertEqual(set(current.values()), {env["GITHUB_SHA"]})
+                if log.name == "scala-project-load.log":
+                    return {"exit_code": 0, "seconds": 1}
                 phase = log.stem
                 actual = cwd / "tmp/experiment-results" / phase
                 actual.mkdir(parents=True)
@@ -391,7 +413,11 @@ class CampaignTests(unittest.TestCase):
             self.assertEqual([sha for _, sha in transitions], [A] * 6 + [B] * 3)
             self.assertEqual(len({path for path, _ in transitions}), 3)
             self.assertEqual(
-                [call.args[1]["GITHUB_SHA"] for call in harness.execute.call_args_list],
+                [
+                    call.args[1]["GITHUB_SHA"]
+                    for call in harness.execute.call_args_list
+                    if str(campaign.HARNESS) in call.args[0]
+                ],
                 [A, A, B],
             )
 
@@ -402,8 +428,10 @@ class CampaignTests(unittest.TestCase):
         )
         self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
         self.assertEqual(
-            set(workflow["on"]["workflow_dispatch"]["inputs"]), {"source_a", "source_b"}
+            set(workflow["on"]["workflow_dispatch"]["inputs"]),
+            {"source_a", "source_b", "run_macos"},
         )
+        self.assertEqual(workflow["jobs"]["macos"]["if"], "${{ inputs.run_macos }}")
         for name, minutes in (("linux", "720"), ("macos", "120")):
             job = workflow["jobs"][name]
             self.assertEqual(job["timeout-minutes"], minutes)
