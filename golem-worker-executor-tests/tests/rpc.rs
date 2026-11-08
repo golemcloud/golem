@@ -6966,7 +6966,7 @@ async fn reacquire_permits_restart_preserves_accepted_queued_live_invocation(
 
 #[test]
 #[timeout("120s")]
-#[ignore = "GOL-1065: a same-key call on a fork must resolve to the copied invocation, which needs fork invocation ID derivation"]
+#[ignore = "a same-key call on a fork must resolve to the copied invocation, but forks do not derive invocation IDs yet"]
 async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -7209,7 +7209,7 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
 
 #[test]
 #[timeout("120s")]
-#[ignore = "GOL-1065: stream-slot reads and export forks require a route scope, which agent RPC sessions do not have"]
+#[ignore = "stream-slot reads and export forks require a route scope, which agent RPC sessions do not have yet"]
 async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -7395,7 +7395,7 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
 
 #[test]
 #[timeout("120s")]
-#[ignore = "GOL-1065: a same-key call on a fork must resolve to the copied invocation, which needs fork invocation ID derivation"]
+#[ignore = "a same-key call on a fork must resolve to the copied invocation, but forks do not derive invocation IDs yet"]
 async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

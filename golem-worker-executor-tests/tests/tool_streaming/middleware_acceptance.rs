@@ -1398,9 +1398,10 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
 
     let agent_id = agent_id!("ToolSecretCaller", "shipped-audit-secret");
     let evidence = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_as_principal(
             &caller_component,
             &agent_id,
+            oidc_principal("audit-user"),
             "inspect_secret_policy",
             data_value!(),
         )
@@ -1429,7 +1430,10 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
         assert_eq!(record["toolName"], "secret-policy-probe");
         assert_eq!(record["input"]["secretHandles"], 1);
         assert_eq!(record["outcome"]["kind"], "success");
-        assert_eq!(record["principal"]["kind"], "anonymous");
+        // The middleware reads the caller from the invocation context: the user who invoked
+        // the agent whose call reached the tool.
+        assert_eq!(record["principal"]["kind"], "oidc");
+        assert_eq!(record["principal"]["subject"], "audit-user");
         assert!(
             record["owner"]["agentId"]
                 .as_str()

@@ -372,6 +372,69 @@ async fn scheduled_invocation_survives_a_restart_before_its_wake_fires(
     assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await
 }
 
+/// The receipt the guest gets names the invocation the target commits, which is the invocation
+/// the wake starts. After the target is deleted, the caller still replays the completed schedule
+/// from its own oplog: the replayed receipt is the same and the target is not created again.
+#[test]
+#[timeout("4m")]
+async fn schedule_receipt_names_the_scheduled_invocation_and_replays_without_the_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides::default();
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server_name = "receipt";
+    let (server, target) = start_agents(&executor, &component, server_name).await?;
+    let client = agent_id!("ScheduledInvocationClient", CLIENT);
+    let receipt = |executor: &TestWorkerExecutor| {
+        let executor = executor.clone();
+        let component = component.clone();
+        let client = client.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &client,
+                    "scheduled_invocation_id",
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<Option<String>>()
+        }
+    };
+    schedule_at(
+        &executor,
+        &component,
+        server_name,
+        Utc::now() + chrono::Duration::seconds(2),
+    )
+    .await?;
+    let receipt_before_restart = receipt(&executor).await?;
+
+    wait_for_scheduled_start(&executor, &target).await?;
+    assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await?;
+    let committed = scheduled(&executor.get_oplog(&target, OplogIndex::INITIAL).await?);
+    assert_eq!(
+        receipt_before_restart,
+        Some(format!("{}.{}", target.agent_id, committed.keys[0])),
+        "the receipt must name the committed invocation, which is the one that started"
+    );
+
+    executor.delete_worker(&target).await?;
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(receipt(&executor).await?, receipt_before_restart);
+    assert_eq!(executor.get_worker_metadata_opt(&target).await?, None);
+    Ok(())
+}
+
 /// The executor is lost after the wake fired and before the target recorded the invocation's
 /// start. The invocation is still pending and due, and runs once after the restart.
 #[test]

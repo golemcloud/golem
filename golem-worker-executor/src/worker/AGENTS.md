@@ -17,8 +17,10 @@ rewinding a cursor.
 - An invocation is accepted only after its `PendingAgentInvocation` entry is committed
   (`enqueue_worker_invocation_with_effect`). Never report acceptance to a caller — local or
   remote — before that commit.
-- Dedupe by idempotency key before appending (`lookup_invocation_result` ≠ `LookupResult::New`
-  returns the existing invocation). Same key = same invocation, never new work.
+- Dedupe by invocation ID before appending (`lookup_invocation_result` ≠ `LookupResult::New`
+  returns the existing invocation). Same invocation ID = same invocation, never new work. The
+  same raw idempotency key from another caller scope or for another operation is a different
+  invocation.
 - Successful completion appends `AgentInvocationFinished`, then waits for the state actor's commit
   receipt before notifying waiters (`on_agent_invocation_success`; failures go through
   `on_invocation_failure`). Durable agents use `CommitLevel::Always`, so the receipt follows

@@ -625,6 +625,7 @@ pub struct TestWorkerExecutor {
     production_oplog: Option<Arc<dyn golem_worker_executor::services::oplog::OplogService>>,
     concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
     leak_detector: std::sync::Weak<()>,
+    caller: Option<AuthCtx>,
 }
 
 impl TestWorkerExecutor {
@@ -920,7 +921,19 @@ impl TestWorkerExecutor {
         executor_release::wait_for_release(&shutdown, &invocation_loops, released).await
     }
 
+    /// A handle to the same executor whose DSL calls authenticate as `caller` instead of the
+    /// test account, and so derive their invocation IDs in the caller's idempotency scope.
+    pub fn as_caller(&self, caller: AuthCtx) -> Self {
+        Self {
+            caller: Some(caller),
+            ..self.clone()
+        }
+    }
+
     pub fn auth_ctx(&self) -> AuthCtx {
+        if let Some(caller) = &self.caller {
+            return caller.clone();
+        }
         AuthCtx::User(UserAuthCtx {
             account_id: self.context.account_id,
             account_email: golem_common::model::account::AccountEmail::new("test@golem"),
@@ -3099,6 +3112,7 @@ async fn start_executor_with_config(
                 production_oplog: None,
                 concurrent_resource_entry: None,
                 leak_detector,
+                caller: None,
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
@@ -4904,6 +4918,7 @@ async fn run_production_context_bootstrap(
                 production_oplog: oplog.get().cloned(),
                 concurrent_resource_entry,
                 leak_detector,
+                caller: None,
             });
         } else if start.elapsed().as_secs() > 10 {
             return Err(anyhow::anyhow!(timeout_msg));

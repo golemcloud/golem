@@ -234,8 +234,11 @@ pub trait ScheduledInvocationClient {
     /// Schedule inc_global_by on self 200ms in the future
     fn test3(&mut self);
 
+    /// Schedules `inc_global_by(17)` on the server and keeps the receipt
     fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32);
     fn cancel_scheduled(&self);
+    /// The invocation ID of the receipt kept by `schedule_at`, in its text form
+    fn scheduled_invocation_id(&self) -> Option<String>;
 
     /// Schedules `inc(hold_ms)` on a new ephemeral target and keeps its cancellation token
     fn schedule_ephemeral_at(
@@ -256,6 +259,7 @@ struct ScheduledInvocationClientImpl {
     _name: String,
     global: u64,
     token: Option<golem_rust::CancellationToken>,
+    scheduled_invocation_id: Option<String>,
 }
 
 #[agent_implementation]
@@ -265,6 +269,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
             _name: name,
             global: 0,
             token: None,
+            scheduled_invocation_id: None,
         }
     }
 
@@ -294,18 +299,33 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     }
 
     fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32) {
-        let mut server = ScheduledInvocationServerClient::get(server_agent_name);
-        self.token = Some(
-            server
-                .schedule_cancelable_inc_global_by(
-                    17,
-                    Datetime {
-                        seconds: seconds as i64,
-                        nanoseconds,
-                    },
-                )
-                .expect("failed to schedule cancelable invocation"),
+        // The generated durable client drops the receipt metadata, so this calls the host directly.
+        use golem_rust::golem_agentic::golem::agent::host as agentic_host;
+        let server = agentic_host::WasmRpc::new(
+            "ScheduledInvocationServer",
+            encode_single_parameter(server_agent_name),
+            None,
+            Vec::new(),
         );
+        let receipt = server
+            .schedule_cancelable_invocation(
+                agentic_host::Datetime {
+                    seconds: seconds as i64,
+                    nanoseconds,
+                },
+                "inc_global_by",
+                encode_single_parameter(17u64),
+                None,
+            )
+            .expect("failed to schedule cancelable invocation");
+        self.scheduled_invocation_id = Some(
+            golem_rust::InvocationMetadata::from(receipt.metadata)
+                .invocation_id
+                .to_string(),
+        );
+        self.token = Some(golem_rust::CancellationToken::from(
+            receipt.cancellation_token,
+        ));
     }
 
     fn cancel_scheduled(&self) {
@@ -313,6 +333,10 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
             .as_ref()
             .expect("no scheduled invocation")
             .cancel();
+    }
+
+    fn scheduled_invocation_id(&self) -> Option<String> {
+        self.scheduled_invocation_id.clone()
     }
 
     fn schedule_ephemeral_at(

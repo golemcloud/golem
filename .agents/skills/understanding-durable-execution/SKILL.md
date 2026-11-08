@@ -2084,6 +2084,56 @@ cursor drains (`await_natural_tail_end`) with a live-armed delivery token
 (`CompletionDelivery::prepare_delivery`), which makes "crash after End, before delivery" safe
 without re-executing.
 
+## Invocation identity
+
+An invocation's identity is its invocation ID: the owner agent and a UUID
+(`golem-common/src/base_model/invocation_id.rs::InvocationId`). The server prints it as
+`<component>/<agent>.<uuid>`; guests and the CLI print `<agent>.<uuid>`. The oplog stores only the UUID, in
+the `invocation_id` field of `PendingAgentInvocation`, `AgentInvocationStarted`,
+`AgentInvocationFinished` and the invocation `Error`. Status (`InvocationResultMembership`),
+dedupe and `lookup_invocation_result` use the same value. A caller's idempotency key is only an
+input to the ID; the raw key is not stored.
+
+A request carries an `InvocationRequestKey`, and admission finalizes it with
+`finalize(agent_id, fingerprint, operation)` once the target's fingerprint is known
+(`grpc/invocation_session/admission.rs`, `services/rpc/direct.rs`, `durable_host/rpc/target.rs`,
+`durable_host/rpc/schedule.rs`):
+
+| Variant | Source | Unique part |
+|---|---|---|
+| `External { scope, key }` | an authenticated caller's key; `IdempotencyScope` is `user:`, `agent:` or `admin:…:as:` (`AuthCtx::idempotency_scope`) | UUIDv5 of (fingerprint, scope, operation, key) |
+| `Internal(key)` | a key Golem derived, such as `derive_idempotency_key` of the parent ID and the call's `Start` index | the same, with the fixed scope `internal` |
+| `RouteSession { scope, key }` | a Durable Streams session, scoped to the route for every caller | the same, with `route:<scope>` |
+| `Unkeyed(uuid)` | no key, or a caller without a scope: `AuthCtx::System`, and the HTTP route (`custom_api`) and MCP paths, which pass no scope | the retained random UUID |
+
+`InvocationRequestKey::external` turns a key from a caller without a scope into `Unkeyed`: such a
+key is ignored, never rejected or deduped. The operation is the method name, or
+`tool:<tool-name>/<command path>` for an agent-hosted tool. Every field is length-prefixed. The
+fingerprint makes an old ID unresolvable on a successor incarnation. An ephemeral or phantom owner
+has no fingerprint before it exists, so its owner ID comes from `owner_key(operation)`; the CLI
+derives the same owner to subscribe to its events. Keep the prepared request key, not the final ID,
+when a request is retried or forwarded: every retry finalizes it again against the same target.
+
+A key that is already accepted with a different request is an `IdempotencyConflict` (REST 422):
+`worker/ingress.rs::ensure_matching_invocation_payload` compares the stored request with
+`AgentInvocationPayload::same_caller_request`, including the attached scope card (`scope_card`). Streaming
+sessions compare their stream descriptor instead (`worker/streaming/mod.rs`).
+
+Terminals name their invocation. Replay rejects an `AgentInvocationFinished` whose ID differs from
+the started invocation (`replay_state/cursor/reads.rs::get_oplog_entry_agent_invocation_finished`).
+An invocation `Error` is a hint: a background retry task can outlive its invocation, so an `Error`
+naming a finished invocation is legal. The status fold attributes it only while that invocation
+runs, or for the agent's `PermissionDenied` rejection of a cancelled pending invocation
+(`worker/status/fields.rs`). A `Recovery` error never names an invocation (`check_well_formed`).
+
+Guests read their identity and caller through `golem:agent/invocation-context`
+(`durable_host/golem/agent_invocation_context.rs`). `invocation-id()` and `caller()` read what the
+invocation start recorded, so they are not durable calls. An entity Store answers for its
+enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
+(initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
+`principal` parameter. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
+writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
+
 ## Invocation queue and results
 `enqueue_worker_invocation_with_effect` (`worker/mod.rs`): dedupe via `lookup_invocation_result`
 (anything other than `LookupResult::New` returns without appending), then append
@@ -2163,8 +2213,8 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    Streaming RPC consumes this hint during target preparation, before it builds stream mappings
    with the returned fingerprint; the subsequent invocation uses `MayExist`.
    Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
-   identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the idempotency key — deterministic,
-   never random.
+   identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the request key's
+   `owner_key(operation)` — deterministic, never random.
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native

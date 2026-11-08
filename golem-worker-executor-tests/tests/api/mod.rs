@@ -3968,6 +3968,62 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     Ok(())
 }
 
+/// One idempotency key names a different invocation for each operation and each caller scope.
+/// A caller with no scope, such as the system, never deduplicates by its key.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn idempotency_keys_are_scoped_by_operation_and_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "idempotency-key-scopes");
+    executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    let AuthCtx::User(user) = executor.auth_ctx() else {
+        bail!("the test executor authenticates as a user");
+    };
+    let mut other_user = user.clone();
+    other_user.account_id = AccountId::new();
+    let other_user = executor.as_caller(AuthCtx::User(other_user));
+    let same_account_agent = executor.as_caller(AuthCtx::agent_with_effective_surface(
+        user.account_id,
+        user.account_email.clone(),
+        user.effective_surface.clone(),
+    ));
+    let system = executor.as_caller(AuthCtx::System);
+
+    let key = IdempotencyKey::fresh();
+    let steps = [
+        (&executor, "increment", data_value!(), 1),
+        (&executor, "increment", data_value!(), 1),
+        (&executor, "sleep_and_increment", data_value!(0u32), 2),
+        (&other_user, "increment", data_value!(), 3),
+        (&same_account_agent, "increment", data_value!(), 4),
+        (&system, "increment", data_value!(), 5),
+        (&system, "increment", data_value!(), 6),
+        (&executor, "increment", data_value!(), 1),
+    ];
+    for (step, (caller, method, input, expected)) in steps.into_iter().enumerate() {
+        let result = caller
+            .invoke_and_await_agent_with_key(&component, &counter_id, &key, method, input)
+            .await?
+            .into_typed::<u32>()?;
+        assert_eq!(result, expected, "step {step}: {method}");
+    }
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -5921,10 +5977,14 @@ async fn create_invoke_delete_create_invoke(
         .await?;
     assert_eq!(r1.into_typed::<u32>()?, 1);
 
+    let key = IdempotencyKey::fresh();
     let r2 = executor
-        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent_with_key(&component, &counter_id, &key, "increment", data_value!())
         .await?;
     assert_eq!(r2.into_typed::<u32>()?, 2);
+    let deleted_invocation = executor
+        .external_invocation_key(&worker_id, &key, "increment")
+        .await?;
 
     executor.delete_worker(&worker_id).await?;
 
@@ -5932,10 +5992,31 @@ async fn create_invoke_delete_create_invoke(
         .start_agent(&component.id, counter_id.clone())
         .await?;
 
+    // The key names a new invocation of the new incarnation, so it runs instead of returning
+    // the deleted agent's result.
     let r3 = executor
-        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent_with_key(&component, &counter_id, &key, "increment", data_value!())
         .await?;
     assert_eq!(r3.into_typed::<u32>()?, 1);
+    let recreated_invocation = executor
+        .external_invocation_key(&worker_id, &key, "increment")
+        .await?;
+    assert_ne!(recreated_invocation, deleted_invocation);
+    let started = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match started.invocation {
+                golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(
+                    method,
+                ) => Some(method.invocation_id),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(started, vec![recreated_invocation]);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
