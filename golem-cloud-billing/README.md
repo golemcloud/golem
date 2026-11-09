@@ -208,7 +208,7 @@ when none is:
 | --- | --- |
 | `subscription` | a billable subscription (`active`, `trialing` or `past_due`) is not canceled at the period end |
 | `canceledSubscription` | a billable subscription is canceled at the period end and runs to the end of the period |
-| `unbilledUsage` | a usage event that is not held is newer than the newest order of the account: Polar bills it only on the next order |
+| `unbilledUsage` | a usage event is not held, and is not sent yet or was sent after the newest order of the account. Polar bills an event only after the push sends it, on the next order |
 | `unpaidOverage` | a `pending` order has an amount for a metered price |
 
 The hold stays for the whole life of a billable subscription, also after a cancellation. Paid
@@ -223,7 +223,9 @@ plan, so the account is never on the paid plan without a hold. The table `deleti
 the holds that the app placed. The sweep reconciles every account with a billable subscription and
 no row there: a subscription from before the app placed holds, or one whose last placement failed.
 It also reconciles the accounts without a billable subscription whose usage events changed, because
-no webhook comes for a usage event.
+no webhook comes for a usage event, and each account whose row is older than an hour
+(`HOLD_RECHECK_MS`). A placement refreshes the row, and a removal that failed keeps it, so the
+sweep tries the removal again with no time limit.
 
 The registry refuses `DELETE /v1/accounts/{account_id}` with 409 while the account has a hold, and
 shows the reason text to the person, for example in `golem-cli account delete`. The text starts
@@ -295,7 +297,8 @@ For each account in `user.golem_account_id` or `polar_subscriptions` that the re
    its subscriptions, which have all ended by now, and clears its external ID. A 404 counts as
    deleted. The table `deleted_account_cleanups` records the account, so later runs do
    not call Polar for it again;
-3. deletes the Better Auth user of the account, with its sessions and GitHub accounts.
+3. deletes the Better Auth user of the account, with its sessions and GitHub accounts, and the
+   row of the account in `deletion_holds`.
 
 The subscriptions, orders and usage events of the account stay. A person who signs up again with
 the same GitHub identity gets a new Golem account at once. The billing app refuses its sign-in

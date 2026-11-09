@@ -119,6 +119,8 @@ export const cleanupDeletedAccounts: Effect.Effect<
     }
   }
 
+  // The sweep of the web app skips a deleted account, so its recorded hold has no use any more.
+  yield* query("DELETE FROM deletion_holds WHERE account_id = ANY($1::uuid[])", [[...finished]])
   // Sessions and GitHub accounts reference the user with ON DELETE CASCADE.
   const deletedUsers = hasUsers
     ? (yield* query(`DELETE FROM "user" WHERE golem_account_id = ANY($1::uuid[])`, [[...finished]])).rowCount ?? 0

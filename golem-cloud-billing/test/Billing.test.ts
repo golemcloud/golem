@@ -33,7 +33,7 @@ const meteredPriceId = "price_compute"
 
 describe("Polar billing", () => {
   // The registry tables in `public` with the grants of the hosted deployment: the app reads
-  // whether an account is deleted and its usage mode.
+  // whether an account is deleted.
   const registry = new RegistryDatabase()
   let config: BillingConfigShape
   let pool: pg.Pool
@@ -698,8 +698,12 @@ describe("Polar billing", () => {
       "Golem Cloud billing: The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid."
     const unpaidHold = `Golem Cloud billing: An invoice for paid overage is not paid. Pay it in Manage billing at ${baseUrl}.`
 
-    /** A usage event of the usage push, sent `ago` milliseconds before now unless `held`. */
-    const usageEvent = async (accountId: string, ago: number, options: { readonly held?: boolean } = {}) => {
+    /** A usage event of the usage push, sent `ago` milliseconds before now, or held then, or not sent. */
+    const usageEvent = async (
+      accountId: string,
+      ago: number,
+      options: { readonly held?: boolean; readonly unsent?: boolean } = {}
+    ) => {
       await pool.query(
         `INSERT INTO usage_events
            (event_id, account_id, period, dimension, from_micro_units, to_micro_units, created_at, sent_at, held_at)
@@ -708,7 +712,7 @@ describe("Polar billing", () => {
           `${accountId}:2026-11:compute:${randomUUID()}`,
           accountId,
           new Date(Date.now() - ago - MINUTE),
-          options.held ? null : new Date(Date.now() - ago),
+          options.held || options.unsent ? null : new Date(Date.now() - ago),
           options.held ? new Date(Date.now() - ago) : null
         ]
       )
@@ -783,6 +787,39 @@ describe("Polar billing", () => {
 
       await deliver("order.paid", order(accountId, paidLater))
       expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+    })
+
+    it("keeps the hold while the usage push has not sent an event, also after a newer order", async () => {
+      const accountId = randomUUID()
+      await deliver("subscription.active", subscription(accountId))
+      // A failed ingestion: the event is older than the last order, and Polar never received it.
+      await usageEvent(accountId, MINUTE, { unsent: true })
+      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2026-12-04T10:00:00Z" }))
+
+      await deliver("order.paid", order(accountId, { status: "paid", paid: true }))
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unbilledHold)
+
+      // The next push holds the event, because the subscription has ended.
+      await pool.query("UPDATE usage_events SET held_at = clock_timestamp() WHERE account_id = $1", [accountId])
+      await sweep(new Date())
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+    })
+
+    it("checks a recorded hold again with no time limit, and removes it when the account owes nothing", async () => {
+      // A removal that failed long ago: the registry and the record still have the hold, and the
+      // account has no subscription and no recent usage event.
+      const accountId = randomUUID()
+      upstreams.deletionHolds.set(accountId, unpaidHold)
+      await pool.query(
+        "INSERT INTO deletion_holds (account_id, reason, updated_at) VALUES ($1, $2, now() - interval '30 days')",
+        [accountId, unpaidHold]
+      )
+
+      await sweep(new Date())
+
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+      const recorded = await pool.query("SELECT reason FROM deletion_holds WHERE account_id = $1", [accountId])
+      expect(recorded.rows).toEqual([])
     })
 
     it("frees an ended subscription when the usage push holds the overage that Polar would not bill", async () => {

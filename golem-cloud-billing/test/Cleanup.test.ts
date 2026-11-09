@@ -196,14 +196,19 @@ describe("cleanup of deleted accounts", () => {
     await subscribe(accountId, "active")
     await pool.query("UPDATE polar_subscriptions SET cancel_at_period_end = true WHERE account_id = $1", [accountId])
     polar.customers.add(accountId)
+    await pool.query("INSERT INTO deletion_holds (account_id, reason) VALUES ($1, 'held')", [accountId])
     await registry.deleteAccount(accountId)
+    const recordedHolds = async () =>
+      (await pool.query("SELECT reason FROM deletion_holds WHERE account_id = $1", [accountId])).rows
 
     expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 1, deletedUsers: 0 })
     expect(polar.deletes).toEqual([])
     expect(await rowsOf(userId)).toEqual({ users: 1, sessions: 1, accounts: 1 })
+    expect(await recordedHolds()).toEqual([{ reason: "held" }])
 
     await pool.query("UPDATE polar_subscriptions SET status = 'canceled' WHERE account_id = $1", [accountId])
     expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
+    expect(await recordedHolds()).toEqual([])
   })
 
   it("counts a customer that Polar does not have as deleted", async () => {

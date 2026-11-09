@@ -85,8 +85,9 @@ export interface SubscriptionsShape {
   ) => Effect.Effect<ReadonlyArray<PendingOrder>, SubscriptionsError>
   /**
    * Whether the usage push recorded paid overage of the account that no order bills yet: a usage
-   * event that is not held and is newer than the newest order of the account. Polar bills a sent
-   * event on the next order of the subscription, and the push sends an unsent event at its next run.
+   * event that is not held, and is not sent yet or was sent after the newest order of the account.
+   * Polar bills a sent event on the next order of the subscription. The push sends an unsent event
+   * at its next run, or holds it when Polar would not bill it.
    */
   readonly unbilledUsage: (accountId: string) => Effect.Effect<boolean, SubscriptionsError>
   /**
@@ -96,11 +97,14 @@ export interface SubscriptionsShape {
    *   the subscription began before the app placed holds, or the last placement failed,
    * - an account without a billable subscription of the product, with usage events that the usage
    *   push recorded, sent or held after `since`. No webhook comes for these events: a new one can
-   *   need a hold, and a held one no longer counts as unbilled, so it can remove the hold.
+   *   need a hold, and a held one no longer counts as unbilled, so it can remove the hold,
+   * - an account whose row in `deletion_holds` is older than `recheckBefore`. A hold that the app
+   *   failed to remove keeps its row, so the sweep tries again, with no time limit.
    */
   readonly holdCandidates: (
     productId: string,
-    since: Date
+    since: Date,
+    recheckBefore: Date
   ) => Effect.Effect<ReadonlyArray<string>, SubscriptionsError>
   /**
    * The accounts with a billable subscription of the product that is canceled at the period end,
@@ -207,14 +211,16 @@ export const tables = `
   )`
 
 /**
- * The usage events of account $1 that no order bills yet: not held, and sent (or recorded, when
- * not sent yet) after the creation of the newest order of the account.
+ * The usage events of account $1 that no order bills yet: not held, and either not sent yet or
+ * sent after the creation of the newest order of the account. Polar bills only the events that it
+ * received, so an unsent event stays unbilled until the usage push sends it or holds it, also when
+ * an order is newer.
  */
 const unbilledUsageEvents = `
   usage_events e
   WHERE e.account_id = $1 AND e.held_at IS NULL
-    AND coalesce(e.sent_at, e.created_at) > coalesce(
-          (SELECT max(o.created_at) FROM polar_orders o WHERE o.account_id = $1), '-infinity'::timestamptz)`
+    AND (e.sent_at IS NULL OR e.sent_at > coalesce(
+          (SELECT max(o.created_at) FROM polar_orders o WHERE o.account_id = $1), '-infinity'::timestamptz))`
 
 interface SubscriptionRow {
   readonly subscription_id: string
@@ -346,7 +352,7 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
         accountId
       ]).pipe(Effect.map((result) => result.rows[0]?.unbilled === true))
 
-    const holdCandidates = (productId: string, since: Date) =>
+    const holdCandidates = (productId: string, since: Date, recheckBefore: Date) =>
       query<{ account_id: string }>(
         `SELECT s.account_id::text AS account_id
            FROM polar_subscriptions s
@@ -358,8 +364,10 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
           WHERE greatest(e.created_at, e.sent_at, e.held_at) > $3
             AND NOT EXISTS (
               SELECT 1 FROM polar_subscriptions s
-               WHERE s.account_id = e.account_id AND s.product_id = $1 AND s.status = ANY($2))`,
-        [productId, billableStatuses, since]
+               WHERE s.account_id = e.account_id AND s.product_id = $1 AND s.status = ANY($2))
+         UNION
+         SELECT account_id::text AS account_id FROM deletion_holds WHERE updated_at < $4`,
+        [productId, billableStatuses, since, recheckBefore]
       ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
 
     const recordHold = (accountId: string, reason: string) =>

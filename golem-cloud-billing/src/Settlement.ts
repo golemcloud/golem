@@ -54,6 +54,13 @@ export const SETTLEMENT_MARGIN_MS = 15 * 60 * 1000
  */
 export const ORDER_PAYMENT_GRACE_MS = 60 * 60 * 1000
 
+/**
+ * How old a recorded deletion hold gets before the sweep reconciles the account again. A placement
+ * refreshes the record, so a held account is checked about once in this time. A removal that
+ * failed keeps the old record, so the sweep tries it again, long after the last webhook.
+ */
+export const HOLD_RECHECK_MS = 60 * 60 * 1000
+
 /** How long the sweep still checks a subscription after its end, or an order after the grace. */
 const SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -287,7 +294,11 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
           at(-ORDER_PAYMENT_GRACE_MS - SWEEP_WINDOW_MS),
           at(-ORDER_PAYMENT_GRACE_MS)
         )
-        const holdCandidates = yield* subscriptions.holdCandidates(config.polar.productId, at(-SWEEP_WINDOW_MS))
+        const holdCandidates = yield* subscriptions.holdCandidates(
+          config.polar.productId,
+          at(-SWEEP_WINDOW_MS),
+          at(-HOLD_RECHECK_MS)
+        )
         const candidates = [...new Set([...ending, ...awaitingPayment, ...holdCandidates])]
         // The reconcile changes nothing for a deleted account, so the sweep skips it.
         const deleted = new Set(yield* registryAccounts.deletedAmong(candidates))
