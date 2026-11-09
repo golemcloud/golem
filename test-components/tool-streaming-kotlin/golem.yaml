@@ -1,0 +1,43 @@
+manifestVersion: 1.6.0
+
+app: tool-streaming-kotlin
+
+componentTemplates:
+  kotlin-test-component:
+    guestLanguage: kotlin
+    presets:
+      release:
+        default: true
+        build:
+        - command: gradle -p "{{ componentDir }}" nativeComponent
+          dir: "{{ appRootDir }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/build.gradle.kts"
+          - "{{ appRootDir }}/settings.gradle.kts"
+          - "{{ appRootDir }}/gradle.properties"
+          targets:
+          - "{{ componentDir }}/build/golem/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ componentDir }}/build/golem/{{ component_name | to_snake_case }}.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../golem_it_tool_streaming_kotlin.wasm"
+
+components:
+  kotlin:examples:
+    dir: .
+    templates: kotlin-test-component
+
+tools:
+  matrix-core: {}
+
+agents:
+  KotlinToolStreamingCaller:
+    tools:
+      matrix-core: {}
+
+environments:
+  local:
+    server: local
+    componentPresets: release

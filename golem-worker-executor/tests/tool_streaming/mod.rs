@@ -181,6 +181,10 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("tool_streaming_kotlin")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("tool_streaming_moonbit")]
     PrecompiledComponent
 );

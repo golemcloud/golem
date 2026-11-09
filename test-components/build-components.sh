@@ -7,6 +7,7 @@ rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" 
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe")
 effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect" "permissions-effect")
 scala_test_apps=("tool-streaming-scala")
+kotlin_test_apps=("tool-streaming-kotlin")
 moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40")
 go_test_apps=("agent-sdk-go" "agent-rpc-go" "tool-streaming-go")
 benchmark_apps=("benchmarks")
@@ -19,7 +20,7 @@ GO_CHUNKS=1   # Number of chunks to split go apps into for parallel CI builds
 # - clean: clean all projects without building
 # - rebuild: clean all projects before building them
 # - check: run only `golem-cli build --step check` for selected projects
-# - rust / ts / scala / moonbit / benchmarks: build only the specified group
+# - rust / ts / scala / kotlin / moonbit / benchmarks: build only the specified group
 # - rust-N / ts-N: build only the Nth chunk of that group (for parallel CI)
 # - list-groups: print available group names for CI matrix generation
 
@@ -74,6 +75,7 @@ print_groups_json() {
   done
   printf '%s{"name":"effect","needs-node":true,"needs-effect":true}' "$sep"
   printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
+  printf ',{"name":"kotlin","needs-node":false,"needs-kotlin":true,"expected-artifact":"golem_it_tool_streaming_kotlin.wasm"}'
   printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true}'
   for ((i=1; i<=GO_CHUNKS; i++)); do
     printf ',{"name":"go-%d","needs-node":false,"needs-go":true}' "$i"
@@ -97,7 +99,7 @@ for arg in "$@"; do
     check)
       check_only=true
       ;;
-    rust|ts|effect|scala|moonbit|go|benchmarks)
+    rust|ts|effect|scala|kotlin|moonbit|go|benchmarks)
       single_group=true
       group="$arg"
       ;;
@@ -355,6 +357,9 @@ build_sdk_apps() {
         tool-streaming-scala)
           test -s ../golem_it_tool_streaming_scala.wasm
           ;;
+        tool-streaming-kotlin)
+          test -s ../golem_it_tool_streaming_kotlin.wasm
+          ;;
         tool-streaming-moonbit)
           test -s ../golem_it_tool_streaming_moonbit.wasm
           ;;
@@ -402,6 +407,10 @@ fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "scala" ]; then
   build_sdk_apps "Scala" "${scala_test_apps[@]}"
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "kotlin" ]; then
+  build_sdk_apps "Kotlin" "${kotlin_test_apps[@]}"
 fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "moonbit" ]; then

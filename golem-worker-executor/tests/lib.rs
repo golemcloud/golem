@@ -357,6 +357,12 @@ test_component!(
     "scala:examples"
 );
 test_component!(
+    tool_streaming_kotlin,
+    "tool_streaming_kotlin",
+    "golem_it_tool_streaming_kotlin",
+    "kotlin:examples"
+);
+test_component!(
     tool_streaming_moonbit,
     "tool_streaming_moonbit",
     "golem_it_tool_streaming_moonbit",

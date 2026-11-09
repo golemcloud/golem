@@ -100,6 +100,7 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
     #[tagged_as("tool_streaming_ts_caller")] typescript_caller: &PrecompiledComponent,
     #[tagged_as("tool_streaming_scala")] scala: &PrecompiledComponent,
     #[tagged_as("tool_streaming_moonbit")] moonbit: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_kotlin")] kotlin: &PrecompiledComponent,
     #[tagged_as("tool_streaming_effect_provider")] effect_provider: &PrecompiledComponent,
     #[tagged_as("tool_streaming_effect_caller")] effect_caller: &PrecompiledComponent,
     #[tagged_as("tool_streaming_go_provider")] go_provider: &PrecompiledComponent,
@@ -169,6 +170,13 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
             agent_type: "",
             method: "",
         },
+        MatrixFixture {
+            language: "kotlin",
+            component: kotlin,
+            package: "kotlin:examples",
+            agent_type: "",
+            method: "",
+        },
     ];
     let callers = [
         MatrixFixture {
@@ -211,6 +219,13 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
             component: go_caller,
             package: "",
             agent_type: "GoToolStreamingCaller",
+            method: "matrix_core_observation",
+        },
+        MatrixFixture {
+            language: "kotlin",
+            component: kotlin,
+            package: "",
+            agent_type: "KotlinToolStreamingCaller",
             method: "matrix_core_observation",
         },
     ];
