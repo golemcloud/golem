@@ -659,7 +659,9 @@ calls remain incomplete rather than applying guest cancellation or non-cancellab
 This also prevents a pending producer from recording a false EOF while its Store is discarded.
 An attachment write or terminal that the owner fence rejects abandons its call
 (`abandon_if_owner_fenced` in `durable_host/tool/durability.rs`): the fence's `Cancelled` is not
-the call's outcome, so the next generation repairs the `Start` in place.
+the call's outcome, so the next generation repairs the `Start` in place. The same holds for a
+`tool-stdin-closed` wait that the fence wakes: it abandons its call instead of recording the
+`Cancelled` terminal, so the recovered caller keeps writing to the open stdin.
 
 Typed stream projection requests read admission from its owning Store before receiving durable
 items. Recorded observations replay from the consumer journal; opening a source waits for the

@@ -120,6 +120,11 @@ impl WorkerTasks {
         self.0.tasks.wait().await;
     }
 
+    /// Resolves once root admission is closed and the roots are cancelled.
+    pub(crate) async fn stopped(&self) {
+        self.0.stop.cancelled().await
+    }
+
     /// Metadata queries remain available for owner-driven stream cleanup after external roots
     /// stop. Final retirement closes this admission too, before the oplog actor is stopped.
     pub(crate) async fn stop_and_wait(&self) -> Result<(), String> {
@@ -149,6 +154,23 @@ impl WorkerTasks {
             result = result.and(completed);
         }
         result
+    }
+
+    /// Describes the tasks that still keep [`Self::stop_and_wait`] pending, if any.
+    pub(crate) fn describe_pending(&self) -> Option<String> {
+        let roots = self.0.tasks.len();
+        let metadata = self.0.metadata.len();
+        let actors = self
+            .0
+            .actors
+            .lock()
+            .unwrap()
+            .owners
+            .iter()
+            .filter(|owner| owner.strong_count() != 0)
+            .count();
+        (roots + metadata + actors != 0)
+            .then(|| format!("roots={roots} metadata={metadata} actors={actors}"))
     }
 
     pub(crate) fn spawn_metadata<F>(&self, future: F) -> Result<JoinHandle<F::Output>, &'static str>

@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
+use crate::filesystem::sandbox::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::filesystem_snapshot::AgentSnapshots;
 use crate::model::{LookupResult, TrapType};
-use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
     CaptureError, CaptureOutcome, DeleteFailure, InitialFilesCheck, LimitTransition,
     ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem, TreeMark, WholeCapture,
@@ -618,6 +618,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     ?decision,
                     "Invocation queue loop interrupted after recovery"
                 );
+                // A completed recovery leaves no invocation running, so no invocation outcome
+                // records this stop. Like an idle demand of the resident loop, the unloaded path
+                // records its lifecycle marker after disposal.
+                if final_decision.is_none()
+                    && matches!(
+                        kind,
+                        InterruptKind::Suspend(_) | InterruptKind::Interrupt(_)
+                    )
+                {
+                    unloaded_interrupt = Some(interrupt.clone());
+                }
                 if !matches!(kind, InterruptKind::Restart) {
                     final_interrupt = Some(kind);
                 }

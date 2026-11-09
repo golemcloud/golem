@@ -3191,7 +3191,20 @@ async fn promise(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    // The executor checks a blocked guest for suspension after `wait_suspend_grace` and then
+    // every `wait_suspend_check_interval`. The default interval equals the wait for Suspended
+    // below, so a guest that blocks after the first check would never suspend in time.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)

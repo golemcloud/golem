@@ -22,9 +22,11 @@ use golem_common::model::{AgentStatus, OplogIndex, PromiseId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tracing::Instrument;
@@ -50,7 +52,20 @@ async fn go_promise_suspends_until_completed(
     #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    // The executor checks a blocked guest for suspension after `wait_suspend_grace` and then
+    // every `wait_suspend_check_interval`. The default interval equals the wait for Suspended
+    // below, so a guest that blocks after the first check would never suspend in time.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_go)

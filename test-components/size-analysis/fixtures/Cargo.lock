@@ -731,6 +731,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "retention-tool-client-refined"
+version = "0.0.1"
+dependencies = [
+ "golem-rust",
+]
+
+[[package]]
 name = "retention-typed-floor"
 version = "0.0.1"
 dependencies = [
@@ -1226,7 +1233,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#fb1fff1fa0e553b27d86691281018071282e3eab"
+source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#c0eb9d2ff0dac16cbf04f6206fc9e86cfa70f5bd"
 dependencies = [
  "bitflags",
  "futures",
@@ -1246,7 +1253,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#fb1fff1fa0e553b27d86691281018071282e3eab"
+source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#c0eb9d2ff0dac16cbf04f6206fc9e86cfa70f5bd"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
@@ -1279,7 +1286,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#fb1fff1fa0e553b27d86691281018071282e3eab"
+source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#c0eb9d2ff0dac16cbf04f6206fc9e86cfa70f5bd"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
@@ -1308,7 +1315,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust-macro"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#fb1fff1fa0e553b27d86691281018071282e3eab"
+source = "git+https://github.com/golemcloud/wit-bindgen?branch=wit-bindgen-golem-1.6#c0eb9d2ff0dac16cbf04f6206fc9e86cfa70f5bd"
 dependencies = [
  "anyhow",
  "macro-string",

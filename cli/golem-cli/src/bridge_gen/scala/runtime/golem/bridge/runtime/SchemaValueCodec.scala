@@ -82,7 +82,7 @@ object SchemaValueCodec {
       case F32Value(v)                  => node("f32") { output.append(floatJson(v).render); () }
       case F64Value(v)                  => node("f64") { output.append(floatJson(v).render); () }
       case CharValue(v)                 => node("char")(string(charString(v)))
-      case StringValue(v)               => node("string")(string(v))
+      case StringValue(v)               => node("string")(string(validString(v)))
       case RecordValue(values)          => children("record", "fields", values)
       case TupleValue(values)           => children("tuple", "elements", values)
       case ListValue(values)            => children("list", "elements", values)
@@ -120,25 +120,29 @@ object SchemaValueCodec {
       case TextValue(text, language) =>
         node("text") {
           output.append('{')
-          language.foreach { language => output.append("\"language\":"); string(language); output.append(',') }
-          output.append("\"text\":"); string(text); output.append('}'); ()
+          language.foreach { language =>
+            output.append("\"language\":"); string(validText("text language", language)); output.append(',')
+          }
+          output.append("\"text\":"); string(validText("text", text)); output.append('}'); ()
         }
       case BinaryValue(bytes, mime) =>
         node("binary") {
           output.append("{\"bytes\":"); array(bytes) { byte => output.append(byte & 0xff); () }
-          mime.foreach { mime => output.append(",\"mimeType\":"); string(mime) }
+          mime.foreach { mime => output.append(",\"mimeType\":"); string(validText("binary MIME type", mime)) }
           output.append('}'); ()
         }
-      case PathValue(v)     => node("path") { output.append("{\"path\":"); string(v); output.append('}'); () }
-      case UrlValue(v)      => node("url") { output.append("{\"url\":"); string(v); output.append('}'); () }
-      case UuidValue(v)     => node("uuid")(string(Uuid.toStandardString(v)))
+      case PathValue(v) =>
+        node("path") { output.append("{\"path\":"); string(validText("path", v)); output.append('}'); () }
+      case UrlValue(v) =>
+        node("url") { output.append("{\"url\":"); string(validText("url", v)); output.append('}'); () }
+      case UuidValue(v)     => node("uuid")(string(v.toString))
       case DatetimeValue(v) => node("datetime") { output.append("{\"value\":"); string(v); output.append('}'); () }
       case DurationValue(v) =>
         node("duration") { output.append("{\"nanoseconds\":"); string(v.toString); output.append('}'); () }
       case QuantityValue(mantissa, scale, unit) =>
         node("quantity") {
           output.append("{\"mantissa\":"); string(mantissa.toString);
-          output.append(",\"scale\":").append(scale).append(",\"unit\":"); string(unit); output.append('}'); ()
+          output.append(",\"scale\":").append(scale).append(",\"unit\":"); string(validText("quantity unit", unit)); output.append('}'); ()
         }
       case StreamReferenceValue(provisional, token, _) =>
         node("stream") {
@@ -151,7 +155,7 @@ object SchemaValueCodec {
         }
       case UnionValue(tag, body) =>
         node("union") {
-          output.append("{\"body\":"); writeJson(body, output); output.append(",\"tag\":"); string(tag);
+          output.append("{\"body\":"); writeJson(body, output); output.append(",\"tag\":"); string(validText("union tag", tag));
           output.append('}'); ()
         }
     }
@@ -172,7 +176,7 @@ object SchemaValueCodec {
     case F32Value(v)    => node("f32", floatJson(v))
     case F64Value(v)    => node("f64", floatJson(v))
     case CharValue(v)   => node("char", Json.string(charString(v)))
-    case StringValue(v) => node("string", Json.string(v))
+    case StringValue(v) => node("string", Json.string(validString(v)))
 
     case RecordValue(fields) =>
       node("record", Json.obj("fields" -> Json.arr(fields.map(toJson).toVector)))
@@ -212,20 +216,23 @@ object SchemaValueCodec {
     case TextValue(text, language) =>
       node(
         "text",
-        Json.obj(Vector.empty ++ language.map(l => "language" -> Json.string(l)) :+ ("text" -> Json.string(text)))
+        Json.obj(
+          Vector.empty ++ language.map(l => "language" -> Json.string(validText("text language", l))) :+
+            ("text" -> Json.string(validText("text", text)))
+        )
       )
     case BinaryValue(bytes, mimeType) =>
       val base = Vector[(String, Json)](
         "bytes" -> Json.arr(bytes.map(b => Json.fromInt(b & 0xff)))
       )
       val withMime = mimeType match {
-        case Some(m) => base :+ ("mimeType" -> Json.string(m))
+        case Some(m) => base :+ ("mimeType" -> Json.string(validText("binary MIME type", m)))
         case None    => base
       }
       node("binary", Json.obj(withMime))
-    case PathValue(v)                         => node("path", Json.obj("path" -> Json.string(v)))
-    case UrlValue(v)                          => node("url", Json.obj("url" -> Json.string(v)))
-    case UuidValue(v)                         => node("uuid", Json.string(Uuid.toStandardString(v)))
+    case PathValue(v)                         => node("path", Json.obj("path" -> Json.string(validText("path", v))))
+    case UrlValue(v)                          => node("url", Json.obj("url" -> Json.string(validText("url", v))))
+    case UuidValue(v)                         => node("uuid", Json.string(v.toString))
     case DatetimeValue(v)                     => node("datetime", Json.obj("value" -> Json.string(v)))
     case DurationValue(v)                     => node("duration", Json.obj("nanoseconds" -> Json.string(v.toString)))
     case QuantityValue(mantissa, scale, unit) =>
@@ -234,7 +241,7 @@ object SchemaValueCodec {
         Json.obj(
           "mantissa" -> Json.string(mantissa.toString),
           "scale"    -> Json.fromInt(scale),
-          "unit"     -> Json.string(unit)
+          "unit"     -> Json.string(validText("quantity unit", unit))
         )
       )
 
@@ -247,11 +254,39 @@ object SchemaValueCodec {
       node("stream", reference)
 
     case UnionValue(unionTag, body) =>
-      node("union", Json.obj("body" -> toJson(body), "tag" -> Json.string(unionTag)))
+      node("union", Json.obj("body" -> toJson(body), "tag" -> Json.string(validText("union tag", unionTag))))
   }
 
   private def node(kind: String, value: Json): Json =
     Json.obj("kind" -> Json.string(kind), "value" -> value)
+
+  private[runtime] def loneSurrogateIndex(value: String): Int = {
+    var index = 0
+    while (index < value.length) {
+      val current = value.charAt(index)
+      if (Character.isHighSurrogate(current)) {
+        if (index + 1 < value.length && Character.isLowSurrogate(value.charAt(index + 1))) index += 2
+        else return index
+      } else if (Character.isLowSurrogate(current)) return index
+      else index += 1
+    }
+    -1
+  }
+
+  private[runtime] def validString(value: String): String = validText("string", value)
+
+  /** Rejects a textual leaf with a lone surrogate; `what` names the leaf in the error. */
+  private[runtime] def validText(what: String, value: String): String = {
+    val index = loneSurrogateIndex(value)
+    if (index >= 0)
+      throw BridgeException(f"Schema $what contains a lone surrogate U+${value.charAt(index).toInt}%04X at index $index")
+    value
+  }
+
+  private def decodedText(what: String)(json: Json): Either[String, String] =
+    Json.asString(json).flatMap { text =>
+      if (loneSurrogateIndex(text) >= 0) Left(s"$what value must not contain a lone surrogate") else Right(text)
+    }
 
   private def charString(value: Int): String = {
     if (value < 0 || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff))
@@ -382,25 +417,91 @@ object SchemaValueCodec {
     case StringValue(x) => x
     case o              => mismatch("string", o)
   }
-  def asPath(v: SchemaValue): String = v match {
-    case PathValue(x) => x
+  def asPath(v: SchemaValue): GolemPath = v match {
+    case PathValue(x) => GolemPath(x)
     case o            => mismatch("path", o)
   }
-  def asUrl(v: SchemaValue): String = v match {
-    case UrlValue(x) => x
-    case o           => mismatch("url", o)
+  def asUrl(v: SchemaValue): java.net.URI = v match {
+    case UrlValue(x) =>
+      try new java.net.URI(x)
+      catch {
+        case e: java.net.URISyntaxException => throw BridgeException(s"Invalid url '$x': ${e.getReason}")
+      }
+    case o => mismatch("url", o)
   }
   def asDatetime(v: SchemaValue): java.time.Instant = v match {
-    case DatetimeValue(x) =>
-      try java.time.Instant.parse(x)
-      catch {
-        case e: Exception => throw BridgeException(s"Invalid datetime '$x': ${e.getMessage}")
-      }
-    case o => mismatch("datetime", o)
+    case DatetimeValue(x) => parseDatetime(x)
+    case o                => mismatch("datetime", o)
   }
-  def asDuration(v: SchemaValue): Long = v match {
-    case DurationValue(x) => x
+  def asDuration(v: SchemaValue): java.time.Duration = v match {
+    case DurationValue(x) => java.time.Duration.ofNanos(x)
     case o                => mismatch("duration", o)
+  }
+
+  def encodePath(v: GolemPath): SchemaValue        = PathValue(v.value)
+  def encodeUrl(v: java.net.URI): SchemaValue      = UrlValue(v.toString)
+  def encodeDatetime(v: java.time.Instant): SchemaValue = DatetimeValue(formatDatetime(v))
+  def encodeDuration(v: java.time.Duration): SchemaValue =
+    try DurationValue(v.toNanos)
+    catch {
+      case _: ArithmeticException => throw BridgeException(s"Duration $v is outside the s64 nanoseconds range")
+    }
+
+  // RFC 3339 text is limited to four-digit years: 0000-01-01T00:00:00Z ..= 9999-12-31T23:59:59.999999999Z.
+  private val MinDatetimeSeconds = -62167219200L
+  private val MaxDatetimeSeconds = 253402300799L
+  private val Rfc3339 = java.util.regex.Pattern.compile(
+    "([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt ]([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\\.([0-9]+))?(?:[Zz]|([+-])([0-9]{2}):([0-9]{2}))"
+  )
+
+  /**
+   * Formats an instant as RFC 3339 in UTC with a trailing `Z` and up to nine
+   * fraction digits (trailing zeros removed). Throws for instants outside the
+   * years 0000..9999.
+   */
+  def formatDatetime(value: java.time.Instant): String = {
+    val seconds = value.getEpochSecond
+    if (seconds < MinDatetimeSeconds || seconds > MaxDatetimeSeconds)
+      throw BridgeException(s"Datetime $value is outside the years 0000..9999 in UTC")
+    val t        = java.time.LocalDateTime.ofEpochSecond(seconds, 0, java.time.ZoneOffset.UTC)
+    val fraction =
+      if (value.getNano == 0) "" else "." + f"${value.getNano}%09d".reverse.dropWhile(_ == '0').reverse
+    f"${t.getYear}%04d-${t.getMonthValue}%02d-${t.getDayOfMonth}%02dT${t.getHour}%02d:${t.getMinute}%02d:${t.getSecond}%02d${fraction}Z"
+  }
+
+  /**
+   * Parses an RFC 3339 datetime with any UTC offset and converts it to UTC.
+   * Throws for malformed text, more than nine fraction digits, and instants
+   * outside the years 0000..9999 in UTC.
+   */
+  def parseDatetime(value: String): java.time.Instant = {
+    val m = Rfc3339.matcher(value)
+    if (!m.matches()) throw BridgeException(s"Invalid RFC 3339 datetime '$value'")
+    val fraction = Option(m.group(7)).getOrElse("")
+    if (fraction.length > 9) throw BridgeException(s"Datetime '$value' has more than nine fraction digits")
+    val local =
+      try
+        java.time.LocalDateTime.of(
+          m.group(1).toInt,
+          m.group(2).toInt,
+          m.group(3).toInt,
+          m.group(4).toInt,
+          m.group(5).toInt,
+          m.group(6).toInt
+        )
+      catch { case _: java.time.DateTimeException => throw BridgeException(s"Invalid RFC 3339 datetime '$value'") }
+    val offsetSeconds = Option(m.group(8)) match {
+      case None       => 0
+      case Some(sign) =>
+        val hours   = m.group(9).toInt
+        val minutes = m.group(10).toInt
+        if (hours > 23 || minutes > 59) throw BridgeException(s"Invalid RFC 3339 datetime '$value'")
+        (if (sign == "-") -1 else 1) * (hours * 3600 + minutes * 60)
+    }
+    val seconds = local.toEpochSecond(java.time.ZoneOffset.UTC) - offsetSeconds
+    if (seconds < MinDatetimeSeconds || seconds > MaxDatetimeSeconds)
+      throw BridgeException(s"Datetime '$value' is outside the years 0000..9999 in UTC")
+    java.time.Instant.ofEpochSecond(seconds, fraction.padTo(9, '0').toLong)
   }
   def asBinary(v: SchemaValue): (Vector[Byte], Option[String]) = v match {
     case BinaryValue(bytes, mimeType) => (bytes, mimeType)
@@ -461,38 +562,19 @@ object SchemaValueCodec {
   def requiredPayload(payload: Option[SchemaValue], context: String): SchemaValue =
     payload.getOrElse(throw BridgeException(s"Missing payload for $context"))
 
-  // --- UUID <-> record-of-two-u64 -----------------------------------------
+  // --- UUID text ------------------------------------------------------------
 
   /**
-   * Encodes a [[Uuid]] as the cross-SDK `uuid.Uuid` builtin record (two `u64`
-   * halves). The runtime [[SchemaValue.U64Value]] holds the raw 64 bits, so the
-   * unsigned half values are reinterpreted as raw bits via `toLong`.
+   * Parses the canonical UUID text form: lowercase hexadecimal digits in the
+   * hyphenated 8-4-4-4-12 layout, as `java.util.UUID.toString` produces it.
+   * `UUID.fromString` also accepts other forms, so the layout is checked first.
    */
-  def encodeUuid(uuid: Uuid): SchemaValue = {
-    if (uuid.highBits < 0 || uuid.highBits > MaxU64)
-      throw BridgeException(s"UUID high half ${uuid.highBits} out of range [0, $MaxU64]")
-    if (uuid.lowBits < 0 || uuid.lowBits > MaxU64)
-      throw BridgeException(s"UUID low half ${uuid.lowBits} out of range [0, $MaxU64]")
-    RecordValue(
-      List(U64Value((uuid.highBits & MaxU64).toLong), U64Value((uuid.lowBits & MaxU64).toLong))
-    )
-  }
+  def parseUuid(text: String): Either[String, java.util.UUID] =
+    if (CanonicalUuid.matcher(text).matches()) Right(java.util.UUID.fromString(text))
+    else Left(s"Expected a lowercase hyphenated UUID, got '$text'")
 
-  /** Decodes the `uuid.Uuid` builtin record into a [[Uuid]]. */
-  def decodeUuid(value: SchemaValue): Either[String, Uuid] = value match {
-    case RecordValue(List(U64Value(hi), U64Value(lo))) =>
-      Right(Uuid(BigInt(hi) & MaxU64, BigInt(lo) & MaxU64))
-    case other => Left(s"Expected a uuid record (two u64 fields), got $other")
-  }
-
-  /**
-   * [[decodeUuid]] variant that throws [[BridgeException]] on a shape mismatch.
-   */
-  def decodeUuidOrThrow(value: SchemaValue): Uuid =
-    decodeUuid(value) match {
-      case Right(uuid)   => uuid
-      case Left(message) => throw BridgeException(message)
-    }
+  private val CanonicalUuid =
+    java.util.regex.Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
   // --- Decoding ------------------------------------------------------------
 
@@ -520,7 +602,7 @@ object SchemaValueCodec {
       }
     case "f64"    => floatValue(value).map(F64Value(_))
     case "char"   => Json.asString(value).flatMap(charValue)
-    case "string" => Json.asString(value).map(StringValue(_))
+    case "string" => decodedText("string")(value).map(StringValue(_))
 
     case "record" =>
       exactObject(value, Set("fields"), "record").flatMap(member(_, "fields")).flatMap(Json.asArray).flatMap { items =>
@@ -571,21 +653,21 @@ object SchemaValueCodec {
     case "text" =>
       for {
         fields   <- exactOptionalObject(value, Set("text"), Set("language"), "text")
-        text     <- member(fields, "text").flatMap(Json.asString)
-        language <- optionalStringMember(fields, "language")
+        text     <- member(fields, "text").flatMap(decodedText("text"))
+        language <- optionalTextMember(fields, "language", "text language")
       } yield TextValue(text, language)
     case "binary" =>
       for {
         fields   <- exactOptionalObject(value, Set("bytes"), Set("mimeType"), "binary")
         bytes    <- member(fields, "bytes").flatMap(Json.asArray).flatMap(decodeBytes)
-        mimeType <- optionalStringMember(fields, "mimeType")
+        mimeType <- optionalTextMember(fields, "mimeType", "binary MIME type")
       } yield BinaryValue(bytes, mimeType)
     case "path" =>
-      exactObject(value, Set("path"), "path").flatMap(member(_, "path")).flatMap(Json.asString).map(PathValue(_))
+      exactObject(value, Set("path"), "path").flatMap(member(_, "path")).flatMap(decodedText("path")).map(PathValue(_))
     case "url" =>
-      exactObject(value, Set("url"), "url").flatMap(member(_, "url")).flatMap(Json.asString).map(UrlValue(_))
+      exactObject(value, Set("url"), "url").flatMap(member(_, "url")).flatMap(decodedText("url")).map(UrlValue(_))
     case "uuid" =>
-      Json.asString(value).flatMap(Uuid.fromStandardString).map(UuidValue(_))
+      Json.asString(value).flatMap(parseUuid).map(UuidValue(_))
     case "datetime" =>
       exactObject(value, Set("value"), "datetime")
         .flatMap(member(_, "value"))
@@ -602,13 +684,13 @@ object SchemaValueCodec {
         mantissa <-
           member(fields, "mantissa").flatMap(n => decimalString(n, signed = true, MinI64, MaxI64, "quantity mantissa"))
         scale <- member(fields, "scale").flatMap(n => ranged(n, MinI32, MaxI32, "quantity scale"))
-        unit  <- member(fields, "unit").flatMap(Json.asString)
+        unit  <- member(fields, "unit").flatMap(decodedText("quantity unit"))
       } yield QuantityValue(mantissa.toLong, scale.toInt, unit)
 
     case "union" =>
       for {
         fields <- exactObject(value, Set("tag", "body"), "union")
-        tag    <- member(fields, "tag").flatMap(Json.asString)
+        tag    <- member(fields, "tag").flatMap(decodedText("union tag"))
         body   <- member(fields, "body").flatMap(fromJson)
       } yield UnionValue(tag, body)
 
@@ -705,9 +787,9 @@ object SchemaValueCodec {
   private def member(fields: Vector[(String, Json)], name: String): Either[String, Json] =
     fields.find(_._1 == name).map(_._2).toRight(s"Missing required field '$name'")
 
-  private def optionalStringMember(fields: Vector[(String, Json)], name: String): Either[String, Option[String]] =
+  private def optionalTextMember(fields: Vector[(String, Json)], name: String, what: String): Either[String, Option[String]] =
     fields.find(_._1 == name).map(_._2) match {
-      case Some(value) => Json.asString(value).map(Some(_))
+      case Some(value) => decodedText(what)(value).map(Some(_))
       case None        => Right(None)
     }
 

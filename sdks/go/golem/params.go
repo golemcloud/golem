@@ -39,6 +39,21 @@ func encodeParams(fields []engine.Field, v reflect.Value) types.SchemaValueTree 
 	return types.SchemaValueTree{ValueNodes: b.Nodes, Root: root}
 }
 
+// tryEncodeParams is encodeParams that returns the [engine.EncodeError] of a
+// value the caller supplied that does not encode, rather than panicking with it.
+func tryEncodeParams(fields []engine.Field, v reflect.Value) (tree types.SchemaValueTree, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			ee, ok := r.(*engine.EncodeError)
+			if !ok {
+				panic(r)
+			}
+			err = ee
+		}
+	}()
+	return encodeParams(fields, v), nil
+}
+
 // decodeParams decodes a parameter-list tree (a record at the root) into dst's
 // fields. An empty parameter list is permitted to arrive as an empty record.
 // Principal fields have no value in the tree: they are set to principal, which

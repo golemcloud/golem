@@ -321,7 +321,7 @@ mod tests {
 
     fn mcp_only() -> McpOnlyEndpoint {
         McpOnlyEndpoint::new(
-            TrustedIngress::new(&["10.0.0.1".parse().unwrap()]),
+            TrustedIngress::new(&["10.0.0.1/32".parse().unwrap()]),
             Arc::new(Lookup),
             make_sync(|req: Request| {
                 let mcp_request = req.extensions().get::<McpRequest>().unwrap();

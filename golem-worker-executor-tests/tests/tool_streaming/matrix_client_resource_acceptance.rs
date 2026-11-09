@@ -1049,6 +1049,13 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         assert_eq!(starts.len(), 2);
         assert_eq!(starts[0], first_start);
         let second_start = starts[1];
+        // Hold the terminal of the body that derives second until the other derivation is
+        // recorded. Otherwise the caller can observe this body's result before the other
+        // derivation ends, and replay then cannot end that derivation while the restart below
+        // holds this body at its audit lookup. The other body waits in the card service, so only
+        // this body can complete first.
+        let mut second_completion =
+            executor.gate_next_live_entity_body_completion(&worker, "matrix-permission-issuer");
         cards.release[1].add_permits(1);
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
@@ -1065,7 +1072,17 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             }
         })
         .await?;
+        tokio::time::timeout(Duration::from_secs(20), second_completion.entered()).await?;
         cards.release[0].add_permits(1);
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while !executor.stored_oplog(&worker).await.iter().any(|entry| {
+                matches!(entry, OplogEntry::CardDerived { card, .. } if card.card_id() == first_card)
+            }) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        second_completion.release();
         anyhow::Ok((first_start, second_start, first_card, second_card))
     };
     let (result, installed) = tokio::join!(invocation, install);
@@ -1150,6 +1167,9 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
     let second_audit = index_of(
         &|entry| matches!(entry, OplogEntry::CardDerived { card, entity_parent_start_index: Some(parent), wallet_generation: 1, .. } if card.card_id() == second_card && *parent == second_parent),
     );
+    let second_body_end = index_of(
+        &|entry| matches!(entry, OplogEntry::End { start_index, .. } if *start_index == second_parent),
+    );
     assert_eq!(second_audit, second_end.next());
     assert!(
         p1.0 < first_parent
@@ -1162,7 +1182,8 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             && second_end < second_audit
             && second_audit < first_end
             && first_end < first_audit
-            && first_audit < p2.0
+            && first_audit < second_body_end
+            && second_body_end < p2.0
     );
     assert!(
         !recorded

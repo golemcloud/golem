@@ -9,13 +9,19 @@ on:
       # e.g. `1.5.x`. The wildcard means a new `1.6.x` branch starts running
       # CI on push automatically when it is created.
       - "[0-9]+.[0-9]+.x"
-    # Skip the heavy Rust/Docker/etc. CI when only docs/ changes were pushed.
-    # Documentation has its own workflow in .github/workflows/docs.yaml.
+    # Skip the heavy Rust/Docker/etc. CI when only docs/ or the cloud billing app changed. They
+    # have their own workflows: .github/workflows/docs.yaml and golem-cloud-billing.yaml. The
+    # required checks of main do not report for such a change, so its pull request is merged
+    # with the ruleset bypass.
     paths-ignore:
       - "docs/**"
+      - "golem-cloud-billing/**"
+      - ".github/workflows/golem-cloud-billing.yaml"
   pull_request:
     paths-ignore:
       - "docs/**"
+      - "golem-cloud-billing/**"
+      - ".github/workflows/golem-cloud-billing.yaml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -29,7 +35,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.13"
+  WASM_RQUICKJS_VERSION: "0.4.15"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -116,6 +122,8 @@ jobs:
         with:
           fetch-depth: 1
       - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: wasm32-wasip2
 
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
@@ -141,6 +149,10 @@ jobs:
           java-version: 21
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
+      - name: Setup Node.js (for the tool-process adapter tests)
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
       - uses: ./.github/actions/restore-binaries
         with:
           disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
@@ -239,7 +251,7 @@ jobs:
       - name: Compute built-in artifact cache key
         id: cache-key
         env:
-          SOURCE_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'Makefile.toml', 'builtin-artifacts.json', 'builtin-tools/**', 'plugins/**', 'wit/**', 'sdks/rust/**', 'sdks/ts/**', 'cli/golem-cli/**', 'golem-common/**', 'golem-api-grpc/**', 'golem-client/**', 'golem-schema/**', 'golem-schema-derive/**', 'golem-tool-metadata/**', 'golem-rust-macro/**', 'golem-mcp-import/**', 'golem-openapi-client-generator/**', 'golem-skills/skills/**', '.github/actions/setup-*/**', '.github/workflows/ci.yaml') }}
+          SOURCE_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'Makefile.toml', 'builtin-artifacts.json', 'builtin-tools/**', 'plugins/**', 'wit/**', 'sdks/rust/**', 'sdks/ts/**', 'sdks/javascript/**', 'cli/golem-cli/**', 'golem-common/**', 'golem-api-grpc/**', 'golem-client/**', 'golem-schema/**', 'golem-schema-derive/**', 'golem-tool-metadata/**', 'golem-rust-macro/**', 'golem-mcp-import/**', 'golem-openapi-client-generator/**', 'golem-skills/skills/**', '.github/actions/setup-*/**', '.github/workflows/ci.yaml') }}
         run: |
           tools=$({ rustc -vV; node --version; wasm-rquickjs --version; wasm-tools --version; } | sha256sum | cut -d' ' -f1)
           echo "value=golem-builtin-artifacts-v3-${SOURCE_HASH}-${tools}" >> "$GITHUB_OUTPUT"
@@ -448,7 +460,7 @@ jobs:
         run: |
           mkdir -p tmp/apfs-test-bin
           cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor \
-            --features test-utils --lib --no-run --message-format=json \
+            --features test-utils --lib --no-run --message-format=json-render-diagnostics \
             > tmp/apfs-cargo-messages.jsonl
           integration-tests/scripts/managed-filesystem/test-select-cargo-test-executables.py
           python3 integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py \
@@ -1127,6 +1139,10 @@ jobs:
         run: cargo build --target wasm32-wasip2 -p golem-schema --no-default-features --features guest
       - name: Test owned typed values in guest mode
         run: cargo test -p golem-schema --no-default-features --features guest --test owned_typed_wit -- --nocapture --report-time
+      - name: Test feature-gated validation in guest mode
+        run: cargo test -p golem-schema --no-default-features --features guest --test feature_matrix -- --nocapture --report-time
+      - name: Test feature-gated validation with default features
+        run: cargo test -p golem-schema --test feature_matrix -- --nocapture --report-time
 
   golem-client:
     runs-on: blacksmith

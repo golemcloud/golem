@@ -99,6 +99,29 @@ pub impl FromSchema for Int with fn from_value(v) {
 // ============================================================
 
 ///|
+pub impl IntoSchema for Int16 with fn type_id() {
+  "s16"
+}
+
+///|
+pub impl IntoSchema for Int16 with fn register_in(_b) {
+  @model.schema_type(S16(None))
+}
+
+///|
+pub impl IntoSchema for Int16 with fn to_value(self) {
+  S16(self.to_int())
+}
+
+///|
+pub impl FromSchema for Int16 with fn from_value(v) {
+  match v {
+    S16(x) if x >= -32768 && x <= 32767 => Int16::from_int(x)
+    _ => raise FromSchemaError::custom("expected a signed 16-bit integer")
+  }
+}
+
+///|
 pub impl IntoSchema for UInt16 with fn type_id() {
   "u16"
 }

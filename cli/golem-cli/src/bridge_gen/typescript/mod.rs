@@ -43,7 +43,7 @@ use golem_common::schema::agent::{
 use golem_common::schema::graph::{SchemaGraph, reachable_defs};
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, SchemaType, TextRestrictions, UnionSpec, VariantCaseType,
+    BinaryRestrictions, QuantitySpec, SchemaType, TextRestrictions, UnionSpec, VariantCaseType,
 };
 use golem_common::schema::unstructured::{
     unstructured_binary_restrictions, unstructured_text_restrictions,
@@ -91,6 +91,12 @@ struct ExternalConstructorNames {
 const TS_BRIDGE_PACKAGE_NAME: &str = "@golemcloud/golem-ts-bridge";
 const TS_SDK_PACKAGE_NAME: &str = "@golemcloud/golem-ts-sdk";
 pub(crate) const MULTIMODAL_INPUT_NAME: &str = "multimodalInput";
+/// Guest-mode shape of a bare `text` value; the same shape as the external
+/// runtime's `AgentText`.
+const GUEST_TEXT_TYPE: &str = "{ text: string; language?: string }";
+/// Guest-mode shape of a bare `binary` value; the same shape as the external
+/// runtime's `AgentBinary`.
+const GUEST_BINARY_TYPE: &str = "{ bytes: Uint8Array; mimeType?: string }";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeScriptBridgeMode {
@@ -2064,7 +2070,7 @@ impl TypeScriptBridgeGenerator {
         };
         writer.write_doc(&method.description);
         writer.write_line(format!(
-            "readonly {member_name}: base.StreamingRemoteMethod<[{args}], {result}> = base.createStreamingRemoteMethod<[{args}], {result}>(() => this.__getConfig().server, () => ({{ application: this.__getConfig().application, environment: this.__getConfig().environment, agentType: {:?}, constructorParameters: this.publicParameters, phantomId: this.phantomId, config: this.publicConfig, method: {:?} }}), {}, (value: any, stream: any) => {{ {decode_body} }});",
+            "readonly {member_name}: base.StreamingRemoteMethod<[{args}], {result}> = base.createStreamingRemoteMethod<[{args}], {result}>(() => this.__getConfig(), () => ({{ application: this.__getConfig().application, environment: this.__getConfig().environment, agentType: {:?}, constructorParameters: this.publicParameters, phantomId: this.phantomId, config: this.publicConfig, method: {:?} }}), {}, (value: any, stream: any) => {{ {decode_body} }});",
             self.agent_type.type_name.0, method.name, encode.build().trim()
         ));
         Ok(())
@@ -2164,7 +2170,7 @@ impl TypeScriptBridgeGenerator {
             | SchemaType::Url { .. }
             | SchemaType::Datetime { .. } => {
                 let kind = match typ { SchemaType::Bool { .. } => "bool", SchemaType::S8 { .. } => "s8", SchemaType::S16 { .. } => "s16", SchemaType::S32 { .. } => "s32", SchemaType::U8 { .. } => "u8", SchemaType::U16 { .. } => "u16", SchemaType::U32 { .. } => "u32", SchemaType::Char { .. } => "char", SchemaType::String { .. } => "string", SchemaType::Path { .. } => "path", SchemaType::Url { .. } => "url", SchemaType::Datetime { .. } => "datetime", _ => unreachable!() };
-                let payload = match typ { SchemaType::Path { .. } => format!("{{ path: {value} }}"), SchemaType::Url { .. } => format!("{{ url: {value} }}"), SchemaType::Datetime { .. } => format!("{{ value: {value} }}"), _ => value.to_string() };
+                let payload = match typ { SchemaType::Path { .. } => format!("{{ path: {value} }}"), SchemaType::Url { .. } => format!("{{ url: {value} }}"), SchemaType::Datetime { .. } => format!("{{ value: base.Datetime.toISOString({value}) }}"), _ => value.to_string() };
                 format!("({{ kind: '{kind}', value: {payload} }})")
             },
             SchemaType::Uuid { .. } => {
@@ -2175,8 +2181,9 @@ impl TypeScriptBridgeGenerator {
                 if matches!(typ, SchemaType::F32 { .. }) { "f32" } else { "f64" }
             ),
             SchemaType::Duration { .. } => format!("({{ kind: 'duration', value: {{ nanoseconds: ({value}).toString() }} }})"),
-            SchemaType::Quantity { .. } => format!(
-                "({{ kind: 'quantity', value: {{ mantissa: ({value}).mantissa.toString(), scale: ({value}).scale, unit: ({value}).unit }} }})"
+            SchemaType::Quantity { spec, .. } => format!(
+                "((q: base.QuantityValue) => ({{ kind: 'quantity', value: {{ mantissa: q.mantissa.toString(), scale: q.scale, unit: q.unit }} }}))({})",
+                Self::quantity_unit_guard(value, spec)?
             ),
             SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => format!(
                 "({{ kind: '{}', value: {{ elements: Array.from({value} as Iterable<any>).map((item: any) => {}) }} }})",
@@ -2353,6 +2360,14 @@ impl TypeScriptBridgeGenerator {
                     wire_kind
                 )
             }
+            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. }
+                if matches!(**element, SchemaType::U8 { .. }) =>
+            {
+                format!(
+                    "Uint8Array.from(({value} as any).value.elements, (item:any) => {})",
+                    self.decode_public_value("item", element)?
+                )
+            }
             SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => format!(
                 "({value} as any).value.elements.map((item:any) => {})",
                 self.decode_public_value("item", element)?
@@ -2400,9 +2415,12 @@ impl TypeScriptBridgeGenerator {
                 "({{ bytes: Uint8Array.from(({value} as any).value.bytes), mimeType: ({value} as any).value.mimeType }})"
             ),
             SchemaType::Duration { .. } => format!("BigInt(({value} as any).value.nanoseconds)"),
-            SchemaType::Quantity { .. } => format!(
-                "({{ mantissa: BigInt(({value} as any).value.mantissa), scale: ({value} as any).value.scale, unit: ({value} as any).value.unit }})"
-            ),
+            SchemaType::Quantity { spec, .. } => Self::quantity_unit_guard(
+                &format!(
+                    "({{ mantissa: BigInt(({value} as any).value.mantissa), scale: ({value} as any).value.scale as number, unit: ({value} as any).value.unit as string }})"
+                ),
+                spec,
+            )?,
             SchemaType::Map {
                 key, value: val, ..
             } => format!(
@@ -2499,7 +2517,9 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Uuid { .. } => {
                 format!("base.Uuid.parse(({value} as any).value as string)")
             }
-            SchemaType::Datetime { .. } => format!("(({value} as any).value.value as string)"),
+            SchemaType::Datetime { .. } => {
+                format!("base.Datetime.parse(({value} as any).value.value as string)")
+            }
             SchemaType::Text { .. } => format!("(({value} as any).value as base.AgentText)"),
             SchemaType::Enum { cases, .. } => format!(
                 "((v: any) => {{ {} throw new Error('unknown enum'); }})(({value} as any).value.case)",
@@ -3260,10 +3280,10 @@ impl TypeScriptBridgeGenerator {
                 format!("((n: any) => n.value as string)({value})")
             }
             SchemaType::Uuid { .. } => {
-                format!("((n: any) => base.Uuid.parse(n.value as string))({value})")
+                format!("((n: any) => base.Uuid.from(n.value))({value})")
             }
             SchemaType::Datetime { .. } => {
-                format!("((n: any) => base.datetimeToISOString(n.value))({value})")
+                format!("((n: any) => n.value as base.Datetime)({value})")
             }
             SchemaType::Duration { .. } => format!("((n: any) => n.nanoseconds)({value})"),
             SchemaType::Stream {
@@ -3289,10 +3309,16 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Ref { .. } => anyhow::bail!(
                 "Unresolved SchemaType::Ref reached guest decode; value expr = {value}"
             ),
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => anyhow::bail!(
-                "Bare text/binary rich scalars have no TypeScript bridge surface; type = {typ:?}"
+            SchemaType::Text { .. } => format!(
+                "((n: any): {GUEST_TEXT_TYPE} => (n.language === undefined ? {{ text: n.text }} : {{ text: n.text, language: n.language }}))({value})"
             ),
-            SchemaType::Quantity { .. } | SchemaType::Future { .. } | SchemaType::Stream { .. } => {
+            SchemaType::Binary { .. } => format!(
+                "((n: any): {GUEST_BINARY_TYPE} => (n.mimeType === undefined ? {{ bytes: n.bytes }} : {{ bytes: n.bytes, mimeType: n.mimeType }}))({value})"
+            ),
+            SchemaType::Quantity { spec, .. } => {
+                Self::quantity_unit_guard(&format!("(({value}) as any).value"), spec)?
+            }
+            SchemaType::Future { .. } | SchemaType::Stream { .. } => {
                 anyhow::bail!(
                     "SchemaType variant has no TypeScript bridge decoding yet; type = {typ:?}"
                 )
@@ -3512,18 +3538,12 @@ impl TypeScriptBridgeGenerator {
                     "((n: any) => {{ {arms} throw new Error(`Unknown union branch tag ${{n.value.tag}}`); }})({value})"
                 )
             }
-            SchemaType::Text { .. } if self.has_external_streams() => format!(
-                "((n: any) => ({{ text: n.value.text, language: n.value.language }}))({value})"
+            SchemaType::Text { .. } => format!(
+                "((n: any): base.AgentText => (n.value.language === undefined ? {{ text: n.value.text }} : {{ text: n.value.text, language: n.value.language }}))({value})"
             ),
-            SchemaType::Binary { .. } if self.has_external_streams() => format!(
-                "((n: any) => ({{ bytes: Uint8Array.from(n.value.bytes), mimeType: n.value.mimeType }}))({value})"
+            SchemaType::Binary { .. } => format!(
+                "((n: any): base.AgentBinary => (n.value.mimeType === undefined ? {{ bytes: Uint8Array.from(n.value.bytes) }} : {{ bytes: Uint8Array.from(n.value.bytes), mimeType: n.value.mimeType }}))({value})"
             ),
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => {
-                return Err(anyhow!(
-                    "Bare text/binary rich scalars have no TypeScript bridge surface; \
-                     wrap them in the unstructured text/binary variant ({typ:?})"
-                ));
-            }
             SchemaType::Path { .. } => {
                 format!("((n: any) => n.value.path as string)({value})")
             }
@@ -3531,17 +3551,20 @@ impl TypeScriptBridgeGenerator {
                 format!("((n: any) => n.value.url as string)({value})")
             }
             SchemaType::Uuid { .. } => {
-                format!("((n: any) => base.Uuid.from(n.value))({value})")
+                format!("((n: any) => base.Uuid.parse(n.value as string))({value})")
             }
             SchemaType::Datetime { .. } => {
-                format!("((n: any) => n.value.value as string)({value})")
+                format!("((n: any) => base.Datetime.parse(n.value.value as string))({value})")
             }
             SchemaType::Duration { .. } => {
                 format!("((n: any) => BigInt(n.value.nanoseconds))({value})")
             }
-            SchemaType::Quantity { .. } => format!(
-                "((n: any) => ({{ mantissa: BigInt(n.value.mantissa), scale: n.value.scale, unit: n.value.unit }}))({value})"
-            ),
+            SchemaType::Quantity { spec, .. } => Self::quantity_unit_guard(
+                &format!(
+                    "((n: any) => ({{ mantissa: BigInt(n.value.mantissa), scale: n.value.scale as number, unit: n.value.unit as string }}))({value})"
+                ),
+                spec,
+            )?,
             SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
@@ -3702,7 +3725,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Url { .. } => format!("{{ tag: 'url', value: {value} }}"),
             SchemaType::Uuid { .. } => format!("{{ tag: 'uuid', value: {value} }}"),
             SchemaType::Datetime { .. } => {
-                format!("{{ tag: 'datetime', value: base.datetimeFromISOString({value}) }}")
+                format!("{{ tag: 'datetime', value: {value} }}")
             }
             SchemaType::Duration { .. } => format!("{{ tag: 'duration', nanoseconds: {value} }}"),
             SchemaType::Stream {
@@ -3726,10 +3749,17 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Ref { .. } => anyhow::bail!(
                 "Unresolved SchemaType::Ref reached guest encode; value expr = {value}"
             ),
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => anyhow::bail!(
-                "Bare text/binary rich scalars have no TypeScript bridge surface; type = {typ:?}"
+            SchemaType::Text { .. } => format!(
+                "((v: {GUEST_TEXT_TYPE}): base.SchemaValue => ({{ tag: 'text', text: v.text, language: v.language }}))({value})"
             ),
-            SchemaType::Quantity { .. } | SchemaType::Future { .. } | SchemaType::Stream { .. } => {
+            SchemaType::Binary { .. } => format!(
+                "((v: {GUEST_BINARY_TYPE}): base.SchemaValue => ({{ tag: 'binary', bytes: v.bytes, mimeType: v.mimeType }}))({value})"
+            ),
+            SchemaType::Quantity { spec, .. } => format!(
+                "{{ tag: 'quantity', value: {} }}",
+                Self::quantity_unit_guard(value, spec)?
+            ),
+            SchemaType::Future { .. } | SchemaType::Stream { .. } => {
                 anyhow::bail!(
                     "SchemaType variant has no TypeScript bridge encoding yet; type = {typ:?}"
                 )
@@ -3936,18 +3966,12 @@ impl TypeScriptBridgeGenerator {
                     "((v: any) => {{ {arms} throw new Error(`Unknown union branch ${{v.tag}}`); }})({value})"
                 )
             }
-            SchemaType::Text { .. } if self.has_external_streams() => format!(
-                "{{ kind: 'text', value: {{ text: ({value}).text, ...(({value}).language !== undefined ? {{ language: ({value}).language }} : {{}}) }} }}"
+            SchemaType::Text { .. } => format!(
+                "((v: base.AgentText): base.SchemaValue => ({{ kind: 'text', value: v.language === undefined ? {{ text: v.text }} : {{ text: v.text, language: v.language }} }}))({value})"
             ),
-            SchemaType::Binary { .. } if self.has_external_streams() => format!(
-                "{{ kind: 'binary', value: {{ bytes: Array.from(({value}).bytes), ...(({value}).mimeType !== undefined ? {{ mimeType: ({value}).mimeType }} : {{}}) }} }}"
+            SchemaType::Binary { .. } => format!(
+                "((v: base.AgentBinary): base.SchemaValue => ({{ kind: 'binary', value: v.mimeType === undefined ? {{ bytes: Array.from(v.bytes) }} : {{ bytes: Array.from(v.bytes), mimeType: v.mimeType }} }}))({value})"
             ),
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => {
-                return Err(anyhow!(
-                    "Bare text/binary rich scalars have no TypeScript bridge surface; \
-                     wrap them in the unstructured text/binary variant ({typ:?})"
-                ));
-            }
             SchemaType::Path { .. } => {
                 format!("{{ kind: 'path', value: {{ path: {value} }} }}")
             }
@@ -3958,13 +3982,16 @@ impl TypeScriptBridgeGenerator {
                 format!("{{ kind: 'uuid', value: ({value}).toString() }}")
             }
             SchemaType::Datetime { .. } => {
-                format!("{{ kind: 'datetime', value: {{ value: {value} }} }}")
+                format!(
+                    "{{ kind: 'datetime', value: {{ value: base.Datetime.toISOString({value}) }} }}"
+                )
             }
             SchemaType::Duration { .. } => {
                 format!("{{ kind: 'duration', value: {{ nanoseconds: ({value}).toString() }} }}")
             }
-            SchemaType::Quantity { .. } => format!(
-                "{{ kind: 'quantity', value: {{ mantissa: ({value}).mantissa.toString(), scale: ({value}).scale, unit: ({value}).unit }} }}"
+            SchemaType::Quantity { spec, .. } => format!(
+                "((q: base.QuantityValue): base.SchemaValue => ({{ kind: 'quantity', value: {{ mantissa: q.mantissa.toString(), scale: q.scale, unit: q.unit }} }}))({})",
+                Self::quantity_unit_guard(value, spec)?
             ),
             SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
@@ -3977,6 +4004,21 @@ impl TypeScriptBridgeGenerator {
             }
         };
         Ok(rendered)
+    }
+
+    /// Wraps the quantity expression `value` in a check that its unit is one
+    /// the schema allows: an allowed suffix, or the base unit when the schema
+    /// lists no suffixes.
+    fn quantity_unit_guard(value: &str, spec: &QuantitySpec) -> anyhow::Result<String> {
+        let allowed = if spec.allowed_suffixes.is_empty() {
+            std::slice::from_ref(&spec.base_unit)
+        } else {
+            spec.allowed_suffixes.as_slice()
+        };
+        let allowed = serde_json::to_string(allowed)?;
+        Ok(format!(
+            "((q: base.QuantityValue): base.QuantityValue => {{ const __allowed: string[] = {allowed}; if (!__allowed.includes(q.unit)) throw new Error(`Quantity unit ${{q.unit}} is not allowed; expected one of ${{__allowed.join(', ')}}`); return q; }})({value})"
+        ))
     }
 
     fn unstructured_text_type(&self, restrictions: &TextRestrictions) -> String {
@@ -4261,8 +4303,8 @@ impl TypeScriptBridgeGenerator {
             SchemaType::String { .. }
             | SchemaType::Char { .. }
             | SchemaType::Path { .. }
-            | SchemaType::Url { .. }
-            | SchemaType::Datetime { .. } => "string".to_string(),
+            | SchemaType::Url { .. } => "string".to_string(),
+            SchemaType::Datetime { .. } => "base.Datetime".to_string(),
             SchemaType::Uuid { .. } => "base.Uuid".to_string(),
             SchemaType::Enum { .. } => self.streaming_type_definition(typ)?,
             SchemaType::F64 { .. }
@@ -4455,8 +4497,8 @@ impl TypeScriptBridgeGenerator {
             SchemaType::String { .. }
             | SchemaType::Char { .. }
             | SchemaType::Path { .. }
-            | SchemaType::Url { .. }
-            | SchemaType::Datetime { .. } => "string".to_string(),
+            | SchemaType::Url { .. } => "string".to_string(),
+            SchemaType::Datetime { .. } => "base.Datetime".to_string(),
             SchemaType::Uuid { .. } => "base.Uuid".to_string(),
             SchemaType::F64 { .. }
             | SchemaType::F32 { .. }
@@ -4565,28 +4607,10 @@ impl TypeScriptBridgeGenerator {
                     // Bare text/binary rich scalars have no TS surface; the
                     // ergonomic wrapper types are reached only via the
                     // role-marked unstructured variant intercepted above.
-                    SchemaType::Binary { .. }
-                        if self.mode == TypeScriptBridgeMode::ExternalRest
-                            && self.has_external_streams() =>
-                    {
-                        Ok("base.AgentBinary".to_string())
+                    SchemaType::Text { .. } | SchemaType::Binary { .. } => {
+                        Ok(self.rich_scalar_type(typ).to_string())
                     }
-                    SchemaType::Text { .. }
-                        if self.mode == TypeScriptBridgeMode::ExternalRest
-                            && self.has_external_streams() =>
-                    {
-                        Ok("base.AgentText".to_string())
-                    }
-                    SchemaType::Quantity { .. }
-                        if self.mode == TypeScriptBridgeMode::ExternalRest
-                            && self.has_external_streams() =>
-                    {
-                        Ok("base.QuantityValue".to_string())
-                    }
-                    SchemaType::Text { .. } | SchemaType::Binary { .. } => Err(anyhow!(
-                        "Bare text/binary rich scalars have no TypeScript bridge type; \
-                         wrap them in the unstructured text/binary variant ({typ:?})"
-                    )),
+                    SchemaType::Quantity { .. } => Ok("base.QuantityValue".to_string()),
                     // Same wire shape as `list`; `Uint8Array` for
                     // `fixed-list<u8>`.
                     SchemaType::FixedList { element, .. } => {
@@ -4606,7 +4630,7 @@ impl TypeScriptBridgeGenerator {
                     SchemaType::Path { .. } => Ok("string".to_string()),
                     SchemaType::Url { .. } => Ok("string".to_string()),
                     SchemaType::Uuid { .. } => Ok("base.Uuid".to_string()),
-                    SchemaType::Datetime { .. } => Ok("string".to_string()),
+                    SchemaType::Datetime { .. } => Ok("base.Datetime".to_string()),
                     SchemaType::Duration { .. } => Ok("bigint".to_string()),
                     SchemaType::Secret { .. }
                         if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
@@ -4631,10 +4655,7 @@ impl TypeScriptBridgeGenerator {
                     SchemaType::Stream {
                         inner: Some(inner), ..
                     } => Ok(format!("base.AgentStream<{}>", self.type_reference(inner)?)),
-                    // Capability / quantity / WASI-P3 nodes are not part of the
-                    // agent IO surface exercised by the bridge today.
-                    SchemaType::Quantity { .. }
-                    | SchemaType::Secret { .. }
+                    SchemaType::Secret { .. }
                     | SchemaType::QuotaToken { .. }
                     | SchemaType::PermissionCard { .. }
                     | SchemaType::Future { .. }
@@ -4779,7 +4800,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Path { .. } => Ok("string".to_string()),
             SchemaType::Url { .. } => Ok("string".to_string()),
             SchemaType::Uuid { .. } => Ok("base.Uuid".to_string()),
-            SchemaType::Datetime { .. } => Ok("string".to_string()),
+            SchemaType::Datetime { .. } => Ok("base.Datetime".to_string()),
             SchemaType::Duration { .. } => Ok("bigint".to_string()),
             SchemaType::Secret { .. } if self.mode == TypeScriptBridgeMode::GuestWasmRpc => {
                 Ok("base.SecretHandle".to_string())
@@ -4800,41 +4821,27 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Stream {
                 inner: Some(inner), ..
             } => Ok(format!("base.AgentStream<{}>", self.type_reference(inner)?)),
-            // Bare text/binary rich scalars have no TS surface; the ergonomic
-            // wrapper types are reached only via the role-marked unstructured
-            // variant intercepted in `type_reference`.
-            SchemaType::Binary { .. }
-                if self.mode == TypeScriptBridgeMode::ExternalRest
-                    && self.has_external_streams() =>
-            {
-                Ok("base.AgentBinary".to_string())
+            SchemaType::Text { .. } | SchemaType::Binary { .. } => {
+                Ok(self.rich_scalar_type(resolved).to_string())
             }
-            SchemaType::Text { .. }
-                if self.mode == TypeScriptBridgeMode::ExternalRest
-                    && self.has_external_streams() =>
-            {
-                Ok("base.AgentText".to_string())
-            }
-            SchemaType::Quantity { .. }
-                if self.mode == TypeScriptBridgeMode::ExternalRest
-                    && self.has_external_streams() =>
-            {
-                Ok("base.QuantityValue".to_string())
-            }
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => Err(anyhow!(
-                "Bare text/binary rich scalars have no TypeScript bridge type; \
-                 wrap them in the unstructured text/binary variant ({typ:?})"
-            )),
-            // Capability / quantity / WASI-P3 nodes are not part of the agent
-            // IO surface exercised by the bridge today.
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Quantity { .. } => Ok("base.QuantityValue".to_string()),
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { inner: None, .. } => Err(anyhow!(
                 "Cannot emit TypeScript type definition for unsupported schema variant: {typ:?}"
             )),
+        }
+    }
+
+    /// TS type of a bare `text` or `binary` value.
+    fn rich_scalar_type(&self, typ: &SchemaType) -> &'static str {
+        match (typ, self.mode) {
+            (SchemaType::Text { .. }, TypeScriptBridgeMode::ExternalRest) => "base.AgentText",
+            (SchemaType::Text { .. }, TypeScriptBridgeMode::GuestWasmRpc) => GUEST_TEXT_TYPE,
+            (_, TypeScriptBridgeMode::ExternalRest) => "base.AgentBinary",
+            (_, TypeScriptBridgeMode::GuestWasmRpc) => GUEST_BINARY_TYPE,
         }
     }
 

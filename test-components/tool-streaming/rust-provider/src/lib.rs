@@ -1503,6 +1503,60 @@ async fn run_nested(
     })
 }
 
+// Inside this tool entity, holds a nested `marker-echo` call whose stdin is still open while the
+// entity waits for that stdin to close, and pauses at a crash checkpoint. The recovered entity
+// writes the rest of the input; the wait reports how the stdin really closed, and the output
+// carries that cause followed by the nested echo.
+async fn run_nested_open_stdin_wait(
+    mut stdout: OutputStream,
+) -> Result<StreamSummary, StreamingError> {
+    use futures_concurrency::prelude::*;
+
+    let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+    let (writer, nested_stdin, closed) = tool_host::create_stdin();
+    let (nested_target, mut nested_stdout) = tool_host::create_output();
+    let nested = rpc.async_invoke_and_await(
+        &["run".to_string()],
+        raw_run_input("marker-echo"),
+        Some(nested_stdin),
+        Some(nested_target),
+        None,
+    );
+    writer
+        .write(b"open".to_vec())
+        .await
+        .expect("write nested stdin before the checkpoint");
+    let writes = async {
+        wait_at_crash_checkpoint(&(), "nested-stdin-closed-wait-pending").await;
+        writer
+            .write(b"-recovered".to_vec())
+            .await
+            .expect("write nested stdin after recovery");
+        writer.finish().await.expect("finish nested stdin");
+    };
+    let echoed = async move {
+        let mut output = Vec::new();
+        while let Some(item) = nested_stdout.next().await {
+            output.extend(item.expect("nested marker-echo stdout failed"));
+        }
+        output
+    };
+    let ((cause, ()), echoed, nested_result) =
+        ((closed.wait(), writes).join(), echoed, nested.get())
+            .join()
+            .await;
+    nested_result.expect("nested marker-echo result");
+    let mut output = format!("{cause:?}:").into_bytes();
+    output.extend(echoed);
+    let output_closed = !write_chunk(&mut stdout, output).await;
+    let _ = stdout.finish().await;
+    Ok(StreamSummary {
+        chunks_read: 0,
+        bytes_read: 0,
+        output_closed,
+    })
+}
+
 async fn run_nested_capable_parent_end(
     stdin: InputStream,
     mut stdout: OutputStream,
@@ -1816,6 +1870,9 @@ impl Streaming for StreamingImpl {
         }
         if mode == "nested" {
             return run_nested(stdin, stdout).await;
+        }
+        if mode == "nested-open-stdin-wait" {
+            return run_nested_open_stdin_wait(stdout).await;
         }
         if mode == "nested-capable-parent-end" {
             return run_nested_capable_parent_end(stdin, stdout).await;
@@ -2151,11 +2208,20 @@ impl Streaming for StreamingImpl {
         mut stdout: OutputStream,
         mut diagnostics: OutputStream,
     ) -> Result<StreamSummary, StreamingError> {
-        if mode == "redaction-terminals" {
-            for byte in MARKER {
+        if mode == "redaction-terminals" || mode == "utf8-terminals" {
+            let (output, error): (&[u8], &[u8]) = if mode == "utf8-terminals" {
+                // Distinct 2/3/4-byte code points and incomplete EOF tails.
+                (
+                    b"stdout:\xc2\xa2\xe2\x82\xac\xf0\x9f\x98\x80\xe2",
+                    b"stderr:\xc3\xa9\xf0\x9f\xa6\x80\xf0\x9f",
+                )
+            } else {
+                (MARKER, b"stderr-visible")
+            };
+            for byte in output {
                 stdout.write(vec![*byte]).await.unwrap();
             }
-            for byte in b"stderr-visible" {
+            for byte in error {
                 diagnostics.write(vec![*byte]).await.unwrap();
             }
             stdout.finish().await.unwrap();

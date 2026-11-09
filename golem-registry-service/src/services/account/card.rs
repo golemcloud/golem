@@ -24,7 +24,7 @@ use golem_common::model::card::{
     AccountOauth2IdentityResourcePattern, AccountPermissionShareResourcePattern,
     AccountPluginResourcePattern, AccountResourcePattern, AccountTokenResourcePattern,
     AccountToolMiddlewareReleaseResourcePattern, AccountToolReleaseResourcePattern,
-    AccountUsageResourcePattern, AgentResourcePattern, ApplicationResourcePattern,
+    AccountUsageResourcePattern, AccountVerb, AgentResourcePattern, ApplicationResourcePattern,
     BlobResourcePattern, CardId, CardManagedBy, CardManagedByAccountRoot, CardResourcePattern,
     ClassPermissionPattern, ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
     EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketResourcePattern,
@@ -35,7 +35,7 @@ use golem_common::model::card::{
     EnvironmentRetryPolicyResourcePattern, EnvironmentSecuritySchemeResourcePattern,
     EnvironmentToolGrantResourcePattern, EnvironmentToolMiddlewareGrantResourcePattern,
     FilesystemResourcePattern, KvResourcePattern, NetworkResourcePattern, OplogResourcePattern,
-    PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, SecretResourcePattern,
+    PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, RdbmsVerb, SecretResourcePattern,
     SystemResourcePattern, SystemVerb, ToolResourcePattern,
 };
 
@@ -93,10 +93,36 @@ fn add_own_account_grants(grants: &mut Vec<PermissionPattern>, account_email: &A
             account: account_email.clone(),
         },
     );
+
+    // Every account verb except set-plan: the plan decides what the account may use and what
+    // it pays, so only an administrator or the holder of a set-plan permission share changes it.
+    grants.extend(OWNER_ACCOUNT_VERBS.map(|verb| {
+        PermissionPattern::Account(ClassPermissionPattern {
+            verb: Some(verb),
+            owner: AccountOwnerPattern::Account {
+                account: account_email.clone(),
+            },
+            recipient: RecipientPattern::Any,
+            resource: AccountResourcePattern,
+        })
+    }));
 }
+
+const OWNER_ACCOUNT_VERBS: [AccountVerb; 4] = [
+    AccountVerb::View,
+    AccountVerb::Update,
+    AccountVerb::Delete,
+    AccountVerb::ViewPlan,
+];
 
 fn add_admin_grants(grants: &mut Vec<PermissionPattern>) {
     grants.extend([
+        PermissionPattern::Account(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Any,
+            recipient: RecipientPattern::Any,
+            resource: AccountResourcePattern,
+        }),
         PermissionPattern::System(ClassPermissionPattern {
             verb: None,
             owner: EmptyOwnerPattern,
@@ -160,12 +186,6 @@ fn add_account_grants(
             owner: account_owner.clone(),
             recipient: RecipientPattern::Any,
             resource: AccountOauth2IdentityResourcePattern::Any,
-        }),
-        PermissionPattern::Account(ClassPermissionPattern {
-            verb: None,
-            owner: account_owner.clone(),
-            recipient: RecipientPattern::Any,
-            resource: AccountResourcePattern,
         }),
         PermissionPattern::AccountPlugin(ClassPermissionPattern {
             verb: None,
@@ -317,6 +337,14 @@ fn add_account_grants(
             recipient: RecipientPattern::Any,
             resource: RdbmsResourcePattern::any(),
         }),
+        PermissionPattern::Rdbms(ClassPermissionPattern {
+            verb: Some(RdbmsVerb::Unanalyzed),
+            owner: environment_owner.clone(),
+            recipient: RecipientPattern::Any,
+            resource: RdbmsResourcePattern::Database {
+                database: "*".to_string(),
+            },
+        }),
         PermissionPattern::Secret(ClassPermissionPattern {
             verb: None,
             owner: environment_owner,
@@ -370,9 +398,14 @@ fn add_account_grants(
 
 #[cfg(test)]
 mod tests {
+    use super::super::account_permission_target;
     use super::account_root_card_record;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::card::{Card, PermissionPattern};
+    use golem_common::model::auth::AccountRole;
+    use golem_common::model::card::recipient::RecipientPattern;
+    use golem_common::model::card::{
+        AccountVerb, Card, DelegationSurface, EffectiveSurface, PermissionPattern, parse_permission,
+    };
     use test_r::test;
 
     #[test]
@@ -393,5 +426,103 @@ mod tests {
                 .iter()
                 .any(|grant| matches!(grant, PermissionPattern::EnvironmentToolGrant(_)))
         );
+
+        let delegation = DelegationSurface::from_cards(&[card]);
+        let scoped = parse_permission(
+            "rdbms(tool-owner@example.com/shop/prod) @ tool-owner@example.com/shop/prod/migrations/Migrator : unanalyzed : database(orders)",
+        )
+        .unwrap();
+        assert!(
+            delegation
+                .validate_attenuation(&[scoped], &[], &[], &[])
+                .is_ok()
+        );
+        let other_account = parse_permission(
+            "rdbms(other@example.com/shop/prod) @ * : unanalyzed : database(orders)",
+        )
+        .unwrap();
+        assert!(
+            delegation
+                .validate_attenuation(&[other_account], &[], &[], &[])
+                .is_err()
+        );
+    }
+
+    fn root_card(account_email: &AccountEmail, roles: &[AccountRole]) -> Card {
+        account_root_card_record(AccountId::new(), account_email.clone(), roles)
+            .try_into()
+            .unwrap()
+    }
+
+    fn allows(
+        card: &Card,
+        holder: &AccountEmail,
+        account: &AccountEmail,
+        verb: AccountVerb,
+    ) -> bool {
+        EffectiveSurface::from_cards(
+            std::slice::from_ref(card),
+            &RecipientPattern::Account {
+                account: holder.clone(),
+            },
+        )
+        .unwrap()
+        .authorize(&account_permission_target(account, verb))
+        .unwrap()
+    }
+
+    #[test]
+    fn owner_root_card_allows_every_account_verb_except_set_plan() {
+        let owner = AccountEmail::new("owner@example.com");
+        let card = root_card(&owner, &[]);
+
+        for verb in [
+            AccountVerb::View,
+            AccountVerb::Update,
+            AccountVerb::Delete,
+            AccountVerb::ViewPlan,
+        ] {
+            assert!(allows(&card, &owner, &owner, verb), "{verb:?}");
+        }
+        assert!(!allows(&card, &owner, &owner, AccountVerb::SetPlan));
+    }
+
+    #[test]
+    fn owner_cannot_share_set_plan_on_the_own_account() {
+        let owner = AccountEmail::new("owner@example.com");
+        let delegation = DelegationSurface::from_cards(&[root_card(&owner, &[])]);
+
+        let set_plan =
+            parse_permission("account(owner@example.com) @ other@example.com : set-plan :")
+                .unwrap();
+        assert!(
+            delegation
+                .validate_attenuation(&[set_plan], &[], &[], &[])
+                .is_err()
+        );
+        let view_plan =
+            parse_permission("account(owner@example.com) @ other@example.com : view-plan :")
+                .unwrap();
+        assert!(
+            delegation
+                .validate_attenuation(&[view_plan], &[], &[], &[])
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn admin_root_card_allows_set_plan_on_every_account() {
+        let admin = AccountEmail::new("admin@example.com");
+        let customer = AccountEmail::new("customer@example.com");
+        let card = root_card(&admin, &[AccountRole::Admin]);
+
+        assert!(allows(&card, &admin, &admin, AccountVerb::SetPlan));
+        assert!(allows(&card, &admin, &customer, AccountVerb::SetPlan));
+        assert!(!allows(
+            &root_card(&admin, &[AccountRole::MarketingAdmin]),
+            &admin,
+            &admin,
+            AccountVerb::SetPlan
+        ));
     }
 }

@@ -20,9 +20,8 @@ use crate::bridge_gen::fixtures::{
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_cli::bridge_gen::rust::{
-    RustBridgeGenerator, RustBridgeGeneratorConfig, RustBridgeMode, RustRemappedType, RustTypeName,
+    RustBridgeGenerator, RustBridgeGeneratorConfig, RustBridgeMode, RustTypeName,
 };
-use golem_cli::bridge_gen::type_naming::TypeName;
 use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_cli::model::language::GuestLanguage;
 use golem_common::model::Empty;
@@ -840,6 +839,101 @@ counter-agent-client = {{ path = {package_dir:?} }}
 }
 
 #[test]
+fn bridge_rust_external_streaming_start_is_unreachable_after_the_reconnect_window() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "StreamerAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "numbers",
+            vec![],
+            Some(SchemaType::stream(Some(SchemaType::u32()))),
+        )],
+        vec![],
+        AgentMode::Ephemeral,
+    );
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
+    let mut generator = RustBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
+    generator.generate().unwrap();
+
+    let consumer_dir = target_dir.join("consumer");
+    std::fs::create_dir_all(consumer_dir.join("src")).unwrap();
+    std::fs::write(
+        consumer_dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+name = "generated-bridge-reconnect-consumer"
+version = "0.0.1"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+streamer-agent-client = {{ path = {package_dir:?} }}
+tokio = {{ version = "1", features = ["macros", "rt"] }}
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        consumer_dir.join("src/main.rs"),
+        r#"use std::time::{Duration, Instant};
+use streamer_agent_client::__golem_bridge_runtime::ClientError;
+use streamer_agent_client::{GolemServer, ReconnectPolicy, StreamerAgent};
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    streamer_agent_client::configure_with_reconnect(
+        GolemServer::Custom {
+            url: format!("http://{address}").parse().unwrap(),
+            token: "token".to_string(),
+        },
+        "app",
+        "local",
+        ReconnectPolicy::Within(Duration::from_millis(300)),
+    );
+    let agent = StreamerAgent::new_phantom().await.unwrap();
+    let started = Instant::now();
+    match agent.numbers().await {
+        Err(ClientError::Unreachable { endpoint, window, .. }) => {
+            assert!(endpoint.contains(&address.to_string()), "{endpoint}");
+            assert_eq!(window, Duration::from_millis(300));
+            assert!(started.elapsed() < Duration::from_secs(5));
+        }
+        Err(error) => panic!("expected an unreachable error, got {error}"),
+        Ok(_) => panic!("a closed port answered"),
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let shared_target_dir = crate::workspace_path().join("target/shared_bridge_tests");
+    let output = std::process::Command::new("cargo")
+        .arg("run")
+        .arg("--target-dir")
+        .arg(&shared_target_dir)
+        .current_dir(&consumer_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "generated bridge consumer failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn external_type_only_crate_is_portable_serializable_and_client_free() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
@@ -870,7 +964,6 @@ fn external_type_only_crate_is_portable_serializable_and_client_free() {
             SchemaType::binary(BinaryRestrictions::default()),
         ),
         named_field("native-id", SchemaType::uuid()),
-        named_field("remapped-id", ref_to("uuid.Uuid")),
     ]);
     let media = multimodal(vec![
         variant_case("caption", Some(restricted_text)),
@@ -908,13 +1001,6 @@ fn external_type_only_crate_is_portable_serializable_and_client_free() {
                 SchemaType::r#enum(vec!["ready".to_string(), "waiting".to_string()]),
             ),
             def("portable-envelope", envelope),
-            def(
-                "uuid.Uuid",
-                SchemaType::record(vec![
-                    named_field("high-bits", SchemaType::u64()),
-                    named_field("low-bits", SchemaType::u64()),
-                ]),
-            ),
         ],
         AgentMode::Durable,
     );
@@ -993,7 +1079,6 @@ fn main() {
         unrestricted_binary: UnstructuredBinary::from_inline(vec![4, 5], "data/test".to_string()),
         bare_binary: AgentBinary { bytes: vec![6, 7], mime_type: None },
         native_id: uuid::Uuid::from_u64_pair(1, 2),
-        remapped_id: uuid::Uuid::from_u64_pair(3, 4),
     };
     let media = vec![
         Multimodal0::caption(UnstructuredText::from_inline(
@@ -1401,7 +1486,12 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
     assert!(cargo_toml.contains("name = \"alpha-agent-guest-client\""));
     assert!(cargo_toml.contains("golem-rust"));
     assert!(cargo_toml.contains("export_golem_agentic"));
-    assert!(cargo_toml.contains("chrono = \"0.4\""));
+    assert!(cargo_toml.contains("chrono = \"0.4.42\""));
+    assert!(
+        cargo_toml.contains("features = [\"export_golem_agentic\", \"macro\"]"),
+        "{cargo_toml}"
+    );
+    assert!(cargo_toml.contains("url = \"2.5.7\""));
     assert!(cargo_toml.contains("serde = { version = \"1\""));
     assert!(cargo_toml.contains("uuid = { version = \"1.18.1\""));
     assert!(!cargo_toml.contains("[features]"));
@@ -2682,20 +2772,20 @@ fn colliding_names_tool() -> Tool {
     }
 }
 
-fn uuid_remap_agent() -> AgentTypeSchema {
+fn uuid_agent() -> AgentTypeSchema {
     agent(
         "UuidAgent",
         "scala",
-        vec![field("id", ref_to("uuid.Uuid"))],
+        vec![field("id", SchemaType::uuid())],
         vec![
             method(
                 "lookup",
                 vec![
-                    field("maybe-id", SchemaType::option(ref_to("uuid.Uuid"))),
-                    field("ids", SchemaType::list(ref_to("uuid.Uuid"))),
+                    field("maybe-id", SchemaType::option(SchemaType::uuid())),
+                    field("ids", SchemaType::list(SchemaType::uuid())),
                     field("holder", ref_to("id-holder")),
                 ],
-                Some(ref_to("uuid.Uuid")),
+                Some(SchemaType::uuid()),
             ),
             method("holder", vec![], Some(ref_to("id-holder"))),
             method(
@@ -2703,46 +2793,39 @@ fn uuid_remap_agent() -> AgentTypeSchema {
                 vec![
                     field(
                         "by-name",
-                        SchemaType::map(SchemaType::string(), ref_to("uuid.Uuid")),
+                        SchemaType::map(SchemaType::string(), SchemaType::uuid()),
                     ),
                     field(
                         "by-id",
-                        SchemaType::map(ref_to("uuid.Uuid"), SchemaType::u32()),
+                        SchemaType::map(SchemaType::uuid(), SchemaType::u32()),
                     ),
                     field(
                         "pair",
-                        SchemaType::tuple(vec![ref_to("uuid.Uuid"), SchemaType::u32()]),
+                        SchemaType::tuple(vec![SchemaType::uuid(), SchemaType::u32()]),
                     ),
                     field("choice", ref_to("id-choice")),
                 ],
                 Some(SchemaType::result(
                     golem_common::schema::schema_type::ResultSpec {
-                        ok: Some(Box::new(ref_to("uuid.Uuid"))),
-                        err: Some(Box::new(ref_to("uuid.Uuid"))),
+                        ok: Some(Box::new(SchemaType::uuid())),
+                        err: Some(Box::new(SchemaType::uuid())),
                     },
                 )),
             ),
         ],
         vec![
             def(
-                "uuid.Uuid",
-                SchemaType::record(vec![
-                    named_field("high-bits", SchemaType::u64()),
-                    named_field("low-bits", SchemaType::u64()),
-                ]),
-            ),
-            def(
                 "id-choice",
                 SchemaType::variant(vec![
-                    variant_case("id", Some(ref_to("uuid.Uuid"))),
+                    variant_case("id", Some(SchemaType::uuid())),
                     variant_case("none", None),
                 ]),
             ),
             def(
                 "id-holder",
                 SchemaType::record(vec![
-                    named_field("id", ref_to("uuid.Uuid")),
-                    named_field("native-id", SchemaType::uuid()),
+                    named_field("id", SchemaType::uuid()),
+                    named_field("label", SchemaType::string()),
                 ]),
             ),
         ],
@@ -2751,30 +2834,18 @@ fn uuid_remap_agent() -> AgentTypeSchema {
 }
 
 #[test]
-fn uuid_ref_is_remapped_to_the_native_uuid() {
-    let uuid_ref = SchemaType::ref_to(TypeId::new("uuid.Uuid"));
-    let mapped = RustTypeName::from_schema_type(&uuid_ref);
-    assert_eq!(mapped, Some(RustTypeName::Remapped(RustRemappedType::Uuid)));
-    assert_eq!(mapped.unwrap().to_string(), "uuid::Uuid");
-
-    let other_ref = SchemaType::ref_to(TypeId::new("my.OtherType"));
-    assert_eq!(RustTypeName::from_schema_type(&other_ref), None);
-}
-
-#[test]
-fn external_uuid_record_is_remapped_to_the_native_uuid() {
+fn external_uuid_maps_to_the_uuid_crate_type_and_round_trips() {
     let dir = TempDir::new().unwrap();
     let package_dir = Utf8Path::from_path(dir.path())
         .unwrap()
         .join("uuid-agent-client");
-    RustBridgeGenerator::new(uuid_remap_agent(), &package_dir, true)
+    RustBridgeGenerator::new(uuid_agent(), &package_dir, true)
         .unwrap()
         .generate()
         .unwrap();
 
     let lib_path = package_dir.join("src/lib.rs");
     let source = std::fs::read_to_string(&lib_path).unwrap();
-    assert!(!source.contains("UuidUuid"), "{source}");
     assert!(source.contains("pub id: uuid::Uuid"), "{source}");
 
     let client_module = "mod __golem_bridge_client {\n    use super::*;\n";
@@ -2785,25 +2856,21 @@ fn external_uuid_record_is_remapped_to_the_native_uuid() {
             "{client_module}{}",
             r#"
     #[cfg(test)]
-    mod uuid_remap_codec {
+    mod uuid_codec {
         use super::*;
         use crate::__golem_bridge_runtime::schema::SchemaValue;
 
         #[test]
-        fn id_holder_round_trips_through_the_uuid_record() {
-            let id = uuid::Uuid::from_u64_pair(1, 2);
-            let native_id = uuid::Uuid::from_u64_pair(3, 4);
-            let encoded = encode_IdHolder(IdHolder { id, native_id }).unwrap();
-            let SchemaValue::Record { fields } = &encoded else { panic!("{encoded:?}") };
-            assert!(matches!(
-                fields[0],
-                SchemaValue::Record { ref fields } if matches!(fields.as_slice(), [SchemaValue::U64(1), SchemaValue::U64(2)])
-            ), "{encoded:?}");
-            assert!(matches!(fields[1], SchemaValue::Uuid(uuid) if uuid == native_id), "{encoded:?}");
-            let decoded = decode_IdHolder(encoded).unwrap();
-            assert_eq!(decoded.id, id);
-            assert_eq!(decoded.native_id, native_id);
-            assert!(decode_IdHolder(SchemaValue::Record { fields: vec![SchemaValue::Uuid(id), SchemaValue::Uuid(native_id)] }).is_err());
+        fn id_holder_round_trips_through_the_native_uuid() {
+            for id in [uuid::Uuid::nil(), uuid::Uuid::max(), uuid::Uuid::from_u64_pair(1, 2)] {
+                let encoded = encode_IdHolder(IdHolder { id, label: "a".to_string() }).unwrap();
+                let SchemaValue::Record { fields } = &encoded else { panic!("{encoded:?}") };
+                assert!(matches!(fields[0], SchemaValue::Uuid(uuid) if uuid == id), "{encoded:?}");
+                let decoded = decode_IdHolder(encoded).unwrap();
+                assert_eq!(decoded.id, id);
+            }
+            let halves = SchemaValue::Record { fields: vec![SchemaValue::U64(1), SchemaValue::U64(2)] };
+            assert!(decode_IdHolder(SchemaValue::Record { fields: vec![halves, SchemaValue::String("a".to_string())] }).is_err());
         }
     }
 "#
@@ -2822,16 +2889,16 @@ fn external_uuid_record_is_remapped_to_the_native_uuid() {
 }
 
 #[test]
-fn guest_uuid_record_is_remapped_to_the_native_uuid() {
+fn guest_uuid_maps_to_the_golem_rust_type_and_round_trips() {
     let dir = TempDir::new().unwrap();
     let package_dir = Utf8Path::from_path(dir.path())
         .unwrap()
         .join("uuid-agent-guest");
-    let mut agent_type = uuid_remap_agent();
+    let mut agent_type = uuid_agent();
     agent_type.methods.push(method(
         "ids-stream",
         vec![],
-        Some(SchemaType::stream(Some(ref_to("uuid.Uuid")))),
+        Some(SchemaType::stream(Some(SchemaType::uuid()))),
     ));
     RustBridgeGenerator::new_with_mode(
         agent_type,
@@ -2845,40 +2912,37 @@ fn guest_uuid_record_is_remapped_to_the_native_uuid() {
 
     let lib_path = package_dir.join("src/lib.rs");
     let mut source = std::fs::read_to_string(&lib_path).unwrap();
-    assert!(!source.contains("UuidUuid"), "{source}");
     assert!(source.contains("pub id: golem_rust::Uuid"), "{source}");
     assert!(source.contains("fn new_uuid_stream"), "{source}");
     source.push_str(
         r#"
 #[cfg(test)]
-mod uuid_remap_codec {
+mod uuid_codec {
     use super::*;
 
     #[test]
-    fn id_holder_round_trips_through_the_uuid_record() {
-        let id = golem_rust::Uuid::from_u64_pair(1, 2);
-        let native_id = golem_rust::Uuid::from_u64_pair(3, 4);
-        let mut writer = golem_rust::schema::wit::direct::WireWriter::default();
-        let root = encode_IdHolder(&IdHolder { id, native_id }, &mut writer).unwrap();
-        let tree = writer.finish(root);
-        let nodes = &tree.value_nodes;
-        let __wire::SchemaValueNode::RecordValue(fields) = &nodes[tree.root as usize] else { panic!("{nodes:?}") };
-        let __wire::SchemaValueNode::RecordValue(halves) = &nodes[fields[0] as usize] else { panic!("{nodes:?}") };
-        assert!(matches!(nodes[halves[0] as usize], __wire::SchemaValueNode::U64Value(1)), "{nodes:?}");
-        assert!(matches!(nodes[halves[1] as usize], __wire::SchemaValueNode::U64Value(2)), "{nodes:?}");
-        let mut reader = golem_rust::schema::wit::direct::WireReader::new(tree.value_nodes);
-        let decoded = decode_IdHolder(tree.root, &mut reader).unwrap();
-        assert_eq!(decoded.id, id);
-        assert_eq!(decoded.native_id, native_id);
+    fn id_holder_round_trips_through_the_native_uuid() {
+        for id in [golem_rust::Uuid::nil(), golem_rust::Uuid::max(), golem_rust::Uuid::from_u64_pair(1, 2)] {
+            let mut writer = golem_rust::schema::wit::direct::WireWriter::default();
+            let root = encode_IdHolder(&IdHolder { id, label: "a".to_string() }, &mut writer).unwrap();
+            let tree = writer.finish(root);
+            let nodes = &tree.value_nodes;
+            let __wire::SchemaValueNode::RecordValue(fields) = &nodes[tree.root as usize] else { panic!("{nodes:?}") };
+            assert!(matches!(nodes[fields[0] as usize], __wire::SchemaValueNode::UuidValue(_)), "{nodes:?}");
+            let mut reader = golem_rust::schema::wit::direct::WireReader::new(tree.value_nodes);
+            let decoded = decode_IdHolder(tree.root, &mut reader).unwrap();
+            assert_eq!(decoded.id, id);
+        }
 
-        let malformed = vec![
+        let halves = vec![
             __wire::SchemaValueNode::U64Value(1),
-            __wire::SchemaValueNode::StringValue("low".to_string()),
+            __wire::SchemaValueNode::U64Value(2),
             __wire::SchemaValueNode::RecordValue(vec![0, 1]),
-            __wire::SchemaValueNode::RecordValue(vec![2, 2]),
+            __wire::SchemaValueNode::StringValue("a".to_string()),
+            __wire::SchemaValueNode::RecordValue(vec![2, 3]),
         ];
-        let mut reader = golem_rust::schema::wit::direct::WireReader::new(malformed);
-        assert!(decode_IdHolder(3, &mut reader).is_err());
+        let mut reader = golem_rust::schema::wit::direct::WireReader::new(halves);
+        assert!(decode_IdHolder(4, &mut reader).is_err());
     }
 }
 "#,
@@ -2889,32 +2953,626 @@ mod uuid_remap_codec {
     cargo_test_lib(&package_dir);
 }
 
+fn rich_scalar_agent() -> AgentTypeSchema {
+    use golem_common::schema::schema_type::{QuantitySpec, ResultSpec};
+    let weight = SchemaType::quantity(QuantitySpec {
+        base_unit: "kg".to_string(),
+        allowed_suffixes: vec!["kg".to_string(), "g".to_string()],
+        min: None,
+        max: None,
+    });
+    let size = SchemaType::quantity(QuantitySpec {
+        base_unit: "B".to_string(),
+        allowed_suffixes: vec![],
+        min: None,
+        max: None,
+    });
+    agent(
+        "RichScalarAgent",
+        "typescript",
+        vec![field("limit", weight.clone())],
+        vec![
+            method(
+                "weigh",
+                vec![field("weight", weight.clone())],
+                Some(ref_to("measures")),
+            ),
+            method(
+                "describe",
+                vec![
+                    field("note", SchemaType::text(TextRestrictions::default())),
+                    field("blob", SchemaType::binary(BinaryRestrictions::default())),
+                ],
+                Some(SchemaType::text(TextRestrictions::default())),
+            ),
+            method("size", vec![], Some(size.clone())),
+        ],
+        vec![
+            def(
+                "choice",
+                SchemaType::variant(vec![
+                    variant_case("heavy", Some(weight.clone())),
+                    variant_case("empty", None),
+                ]),
+            ),
+            def(
+                "measures",
+                SchemaType::record(vec![
+                    named_field("weight", weight),
+                    named_field("size", size),
+                    named_field("note", SchemaType::text(TextRestrictions::default())),
+                    named_field("blob", SchemaType::binary(BinaryRestrictions::default())),
+                    named_field(
+                        "outcome",
+                        SchemaType::result(ResultSpec {
+                            ok: None,
+                            err: None,
+                        }),
+                    ),
+                    named_field("choice", ref_to("choice")),
+                ]),
+            ),
+        ],
+        AgentMode::Durable,
+    )
+}
+
 #[test]
-fn uuid_ref_with_another_body_is_rejected() {
-    let wrong = agent(
-        "UuidAgent",
-        "scala",
-        vec![field("id", ref_to("uuid.Uuid"))],
-        vec![],
+fn external_rich_scalars_follow_the_schema_and_round_trip() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("rich-scalar-agent-client");
+    RustBridgeGenerator::new(rich_scalar_agent(), &package_dir, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let source = std::fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        source.contains("pub weight: crate::__golem_bridge_types::Quantity<crate::units::UnitKg>"),
+        "{source}"
+    );
+    assert!(
+        source.contains("pub note: crate::__golem_bridge_types::AgentText"),
+        "{source}"
+    );
+
+    let client_module = "mod __golem_bridge_client {\n    use super::*;\n";
+    assert!(source.contains(client_module), "{source}");
+    let source = source.replacen(
+        client_module,
+        &format!(
+            "{client_module}{}",
+            r#"
+    #[cfg(test)]
+    mod rich_scalar_codec {
+        use super::*;
+        use crate::__golem_bridge_runtime::schema::{
+            BinaryValuePayload, QuantityValue as SchemaQuantity, ResultValuePayload, SchemaValue,
+            TextValuePayload, VariantValuePayload,
+        };
+
+        fn measures() -> Measures {
+            Measures {
+                weight: Quantity::new(1500, 3, "kg").unwrap(),
+                size: Quantity::new(42, 0, "B").unwrap(),
+                note: AgentText { text: "hi".to_string(), language: Some("en".to_string()) },
+                blob: AgentBinary { bytes: vec![1, 2], mime_type: Some("image/png".to_string()) },
+                outcome: Err(()),
+                choice: Choice::Empty,
+            }
+        }
+
+        fn encoded_fields() -> Vec<SchemaValue> {
+            let SchemaValue::Record { fields } = encode_Measures(measures()).unwrap() else { panic!() };
+            fields
+        }
+
+        #[test]
+        fn measures_round_trip() {
+            let fields = encoded_fields();
+            assert_eq!(fields[0], SchemaValue::Quantity(SchemaQuantity { mantissa: 1500, scale: 3, unit: "kg".to_string() }));
+            assert_eq!(fields[2], SchemaValue::Text(TextValuePayload { text: "hi".to_string(), language: Some("en".to_string()) }));
+            assert_eq!(fields[3], SchemaValue::Binary(BinaryValuePayload { bytes: vec![1, 2], mime_type: Some("image/png".to_string()) }));
+            let decoded = decode_Measures(SchemaValue::Record { fields }).unwrap();
+            let expected = measures();
+            assert_eq!(decoded.weight, expected.weight);
+            assert_eq!(decoded.size, expected.size);
+            assert_eq!(decoded.note, expected.note);
+            assert_eq!(decoded.blob, expected.blob);
+            assert_eq!(decoded.outcome, Err(()));
+            assert!(matches!(decoded.choice, Choice::Empty));
+        }
+
+        #[test]
+        fn quantity_units_follow_the_schema() {
+            assert!(Quantity::<crate::units::UnitKg>::new(1, 0, "g").is_ok());
+            assert!(Quantity::<crate::units::UnitKg>::new(1, 0, "lb").is_err());
+            assert!(Quantity::<crate::units::UnitB>::new(1, 0, "kB").is_err());
+
+            let mut fields = encoded_fields();
+            fields[0] = SchemaValue::Quantity(SchemaQuantity { mantissa: 1, scale: 0, unit: "lb".to_string() });
+            let error = decode_Measures(SchemaValue::Record { fields }).unwrap_err();
+            assert!(error.contains("lb"), "{error}");
+        }
+
+        #[test]
+        fn unit_cases_and_arms_reject_payloads() {
+            let mut fields = encoded_fields();
+            fields[4] = SchemaValue::Result(ResultValuePayload::Err { value: Some(Box::new(SchemaValue::Bool(true))) });
+            assert!(decode_Measures(SchemaValue::Record { fields }).is_err());
+
+            let mut fields = encoded_fields();
+            fields[4] = SchemaValue::Result(ResultValuePayload::Ok { value: Some(Box::new(SchemaValue::Bool(true))) });
+            assert!(decode_Measures(SchemaValue::Record { fields }).is_err());
+
+            let mut fields = encoded_fields();
+            fields[5] = SchemaValue::Variant(VariantValuePayload { case: 1, payload: Some(Box::new(SchemaValue::Bool(true))) });
+            assert!(decode_Measures(SchemaValue::Record { fields }).is_err());
+        }
+    }
+"#
+        ),
+        1,
+    );
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check_with_args(&package_dir, &[]);
+    cargo_check_with_args(&package_dir, &["--no-default-features"]);
+    cargo_check_with_args(
+        &package_dir,
+        &["--no-default-features", "--features", "serde"],
+    );
+    cargo_test_lib(&package_dir);
+}
+
+#[test]
+fn guest_rich_scalars_use_the_sdk_quantity_and_round_trip() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("rich-scalar-agent-guest");
+    RustBridgeGenerator::new_with_mode(
+        rich_scalar_agent(),
+        &package_dir,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let mut source = std::fs::read_to_string(&lib_path).unwrap();
+    assert!(
+        source.contains("pub weight: golem_rust::Quantity<crate::units::UnitKg>"),
+        "{source}"
+    );
+    assert!(
+        source.contains("impl golem_rust::QuantityUnit for UnitKg"),
+        "{source}"
+    );
+    source.push_str(
+        r#"
+#[cfg(test)]
+mod rich_scalar_codec {
+    use super::*;
+    use golem_rust::schema::wit::direct::{WireReader, WireWriter};
+
+    fn measures() -> Measures {
+        Measures {
+            weight: golem_rust::Quantity::new(1500, 3, "kg").unwrap(),
+            size: golem_rust::Quantity::new(42, 0, "B").unwrap(),
+            note: AgentText { text: "hi".to_string(), language: Some("en".to_string()) },
+            blob: AgentBinary { bytes: vec![1, 2], mime_type: Some("image/png".to_string()) },
+            outcome: Err(()),
+            choice: Choice::Empty,
+        }
+    }
+
+    fn encode(value: &Measures) -> __wire::SchemaValueTree {
+        let mut writer = WireWriter::default();
+        let root = encode_Measures(value, &mut writer).unwrap();
+        writer.finish(root)
+    }
+
+    fn field_index(tree: &__wire::SchemaValueTree, field: usize) -> usize {
+        let __wire::SchemaValueNode::RecordValue(fields) = &tree.value_nodes[tree.root as usize] else { panic!() };
+        fields[field] as usize
+    }
+
+    #[test]
+    fn measures_round_trip() {
+        let tree = encode(&measures());
+        let nodes = &tree.value_nodes;
+        assert!(matches!(&nodes[field_index(&tree, 0)], __wire::SchemaValueNode::QuantityValueNode(q) if q.mantissa == 1500 && q.scale == 3 && q.unit == "kg"), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 2)], __wire::SchemaValueNode::TextValue(t) if t.text == "hi" && t.language.as_deref() == Some("en")), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 3)], __wire::SchemaValueNode::BinaryValue(b) if b.bytes == vec![1, 2] && b.mime_type.as_deref() == Some("image/png")), "{nodes:?}");
+        let root = tree.root;
+        let mut reader = WireReader::new(tree.value_nodes);
+        let decoded = decode_Measures(root, &mut reader).unwrap();
+        let expected = measures();
+        assert_eq!(decoded.weight, expected.weight);
+        assert_eq!(decoded.size, expected.size);
+        assert_eq!(decoded.note, expected.note);
+        assert_eq!(decoded.blob, expected.blob);
+        assert_eq!(decoded.outcome, Err(()));
+        assert!(matches!(decoded.choice, Choice::Empty));
+    }
+
+    #[test]
+    fn quantity_units_follow_the_schema() {
+        assert!(golem_rust::Quantity::<units::UnitKg>::new(1, 0, "g").is_ok());
+        assert!(golem_rust::Quantity::<units::UnitKg>::new(1, 0, "lb").is_err());
+        assert!(golem_rust::Quantity::<units::UnitB>::new(1, 0, "kB").is_err());
+
+        let mut tree = encode(&measures());
+        let weight = field_index(&tree, 0);
+        tree.value_nodes[weight] = __wire::SchemaValueNode::QuantityValueNode(__wire::QuantityValue {
+            mantissa: 1,
+            scale: 0,
+            unit: "lb".to_string(),
+        });
+        let root = tree.root;
+        let mut reader = WireReader::new(tree.value_nodes);
+        let error = decode_Measures(root, &mut reader).unwrap_err();
+        assert!(error.contains("lb"), "{error}");
+    }
+}
+"#,
+    );
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check(&package_dir);
+    cargo_test_lib(&package_dir);
+}
+
+fn time_url_agent() -> AgentTypeSchema {
+    use golem_common::schema::schema_type::{PathDirection, PathKind, PathSpec, UrlRestrictions};
+    let path = SchemaType::path(PathSpec {
+        direction: PathDirection::InOut,
+        kind: PathKind::Any,
+        allowed_mime_types: None,
+        allowed_extensions: None,
+    });
+    agent(
+        "TimeUrlAgent",
+        "typescript",
+        vec![field("start", SchemaType::datetime())],
+        vec![
+            method(
+                "plan",
+                vec![field("schedule", ref_to("schedule"))],
+                Some(ref_to("schedule")),
+            ),
+            method(
+                "wait",
+                vec![field("until", SchemaType::datetime())],
+                Some(SchemaType::duration()),
+            ),
+        ],
         vec![def(
-            "uuid.Uuid",
-            SchemaType::record(vec![named_field("value", SchemaType::string())]),
+            "schedule",
+            SchemaType::record(vec![
+                named_field("at", SchemaType::datetime()),
+                named_field("every", SchemaType::duration()),
+                named_field("link", SchemaType::url(UrlRestrictions::default())),
+                named_field("file", path),
+                named_field(
+                    "labels",
+                    SchemaType::map(SchemaType::string(), SchemaType::u32()),
+                ),
+                named_field("next", SchemaType::option(SchemaType::datetime())),
+            ]),
         )],
         AgentMode::Durable,
-    );
+    )
+}
+
+fn assert_time_url_types(source: &str) {
+    for expected in [
+        "pub at: chrono::DateTime<chrono::Utc>",
+        "pub every: chrono::TimeDelta",
+        "pub link: url::Url",
+        "pub file: String",
+        "pub labels: Vec<(String, u32)>",
+        "pub next: Option<chrono::DateTime<chrono::Utc>>",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+}
+
+const TIME_URL_FIXTURE: &str = r#"
+        fn at() -> chrono::DateTime<chrono::Utc> {
+            chrono::DateTime::parse_from_rfc3339("2026-01-02T05:04:05.123456789+02:00").unwrap().with_timezone(&chrono::Utc)
+        }
+
+        fn schedule() -> Schedule {
+            Schedule {
+                at: at(),
+                every: chrono::TimeDelta::nanoseconds(-1_500_000_001),
+                link: url::Url::parse("https://example.com/a?b=c").unwrap(),
+                file: "/data/report.txt".to_string(),
+                labels: vec![("z".to_string(), 1), ("a".to_string(), 2), ("z".to_string(), 3)],
+                next: Some(chrono::DateTime::from_timestamp(0, 0).unwrap()),
+            }
+        }
+
+        fn year(year: i32) -> chrono::DateTime<chrono::Utc> {
+            chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc()
+        }
+"#;
+
+#[test]
+fn external_datetime_duration_url_use_chrono_and_url_types() {
     let dir = TempDir::new().unwrap();
-    let error = RustBridgeGenerator::new(wrong, Utf8Path::from_path(dir.path()).unwrap(), true)
-        .err()
-        .expect("a uuid.Uuid ref with another body must be rejected");
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("time-url-agent-client");
+    RustBridgeGenerator::new(time_url_agent(), &package_dir, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let source = std::fs::read_to_string(&lib_path).unwrap();
+    assert_time_url_types(&source);
     assert!(
-        error.to_string().contains("high-bits and low-bits"),
-        "{error}"
+        source.contains("until: chrono::DateTime<chrono::Utc>"),
+        "{source}"
     );
+
+    let client_module = "mod __golem_bridge_client {\n    use super::*;\n";
+    assert!(source.contains(client_module), "{source}");
+    let source = source.replacen(
+        client_module,
+        &format!(
+            "{client_module}{}{TIME_URL_FIXTURE}{}",
+            r#"
+    #[cfg(test)]
+    mod time_url_codec {
+        use super::*;
+        use crate::__golem_bridge_runtime::schema::{DurationValuePayload, SchemaValue};
+"#,
+            r#"
+        fn encoded_fields() -> Vec<SchemaValue> {
+            let SchemaValue::Record { fields } = encode_Schedule(schedule()).unwrap() else { panic!() };
+            fields
+        }
+
+        #[test]
+        fn schedule_round_trips() {
+            let fields = encoded_fields();
+            assert_eq!(fields[0], SchemaValue::Datetime { value: at() });
+            assert_eq!(fields[1], SchemaValue::Duration(DurationValuePayload { nanoseconds: -1_500_000_001 }));
+            assert_eq!(fields[2], SchemaValue::Url { url: "https://example.com/a?b=c".to_string() });
+            assert_eq!(fields[3], SchemaValue::Path { path: "/data/report.txt".to_string() });
+            let SchemaValue::Map { entries } = &fields[4] else { panic!("{:?}", fields[4]) };
+            assert_eq!(entries[0].0, SchemaValue::String("z".to_string()));
+            assert_eq!(entries[1].0, SchemaValue::String("a".to_string()));
+            let decoded = decode_Schedule(SchemaValue::Record { fields }).unwrap();
+            let expected = schedule();
+            assert_eq!(decoded.at, expected.at);
+            assert_eq!(decoded.every, expected.every);
+            assert_eq!(decoded.link, expected.link);
+            assert_eq!(decoded.file, expected.file);
+            assert_eq!(decoded.labels, expected.labels);
+            assert_eq!(decoded.next, expected.next);
+        }
+
+        #[test]
+        fn duration_covers_the_s64_nanosecond_range() {
+            for nanoseconds in [i64::MIN, i64::MAX] {
+                let mut value = schedule();
+                value.every = chrono::TimeDelta::nanoseconds(nanoseconds);
+                let fields = encoded_fields_of(value);
+                assert_eq!(fields[1], SchemaValue::Duration(DurationValuePayload { nanoseconds }));
+                let decoded = decode_Schedule(SchemaValue::Record { fields }).unwrap();
+                assert_eq!(decoded.every.num_nanoseconds(), Some(nanoseconds));
+            }
+            let mut value = schedule();
+            value.every = chrono::TimeDelta::MAX;
+            let error = encode_Schedule(value).unwrap_err();
+            assert!(error.contains("nanosecond range"), "{error}");
+        }
+
+        fn encoded_fields_of(value: Schedule) -> Vec<SchemaValue> {
+            let SchemaValue::Record { fields } = encode_Schedule(value).unwrap() else { panic!() };
+            fields
+        }
+
+        #[test]
+        fn datetime_years_outside_0_to_9999_are_rejected() {
+            for edge in [0, 9999] {
+                let mut value = schedule();
+                value.at = year(edge);
+                assert!(encode_Schedule(value).is_ok());
+            }
+            for outside in [-1, 10000] {
+                let mut value = schedule();
+                value.next = Some(year(outside));
+                let error = encode_Schedule(value).unwrap_err();
+                assert!(error.contains("outside the supported range"), "{error}");
+
+                let mut fields = encoded_fields();
+                fields[0] = SchemaValue::Datetime { value: year(outside) };
+                let error = decode_Schedule(SchemaValue::Record { fields }).unwrap_err();
+                assert!(error.contains("outside the supported range"), "{error}");
+            }
+        }
+
+        #[test]
+        fn invalid_url_is_rejected_on_decode() {
+            let mut fields = encoded_fields();
+            fields[2] = SchemaValue::Url { url: "not a url".to_string() };
+            let error = decode_Schedule(SchemaValue::Record { fields }).unwrap_err();
+            assert!(error.contains("not a url"), "{error}");
+        }
+
+        #[cfg(feature = "serde")]
+        #[test]
+        fn serde_uses_canonical_utc_datetime_text() {
+            let json = serde_json::to_value(schedule()).unwrap();
+            assert_eq!(json["at"], "2026-01-02T03:04:05.123456789Z");
+            assert_eq!(json["next"], "1970-01-01T00:00:00Z");
+            assert_eq!(json["link"], "https://example.com/a?b=c");
+            let mut offset = json.clone();
+            offset["at"] = serde_json::Value::String("2026-01-02T05:04:05.123456789+02:00".to_string());
+            let decoded: Schedule = serde_json::from_value(offset).unwrap();
+            assert_eq!(decoded.at, at());
+            let decoded: Schedule = serde_json::from_value(json).unwrap();
+            assert_eq!(decoded.every, schedule().every);
+        }
+    }
+"#
+        ),
+        1,
+    );
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check_with_args(&package_dir, &["--no-default-features"]);
+    cargo_check_with_args(
+        &package_dir,
+        &["--no-default-features", "--features", "serde"],
+    );
+    cargo_test_lib_with_args(&package_dir, &["--features", "serde"]);
+}
+
+#[test]
+fn guest_datetime_duration_url_use_chrono_and_url_types() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("time-url-agent-guest");
+    RustBridgeGenerator::new_with_mode(
+        time_url_agent(),
+        &package_dir,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let mut source = std::fs::read_to_string(&lib_path).unwrap();
+    assert_time_url_types(&source);
+    source.push_str(&format!(
+        "{}{TIME_URL_FIXTURE}{}",
+        r#"
+#[cfg(test)]
+mod time_url_codec {
+    use super::*;
+    use golem_rust::schema::wit::direct::{WirePreflight, WireReader, WireWriter};
+"#,
+        r#"
+    fn encode(value: &Schedule) -> Result<__wire::SchemaValueTree, String> {
+        let mut writer = WireWriter::default();
+        let root = encode_Schedule(value, &mut writer)?;
+        Ok(writer.finish(root))
+    }
+
+    fn field_index(tree: &__wire::SchemaValueTree, field: usize) -> usize {
+        let __wire::SchemaValueNode::RecordValue(fields) = &tree.value_nodes[tree.root as usize] else { panic!() };
+        fields[field] as usize
+    }
+
+    fn decode(tree: __wire::SchemaValueTree) -> Result<Schedule, String> {
+        let root = tree.root;
+        let mut reader = WireReader::new(tree.value_nodes);
+        decode_Schedule(root, &mut reader)
+    }
+
+    #[test]
+    fn schedule_round_trips() {
+        let tree = encode(&schedule()).unwrap();
+        let nodes = &tree.value_nodes;
+        let expected_at = at();
+        assert!(matches!(&nodes[field_index(&tree, 0)], __wire::SchemaValueNode::DatetimeValue(d) if d.seconds == expected_at.timestamp() && d.nanoseconds == 123_456_789), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 1)], __wire::SchemaValueNode::DurationValue(d) if d.nanoseconds == -1_500_000_001), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 2)], __wire::SchemaValueNode::UrlValue(u) if u == "https://example.com/a?b=c"), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 3)], __wire::SchemaValueNode::PathValue(p) if p == "/data/report.txt"), "{nodes:?}");
+        let decoded = decode(tree).unwrap();
+        let expected = schedule();
+        assert_eq!(decoded.at, expected.at);
+        assert_eq!(decoded.every, expected.every);
+        assert_eq!(decoded.link, expected.link);
+        assert_eq!(decoded.file, expected.file);
+        assert_eq!(decoded.labels, expected.labels);
+        assert_eq!(decoded.next, expected.next);
+    }
+
+    #[test]
+    fn duration_covers_the_s64_nanosecond_range() {
+        for nanoseconds in [i64::MIN, i64::MAX] {
+            let mut value = schedule();
+            value.every = chrono::TimeDelta::nanoseconds(nanoseconds);
+            let decoded = decode(encode(&value).unwrap()).unwrap();
+            assert_eq!(decoded.every.num_nanoseconds(), Some(nanoseconds));
+        }
+        let mut value = schedule();
+        value.every = chrono::TimeDelta::MAX;
+        let error = encode(&value).unwrap_err();
+        assert!(error.contains("nanosecond range"), "{error}");
+        let error = preflight_Schedule(&value, &mut WirePreflight::default()).unwrap_err();
+        assert!(error.contains("nanosecond range"), "{error}");
+    }
+
+    #[test]
+    fn datetime_years_outside_0_to_9999_are_rejected() {
+        for edge in [0, 9999] {
+            let mut value = schedule();
+            value.at = year(edge);
+            assert!(encode(&value).is_ok());
+            assert!(preflight_Schedule(&value, &mut WirePreflight::default()).is_ok());
+        }
+        for outside in [-1, 10000] {
+            let mut value = schedule();
+            value.next = Some(year(outside));
+            let error = encode(&value).unwrap_err();
+            assert!(error.contains("outside the supported range"), "{error}");
+            let error = preflight_Schedule(&value, &mut WirePreflight::default()).unwrap_err();
+            assert!(error.contains("outside the supported range"), "{error}");
+
+            let mut tree = encode(&schedule()).unwrap();
+            let index = field_index(&tree, 0);
+            let outside = year(outside);
+            tree.value_nodes[index] = __wire::SchemaValueNode::DatetimeValue(__wire::Datetime {
+                seconds: outside.timestamp(),
+                nanoseconds: 0,
+            });
+            let error = decode(tree).unwrap_err();
+            assert!(error.contains("outside the supported range"), "{error}");
+        }
+    }
+
+    #[test]
+    fn invalid_url_is_rejected_on_decode() {
+        let mut tree = encode(&schedule()).unwrap();
+        let index = field_index(&tree, 2);
+        tree.value_nodes[index] = __wire::SchemaValueNode::UrlValue("not a url".to_string());
+        let error = decode(tree).unwrap_err();
+        assert!(error.contains("not a url"), "{error}");
+    }
+}
+"#
+    ));
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check(&package_dir);
+    cargo_test_lib(&package_dir);
 }
 
 fn cargo_test_lib(target_path: &Utf8Path) {
+    cargo_test_lib_with_args(target_path, &[]);
+}
+
+fn cargo_test_lib_with_args(target_path: &Utf8Path, args: &[&str]) {
     let output = std::process::Command::new("cargo")
         .args(["test", "--lib"])
+        .args(args)
         .arg("--target-dir")
         .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(target_path)

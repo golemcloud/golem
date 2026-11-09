@@ -280,11 +280,20 @@ impl FromWire for chrono::DateTime<chrono::Utc> {
     }
 }
 
+fn std_duration_nanoseconds(duration: &std::time::Duration) -> Result<i64, WireError> {
+    i64::try_from(duration.as_nanos())
+        .map_err(|_| WireError::Shape("duration of at most i64::MAX nanoseconds"))
+}
+
 impl IntoWire for std::time::Duration {
+    fn preflight(&self, _resources: &mut WirePreflight) -> Result<(), WireError> {
+        std_duration_nanoseconds(self).map(|_| ())
+    }
+
     fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
         Ok(writer.push(wire::SchemaValueNode::DurationValue(
             wire::DurationValuePayload {
-                nanoseconds: self.as_nanos().min(i64::MAX as u128) as i64,
+                nanoseconds: std_duration_nanoseconds(self)?,
             },
         )))
     }
@@ -1635,6 +1644,10 @@ resource!(
 );
 
 impl WireSchema for GuestSecretHandle {
+    fn wire_type_id() -> String {
+        <Self as crate::schema::IntoSchema>::type_id().0
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         let inner = <String as WireSchema>::append_schema(builder);
         builder.push(wire::SchemaTypeBody::SecretType(wire::SecretSpec {
@@ -1645,6 +1658,10 @@ impl WireSchema for GuestSecretHandle {
 }
 
 impl WireSchema for GuestQuotaTokenHandle {
+    fn wire_type_id() -> String {
+        <Self as crate::schema::IntoSchema>::type_id().0
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         builder.push(wire::SchemaTypeBody::QuotaTokenType(wire::QuotaTokenSpec {
             resource_name: None,
@@ -1653,6 +1670,10 @@ impl WireSchema for GuestQuotaTokenHandle {
 }
 
 impl WireSchema for GuestPermissionCardHandle {
+    fn wire_type_id() -> String {
+        <Self as crate::schema::IntoSchema>::type_id().0
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         builder.push(wire::SchemaTypeBody::PermissionCardType(
             wire::PermissionCardSpec { polymorphic: false },
@@ -1688,6 +1709,10 @@ impl IntoWire for SchemaValueStream {
 }
 
 impl WireSchema for SchemaValueStream {
+    fn wire_type_id() -> String {
+        <Self as crate::schema::IntoSchema>::type_id().0
+    }
+
     fn contains_stream(_: &mut HashSet<&'static str>) -> bool {
         true
     }

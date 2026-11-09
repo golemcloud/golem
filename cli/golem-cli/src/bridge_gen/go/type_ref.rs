@@ -168,6 +168,8 @@ pub fn render<'a>(
                 rendered.push(render(element, named, resolve, streams, writer)?);
             }
             match rendered.len() {
+                // The empty tuple is the shared Unit, as Rust's () is.
+                0 => format!("{}.Unit", values(writer)),
                 n @ 1..=8 => format!("{}.Tuple{n}[{}]", values(writer), rendered.join(", ")),
                 n => anyhow::bail!(
                     "a {n}-element tuple has no Go spelling: the SDK provides Tuple1 through Tuple8"
@@ -175,16 +177,16 @@ pub fn render<'a>(
             }
         }
 
-        // A unit arm becomes struct{}, Go's zero-sized type, so the arm is
-        // still addressable without carrying a value.
+        // A unit arm becomes values.Unit, which the guest SDK's codec and the
+        // bridge both send without a payload.
         SchemaType::Result { spec, .. } => {
             let ok = match spec.ok.as_deref() {
                 Some(typ) => render(typ, named, resolve, streams, writer)?,
-                None => "struct{}".to_string(),
+                None => format!("{}.Unit", values(writer)),
             };
             let err = match spec.err.as_deref() {
                 Some(typ) => render(typ, named, resolve, streams, writer)?,
-                None => "struct{}".to_string(),
+                None => format!("{}.Unit", values(writer)),
             };
             format!("{}.Result[{ok}, {err}]", values(writer))
         }
@@ -580,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn a_unit_result_arm_becomes_a_zero_sized_struct() {
+    fn a_unit_result_arm_becomes_unit() {
         assert_eq!(
             go_type(&SchemaType::Result {
                 spec: ResultSpec {
@@ -589,7 +591,18 @@ mod tests {
                 },
                 metadata: meta()
             }),
-            "values.Result[struct{}, string]"
+            "values.Result[values.Unit, string]"
+        );
+    }
+
+    #[test]
+    fn the_empty_tuple_becomes_unit() {
+        assert_eq!(
+            go_type(&SchemaType::Tuple {
+                elements: vec![],
+                metadata: meta()
+            }),
+            "values.Unit"
         );
     }
 

@@ -31,12 +31,12 @@ use test_r::test;
 type StoredExternalPayload = (PayloadId, Vec<u8>, Vec<u8>);
 
 /// Minimal in-memory `Oplog` used to drive a [`ReplayState`] over hand-built entries.
-#[derive(Debug)]
 struct InMemoryOplog {
     entries: std::sync::Mutex<Vec<OplogEntry>>,
     /// Every index served by `read_exact`, in order.
     reads: std::sync::Mutex<Vec<OplogIndex>>,
     external_payloads: tokio::sync::Mutex<Vec<StoredExternalPayload>>,
+    tasks: crate::worker::tasks::WorkerTasks,
 }
 
 impl InMemoryOplog {
@@ -45,12 +45,25 @@ impl InMemoryOplog {
             entries: std::sync::Mutex::new(Vec::new()),
             reads: std::sync::Mutex::new(Vec::new()),
             external_payloads: tokio::sync::Mutex::new(Vec::new()),
+            tasks: Default::default(),
         }
+    }
+}
+
+impl std::fmt::Debug for InMemoryOplog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InMemoryOplog")
+            .field("entries", &self.entries)
+            .finish_non_exhaustive()
     }
 }
 
 #[async_trait]
 impl Oplog for InMemoryOplog {
+    fn task_owner(&self) -> Option<&crate::worker::tasks::WorkerTasks> {
+        Some(&self.tasks)
+    }
+
     async fn add(
         &self,
         entry: OplogEntry,
@@ -6880,6 +6893,190 @@ async fn retained_start_claim_rejects_mismatched_identity() {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn mismatched_invocation_rejects_before_later_delivery_but_waits_for_earlier_delivery() {
+    for (earlier_delivery, retain_conflict) in [(false, false), (true, false), (false, true)] {
+        let id = test_invocation_id(7);
+        let mut recorded = start_now();
+        if let OplogEntry::Start { invocation_id, .. } = &mut recorded {
+            *invocation_id = Some(id);
+        }
+        let entries = if retain_conflict {
+            vec![
+                OplogEntry::RecoverySucceeded {
+                    timestamp: Timestamp::now_utc(),
+                },
+                start_now(),
+                recorded,
+                end_for(2, 42),
+                end_for(3, 43),
+                delivered_for(3),
+            ]
+        } else if earlier_delivery {
+            vec![
+                OplogEntry::RecoverySucceeded {
+                    timestamp: Timestamp::now_utc(),
+                },
+                start_now(),
+                end_for(2, 42),
+                delivered_for(2),
+                recorded,
+                start_resolution(),
+                end_for(6, 44),
+                end_for(5, 43),
+                delivered_for(5),
+            ]
+        } else {
+            vec![
+                OplogEntry::RecoverySucceeded {
+                    timestamp: Timestamp::now_utc(),
+                },
+                recorded,
+                end_for(2, 43),
+                delivered_for(2),
+            ]
+        };
+        let rs = replay_state_over(entries).await;
+        if retain_conflict {
+            let first = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            rs.await_resolution(first).await.unwrap();
+            assert!(rs.has_unclaimed_retained_starts());
+        }
+        let wrong = StartClaim::unowned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .with_invocation_id(Some(id));
+        let mut claim = Box::pin(async { rs.claim_start_or_replay_end(wrong).await.map(|_| ()) });
+        if earlier_delivery {
+            assert_pending(
+                &mut claim,
+                "an earlier guest delivery still gates the claim",
+            )
+            .await;
+            let first = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            rs.await_resolution(first).await.unwrap();
+            rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+                .await
+                .unwrap()
+                .acknowledge();
+            let sibling = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockResolution,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            rs.await_resolution(sibling).await.unwrap();
+            assert!(rs.has_unclaimed_retained_starts());
+        }
+        let error = tokio::time::timeout(Duration::from_secs(2), claim)
+            .await
+            .expect("a conflicting call before the next delivery must fail, not wait")
+            .expect_err("changed call identity must be rejected");
+        assert!(matches!(
+            error,
+            WorkerExecutorError::UnexpectedOplogEntry { .. }
+        ));
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn same_invocation_sibling_does_not_hide_a_matching_start_after_delivery() {
+    for retain_sibling in [false, true] {
+        let id = test_invocation_id(7);
+        let mut sibling = start_resolution();
+        let mut matching = start_now();
+        for entry in [&mut sibling, &mut matching] {
+            if let OplogEntry::Start { invocation_id, .. } = entry {
+                *invocation_id = Some(id);
+            }
+        }
+        let rs = replay_state_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            sibling,
+            end_for(2, 41),
+            start_now(),
+            end_for(4, 42),
+            delivered_for(4),
+            matching,
+            end_for(7, 43),
+            delivered_for(7),
+        ])
+        .await;
+        let claim = StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .with_invocation_id(Some(id));
+        let mut matching = Box::pin(rs.claim_start_or_replay_end(claim));
+        if !retain_sibling {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), matching.as_mut())
+                    .await
+                    .is_err(),
+                "a same-id sibling must not bypass the delivery"
+            );
+        }
+        let control = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(control.start_idx(), OplogIndex::from_u64(4));
+        rs.await_resolution(control).await.unwrap();
+        assert!(rs.has_unclaimed_retained_starts());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), matching.as_mut())
+                .await
+                .is_err(),
+            "a retained sibling must not reject a later full match"
+        );
+        rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6))
+            .await
+            .unwrap()
+            .acknowledge();
+        let ReplayStartClaimOutcome::Claimed { handle, .. } = matching.await.unwrap() else {
+            panic!("the matching Start must be claimed");
+        };
+        assert_eq!(handle.start_idx(), OplogIndex::from_u64(7));
+        rs.await_resolution(handle).await.unwrap();
+        let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+            .claim_start_or_replay_end(
+                StartClaim::unowned(
+                    &HostFunctionName::MonotonicClockResolution,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .with_invocation_id(Some(id)),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("the sibling must remain claimable");
+        };
+        assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
+        rs.await_resolution(handle).await.unwrap();
+    }
+}
+
+#[test]
 async fn retained_invocation_identity_is_checked_before_live_continuation() {
     let invocation_id = DurableInvocationId {
         anchor: OplogIndex::INITIAL,
@@ -11625,6 +11822,46 @@ async fn missing_start_claim_waits_while_an_active_body_owns_the_head_start() {
 }
 
 #[test]
+async fn blocked_claim_task_ends_when_the_owner_tasks_stop() {
+    // [RecoverySucceeded(1), Start(entity=2), Start(3, parent 2), End(3→4), End(2→5)] — a claim
+    // task waits for the active body, as when executor shutdown drops the Store that replays.
+    // Nothing drives the body afterwards, so only the stop of the owner's tasks can end the wait;
+    // otherwise the owner's retirement never completes.
+    let (rs, _handle, mut reconstruction, oplog) = replay_with_undrained_reconstruction(vec![
+        start_with_parent(2),
+        end_for(3, 1),
+        end_for(2, 2),
+    ])
+    .await;
+    let tasks = oplog.tasks.clone();
+    let mut claim = tasks
+        .spawn_metadata({
+            let rs = rs.clone();
+            async move {
+                rs.claim_start_or_replay_end(StartClaim::unowned(
+                    &HostFunctionName::WallClockNow,
+                    &DurableFunctionType::ReadLocal,
+                ))
+                .await
+            }
+        })
+        .unwrap();
+    wait_until_claim_parked(&rs, &mut claim, 1).await;
+
+    tokio::time::timeout(Duration::from_secs(5), tasks.stop_and_wait())
+        .await
+        .expect("a parked claim task kept the owner's retirement pending")
+        .unwrap();
+    assert!(matches!(
+        claim.await.unwrap(),
+        Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump
+        })
+    ));
+    reconstruction.body_settled();
+}
+
+#[test]
 async fn missing_numbered_claim_waits_while_an_active_body_owns_the_head_entry() {
     // [RecoverySucceeded(1), Start(entity=2), RemoveRetryPolicy(3, entity 2), End(2→4)] — the head is a positional entry
     // of the active body. The claim of a numbered call waits until the body consumed it, then
@@ -12725,7 +12962,7 @@ async fn disposal_refusal_without_collection_preserves_nested_calls() {
             unreachable!()
         };
         *invocation_id = Some(test_invocation_id(7));
-        let mut entries = vec![
+        let entries = vec![
             OplogEntry::RecoverySucceeded {
                 timestamp: Timestamp::now_utc(),
             },
@@ -12738,11 +12975,6 @@ async fn disposal_refusal_without_collection_preserves_nested_calls() {
             delivered_for(3),
             end_for(2, 43),
         ];
-        if wrong_function {
-            // A direct-call control can reject the wrong identity immediately. An accessor
-            // claim must first wait for earlier guest deliveries, even when it will diverge.
-            entries.retain(|entry| !matches!(entry, OplogEntry::CompletionDelivered { .. }));
-        }
         let terminal = OplogIndex::from_u64(entries.len() as u64);
         let (rs, _) = disposal_replay_state_over(entries).await;
         let root = rs

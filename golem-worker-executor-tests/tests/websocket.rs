@@ -3194,11 +3194,14 @@ async fn serve_connection(
 
     // The first completed handshake greets the initial connection; later ones
     // deliver the reconnected handle's messages.
-    if handshake == 0 {
-        send_frame(&mut write, &shared, RECONNECT_FIRST_MESSAGE).await?;
+    let greetings: &[&str] = if handshake == 0 {
+        &[RECONNECT_FIRST_MESSAGE]
     } else {
-        for payload in shared.reconnect_messages {
-            send_frame(&mut write, &shared, payload).await?;
+        shared.reconnect_messages
+    };
+    for payload in greetings {
+        if !send_frame(&mut write, &shared, payload).await? {
+            return Ok(());
         }
     }
 
@@ -3231,19 +3234,41 @@ async fn serve_connection(
 }
 
 /// Sends one text frame and records it only after it was successfully sent.
+///
+/// Returns `false` and records `ConnectionClosed` when the client already went
+/// away, as the frame loop does: a test can drop the executor, which closes its
+/// socket, at any point after the handshake.
 async fn send_frame(
     write: &mut WsServerSink,
     shared: &ServerShared,
     payload: &str,
-) -> Result<(), String> {
-    SinkExt::send(
+) -> Result<bool, String> {
+    use tokio_tungstenite::tungstenite::Error;
+    match SinkExt::send(
         write,
         tokio_tungstenite::tungstenite::Message::text(payload),
     )
     .await
-    .map_err(|error| format!("sending the frame {payload:?} failed: {error}"))?;
-    emit(shared, ReconnectServerEvent::FrameSent(payload.to_string()));
-    Ok(())
+    {
+        Ok(()) => {
+            emit(shared, ReconnectServerEvent::FrameSent(payload.to_string()));
+            Ok(true)
+        }
+        Err(Error::ConnectionClosed | Error::AlreadyClosed) => {
+            emit(shared, ReconnectServerEvent::ConnectionClosed);
+            Ok(false)
+        }
+        Err(Error::Io(error))
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+            ) =>
+        {
+            emit(shared, ReconnectServerEvent::ConnectionClosed);
+            Ok(false)
+        }
+        Err(error) => Err(format!("sending the frame {payload:?} failed: {error}")),
+    }
 }
 
 /// Reads the client's HTTP websocket upgrade request up to its header

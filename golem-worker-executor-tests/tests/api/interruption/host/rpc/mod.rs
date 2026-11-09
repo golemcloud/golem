@@ -588,8 +588,9 @@ async fn pending_rpc_scenario(
             // Preserve two-Store physical settlement and exact refund assertions. This target
             // completed normally after caller refund, so use its ordinary idle eviction.
             tokio::time::timeout(Duration::from_secs(5), async {
-                while target.is_loaded().await && target.eviction_class().await.is_none() { tokio::task::yield_now().await; }
-                if target.is_loaded().await { ensure!(target.stop_if_idle().await); }
+                // `stop_if_idle` also refuses for pending invocations, active entity bodies and a
+                // stopping instance, so an eviction class does not prove the first call succeeds.
+                while target.is_loaded().await && !target.stop_if_idle().await { tokio::task::yield_now().await; }
                 while target.is_loaded().await { tokio::task::yield_now().await; }
                 target.join_accepted_stops_for_test().await?;
                 target.retained_cleanup_for_test().await?;

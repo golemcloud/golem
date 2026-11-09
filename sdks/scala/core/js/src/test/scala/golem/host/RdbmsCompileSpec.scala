@@ -26,7 +26,7 @@ object RdbmsCompileSpec extends ZIOSpecDefault {
   private val ts     = DbTimestamp(date, time)
   private val tstz   = DbTimestampTz(ts, 3600)
   private val timeTz = DbTimeTz(time, -18000)
-  private val uuid   = DbUuid(BigInt("123456789012345678"), BigInt("987654321098765432"))
+  private val uuid   = new java.util.UUID(123456789012345678L, 987654321098765432L)
   private val ipv4   = IpAddress.Ipv4(192, 168, 1, 1)
   private val ipv6   = IpAddress.Ipv6(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1)
   private val mac    = MacAddress(0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff)
@@ -177,7 +177,7 @@ object RdbmsCompileSpec extends ZIOSpecDefault {
     IgniteDbValue.DbDouble(2.718),
     IgniteDbValue.DbChar('A'),
     IgniteDbValue.DbString("hello"),
-    IgniteDbValue.DbUuid((BigInt("123456789012345678"), BigInt("987654321098765432"))),
+    IgniteDbValue.DbUuid(new java.util.UUID(123456789012345678L, 987654321098765432L)),
     IgniteDbValue.DbDate(1719446400000L),
     IgniteDbValue.DbTimestamp((1719446400000L, 123456)),
     IgniteDbValue.DbTime(52245000000000L),
@@ -281,7 +281,7 @@ object RdbmsCompileSpec extends ZIOSpecDefault {
         ts.date == date && ts.time == time,
         tstz.timestamp == ts && tstz.offset == 3600,
         timeTz.time == time && timeTz.offset == -18000,
-        uuid.highBits > 0 && uuid.lowBits > 0
+        uuid.getMostSignificantBits > 0 && uuid.getLeastSignificantBits > 0
       )
     },
 

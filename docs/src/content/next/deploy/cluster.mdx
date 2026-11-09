@@ -14,7 +14,7 @@ A fixed cluster runs each Golem service from its own image on [Docker Hub](https
 | Component compilation service | `golemservices/golem-component-compilation-service` | 1 or more | HTTP 8084, gRPC 9010 |
 | Worker executor | `golemservices/golem-worker-executor` | N | HTTP 8082, gRPC 9000 |
 
-Every service reads a TOML file in its image, and `GOLEM__<FIELD>` environment variables override it. For a nested field, join the names with `__`: `GOLEM__DB__CONFIG__HOST` sets `db.config.host`. A list is written in TOML syntax, for example `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["10.0.0.5"]'`. The [Deployment](/next/deploy#golem-services) page links the configuration file and the environment variables of each service.
+Every service reads a TOML file in its image, and `GOLEM__<FIELD>` environment variables override it. For a nested field, join the names with `__`: `GOLEM__DB__CONFIG__HOST` sets `db.config.host`. A list is written in TOML syntax, for example `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["10.0.0.5/32"]'`. The [Deployment](/next/deploy#golem-services) page links the configuration file and the environment variables of each service.
 
 ## Storage
 
@@ -191,7 +191,7 @@ Two of the worker service paths are WebSocket connections: `/v1/agents/invoke-ag
 
 Every other host goes to the worker service's custom request port, 9006, which serves the HTTP API and MCP deployments of that host. Reserve the management host with `GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS='["golem.example.com"]'` on the registry service, so that no environment can register it.
 
-To give the worker service the public scheme and host, set `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES` to the address of the proxy that connects to it. The proxy must replace the client's `X-Forwarded-Proto` and `X-Forwarded-Host` with one value each. A request from a trusted address without both headers fails. The address must be fixed: give the proxy a static IP address, or run it next to the worker service and trust `127.0.0.1`. See the [production checklist](/next/deploy/production-checklist#4-put-a-reverse-proxy-in-front).
+To give the worker service the public scheme and host, set `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES` to the address range of the proxy that connects to it (`/32` for one address). The proxy must replace the client's `X-Forwarded-Proto` and `X-Forwarded-Host` with one value each. A request from a trusted address without both headers fails. A single proxy needs a fixed address: give it a static IP address, or run it next to the worker service and trust `127.0.0.1/32`. For an ingress that runs as several pods, trust its pod range and admit only the ingress with a network policy; see [Configuring ingress](/next/operate/http-gateway#configuring-ingress). See the [production checklist](/next/deploy/production-checklist#4-put-a-reverse-proxy-in-front).
 
 ## Moving from the all-in-one server
 

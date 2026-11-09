@@ -17,11 +17,11 @@
 package golem.schema
 
 import zio.blocks.schema.{Modifier, Schema}
-import zio.blocks.typeid.TypeId
 
+import java.net.{URI, URISyntaxException}
 import java.time.{Duration => JDuration, Instant}
+import scala.annotation.publicInBinary
 import scala.collection.immutable.ListMap
-import scala.util.control.NonFatal
 
 final case class GolemPath(value: String) extends AnyVal
 
@@ -34,7 +34,8 @@ object GolemPath {
     new IntoSchema[GolemPath] {
       override lazy val graph: SchemaGraph =
         SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.PathType(defaultSpec)))
-      override def toValue(value: GolemPath): SchemaValue = SchemaValue.PathValue(value.value)
+      override def toValue(value: GolemPath): SchemaValue =
+        SchemaValue.PathValue(UnicodeText.encodeText("path", value.value))
     }
 
   implicit val fromSchema: FromSchema[GolemPath] =
@@ -47,26 +48,66 @@ object GolemPath {
     }
 }
 
-final case class Url(value: String) extends AnyVal
-
-object Url {
+private[golem] object UrlText {
   val defaultRestrictions: UrlRestrictions = UrlRestrictions.empty
 
-  implicit val schema: Schema[Url] = Schema.derived
+  def encode(value: URI): String = UnicodeText.encodeText("url", value.toString)
 
-  implicit val intoSchema: IntoSchema[Url] =
-    new IntoSchema[Url] {
+  def parse(value: String): Either[String, URI] =
+    try Right(new URI(value))
+    catch { case e: URISyntaxException => Left(s"invalid url '$value': ${e.getReason}") }
+}
+
+private[golem] object DurationNanos {
+
+  /**
+   * The signed nanoseconds of a duration. Throws [[SchemaEncodeError]] outside
+   * the s64 range. Computed here because the Scala.js `java.time` overflows at
+   * the most negative value.
+   */
+  def of(value: JDuration): Long = {
+    val seconds = value.getSeconds
+    try
+      if (seconds < 0)
+        Math.addExact(Math.multiplyExact(seconds + 1, 1000000000L), value.getNano.toLong - 1000000000L)
+      else Math.addExact(Math.multiplyExact(seconds, 1000000000L), value.getNano.toLong)
+    catch {
+      case _: ArithmeticException => throw SchemaEncodeError(s"Duration is out of i64 nanoseconds range: $value")
+    }
+  }
+}
+
+/**
+ * Bare text with an optional language code. Its schema is `text` without
+ * restrictions; a callee may publish a refined `text` schema (languages,
+ * length, regex), which the server checks.
+ */
+final case class Text(text: String, language: Option[String] = None)
+
+object Text {
+  val defaultRestrictions: TextRestrictions = TextRestrictions.empty
+
+  implicit val schema: Schema[Text] = Schema.derived
+
+  private[golem] def toSchemaValue(value: Text): SchemaValue =
+    SchemaValue.TextValue(
+      UnicodeText.encodeText("text", value.text),
+      value.language.map(UnicodeText.encodeText("text language", _))
+    )
+
+  implicit val intoSchema: IntoSchema[Text] =
+    new IntoSchema[Text] {
       override lazy val graph: SchemaGraph =
-        SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.UrlType(defaultRestrictions)))
-      override def toValue(value: Url): SchemaValue = SchemaValue.UrlValue(value.value)
+        SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.TextType(defaultRestrictions)))
+      override def toValue(value: Text): SchemaValue = toSchemaValue(value)
     }
 
-  implicit val fromSchema: FromSchema[Url] =
-    new FromSchema[Url] {
-      override def fromValue(value: SchemaValue): Either[FromSchemaError, Url] =
+  implicit val fromSchema: FromSchema[Text] =
+    new FromSchema[Text] {
+      override def fromValue(value: SchemaValue): Either[FromSchemaError, Text] =
         value match {
-          case SchemaValue.UrlValue(v) => Right(Url(v))
-          case other                   => Left(FromSchemaError(s"expected url value for Url, got $other"))
+          case SchemaValue.TextValue(text, language) => Right(Text(text, language))
+          case other                                 => Left(FromSchemaError(s"expected text value for Text, got $other"))
         }
     }
 }
@@ -78,6 +119,12 @@ object Quantity {
 
   private[golem] def encodeSpec(spec: QuantitySpec): String =
     (spec.baseUnit :: spec.allowedSuffixes).mkString("\u001f")
+
+  /**
+   * Only the base unit when there are no suffixes, otherwise only the suffixes.
+   */
+  private[golem] def allows(spec: QuantitySpec, unit: String): Boolean =
+    if (spec.allowedSuffixes.isEmpty) unit == spec.baseUnit else spec.allowedSuffixes.contains(unit)
 
   private[golem] def decodeSpec(value: String): Option[QuantitySpec] =
     value.split("\u001f", -1).toList match {
@@ -94,9 +141,20 @@ object Quantity {
         SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.QuantityType(unit.spec)))
 
       override def toValue(value: Quantity[U]): SchemaValue = {
+        UnicodeText.encodeText("quantity unit", value.unit)
         if (!unit.allows(value.unit)) throw SchemaEncodeError(s"unit '${value.unit}' is not allowed for quantity")
         SchemaValue.QuantityValueNode(QuantityValue(value.mantissa, value.scale, value.unit))
       }
+    }
+
+  def concreteCodec[U](implicit unit: QuantityUnit[U]): wire.ConcreteCodec[Quantity[U]] =
+    wire.ConcreteCodec.scalar[Quantity[U]](wire.WitSchemaTypeBody.QuantityType(unit.spec)) { value =>
+      UnicodeText.encodeText("quantity unit", value.unit)
+      if (!unit.allows(value.unit)) throw SchemaEncodeError(s"unit '${value.unit}' is not allowed for quantity")
+      wire.WitSchemaValueNode.QuantityValueNode(QuantityValue(value.mantissa, value.scale, value.unit))
+    } { case wire.WitSchemaValueNode.QuantityValueNode(v) =>
+      if (!unit.allows(v.unit)) throw SchemaDecodeError(s"unit '${v.unit}' is not allowed for quantity")
+      Quantity[U](v.mantissa, v.scale, v.unit)
     }
 
   implicit def fromSchema[U](implicit unit: QuantityUnit[U]): FromSchema[Quantity[U]] =
@@ -112,17 +170,19 @@ object Quantity {
     }
 }
 
-trait QuantityUnit[U] {
-  def baseUnit: String
-  def allowedSuffixes: List[String]
-  def typeId: TypeId[U]
-
-  final def spec: QuantitySpec            = QuantitySpec(baseUnit, allowedSuffixes, None, None)
-  final def allows(unit: String): Boolean = unit == baseUnit || allowedSuffixes.contains(unit)
+/**
+ * The units of the quantity marker `U`, derived by the compiler from the
+ * [[golem.runtime.annotations.quantityUnit]] annotation on `U`.
+ */
+final class QuantityUnit[U] @publicInBinary private[golem] (val baseUnit: String, val allowedSuffixes: List[String]) {
+  def spec: QuantitySpec            = QuantitySpec(baseUnit, allowedSuffixes, None, None)
+  def allows(unit: String): Boolean = Quantity.allows(spec, unit)
 }
 
 object QuantityUnit {
   def apply[U](implicit unit: QuantityUnit[U]): QuantityUnit[U] = unit
+
+  inline given derived[U]: QuantityUnit[U] = ${ QuantityUnitMacro.derive[U] }
 }
 
 object RichSchemas {
@@ -136,6 +196,25 @@ object RichSchemas {
 
   implicit val durationSchema: Schema[JDuration] =
     Schema[Long].transform[JDuration](JDuration.ofNanos, _.toNanos)
+
+  implicit val uriSchema: Schema[URI] =
+    Schema[String].transform[URI](new URI(_), _.toString)
+
+  implicit val uriIntoSchema: IntoSchema[URI] =
+    new IntoSchema[URI] {
+      override lazy val graph: SchemaGraph =
+        SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.UrlType(UrlText.defaultRestrictions)))
+      override def toValue(value: URI): SchemaValue = SchemaValue.UrlValue(UrlText.encode(value))
+    }
+
+  implicit val uriFromSchema: FromSchema[URI] =
+    new FromSchema[URI] {
+      override def fromValue(value: SchemaValue): Either[FromSchemaError, URI] =
+        value match {
+          case SchemaValue.UrlValue(v) => UrlText.parse(v).left.map(FromSchemaError(_))
+          case other                   => Left(FromSchemaError(s"expected url value for URI, got $other"))
+        }
+    }
 
   implicit val instantIntoSchema: IntoSchema[Instant] =
     new IntoSchema[Instant] {
@@ -157,10 +236,7 @@ object RichSchemas {
     new IntoSchema[JDuration] {
       override lazy val graph: SchemaGraph                = SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.DurationType))
       override def toValue(value: JDuration): SchemaValue =
-        try SchemaValue.DurationValue(value.toNanos)
-        catch {
-          case NonFatal(e) => throw SchemaEncodeError(s"Duration is out of i64 nanoseconds range: ${e.getMessage}")
-        }
+        SchemaValue.DurationValue(DurationNanos.of(value))
     }
 
   implicit val durationFromSchema: FromSchema[JDuration] =
@@ -182,4 +258,5 @@ trait RichSchemaImplicits {
   implicit def golemInstantFromSchema: FromSchema[Instant]    = RichSchemas.instantFromSchema
   implicit def golemDurationIntoSchema: IntoSchema[JDuration] = RichSchemas.durationIntoSchema
   implicit def golemDurationFromSchema: FromSchema[JDuration] = RichSchemas.durationFromSchema
+  implicit def golemUriSchema: Schema[URI]                    = RichSchemas.uriSchema
 }

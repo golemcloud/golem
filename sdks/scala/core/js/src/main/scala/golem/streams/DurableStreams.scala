@@ -6,7 +6,7 @@
  */
 package golem.streams
 
-import golem.{HostApi, Uuid}
+import golem.HostApi
 import golem.config.Secret
 import golem.schema.AgentStream
 import zio.blocks.schema.Schema
@@ -63,7 +63,7 @@ object DurableStreams {
    * automatically.
    */
   def newProducer(): DurableStreamProducer =
-    DurableStreamProducer(Uuid.toStandardString(HostApi.generateIdempotencyKey()))
+    DurableStreamProducer(HostApi.generateIdempotencyKey().toString)
 
   def jsonWriter[A: Schema](
     url: String,

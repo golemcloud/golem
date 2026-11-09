@@ -31,7 +31,7 @@ The native definition-derived Scala SDK client extends `AgentCompanionBase` and 
 ### Example (Durable Counter)
 
 ```scala
-import golem.Uuid
+import java.util.UUID
 
 // Non-phantom: always the same agent for the same name
 val counter = CounterClient.get("shared")
@@ -42,7 +42,7 @@ val phantom2 = CounterClient.newPhantom("shared")
 // phantom1 and phantom2 are different agents, both with name="shared"
 
 // Reconnect to an existing phantom by its UUID
-val existingId: Uuid = Uuid(BigInt(42), BigInt(99))
+val existingId: UUID = UUID.fromString("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 val samePhantom = CounterClient.getPhantom("shared", existingId)
 
 // Call methods on the phantom
@@ -66,8 +66,7 @@ CLI-generated guest/JVM bridge clients do not extend `AgentCompanionBase`.
 Durable bridges expose `get`, `getPhantom`, and `newPhantom`; ephemeral bridges
 expose only `newPhantom`, a logical proxy whose final invocation identity is
 assigned on invocation. Guest factories are synchronous; external JVM factories
-return `Future` and use bridge UUID types rather than native `golem.Uuid` /
-`publicUuid` recipes. See [`golem-call-from-external-scala`](/next/how-to-guides/scala/golem-call-from-external-scala).
+return `Future`. See [`golem-call-from-external-scala`](/next/how-to-guides/scala/golem-call-from-external-scala).
 
 ## Method Signature Differences
 
@@ -88,7 +87,7 @@ CounterClient.newPhantom("counter-name")
 ## Key Points
 
 - Phantom identity and durability mode are independent. Durable phantom agents persist just like regular durable agents; ephemeral invocations discard their memory. If the executor restarts while preparing an ephemeral invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
-- The phantom ID is a `golem.Uuid` (high/low `BigInt` pair).
+- The phantom ID is a `java.util.UUID`.
 - For durable targets, `newPhantom` generates a UUID via `HostApi.generateIdempotencyKey()`. For ephemeral targets it resolves without a phantom override; invocation metadata supplies the actual identity. Factory construction is synchronous in both cases.
 - For durable targets, `getPhantom` with the same UUID and parameters addresses the same persistent agent. For ephemeral targets it selects an invocation identity, not reusable persistent state.
 - Phantom and non-phantom agents with the same constructor parameters are **different agents** — they do not share state.

@@ -13,6 +13,8 @@ Once a maintainer vouches for you, you can open pull requests normally.
 To work on **Golem** you need to install (via package installers or manually) the following tools:
 
 - [rustup](https://rustup.rs/)
+- [WASI SDK](https://github.com/WebAssembly/wasi-sdk/releases) and an official Node.js build with
+  pnpm, to build the built-in tools (see [WASI SDK and Node.js](#wasi-sdk-and-nodejs))
 - For integration tests
   - [redis](https://redis.io/downloads/)
   - [docker](https://www.docker.com)
@@ -22,7 +24,16 @@ To work on **Golem** you need to install (via package installers or manually) th
 
 ### OSX
 ```sh
-brew install rustup redis docker lnav nginx
+brew install rustup redis docker lnav nginx fnm pnpm
+
+# Official Node.js build (see "WASI SDK and Node.js" below)
+fnm install 24 && fnm default 24
+echo 'eval "$(fnm env --use-on-cd --shell zsh)"' >> ~/.zshrc
+
+# WASI SDK: download with curl, not a browser. macOS quarantines browser downloads and kills the unsigned binaries.
+curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-25/wasi-sdk-25.0-arm64-macos.tar.gz | tar xz -C /tmp
+sudo mv /tmp/wasi-sdk-25.0-arm64-macos /opt/wasi-sdk
+echo 'export WASI_SDK_PATH=/opt/wasi-sdk' >> ~/.zshrc
 ```
 
 ## Rust Installation
@@ -33,6 +44,20 @@ rustup default stable
 rustup target add wasm32-wasip2
 cargo install --force cargo-make
 ```
+
+## WASI SDK and Node.js
+
+`cargo make build` also builds the built-in tools, which needs:
+
+- [WASI SDK](https://github.com/WebAssembly/wasi-sdk/releases) at the version CI pins
+  (`WASI_SDK_VERSION` in `.github/workflows/ci.yaml`), with `WASI_SDK_PATH` pointing at it.
+  Without it, C dependencies fail to compile for `wasm32-wasip2` with `'stdio.h' file not found`.
+- An **official** Node.js 24 build (for example via [fnm](https://github.com/Schniz/fnm) or
+  [nvm](https://github.com/nvm-sh/nvm)) and [pnpm](https://pnpm.io). Do not use Homebrew's Node:
+  it links the system zlib, so `npm pack` produces different bytes and the built-in tools'
+  provenance checks fail with `artifact SHA-256 drifted`.
+
+See [OSX](#osx) for the macOS install commands.
 
 Everything else is managed by [cargo-make](https://github.com/sagiegurari/cargo-make).
 

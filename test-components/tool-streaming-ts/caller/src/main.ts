@@ -17,8 +17,122 @@ import { TsStreamingClient } from 'ts-streaming-tool-guest-client';
 import { getConfigValue } from 'golem:agent/host@2.0.0';
 import type { SchemaGraph, Secret } from 'golem:core/types@2.0.0';
 import { z } from 'zod/v4';
+import { Buffer } from 'node:buffer';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+
+// Runs the bound `streaming` tool through node:child_process: `produce 3 2` streams chunks 0, 1
+// and 2 of two bytes each, and an unknown command is a usage error from the shared parser.
+async function childProcessToolObservation(): Promise<string> {
+  const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
+  const sync = spawnSync('streaming', ['produce', '3', '2']);
+  const asynchronous = await new Promise<string>((resolve, reject) => {
+    execFile('streaming', ['produce', '3', '2'], { encoding: 'buffer' }, (error, stdout) =>
+      error ? reject(error) : resolve(hex(stdout)),
+    );
+  });
+  const usage = spawnSync('streaming', ['no-such-command']);
+  return `sync=${sync.status}:${hex(sync.stdout)};async=${asynchronous};usage=${usage.status}`;
+}
+
+// Edge cases of the same dispatch: `optional-streams` echoes stdin, async output above
+// maxBuffer fails like Node, an aborted spawn reports error, exit and close in Node's order,
+// and the disable switch leaves the command to the default (unsupported) process backend.
+async function childProcessToolEdgeCases(): Promise<string> {
+  const echo = spawnSync('streaming', ['optional-streams'], { input: 'ping' });
+  // Inherited sync output must bypass maxBuffer and reach the parent in bounded
+  // chunks, not as one collected buffer after the tool completes.
+  const write = process.stdout.write;
+  const chunkSize = 32 * 1024;
+  const total = 65 * chunkSize;
+  let received = 0;
+  let largest = 0;
+  try {
+    process.stdout.write = ((bytes: Uint8Array) => {
+      largest = Math.max(largest, bytes.length);
+      for (const byte of bytes) {
+        if (byte !== Math.floor(received / chunkSize)) {
+          throw new Error('Inherited output bytes changed');
+        }
+        received++;
+      }
+      return true;
+    }) as typeof write;
+    const inherited = spawnSync('streaming', ['produce', '65', String(chunkSize)], {
+      stdio: ['ignore', 'inherit', 'pipe'],
+      maxBuffer: 1,
+    });
+    if (
+      inherited.error ||
+      inherited.status !== 0 ||
+      inherited.stdout !== null ||
+      received !== total ||
+      largest > chunkSize
+    ) {
+      throw new Error(
+        `Inherited output was not streamed: ${received}/${largest}: ${inherited.error}`,
+      );
+    }
+    process.stdout.write = (() => false) as typeof write;
+    const blocked = spawnSync('streaming', ['produce', '65', String(chunkSize)], {
+      stdio: ['ignore', 'inherit', 'pipe'],
+    });
+    if (
+      (blocked.error as NodeJS.ErrnoException | undefined)?.code !== 'ENOTSUP' ||
+      blocked.status !== null
+    ) {
+      throw new Error(`Sync inherited backpressure was not rejected: ${blocked.error}`);
+    }
+  } finally {
+    process.stdout.write = write;
+  }
+  // Exercise the unmodified runtime stdout and stderr sinks, not the byte
+  // recorder above. The executor asserts the emitted text in the agent's log.
+  const utf8 = spawnSync('streaming', ['dual-reconstruct', 'utf8-terminals'], {
+    stdio: ['ignore', 'inherit', 'inherit'],
+    maxBuffer: 0,
+  });
+  if (utf8.error || utf8.status !== 0) {
+    throw new Error(`Inherited UTF-8 output failed: ${utf8.error}`);
+  }
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('streaming', ['dual-reconstruct', 'utf8-terminals'], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    child.on('error', reject);
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`Async inherited UTF-8 output failed: ${code}`)),
+    );
+  });
+  const overflow = await new Promise<string>((resolve) => {
+    execFile('streaming', ['produce', '64', '64'], { maxBuffer: 1024 }, (error) =>
+      resolve(String((error as { code?: string } | null)?.code)),
+    );
+  });
+  const controller = new AbortController();
+  const aborted = await new Promise<string>((resolve) => {
+    const events: string[] = [];
+    const child = spawn('streaming', ['produce', '100000', '1024'], {
+      signal: controller.signal,
+    });
+    child.on('error', (error) => events.push(`error:${error.name}`));
+    child.on('exit', (code, signal) => events.push(`exit:${code}:${signal}`));
+    child.on('close', () => resolve(events.join(',')));
+    child.stdout.once('data', () => controller.abort());
+  });
+  const previous = process.env.GOLEM_NODE_TOOL_PROCESSES;
+  process.env.GOLEM_NODE_TOOL_PROCESSES = ' Off ';
+  let disabled: string;
+  try {
+    const result = spawnSync('streaming', ['produce', '1', '1']);
+    disabled = result.error ? 'error' : `status:${result.status}`;
+  } finally {
+    if (previous === undefined) delete process.env.GOLEM_NODE_TOOL_PROCESSES;
+    else process.env.GOLEM_NODE_TOOL_PROCESSES = previous;
+  }
+  return `echo=${echo.status}:${echo.stdout};overflow=${overflow};abort=${aborted};disabled=${disabled}`;
+}
 
 const TscClient = client(
   toolDefinition('tsc', { requiresFilesystem: true })
@@ -198,6 +312,14 @@ const Caller = defineAgent({
     matrix_core_observation: method({
       input: {},
       returns: MatrixCoreObservation,
+    }),
+    child_process_tool_observation: method({
+      input: {},
+      returns: z.string(),
+    }),
+    child_process_tool_edge_cases: method({
+      input: {},
+      returns: z.string(),
     }),
   },
 });
@@ -421,6 +543,12 @@ Caller.implement({
       }
       await compile();
       return Result.ok('removed-output-source-preserved-recompiled');
+    },
+    child_process_tool_observation() {
+      return childProcessToolObservation();
+    },
+    child_process_tool_edge_cases() {
+      return childProcessToolEdgeCases();
     },
     async matrix_core_observation() {
       const client = MatrixCoreClient.newClient();

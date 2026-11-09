@@ -455,14 +455,7 @@ impl OidcHandler {
         let pending_login = PendingOidcLogin {
             scheme_id: security_scheme.id,
             nonce: nonce.clone(),
-            original_uri: format!(
-                "{}://{}{}",
-                resolved_route.public_scheme,
-                resolved_route.public_authority,
-                request.underlying.uri().path_and_query().ok_or_else(|| {
-                    RequestHandlerError::invariant_violated("Selected request has no path")
-                })?
-            ),
+            original_uri: pending_login_original_uri(resolved_route, request.underlying.uri())?,
         };
 
         self.session_store
@@ -490,6 +483,21 @@ impl OidcHandler {
             body: ResponseBody::NoBody,
         })
     }
+}
+
+/// The public URL of the request that starts an OIDC login. The callback redirects the browser
+/// back to it after the login.
+pub(crate) fn pending_login_original_uri(
+    resolved_route: &ResolvedRouteEntry,
+    uri: &http::Uri,
+) -> Result<String, RequestHandlerError> {
+    let path_and_query = uri
+        .path_and_query()
+        .ok_or_else(|| RequestHandlerError::invariant_violated("Selected request has no path"))?;
+    Ok(format!(
+        "{}://{}{}",
+        resolved_route.public_scheme, resolved_route.public_authority, path_and_query
+    ))
 }
 
 fn provider_scopes(security_scheme: &SecuritySchemeDetails) -> Vec<openidconnect::Scope> {
