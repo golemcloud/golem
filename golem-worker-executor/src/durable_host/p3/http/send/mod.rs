@@ -122,9 +122,7 @@ where
     // nothing to record — deterministically on both live and replay paths.
     let mut pending_transmission = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.state
-            .pending_p3_http_request_transmissions
-            .remove(&req.rep())
+        ctx.state.p3_http_transmissions.requests.remove(&req.rep())
     });
 
     // The request head is serialized (and recorded) exactly as the guest built

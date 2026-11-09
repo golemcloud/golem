@@ -1166,13 +1166,9 @@ struct PrivateDurableWorkerState {
     pub(crate) open_p3_http_responses:
         HashMap<u32, crate::durable_host::p3::http::OpenP3HttpResponseState>,
 
-    /// Body-transmission wiring of open p3 outgoing HTTP requests, keyed by the request resource
-    /// rep. Registered by the durable `request::new` (which interposes on the guest-facing
-    /// transmission future) and detached by the host call that consumes the request:
-    /// `client::send` records/replays the transmission result durably, while a guest-side
-    /// `consume-body`/`drop` forwards the deterministic value with no recording.
-    pub(crate) pending_p3_http_request_transmissions:
-        HashMap<u32, crate::durable_host::p3::http::PendingHttpRequestBodyTransmission>,
+    /// Transmission wiring and future identities for P3 HTTP bodies. Host transfers preserve
+    /// their recorded result while the recipient owns any later guest delivery boundary.
+    pub(crate) p3_http_transmissions: crate::durable_host::p3::http::HttpTransmissionRegistry,
 
     /// WebSocket connection state indexed by websocket resource rep.
     open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
