@@ -423,10 +423,15 @@ async fn profile_new_without_input_in_non_interactive_mode_shows_help_on_stderr(
 }
 
 #[test]
-async fn app_rejects_old_manifests_without_modifying_files(_tracing: &Tracing) {
+async fn app_upgrades_old_manifests_before_build(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let manifest_path = ctx.cwd_path_join("golem.yaml");
     let included_manifest_path = ctx.cwd_path_join("included.yaml");
+    let artifact = ctx.cwd_path_join("component.wasm");
+    let bytes = wat::parse_str(r#"(component $original (@custom "version" "3.2.1"))"#).unwrap();
+    fs::write(&artifact, &bytes).unwrap();
+    super::backdate_mtime(&artifact);
+    let modified = std::fs::metadata(&artifact).unwrap().modified().unwrap();
 
     for version in ["1.5.0", "1.6.0"] {
         let old_manifest = formatdoc! {"
@@ -435,26 +440,94 @@ async fn app_rejects_old_manifests_without_modifying_files(_tracing: &Tracing) {
             app: test-app-old-manifest
             includes:
               - included.yaml
+            environments:
+              local:
+                server: local
+            components:
+              app:main:
+                templates: shared
+                componentWasm: component.wasm
+                outputWasm: staged.wasm
         "};
         fs::write_str(&manifest_path, old_manifest).unwrap();
         fs::write_str(
             &included_manifest_path,
-            format!("manifestVersion: {version}\n"),
+            indoc! {"
+                componentTemplates:
+                  shared:
+                    outputWasm: inherited-staged.wasm
+            "},
         )
         .unwrap();
         let before = snapshot_dir(ctx.cwd_path());
 
-        for args in [vec![cmd::BUILD], vec![flag::YES, cmd::BUILD]] {
-            let outputs = ctx.cli(args).await;
-            assert!(!outputs.success());
-            assert!(
-                outputs.stdout_contains("Unknown application manifest version")
-                    || outputs.stderr_contains("Unknown application manifest version")
-            );
-            assert!(!outputs.stderr_contains("This action requires confirmation"));
-            assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+        let help = ctx.cli(cmd::NO_ARGS).await;
+        assert!(help.stderr_contains(pattern::HELP_USAGE));
+        assert!(!help.stderr_contains("This action requires confirmation"));
+        assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+
+        let unconfirmed = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(!unconfirmed.success());
+        assert!(unconfirmed.stderr_contains("This action requires confirmation"));
+        assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+
+        let confirmed = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(confirmed.success_or_dump());
+        for path in [&manifest_path, &included_manifest_path] {
+            let source = fs::read_to_string(path).unwrap();
+            let value: serde_yaml::Value = serde_yaml::from_str(&source).unwrap();
+            assert_eq!(value["manifestVersion"], "2.0.0");
+            assert!(!source.contains("outputWasm"));
         }
+        let upgraded = fs::read_to_string(&manifest_path).unwrap();
+        assert!(upgraded.contains("/2.0.0-dev.1/golem.schema.json"));
+        assert!(upgraded.contains("componentWasm: component.wasm"));
+        assert!(!ctx.cwd_path_join("staged.wasm").exists());
+        assert!(!ctx.cwd_path_join("inherited-staged.wasm").exists());
+        assert_eq!(fs::read(&artifact).unwrap(), bytes);
+        assert_eq!(
+            std::fs::metadata(&artifact).unwrap().modified().unwrap(),
+            modified
+        );
+
+        let repeated = ctx.cli([cmd::BUILD, flag::STEP, "build"]).await;
+        assert!(repeated.success_or_dump());
+        assert!(!repeated.stderr_contains("automatic application manifest upgrade"));
+        assert_eq!(fs::read_to_string(&manifest_path).unwrap(), upgraded);
     }
+}
+
+#[test]
+async fn app_manifest_upgrade_rejects_staged_references_without_writes(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+        manifestVersion: 1.6.0
+        app: unsafe-upgrade
+        includes: [included.yaml]
+        components:
+          app:main:
+            componentWasm: component.wasm
+            outputWasm: staged.wasm
+    "},
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("included.yaml"),
+        indoc! {"
+        manifestVersion: 1.6.0
+        customCommands:
+          export:
+          - command: cp staged.wasm exported.wasm
+    "},
+    )
+    .unwrap();
+    let before = snapshot_dir(ctx.cwd_path());
+    let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "build"]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains("removed outputWasm path 'staged.wasm'"));
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
 }
 
 #[test]

@@ -45,6 +45,18 @@ After resolving relative paths in the documents they are merged, then _component
 
 An Application Manifest can also be selected explicitly with `--app-manifest-path` (`-A`). This chooses the root manifest instead of searching parent directories; its `includes` are still resolved. Use `--disable-app-manifest-discovery` (`-X`) to run without manifest discovery.
 
+### Upgrading older manifests
+
+At startup, commands that load an application manifest preview the upgrade plan for manifest versions `1.5.0` and `1.6.0` and ask for confirmation before writing files. Use `--yes` to confirm without an interactive prompt.
+
+The upgrade sets `manifestVersion` to `"2.0.0"`, updates existing schema URLs to `https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json`, and adds the current marker to included versionless fragments in the older application. Unknown or future manifest versions are not rewritten.
+
+The upgrade removes `outputWasm` from component and component-template base properties and presets. It leaves `componentWasm` unchanged: this path identifies the actual built component artifact used for deployment. The CLI does not add a copy stage to preserve the removed staged artifact path.
+
+If a manifest configuration string, including a command, still references the removed staged artifact path, the CLI rejects the upgrade before writing any files. Update those references to use the actual artifact identified by `componentWasm`, then retry. The CLI does not guess paths that depend on a build profile. A `1.5.0` manifest with bridge configuration still requires manual adjustment before the upgrade can proceed.
+
+The guard inspects strings in the manifest, not the contents of external scripts invoked by commands. Check those scripts manually and update any staged-path references to use the actual `componentWasm` artifact. The upgrade does not inspect or rewrite external scripts.
+
 ## Template variables and functions
 
 The _Application Manifest_ has some fields which are used as templates, these fields are marked as **Templated** in the field reference below. The templates are using [minijinja](https://github.com/mitsuhiko/minijinja), which is a minimal templating engine based on _Jinja2_ syntax.
@@ -509,7 +521,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "manifestVersion",
   }}>
-    ***Required manifest format marker***: use `manifestVersion: "2.0.0"` in every manifest document. All loaded documents must use this marker. The CLI rejects older manifest versions and does not upgrade them automatically. The CLI validates the marker separately from the editor's `2.0.0-dev.1` JSON schema URL; it is not the application's deployment version.
+    ***Required manifest format marker***: use `manifestVersion: "2.0.0"` in every current manifest document. The CLI offers a confirmed upgrade for versions `1.5.0` and `1.6.0`; see [Upgrading older manifests](#upgrading-older-manifests) for the changes and cases that require manual adjustment. The CLI validates the marker separately from the editor's `2.0.0-dev.1` JSON schema URL; it is not the application's deployment version.
   </Field>
 
   <Field meta={{
