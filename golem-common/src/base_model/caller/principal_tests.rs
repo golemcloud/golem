@@ -303,7 +303,7 @@ fn each_golem_principal_has_its_kind_and_its_pair_under_its_issuer() {
 /// and re-encoded JSON value would change: key order, number forms, escapes and spaces.
 fn large_claim_set(min_len: usize) -> String {
     let mut json = String::from(
-        r#"{"sub":"u-123","z-first":1,"a-second":1.0,"big":123456789012345678901234567890,"exponent":1E3,"escaped":"é\/","spaced" : [ 1 , 2 ],"groups":["#,
+        r#"{"sub":"u-123","z-first":1,"a-second":1.0,"big":123456789012345678901234567890,"exponent":1E3,"escaped":"\u00e9\/","spaced" : [ 1 , 2 ],"groups":["#,
     );
     let mut index = 0;
     while json.len() < min_len {
