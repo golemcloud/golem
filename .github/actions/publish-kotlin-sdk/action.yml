@@ -1,0 +1,35 @@
+name: 'Publish Kotlin SDK locally'
+description: 'Publishes the Kotlin SDK, KSP processor and Gradle plugin to mavenLocal at 0.0.0-SNAPSHOT and puts the tools `golem build` needs for Kotlin on PATH'
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Java
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 21
+
+    # `golem build` runs the system `gradle` for Kotlin components (the app template ships no wrapper).
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: 9.4.1
+
+    - name: Install wasm-tools
+      shell: bash
+      run: cargo binstall --force --locked wasm-tools@1.248.0
+
+    - name: Sync WIT dependencies
+      shell: bash
+      run: cargo make wit
+
+    # Order matters only for a reader: the three modules are independent builds. The snapshot version is what the CLI
+    # scaffolds with GOLEM_KOTLIN_SDK_VERSION=0.0.0-SNAPSHOT (see sdk_overrides.rs).
+    - name: Publish Kotlin SDK, KSP processor and Gradle plugin to mavenLocal
+      shell: bash
+      working-directory: sdks/kotlin
+      run: |
+        set -euo pipefail
+        for module in sdk ksp gradle-plugin; do
+          (cd "$module" && ./gradlew --no-daemon -PgolemSdkVersion=0.0.0-SNAPSHOT publishToMavenLocal)
+        done

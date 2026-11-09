@@ -741,6 +741,11 @@ jobs:
           mkdir -p ~/.ivy2
           tar -xzf tmp/scala-ivy-publication/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
+      # The Kotlin template tests build real components with the SDK from mavenLocal.
+      - name: Publish Kotlin SDK locally
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_streaming' && matrix.group.shard != 'agents_guest_bridge'
+        uses: ./.github/actions/publish-kotlin-sdk
+
       - name: Restore built TS SDK
         if: matrix.group.shard != 'bridge_gen_rust'
         uses: actions/download-artifact@v8
@@ -1138,6 +1143,40 @@ jobs:
           cat SHA256SUMS
           stat -c 'Scala ivy archive bytes=%s' scala-sdk-ivy-local.tar.gz
           printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
+
+  build-golem-kotlin:
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-binstall: 'true'
+
+      # Publishes the three artifacts to mavenLocal (also checks that they build and package) and installs
+      # the system tools `golem build` needs.
+      - name: Publish Kotlin SDK locally
+        uses: ./.github/actions/publish-kotlin-sdk
+
+      - name: Check generated Kotlin SDK sources
+        run: cargo make check-sdk-kotlin-generated
+
+      - name: Test SDK
+        working-directory: sdks/kotlin/sdk
+        run: ./gradlew --no-daemon wasmWasiNodeTest
+      - name: Test KSP processor
+        working-directory: sdks/kotlin/ksp
+        run: ./gradlew --no-daemon test
+      - name: Compile KSP output against the real SDK
+        working-directory: sdks/kotlin/scripts/real-sdk-compile
+        run: ./gradlew --no-daemon --continue compileKotlinWasmWasi
+      - name: Test Gradle plugin
+        working-directory: sdks/kotlin/gradle-plugin
+        run: ./gradlew --no-daemon test
+      - name: Build a component with the real Gradle plugin
+        working-directory: sdks/kotlin/scripts/real-plugin-build
+        run: ./gradlew --no-daemon verifyComponent verifyAdapterOverride
 
   build-golem-moonbit:
     runs-on: blacksmith
@@ -1627,6 +1666,14 @@ jobs:
         run: |
           mkdir -p ~/.ivy2
           tar -xzf tmp/scala-ivy-publication/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
+
+      - name: Install cargo-make for Kotlin components
+        if: matrix.chunk.needs-kotlin
+        run: cargo binstall --force --locked cargo-make
+
+      - name: Publish Kotlin SDK locally for Kotlin components
+        if: matrix.chunk.needs-kotlin
+        uses: ./.github/actions/publish-kotlin-sdk
 
       - name: Update MoonBit fixture dependencies
         if: matrix.chunk.needs-moonbit
