@@ -1,0 +1,10 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>LongMethod:GolemAgentProcessorTest.kt$GolemAgentProcessorTest$@Test fun `derived SnapshotCodec compiles against JVM stub native runtime`()</ID>
+    <ID>LongMethod:GolemAgentProcessorTest.kt$GolemAgentProcessorTest$@Test fun `generated registration compiles against JVM stub native runtime`()</ID>
+    <ID>LongMethod:GolemAgentProcessorTest.kt$GolemAgentProcessorTest$@Test fun `generates native Registration, entry point, and WIT for CounterAgent`()</ID>
+    <ID>LongMethod:KspTestSupport.kt$internal fun typedToolRuntimeStubs()</ID>
+  </CurrentIssues>
+</SmellBaseline>

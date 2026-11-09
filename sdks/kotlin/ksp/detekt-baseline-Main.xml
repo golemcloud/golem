@@ -1,0 +1,37 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>LongMethod:GolemAgentProcessor.kt$GolemAgentProcessor$private fun buildAgentModel(classDecl: KSClassDeclaration): AgentModel</ID>
+    <ID>LongMethod:NativeRegistrationEmitter.kt$NativeRegistrationEmitter$fun emitEntryPoint(models: List&lt;AgentModel&gt;, tools: List&lt;ToolModel&gt; = emptyList(), middlewares: List&lt;ToolMiddlewareModel&gt; = emptyList(), providers: List&lt;ToolProviderModel&gt; = emptyList(), arenaHeadroomBytes: Int? = null)</ID>
+    <ID>LongMethod:ToolArguments.kt$ToolArgumentParser$fun parseArg( owner: String, p: KSValueParameter, pName: String, declared: TypeDesc, kotlinType: String, fn: KSFunctionDeclaration, allowedInGroup: Boolean, ): ToolArgModel?</ID>
+    <ID>LongMethod:ToolDefinitionModel.kt$ToolDefinitionBuilder$fun build(decl: KSClassDeclaration, visiting: Set&lt;String&gt;, inherited: List&lt;ToolArgModel&gt;): ToolDefinitionModel?</ID>
+    <ID>LongMethod:ToolDefinitionModel.kt$ToolDefinitionBuilder$fun buildCommand(owner: String, fn: KSFunctionDeclaration, kebab: String, returnType: KSType, definitionFqn: String, inherited: List&lt;ToolArgModel&gt;): ToolCommandModel?</ID>
+    <ID>ReturnCount:ConfigWalker.kt$ConfigWalker$fun walk(type: KSType, path: List&lt;String&gt;, declarations: MutableList&lt;ConfigDeclModel&gt;): String</ID>
+    <ID>ReturnCount:FileMappings.kt$FileMappings$fun compile(mappings: List&lt;Pair&lt;String, String&gt;&gt;): Compiled&lt;List&lt;FileMapping&gt;&gt;</ID>
+    <ID>ReturnCount:FileMappings.kt$FileMappings$private fun compileOne(source: String, target: String): Compiled&lt;FileMapping&gt;</ID>
+    <ID>ReturnCount:FileMappings.kt$FileMappings$private fun decodeSegment(raw: String): Compiled&lt;String&gt;</ID>
+    <ID>ReturnCount:GolemAgentProcessor.kt$GolemAgentProcessor$private fun buildConfigModel(param: KSValueParameter, owner: KSClassDeclaration): ConfigModel?</ID>
+    <ID>ReturnCount:GolemAgentProcessor.kt$GolemAgentProcessor$private fun buildToolError(case: KSAnnotation, toolFn: String, at: KSFunctionDeclaration): ToolErrorModel?</ID>
+    <ID>ReturnCount:GolemAgentProcessor.kt$GolemAgentProcessor$private fun buildToolModel(fn: KSFunctionDeclaration): ToolModel?</ID>
+    <ID>ReturnCount:GolemAgentProcessor.kt$GolemAgentProcessor$private fun withDurableStreams(fn: KSFunctionDeclaration, endpoints: List&lt;HttpEndpointModel&gt;): List&lt;HttpEndpointModel&gt;</ID>
+    <ID>ReturnCount:HttpValidation.kt$HttpValidation$fun validate(model: AgentModel): String?</ID>
+    <ID>ReturnCount:NativeRegistrationEmitter.kt$NativeRegistrationEmitter$private fun snapshotArg(model: AgentModel): String</ID>
+    <ID>ReturnCount:RouterValidation.kt$RouterValidation$fun validate(agent: AgentSpec): String?</ID>
+    <ID>ReturnCount:RouterValidation.kt$RouterValidation$private fun validateRouter(agent: AgentSpec): String?</ID>
+    <ID>ReturnCount:ToolArguments.kt$ToolArgumentParser$fun parseArg( owner: String, p: KSValueParameter, pName: String, declared: TypeDesc, kotlinType: String, fn: KSFunctionDeclaration, allowedInGroup: Boolean, ): ToolArgModel?</ID>
+    <ID>ReturnCount:ToolArguments.kt$ToolArgumentParser$fun parseMetadata(owner: String, fn: KSFunctionDeclaration, args: List&lt;ToolArgModel&gt;, globals: List&lt;ToolArgModel&gt;): ToolCommandMetadata?</ID>
+    <ID>ReturnCount:ToolArguments.kt$ToolArgumentParser$fun validateSet(owner: String, args: List&lt;ToolArgModel&gt;, inherited: List&lt;ToolArgModel&gt;, at: KSAnnotated): Boolean</ID>
+    <ID>ReturnCount:ToolArguments.kt$ToolArgumentParser$private fun checkedBound(label: String, literal: String, wit: String, where: String, fn: KSFunctionDeclaration): java.math.BigDecimal?</ID>
+    <ID>ReturnCount:ToolArguments.kt$ToolArgumentParser$private fun parseConstraint(owner: String, c: KSAnnotation, scope: Scope, fn: KSFunctionDeclaration, out: MutableList&lt;ToolConstraintModel&gt;): Unit?</ID>
+    <ID>ReturnCount:ToolArguments.kt$ToolArgumentParser$private fun ref(owner: String, text: String, scope: Scope, fn: KSFunctionDeclaration): ToolRefModel?</ID>
+    <ID>ReturnCount:ToolDefinitionModel.kt$ToolDefinitionBuilder$fun build(decl: KSClassDeclaration, visiting: Set&lt;String&gt;, inherited: List&lt;ToolArgModel&gt;): ToolDefinitionModel?</ID>
+    <ID>ReturnCount:ToolDefinitionModel.kt$ToolDefinitionBuilder$fun buildCommand(owner: String, fn: KSFunctionDeclaration, kebab: String, returnType: KSType, definitionFqn: String, inherited: List&lt;ToolArgModel&gt;): ToolCommandModel?</ID>
+    <ID>ReturnCount:ToolDefinitionModel.kt$ToolDefinitionBuilder$fun buildErrorClass(owner: String, method: String, type: KSType, at: KSFunctionDeclaration): ToolErrorClassModel?</ID>
+    <ID>ReturnCount:ToolDefinitionModel.kt$ToolDefinitionBuilder$fun buildGroup(owner: String, fn: KSFunctionDeclaration, kebab: String, inherited: List&lt;ToolArgModel&gt;, buildChild: (List&lt;ToolArgModel&gt;) -&gt; ToolDefinitionModel?): ToolGroupModel?</ID>
+    <ID>ReturnCount:TypeMapper.kt$TypeMapper$fun resolve(type: KSType): TypeDesc</ID>
+    <ID>ReturnCount:TypedMiddlewareResolver.kt$TypedMiddlewareResolver$fun resolve(decl: KSClassDeclaration): TypedMiddlewareBinding?</ID>
+    <ID>TooGenericExceptionCaught:GolemAgentProcessor.kt$GolemAgentProcessor$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ToolDefinitionModel.kt$ToolDefinitionBuilder$e: Exception</ID>
+  </CurrentIssues>
+</SmellBaseline>
