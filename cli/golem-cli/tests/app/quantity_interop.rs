@@ -691,9 +691,6 @@ fn write_moonbit(ctx: &TestContext) {
                 "quantities-ok"
               })
             }
-
-            ///|
-            fn main {}
         "#},
     )
     .unwrap();

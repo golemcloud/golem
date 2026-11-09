@@ -643,9 +643,6 @@ fn write_moonbit(ctx: &TestContext) {
                 "ok:" + touches.to_string()
               })
             }
-
-            ///|
-            fn main {}
         "#},
     )
     .unwrap();
