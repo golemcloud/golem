@@ -3525,6 +3525,9 @@ mod tests {
             budgets.clone(),
             attempt,
         );
+        // Manual polls must stop on backpressure, not Tokio's cooperative task budget.
+        let reader = tokio::task::unconstrained(reader);
+        let client = tokio::task::unconstrained(client);
         futures::pin_mut!(reader, client);
         assert!(futures::poll!(&mut reader).is_pending());
         assert!(futures::poll!(&mut client).is_pending());
