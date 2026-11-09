@@ -1,0 +1,69 @@
+# Caller identity vectors
+
+Golden vectors for the caller model in `golem-common/src/base_model/caller/`. Every
+implementation that prints, parses or compares pairs, or that builds or checks identity proofs,
+checks itself against these files instead of against another implementation.
+
+## `text-form-v1.json`: the text form of a pair
+
+A pair is `("<issuer>","<subject>")`, with no spaces. Each string is escaped as RFC 8785
+(section 3.2.2.2) serializes JSON strings:
+
+- `\"` and `\\`;
+- `\b`, `\t`, `\n`, `\f` and `\r`;
+- every other control character (U+0000 to U+001F) as `\u00xx`, in lowercase hex;
+- every other character as it is, including `/`, U+007F and all non-ASCII text.
+
+A parser accepts only that spelling, so two texts are equal exactly when their pairs are equal.
+It refuses, for example, `\/`, `b`, uppercase hex, a raw control character, spaces and an
+unquoted `*`.
+
+- `roundTrip`: each `issuer` and `subject` prints as exactly `text`, and `text` parses back to
+  them.
+- `reject`: each `text` fails to parse.
+
+Pairs compare byte for byte: no case folding, and no trailing-slash or Unicode normalization.
+Some strings hold characters that editors may not show (U+007F, U+2028, U+2029); edit the file
+with a tool that keeps them.
+
+## `subjects-v1.json`: Golem subjects
+
+The subjects of agents, accounts and tools under a Golem issuer. Each one starts with its kind,
+and every ID is a lowercase UUID with hyphens:
+
+- `agent:<agent-id>/<fingerprint>`: the agent's ID, never its key, and the fingerprint of this
+  life of the agent, so an agent created again under the same ID is a new pair;
+- `account:<account-id>`: never the account's path;
+- `tool:<environment-id>/<tool-name>`: nothing of one declaration, so a tool declared again
+  under the same name keeps its pair.
+
+- `roundTrip`: the fields print as exactly `subject`, and `subject` parses back to them.
+- `reject`: each `subject` fails to parse.
+
+## `identity-proofs-v1.json`: identity proofs
+
+An identity proof is a JWT in JWS compact form that states an agent's or a tool's own pair for
+one audience. Each case gives the `input` of a proof, and the `header` and `claims` that the
+input gives:
+
+- the header is `alg: ES256`, the issuer key's `kid` and `typ: JWT`;
+- `iss` and `sub` are the principal's own pair, `aud` is one audience, `exp` is 300 seconds after
+  `iat`, and `jti` is unique for each proof;
+- the `golem` claim holds the `kind` (`agent` or `tool`), the `environment` ID, the `account` ID
+  (never the account's path), and the `agentType` of an agent or the `tool` name of a tool.
+
+A proof for AWS STS role assumption (`awsRoleAssumption: true`) also repeats the values of the
+`golem` claim as AWS session tags in the claim `https://aws.amazon.com/tags`, under
+`principal_tags`: `golem:environment`, `golem:account`, `golem:kind`, and `golem:agent-type` or
+`golem:tool`. Each tag value is a one-element list, as in the example of the AWS documentation,
+and there are no transitive tag keys. No other proof carries this claim.
+
+The vectors fix the header and the claim set, not a signature.
+
+## Consumers
+
+- Rust (the source of truth): `text_form_tests.rs`, `principal_tests.rs` and
+  `identity_proof_tests.rs` in `golem-common/src/base_model/caller/`.
+
+When the format changes, change these files in the same commit; the Rust tests fail until both
+agree.
