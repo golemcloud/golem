@@ -15,8 +15,3 @@ pub async fn pure_audit(
     invocation.stdin(),
   )
 }
-
-///|
-fn main {
-
-}

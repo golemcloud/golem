@@ -460,7 +460,7 @@ pub fn RawToolInvocation::empty_result(
 pub fn[E] RawToolInvocation::decode_input(
   self : RawToolInvocation,
   def : @toolCore.ToolDef,
-  command_index : Int,
+  command_index : Int32,
   context : String,
 ) -> Result[Array[@toolCore.CanonicalInputValue], ToolInvokeError[E]] {
   let typed = match self.input.decode_model_for_local(self.context) {

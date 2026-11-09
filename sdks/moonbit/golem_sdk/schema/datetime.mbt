@@ -5,13 +5,53 @@
 /// up to nine fraction digits.
 pub struct Datetime {
   priv seconds : Int64
-  priv nanoseconds : UInt
+  priv nanoseconds : UInt32
 } derive(Eq, Compare, Hash)
+
+///|
+pub extend Datetime with Eq::{equal, not_equal}
+
+///|
+pub extend Datetime with Compare::{compare, op_lt, op_le, op_gt, op_ge}
+
+///|
+pub extend Datetime with Hash::{hash, hash_combine}
+
+///|
+pub extend Datetime with Show::{to_string, output}
+
+///|
+pub extend Datetime with Debug::{to_repr}
+
+///|
+pub extend Datetime with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Datetime with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend Datetime with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Datetime with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Datetime with WireSchema::{append_wire_type, append_result_type}
 
 ///|
 pub suberror DatetimeError {
   DatetimeError(String)
 } derive(Debug, Eq)
+
+///|
+pub extend DatetimeError with Debug::{to_repr}
+
+///|
+pub extend DatetimeError with Eq::{equal, not_equal}
 
 ///|
 let datetime_min_seconds : Int64 = -62167219200L
@@ -24,7 +64,7 @@ let datetime_max_seconds : Int64 = 253402300799L
 /// fraction below one second.
 pub fn Datetime::new(
   seconds : Int64,
-  nanoseconds : UInt,
+  nanoseconds : UInt32,
 ) -> Datetime raise DatetimeError {
   if nanoseconds >= 1_000_000_000U {
     raise DatetimeError(
@@ -45,7 +85,7 @@ pub fn Datetime::seconds(self : Datetime) -> Int64 {
 }
 
 ///|
-pub fn Datetime::nanoseconds(self : Datetime) -> UInt {
+pub fn Datetime::nanoseconds(self : Datetime) -> UInt32 {
   self.nanoseconds
 }
 
@@ -62,7 +102,7 @@ pub fn Datetime::to_wit(self : Datetime) -> @types.Datetime {
 }
 
 ///|
-fn datetime_days_from_civil(year : Int, month : Int, day : Int) -> Int64 {
+fn datetime_days_from_civil(year : Int32, month : Int32, day : Int32) -> Int64 {
   let y = (if month <= 2 { year - 1 } else { year }).to_int64()
   let era = if y >= 0L { y / 400L } else { (y - 399L) / 400L }
   let yoe = y - era * 400L
@@ -73,7 +113,7 @@ fn datetime_days_from_civil(year : Int, month : Int, day : Int) -> Int64 {
 }
 
 ///|
-fn datetime_civil_from_days(days : Int64) -> (Int, Int, Int) {
+fn datetime_civil_from_days(days : Int64) -> (Int32, Int32, Int32) {
   let z = days + 719468L
   let era = if z >= 0L { z / 146097L } else { (z - 146096L) / 146097L }
   let doe = z - era * 146097L
@@ -90,9 +130,9 @@ fn datetime_civil_from_days(days : Int64) -> (Int, Int, Int) {
 ///|
 fn datetime_digits(
   value : String,
-  start : Int,
-  count : Int,
-) -> Int raise DatetimeError {
+  start : Int32,
+  count : Int32,
+) -> Int32 raise DatetimeError {
   if start + count > value.length() {
     raise DatetimeError("invalid RFC 3339 datetime '\{value}'")
   }
@@ -110,8 +150,8 @@ fn datetime_digits(
 ///|
 fn datetime_expect(
   value : String,
-  index : Int,
-  allowed : Array[Int],
+  index : Int32,
+  allowed : Array[Int32],
 ) -> Unit raise DatetimeError {
   guard index < value.length() &&
     allowed.contains(value.code_unit_at(index).to_int()) else {
@@ -203,7 +243,11 @@ pub fn Datetime::parse(value : String) -> Datetime raise DatetimeError {
 }
 
 ///|
-fn datetime_write_padded(logger : &Logger, value : Int, width : Int) -> Unit {
+fn datetime_write_padded(
+  logger : &Logger,
+  value : Int32,
+  width : Int32,
+) -> Unit {
   logger.write_string(value.to_string().pad_start(width, '0'))
 }
 

@@ -45,13 +45,17 @@ pub impl WireConfigField for Bool with fn append_wire_entries(encoder, path) {
 }
 
 ///|
-pub impl WireConfigField for Int with fn append_wire_entries(encoder, path) {
-  wire_local_entry(encoder, (@schema.type_tag() : @schema.TypeTag[Int]), path)
+pub impl WireConfigField for Int32 with fn append_wire_entries(encoder, path) {
+  wire_local_entry(encoder, (@schema.type_tag() : @schema.TypeTag[Int32]), path)
 }
 
 ///|
-pub impl WireConfigField for UInt with fn append_wire_entries(encoder, path) {
-  wire_local_entry(encoder, (@schema.type_tag() : @schema.TypeTag[UInt]), path)
+pub impl WireConfigField for UInt32 with fn append_wire_entries(encoder, path) {
+  wire_local_entry(
+    encoder,
+    (@schema.type_tag() : @schema.TypeTag[UInt32]),
+    path,
+  )
 }
 
 ///|

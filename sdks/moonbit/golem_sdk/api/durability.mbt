@@ -43,7 +43,7 @@ pub fn[
   function : String,
   function_type : DurableFunctionType,
   request : Request,
-  forced_commit? : Bool = false,
+  forced_commit~ : Bool = false,
   body : () -> Response,
 ) -> Response raise {
   let function_name = durable_function_name(iface, function)
@@ -93,7 +93,7 @@ pub async fn[
   function : String,
   function_type : DurableFunctionType,
   request : Request,
-  forced_commit? : Bool = false,
+  forced_commit~ : Bool = false,
   body : async () -> Response,
 ) -> Response {
   let function_name = durable_function_name(iface, function)

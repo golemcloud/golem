@@ -51,7 +51,6 @@ pub async fn MessagesClient::send(
     }
   }
   let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
-    @asyncCore.Cancelled::Cancelled as error => raise error
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
   let __golem_input : @types.TypedSchemaValue = {
@@ -122,7 +121,6 @@ pub async fn PublicFilesClient::read(
     }
   }
   let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
-    @asyncCore.Cancelled::Cancelled as error => raise error
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
   let __golem_input : @types.TypedSchemaValue = {
@@ -193,7 +191,6 @@ pub async fn StorageClient::fetch(
     }
   }
   let __golem_value = @schema.into_wire_record_async(__golem_values) catch {
-    @asyncCore.Cancelled::Cancelled as error => raise error
     error => return Err(@tool.tool_protocol_error(repr(error)))
   }
   let __golem_input : @types.TypedSchemaValue = {

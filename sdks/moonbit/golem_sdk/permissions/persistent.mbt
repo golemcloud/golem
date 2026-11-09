@@ -69,7 +69,7 @@ pub fn PersistentCard::derive_child(
 /// Consumes this card even if the host rejects the revocation.
 pub fn PersistentCard::revoke(
   self : PersistentCard,
-) -> UInt raise PermissionError {
+) -> UInt32 raise PermissionError {
   match self {
     Concrete(card) => card.revoke()
     Template(card) => card.revoke()

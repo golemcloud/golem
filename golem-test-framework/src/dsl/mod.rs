@@ -265,7 +265,7 @@ pub trait TestDsl {
         // Collect all existing file paths for this agent type to remove them first
         let files_to_remove = latest_revision
             .metadata
-            .agent_type_provision_configs()
+            .agent_type_provision_configs
             .get(&AgentTypeName(agent_type.to_string()))
             .map(|c| c.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>())
             .unwrap_or_default();

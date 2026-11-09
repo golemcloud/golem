@@ -319,11 +319,61 @@ fn metadata_with_tool() -> ComponentMetadata {
 #[test]
 fn component_metadata_grpc_roundtrip_preserves_tool_envelope() {
     let metadata = metadata_with_tool();
+    assert!(metadata.agent_type_ids().is_empty());
+    assert!(metadata.tool_type_ids().is_empty());
+    let agent_type_ids = BTreeMap::from([(
+        AgentTypeName("CoderAgent".to_string()),
+        TypeId::try_from(41u32).unwrap(),
+    )]);
+    let tool_type_ids = BTreeMap::from([(
+        ToolName::try_from("grep").unwrap(),
+        TypeId::try_from(73u32).unwrap(),
+    )]);
+    let metadata = metadata.with_type_ids(agent_type_ids.clone(), tool_type_ids.clone());
     let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
         metadata.clone().try_into().unwrap();
     let decoded = ComponentMetadata::try_from(proto.clone()).unwrap();
 
     assert_eq!(decoded, metadata);
+    assert_eq!(proto.agent_type_ids["CoderAgent"], 41);
+    assert_eq!(proto.tool_type_ids["grep"], 73);
+
+    for mut transformed in [
+        decoded.with_provision_configs(decoded.agent_type_provision_configs().clone()),
+        decoded.with_tools(decoded.tools().clone()),
+        decoded.with_tool_middlewares(decoded.tool_middlewares().clone()),
+        decoded.with_component_config(
+            decoded.config_schema().clone(),
+            decoded.component_provision_config().clone(),
+        ),
+    ] {
+        transformed.redact_host_managed_values_for_external();
+        assert_eq!(transformed.agent_type_ids(), &agent_type_ids);
+        assert_eq!(transformed.tool_type_ids(), &tool_type_ids);
+    }
+
+    let replaced = decoded.with_type_ids(BTreeMap::new(), BTreeMap::new());
+    assert!(replaced.agent_type_ids().is_empty());
+    assert!(replaced.tool_type_ids().is_empty());
+    assert_eq!(decoded.agent_type_ids(), &agent_type_ids);
+    assert_eq!(decoded.tool_type_ids(), &tool_type_ids);
+
+    let mut zero_agent_id = proto.clone();
+    zero_agent_id
+        .agent_type_ids
+        .insert("CoderAgent".to_string(), 0);
+    assert!(
+        ComponentMetadata::try_from(zero_agent_id)
+            .unwrap_err()
+            .contains("zero")
+    );
+    let mut zero_tool_id = proto.clone();
+    zero_tool_id.tool_type_ids.insert("grep".to_string(), 0);
+    assert!(
+        ComponentMetadata::try_from(zero_tool_id)
+            .unwrap_err()
+            .contains("zero")
+    );
 
     let mut missing_scope = proto;
     missing_scope
@@ -348,6 +398,119 @@ fn component_metadata_serializes_tools_under_tools_field() {
 }
 
 #[test]
+fn component_metadata_response_pairs_declarations_with_optional_type_ids() {
+    use crate::model::agent::{AgentMode, Snapshotting};
+    use crate::schema::InputSchema;
+    use crate::schema::agent::{AgentConstructorSchema, AgentTypeKind};
+    use poem_openapi::types::{ParseFromJSON, ToJSON};
+
+    let agent = |name: &str| AgentTypeSchema {
+        type_name: AgentTypeName(name.to_string()),
+        kind: AgentTypeKind::Regular,
+        description: format!("Declaration of {name}"),
+        source_language: "rust".to_string(),
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
+            name: None,
+            description: "Create the agent".to_string(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([]),
+        },
+        methods: vec![],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(crate::model::Empty {}),
+        config: vec![],
+    };
+    let allocated_agent = agent("grep");
+    let unallocated_agent = agent("unallocated");
+    let tool = ToolDeploymentMetadata {
+        definition: sample_tool(),
+        provision: ToolProvisionConfig::default(),
+        environment_binding: None,
+        component_bindings: BTreeMap::new(),
+        agent_bindings: BTreeMap::new(),
+    };
+    let tools = BTreeMap::from([
+        (ToolName::try_from("grep").unwrap(), tool.clone()),
+        (ToolName::try_from("unallocated").unwrap(), tool),
+    ]);
+    let metadata = ComponentMetadata::from_parts_with_tools(
+        KnownExports::default(),
+        vec![],
+        Some("example".to_string()),
+        None,
+        vec![unallocated_agent.clone(), allocated_agent.clone()],
+        BTreeMap::new(),
+        tools,
+    )
+    .with_type_ids(
+        BTreeMap::from([(
+            allocated_agent.type_name.clone(),
+            TypeId::try_from(73_u32).unwrap(),
+        )]),
+        BTreeMap::from([(
+            ToolName::try_from("grep").unwrap(),
+            TypeId::try_from(211_u32).unwrap(),
+        )]),
+    );
+    let response = ComponentMetadataDto::from(metadata.clone());
+    assert_eq!(response.agent_types[0].declaration, unallocated_agent);
+    assert_eq!(response.agent_types[0].type_id, None);
+    assert_eq!(response.agent_types[1].declaration, allocated_agent);
+    assert_eq!(response.agent_types[1].type_id.unwrap().get(), 73);
+    assert_eq!(
+        response.tools[&ToolName::try_from("grep").unwrap()]
+            .type_id
+            .unwrap()
+            .get(),
+        211
+    );
+    assert_eq!(
+        response.tools[&ToolName::try_from("unallocated").unwrap()].type_id,
+        None
+    );
+
+    let json = serde_json::to_value(&response).unwrap();
+    assert_eq!(json["agentTypes"][0]["typeId"], serde_json::Value::Null);
+    assert_eq!(json["agentTypes"][1]["typeId"], 73);
+    assert_eq!(
+        json["agentTypes"][1]["declaration"],
+        serde_json::to_value(&allocated_agent).unwrap()
+    );
+    assert_eq!(json["tools"]["grep"]["typeId"], 211);
+    assert_eq!(
+        json["tools"]["unallocated"]["typeId"],
+        serde_json::Value::Null
+    );
+    assert!(json.get("agentTypeIds").is_none());
+    assert!(json.get("toolTypeIds").is_none());
+    let poem_json = response.to_json().unwrap();
+    assert_eq!(poem_json["agentTypes"], json["agentTypes"]);
+    assert_eq!(poem_json["tools"]["grep"]["typeId"], 211);
+    assert_eq!(
+        poem_json["tools"]["unallocated"]["typeId"],
+        serde_json::Value::Null
+    );
+    assert!(poem_json.get("agentTypeIds").is_none());
+    assert!(poem_json.get("toolTypeIds").is_none());
+    let decoded: ComponentMetadataDto = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(ComponentMetadata::from(decoded), metadata);
+    let decoded = ComponentMetadataDto::parse_from_json(Some(poem_json)).unwrap();
+    assert_eq!(ComponentMetadata::from(decoded), metadata);
+
+    let mut invalid = json;
+    invalid["tools"]["grep"]["typeId"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<ComponentMetadataDto>(invalid.clone()).is_err());
+    assert!(ComponentMetadataDto::parse_from_json(Some(invalid)).is_err());
+    let internal_json = serde_json::to_value(&metadata).unwrap();
+    assert_eq!(internal_json["agentTypeIds"]["grep"], 73);
+    assert_eq!(internal_json["toolTypeIds"]["grep"], 211);
+    assert!(internal_json["agentTypes"][1].get("declaration").is_none());
+}
+
+#[test]
 fn component_metadata_binary_roundtrip_preserves_tool_envelope() {
     let metadata = metadata_with_tool();
     let bytes = crate::serialization::serialize(&metadata).unwrap();
@@ -359,20 +522,23 @@ fn component_metadata_binary_roundtrip_preserves_tool_envelope() {
 #[test]
 fn tool_deployment_state_proto_rejects_registered_tool_from_another_revision() {
     let registered_tool = RegisteredTool {
-        deployment_revision: DeploymentRevision::try_from(1_u64).unwrap(),
-        release_id: None,
-        definition: sample_tool(),
-        provision: ToolProvisionConfig::default(),
-        component_bindings: BTreeMap::new(),
-        source: ToolSource::Component {
-            component_id: ComponentId::new(),
-            component_revision: ComponentRevision::try_from(1_u64).unwrap(),
-            component_name: ComponentName("tools:grep".to_string()),
+        type_id: crate::model::type_id::TypeId::try_from(1_u32).unwrap(),
+        registration: crate::model::tool::ToolRegistration {
+            deployment_revision: DeploymentRevision::try_from(1_u64).unwrap(),
+            release_id: None,
+            definition: sample_tool(),
+            provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
+            source: ToolSource::Component {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::try_from(1_u64).unwrap(),
+                component_name: ComponentName("tools:grep".to_string()),
+            },
+            owner_account_id: AccountId(uuid::Uuid::new_v4()),
+            owner_account_email: AccountEmail::new("owner@example.com"),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: Default::default(),
         },
-        owner_account_id: AccountId(uuid::Uuid::new_v4()),
-        owner_account_email: AccountEmail::new("owner@example.com"),
-        metadata_version: "0.1.0".to_string(),
-        metadata_digest: Default::default(),
     };
     let proto = golem_api_grpc::proto::golem::registry::ToolDeploymentState {
         deployment_revision: 2,
@@ -411,16 +577,19 @@ fn tool_deployment_state_proto_rejects_revealable_secrets_outside_readable_scope
     let metadata_digest =
         crate::model::tool_release::tool_metadata_digest("0.1.0", &definition).unwrap();
     let registered = RegisteredTool {
-        deployment_revision,
-        release_id: None,
-        definition,
-        provision: ToolProvisionConfig::default(),
-        component_bindings: BTreeMap::new(),
-        source: source.clone(),
-        owner_account_id,
-        owner_account_email: owner_account_email.clone(),
-        metadata_version: "0.1.0".to_string(),
-        metadata_digest,
+        type_id: crate::model::type_id::TypeId::try_from(1_u32).unwrap(),
+        registration: crate::model::tool::ToolRegistration {
+            deployment_revision,
+            release_id: None,
+            definition,
+            provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
+            source: source.clone(),
+            owner_account_id,
+            owner_account_email: owner_account_email.clone(),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest,
+        },
     };
     let binding = CompiledToolBinding {
         deployment_revision,
@@ -429,8 +598,8 @@ fn tool_deployment_state_proto_rejects_revealable_secrets_outside_readable_scope
             agent_type_name: agent_type_name.clone(),
         },
         tool_name: tool_name.clone(),
-        version: registered.definition.version.clone(),
-        metadata_version: registered.metadata_version.clone(),
+        version: registered.registration.definition.version.clone(),
+        metadata_version: registered.registration.metadata_version.clone(),
         metadata_digest,
         account_id: owner_account_id,
         account_email: owner_account_email,
@@ -488,16 +657,19 @@ fn tool_deployment_state_proto_roundtrip_preserves_coherent_snapshot() {
     let metadata_digest =
         crate::model::tool_release::tool_metadata_digest("0.1.0", &definition).unwrap();
     let registered = RegisteredTool {
-        deployment_revision,
-        release_id: None,
-        definition,
-        provision: ToolProvisionConfig::default(),
-        component_bindings: BTreeMap::new(),
-        source: source.clone(),
-        owner_account_id,
-        owner_account_email: owner_account_email.clone(),
-        metadata_version: "0.1.0".to_string(),
-        metadata_digest,
+        type_id: crate::model::type_id::TypeId::try_from(73_u32).unwrap(),
+        registration: crate::model::tool::ToolRegistration {
+            deployment_revision,
+            release_id: None,
+            definition,
+            provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
+            source: source.clone(),
+            owner_account_id,
+            owner_account_email: owner_account_email.clone(),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest,
+        },
     };
     let binding = CompiledToolBinding {
         deployment_revision,
@@ -506,8 +678,8 @@ fn tool_deployment_state_proto_roundtrip_preserves_coherent_snapshot() {
             agent_type_name: agent_type_name.clone(),
         },
         tool_name: tool_name.clone(),
-        version: registered.definition.version.clone(),
-        metadata_version: registered.metadata_version.clone(),
+        version: registered.registration.definition.version.clone(),
+        metadata_version: registered.registration.metadata_version.clone(),
         metadata_digest,
         account_id: owner_account_id,
         account_email: owner_account_email,
@@ -581,6 +753,7 @@ fn tool_deployment_state_proto_roundtrip_preserves_coherent_snapshot() {
     );
 
     let proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState = state.clone().into();
+    assert_eq!(proto.registered_tools[0].type_id, 73);
     assert!(proto.registered_tools[0].source.is_some());
     assert!(proto.registered_tools[0].tagged_source.is_some());
     assert!(proto.tool_bindings[0].source.is_some());
@@ -588,6 +761,22 @@ fn tool_deployment_state_proto_roundtrip_preserves_coherent_snapshot() {
     let decoded = ToolDeploymentState::try_from(proto.clone()).unwrap();
 
     assert_eq!(decoded, state);
+
+    let mut zero_id_proto = proto.clone();
+    zero_id_proto.registered_tools[0].type_id = 0;
+    assert!(ToolDeploymentState::try_from(zero_id_proto).is_err());
+
+    let registered = state.registered_tools.values().next().unwrap();
+    let mut json = serde_json::to_value(registered).unwrap();
+    assert_eq!(json["typeId"], 73);
+    assert!(json.get("registration").is_none());
+    assert!(json.get("definition").is_some());
+    assert_eq!(
+        serde_json::from_value::<RegisteredTool>(json.clone()).unwrap(),
+        *registered
+    );
+    json.as_object_mut().unwrap().remove("typeId");
+    assert!(serde_json::from_value::<RegisteredTool>(json).is_err());
 
     let mut middleware_state = state.clone();
     let owner = middleware_state
@@ -643,6 +832,7 @@ fn tool_deployment_state_proto_roundtrip_preserves_coherent_snapshot() {
         .registered_tool_middlewares
         .insert(middleware_name, middleware.clone());
     let effective_definition = middleware_state.registered_tools[&tool_name]
+        .registration
         .definition
         .clone();
     middleware_state.tool_middleware_chains.insert(
@@ -752,26 +942,29 @@ fn tool_deployment_state_proto_roundtrip_preserves_host_source() {
         registered_tools: BTreeMap::from([(
             tool_name,
             RegisteredTool {
-                deployment_revision,
-                release_id: None,
-                metadata_digest: crate::model::tool_release::tool_metadata_digest(
-                    &metadata_version,
-                    &definition,
-                )
-                .unwrap(),
-                definition,
-                provision: ToolProvisionConfig::default(),
-                component_bindings: BTreeMap::new(),
-                source: ToolSource::Host {
-                    host_tool_id: crate::model::tool::HostToolId::try_from(
-                        "host-search".to_string(),
+                type_id: crate::model::type_id::TypeId::try_from(1_u32).unwrap(),
+                registration: crate::model::tool::ToolRegistration {
+                    deployment_revision,
+                    release_id: None,
+                    metadata_digest: crate::model::tool_release::tool_metadata_digest(
+                        &metadata_version,
+                        &definition,
                     )
                     .unwrap(),
-                    implementation_version: "host-v1".to_string(),
+                    definition,
+                    provision: ToolProvisionConfig::default(),
+                    component_bindings: BTreeMap::new(),
+                    source: ToolSource::Host {
+                        host_tool_id: crate::model::tool::HostToolId::try_from(
+                            "host-search".to_string(),
+                        )
+                        .unwrap(),
+                        implementation_version: "host-v1".to_string(),
+                    },
+                    owner_account_id: AccountId::SYSTEM,
+                    owner_account_email: AccountEmail::new("system@golem.cloud"),
+                    metadata_version,
                 },
-                owner_account_id: AccountId::SYSTEM,
-                owner_account_email: AccountEmail::new("system@golem.cloud"),
-                metadata_version,
             },
         )]),
         tool_bindings: BTreeMap::new(),

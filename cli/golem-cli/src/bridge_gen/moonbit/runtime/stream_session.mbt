@@ -5,25 +5,25 @@
 const STREAM_SUBPROTOCOL : String = "golem.agent-invocation.v1"
 
 ///|
-const MAX_MESSAGE_BYTES : Int = 32 * 1024 * 1024
+const MAX_MESSAGE_BYTES : Int32 = 32 * 1024 * 1024
 
 ///|
-const MAX_BINARY_METADATA_BYTES : Int = 16 * 1024
+const MAX_BINARY_METADATA_BYTES : Int32 = 16 * 1024
 
 ///|
-const MAX_PACKED_U8_BYTES : Int = 1024 * 1024
+const MAX_PACKED_U8_BYTES : Int32 = 1024 * 1024
 
 ///|
-const MAX_LOGICAL_VALUE_BYTES : Int = 16 * 1024 * 1024
+const MAX_LOGICAL_VALUE_BYTES : Int32 = 16 * 1024 * 1024
 
 ///|
-const MAX_QUEUED_OUTPUT_ITEMS : Int = 256
+const MAX_QUEUED_OUTPUT_ITEMS : Int32 = 256
 
 ///|
-const MAX_QUEUED_OUTPUT_BYTES : Int = 16 * 1024 * 1024
+const MAX_QUEUED_OUTPUT_BYTES : Int32 = 16 * 1024 * 1024
 
 ///|
-const MAX_INPUT_REPLAY_BYTES : Int = 16 * 1024 * 1024
+const MAX_INPUT_REPLAY_BYTES : Int32 = 16 * 1024 * 1024
 
 ///|
 const U64_MAX : UInt64 = 18446744073709551615UL
@@ -41,7 +41,7 @@ pub(all) struct PendingInput {
   mut start : UInt64
   mut count : UInt64
   mut payload : PendingInputPayload
-  mut bytes : Int
+  mut bytes : Int32
 }
 
 ///|
@@ -49,10 +49,10 @@ pub(all) struct PendingInput {
 /// The replay budget exists before attachment and is shared with the session.
 pub struct InputFailure {
   mut diagnostic : String
-  mut bytes : Int
+  mut bytes : Int32
   mut rejected : Bool
   mut disposed : Bool
-  replay_bytes : Ref[Int]
+  replay_bytes : Ref[Int32]
 }
 
 ///|
@@ -64,7 +64,7 @@ pub(all) struct InputRegistration {
   wire_kind : String
   codec : PublicValueCodec
   mut stream_token : String?
-  mut channel : UInt?
+  mut channel : UInt32?
   mut sequence : UInt64
   mut terminal : Bool
   mut source_ended : Bool
@@ -76,7 +76,7 @@ pub(all) struct InputRegistration {
 ///|
 pub struct StreamEncodeContext {
   inputs : Array[InputRegistration]
-  replay_bytes : Ref[Int]
+  replay_bytes : Ref[Int32]
 }
 
 ///|
@@ -87,10 +87,10 @@ pub fn StreamEncodeContext::new() -> StreamEncodeContext {
 ///|
 priv struct OutputBatch {
   values : Array[SchemaValue]
-  mut index : Int
+  mut index : Int32
   cursor : String?
   error : BridgeError?
-  bytes : Int
+  bytes : Int32
   next_sequence : UInt64
   terminal : Bool
 }
@@ -105,11 +105,11 @@ priv struct LiveStreamSession {
   mut attempt_id : String
   idempotency_key : String
   inputs : Array[InputRegistration]
-  input_channels : Map[String, UInt]
+  input_channels : Map[String, UInt32]
   input_tokens : Map[String, InputRegistration]
-  mut next_input_index : Int
-  input_replay_bytes : Ref[Int]
-  output_channels : Map[String, UInt]
+  mut next_input_index : Int32
+  input_replay_bytes : Ref[Int32]
+  output_channels : Map[String, UInt32]
   output_sequences : Map[String, UInt64]
   output_queues : Map[String, @aqueue.Queue[OutputBatch]]
   output_active : Map[String, OutputBatch]
@@ -119,8 +119,8 @@ priv struct LiveStreamSession {
   output_terminals : Map[String, Bool]
   output_claimed : Map[String, Bool]
   output_cancelled : Map[String, Bool]
-  queue_bytes : Map[String, Int]
-  mut total_queue_bytes : Int
+  queue_bytes : Map[String, Int32]
+  mut total_queue_bytes : Int32
   cursors : Map[String, String]
   cursor_sequences : Map[String, UInt64]
   cursor_terminals : Map[String, Bool]
@@ -146,20 +146,20 @@ async fn connect_socket(
 }
 
 ///|
-const FIRST_RECONNECT_DELAY_MS : Int = 50
+const FIRST_RECONNECT_DELAY_MS : Int32 = 50
 
 ///|
-const MAX_RECONNECT_DELAY_MS : Int = 3000
+const MAX_RECONNECT_DELAY_MS : Int32 = 3000
 
 ///|
 /// Bounds one connection attempt: the TCP connect, the TLS handshake and the
 /// WebSocket upgrade together.
-let connect_attempt_timeout_ms : Ref[Int] = { val: 10000, }
+let connect_attempt_timeout_ms : Ref[Int32] = { val: 10000, }
 
 ///|
 /// How long a connection must stay up after the server accepted its operation
 /// for its loss to count as progress.
-let stable_connection_ms : Ref[Int] = { val: 5000, }
+let stable_connection_ms : Ref[Int32] = { val: 5000, }
 
 ///|
 /// Paces reconnects and ends them once the reconnect window passes without
@@ -173,7 +173,7 @@ priv struct ReconnectClock {
   /// When the server accepted the operation of the current connection.
   mut accepted_at : Int64?
   /// The delay before the next attempt; zero makes the next attempt at once.
-  mut delay_ms : Int
+  mut delay_ms : Int32
   mut last_cause : String
 }
 
@@ -230,7 +230,7 @@ fn ReconnectClock::failed(self : ReconnectClock, cause : String) -> Unit {
 }
 
 ///|
-fn ReconnectClock::remaining(self : ReconnectClock) -> Int? {
+fn ReconnectClock::remaining(self : ReconnectClock) -> Int32? {
   match self.policy {
     Unlimited => None
     Within(window_ms) =>
@@ -241,7 +241,7 @@ fn ReconnectClock::remaining(self : ReconnectClock) -> Int? {
 ///|
 /// Waits for the next attempt and returns how long that attempt may take;
 /// raises [BridgeError::Unreachable] once the window has passed.
-async fn ReconnectClock::next_attempt(self : ReconnectClock) -> Int {
+async fn ReconnectClock::next_attempt(self : ReconnectClock) -> Int32 {
   if self.delay_ms > 0 {
     let delay = match self.remaining() {
       None => self.delay_ms
@@ -276,7 +276,7 @@ async fn attach_attempt(
   url : String,
   headers : @http.Headers,
   descriptor : String,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Result[(@websocket.Conn, Map[String, Json]), String] {
   try {
     guard @async.with_timeout_opt(timeout_ms, () => connect_socket(url, headers))
@@ -588,7 +588,7 @@ pub fn[T] register_input_stream(
   stream : AgentStream[T],
   encode : async (T) -> SchemaValue,
   codec : PublicValueCodec,
-  wire_kind? : String = "json",
+  wire_kind~ : String = "json",
 ) -> SchemaValue raise {
   stream.acquire()
   let id = fresh_id()
@@ -687,7 +687,7 @@ fn find_input_by_id(
 ///|
 fn find_input_by_channel(
   inputs : Array[InputRegistration],
-  channel : UInt,
+  channel : UInt32,
 ) -> InputRegistration? {
   for input in inputs {
     if input.channel == Some(channel) {
@@ -702,7 +702,7 @@ pub fn[T] open_output_stream(
   reference : SchemaValue,
   decode : async (SchemaValue) -> T,
   codec : PublicValueCodec,
-  wire_kind? : String = "json",
+  wire_kind~ : String = "json",
 ) -> AgentStream[T] raise {
   let token = match reference {
     StreamReferenceValue(_, Some(token)) => token
@@ -895,7 +895,7 @@ fn validate_object_fields(
 }
 
 ///|
-fn channel_is_installed(session : LiveStreamSession, channel : UInt) -> Bool {
+fn channel_is_installed(session : LiveStreamSession, channel : UInt32) -> Bool {
   let mut found = false
   session.input_channels.each((_, installed) => {
     if installed == channel {
@@ -911,7 +911,7 @@ fn channel_is_installed(session : LiveStreamSession, channel : UInt) -> Bool {
 }
 
 ///|
-fn stable_mapping_count(session : LiveStreamSession) -> Int {
+fn stable_mapping_count(session : LiveStreamSession) -> Int32 {
   let mut count = 0
   session.input_tokens.each((_, _) => count += 1)
   session.output_queues.each((_, _) => count += 1)
@@ -919,7 +919,7 @@ fn stable_mapping_count(session : LiveStreamSession) -> Int {
 }
 
 ///|
-fn trim_pending_u8(pending : PendingInput, high_water : UInt64) -> Int raise {
+fn trim_pending_u8(pending : PendingInput, high_water : UInt64) -> Int32 raise {
   guard pending.payload is PendingU8(bytes) else {
     raise BridgeError("invalid-sequence: partial ACK for non-packed input")
   }
@@ -1021,7 +1021,7 @@ fn install_mappings(
   if mappings.length() > 4096 {
     raise BridgeError("resource-exhausted: too many stream mappings")
   }
-  let channels : Map[UInt, Bool] = Map([])
+  let channels : Map[UInt32, Bool] = Map([])
   let tokens : Map[String, Bool] = Map([])
   let provisionals : Map[String, Bool] = Map([])
   for mapping_json in mappings {
@@ -1500,7 +1500,7 @@ async fn enqueue_output(
 fn release_output(
   session : LiveStreamSession,
   token : String,
-  bytes : Int,
+  bytes : Int32,
 ) -> Unit {
   session.queue_bytes[token] = session.queue_bytes.get(token).unwrap_or(0) -
     bytes
@@ -1681,7 +1681,7 @@ async fn receive_output(
 ///|
 fn output_token_for_channel(
   session : LiveStreamSession,
-  channel : UInt,
+  channel : UInt32,
 ) -> String raise {
   let mut token : String? = None
   session.output_channels.each((candidate, mapped) => {
@@ -1761,7 +1761,9 @@ fn validate_server_stream_end(message : Map[String, Json]) -> String raise {
   let direction = expect_string(get_field(message, "direction"))
   ignore(decode_stream_outcome(get_field(message, "outcome")))
   if direction != "output" && direction != "input" {
-    raise BridgeError("protocol-error: invalid server stream terminal direction")
+    raise BridgeError(
+      "protocol-error: invalid server stream terminal direction",
+    )
   }
   let channel = @string.parse_uint(
     number_literal(get_field(message, "channel")),
@@ -1813,7 +1815,7 @@ async fn queue_output_end(
   if session.output_cancelled.contains(token) {
     return
   }
-  let bytes = @utf8.encode(message.to_json().stringify()).length()
+  let bytes = @utf8.encode(Json(message).stringify()).length()
   enqueue_output(session, token, {
     values: [],
     index: 0,

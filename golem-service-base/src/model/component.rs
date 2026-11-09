@@ -53,7 +53,7 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             account_id: value.account_id,
             component_name: value.component_name,
             component_size: value.component_size,
-            metadata,
+            metadata: metadata.into(),
             created_at: value.created_at,
             wasm_hash: value.wasm_hash,
             hash: value.hash,

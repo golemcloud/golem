@@ -23,6 +23,21 @@ pub struct Datetime {
 } derive(Eq, Compare, Hash)
 
 ///|
+pub extend Datetime with Eq::{equal, not_equal}
+
+///|
+pub extend Datetime with Compare::{compare, op_lt, op_le, op_gt, op_ge}
+
+///|
+pub extend Datetime with Hash::{hash, hash_combine}
+
+///|
+pub extend Datetime with Show::{to_string, output}
+
+///|
+pub extend Datetime with Debug::{to_repr}
+
+///|
 let datetime_min_seconds : Int64 = -62167219200L
 
 ///|

@@ -118,6 +118,10 @@ impl RichMarkers {
             writer.doc(&format!("Unit marker of quantities measured in `{base}`."));
             write_marker(writer, name);
             let trait_name = format!("{package}.QuantityUnit");
+            writer.line(format!(
+                "pub extend {name} with {trait_name}::{{type_id, base_unit, allowed_suffixes}}"
+            ));
+            writer.blank();
             write_method(writer, &trait_name, name, "type_id", &type_id(module, name));
             write_method(
                 writer,
@@ -138,6 +142,8 @@ impl RichMarkers {
             writer.doc("Restriction marker of a text kind.");
             write_marker(writer, name);
             let trait_name = format!("{package}.TextSpec");
+            writer.line(format!("pub extend {name} with {trait_name}::{{type_id, languages, min_length, max_length, regex}}"));
+            writer.blank();
             write_method(writer, &trait_name, name, "type_id", &type_id(module, name));
             write_method(
                 writer,
@@ -242,6 +248,10 @@ impl Specs {
 
 fn write_marker(writer: &mut MoonBitWriter, name: &str) {
     writer.line(format!("pub(all) struct {name} {{}} derive(Debug, Eq)"));
+    writer.blank();
+    writer.line(format!("pub extend {name} with Debug::{{to_repr}}"));
+    writer.blank();
+    writer.line(format!("pub extend {name} with Eq::{{equal, not_equal}}"));
     writer.blank();
 }
 

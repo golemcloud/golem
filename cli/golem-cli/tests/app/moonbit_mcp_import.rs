@@ -164,17 +164,11 @@ async fn moonbit_mcp_client_projects_contract_and_runs_imported_middleware() {
     )
     .unwrap();
 
-    let moon_mod_path = ctx.cwd_path_join("moon.mod.json");
-    let mut moon_mod: Value =
-        serde_json::from_str(&fs::read_to_string(&moon_mod_path).unwrap()).unwrap();
-    moon_mod["deps"]["catalog-lookup-tool-guest-client"] = json!({
-        "path": "golem-temp/bridge-sdk/moonbit/internal/catalog-lookup-tool-guest-client"
-    });
-    fs::write_str(
-        &moon_mod_path,
-        serde_json::to_string_pretty(&moon_mod).unwrap() + "\n",
-    )
-    .unwrap();
+    super::add_moonbit_local_dependency(
+        &ctx,
+        "catalog-lookup-tool-guest-client",
+        "golem-temp/bridge-sdk/moonbit/internal/catalog-lookup-tool-guest-client",
+    );
 
     add_imports(
         &ctx.cwd_path_join("consumer/moon.pkg"),
@@ -259,11 +253,6 @@ async fn moonbit_mcp_client_projects_contract_and_runs_imported_middleware() {
                 }
               }
             }
-
-            ///|
-            fn main {
-
-            }
         "#},
     )
     .unwrap();
@@ -292,11 +281,6 @@ async fn moonbit_mcp_client_projects_contract_and_runs_imported_middleware() {
                 ),
               )
             }
-
-            ///|
-            fn main {
-
-            }
         "#},
     )
     .unwrap();
@@ -305,7 +289,7 @@ async fn moonbit_mcp_client_projects_contract_and_runs_imported_middleware() {
     assert!(built.success_or_dump());
     let generated_root = ctx
         .cwd_path_join("golem-temp/bridge-sdk/moonbit/internal/catalog-lookup-tool-guest-client");
-    assert!(generated_root.join("moon.mod.json").is_file());
+    assert!(generated_root.join("moon.mod").is_file());
     let generated = generated_source_text(&generated_root);
     assert!(generated.contains("@tool.ToolClient::new(\"catalog-lookup\")"));
     assert!(!generated.contains("moonbit-mcp-token"));

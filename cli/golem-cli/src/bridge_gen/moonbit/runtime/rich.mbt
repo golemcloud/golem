@@ -19,6 +19,15 @@ pub(all) struct Path {
 } derive(Debug, Eq, Hash)
 
 ///|
+pub extend Path with Debug::{to_repr}
+
+///|
+pub extend Path with Eq::{equal, not_equal}
+
+///|
+pub extend Path with Hash::{hash, hash_combine}
+
+///|
 pub fn Path::new(value : String) -> Path {
   { value, }
 }
@@ -30,6 +39,15 @@ pub(all) struct Url {
 } derive(Debug, Eq, Hash)
 
 ///|
+pub extend Url with Debug::{to_repr}
+
+///|
+pub extend Url with Eq::{equal, not_equal}
+
+///|
+pub extend Url with Hash::{hash, hash_combine}
+
+///|
 pub fn Url::new(value : String) -> Url {
   { value, }
 }
@@ -39,6 +57,15 @@ pub fn Url::new(value : String) -> Url {
 pub(all) struct Duration {
   nanoseconds : Int64
 } derive(Debug, Eq, Hash)
+
+///|
+pub extend Duration with Debug::{to_repr}
+
+///|
+pub extend Duration with Eq::{equal, not_equal}
+
+///|
+pub extend Duration with Hash::{hash, hash_combine}
 
 ///|
 pub fn Duration::new(nanoseconds : Int64) -> Duration {
@@ -63,6 +90,12 @@ pub struct Text[S] {
   value : String
   language : String?
 } derive(Debug, Eq)
+
+///|
+pub extend Text with Debug::{to_repr}
+
+///|
+pub extend Text with Eq::{equal, not_equal}
 
 ///|
 pub fn[S] Text::new(value : String, language? : String) -> Text[S] {
@@ -97,6 +130,12 @@ pub struct Quantity[U] {
   scale : Int
   unit : String
 } derive(Debug, Eq)
+
+///|
+pub extend Quantity with Debug::{to_repr}
+
+///|
+pub extend Quantity with Eq::{equal, not_equal}
 
 ///|
 pub fn[U : QuantityUnit] Quantity::new(

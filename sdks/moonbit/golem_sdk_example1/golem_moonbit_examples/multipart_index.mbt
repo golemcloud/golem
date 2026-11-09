@@ -3,13 +3,13 @@
 #derive.agent(snapshotting="every_n(3)")
 struct MultipartIndex {
   name : String
-  mut revision : Int
+  mut revision : Int32
   mut index : Bytes
 }
 
 ///|
 priv struct MultipartIndexState {
-  revision : Int
+  revision : Int32
 } derive(ToJson, FromJson)
 
 ///|
@@ -18,14 +18,14 @@ fn MultipartIndex::new(name : String) -> MultipartIndex {
 }
 
 ///|
-pub fn MultipartIndex::append(self : Self, bytes : Bytes) -> Int {
+pub fn MultipartIndex::append(self : Self, bytes : Bytes) -> Int32 {
   self.index = self.index + bytes
   self.revision += 1
   self.revision
 }
 
 ///|
-pub fn MultipartIndex::read_index(self : Self) -> (Int, Bytes) {
+pub fn MultipartIndex::read_index(self : Self) -> (Int32, Bytes) {
   (self.revision, self.index)
 }
 

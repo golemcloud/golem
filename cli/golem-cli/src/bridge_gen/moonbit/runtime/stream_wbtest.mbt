@@ -146,7 +146,7 @@ async test "AgentStream delivers items once and becomes terminal" {
 ///|
 async test "AgentStream cancel is affine and reports its reason once" {
   let reasons : Array[String] = []
-  let stream : AgentStream[Int] = AgentStream::from_next(fn() { None }, on_cancel=fn(
+  let stream : AgentStream[Int32] = AgentStream::from_next(fn() { None }, on_cancel=fn(
     reason,
   ) {
     reasons.push(reason)
@@ -258,14 +258,16 @@ test "server input failures preserve their typed outcome" {
         "message": Json::string("callee failed"),
       }),
     })
-    let message = expect_object(Json::object({
-      "version": json_uint(1U),
-      "type": Json::string("stream-end"),
-      "channel": json_uint(1U),
-      "direction": Json::string("input"),
-      "sequence": Json::string("0"),
-      "outcome": outcome,
-    }))
+    let message = expect_object(
+      Json::object({
+        "version": json_uint(1U),
+        "type": Json::string("stream-end"),
+        "channel": json_uint(1U),
+        "direction": Json::string("input"),
+        "sequence": Json::string("0"),
+        "outcome": outcome,
+      }),
+    )
     assert_eq(validate_server_stream_end(message), "input")
   }
 }
@@ -390,7 +392,7 @@ test "strict protocol JSON rejects duplicate members at every depth" {
 
 ///|
 async test "MemoryReader owns a detached receive actor" {
-  let delivered : @aqueue.Queue[Int] = @aqueue.Queue(kind=@aqueue.Blocking(1))
+  let delivered : @aqueue.Queue[Int32] = @aqueue.Queue(kind=@aqueue.Blocking(1))
   let owner = @io.MemoryReader(async fn(_) {
     @async.sleep(1)
     delivered.put(7)
@@ -416,7 +418,7 @@ async test "packed u8 input prefetch is bounded and non-blocking" {
   let input = context.inputs[0]
   inspect((input.next)() is Some(U8Value(1)), content="true")
   @async.sleep(1)
-  let prefetched : Array[Int] = []
+  let prefetched : Array[Int32] = []
   for ;; {
     match (input.try_next)() {
       Some(Some(U8Value(value))) => prefetched.push(value)

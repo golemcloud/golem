@@ -53,7 +53,7 @@ fn get_golem_agent_id() -> String raise SnapshotLoadError {
 }
 
 ///|
-fn slice_fixedarray_to_bytes(arr : FixedArray[Byte], start : Int) -> Bytes {
+fn slice_fixedarray_to_bytes(arr : FixedArray[Byte], start : Int32) -> Bytes {
   let slice : Array[Byte] = []
   for i in start..<arr.length() {
     slice.push(arr[i])

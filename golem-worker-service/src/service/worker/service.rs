@@ -3337,7 +3337,7 @@ impl WorkerService {
             .get(&owner)
             .and_then(|chains| chains.get(&tool_name))
             .map(|chain| chain.effective_definition.clone())
-            .unwrap_or_else(|| registered.definition.clone());
+            .unwrap_or_else(|| registered.registration.definition.clone());
         Ok(NativeToolDefinition {
             definition,
             component_revision: component.revision,
@@ -4901,6 +4901,7 @@ mod tests {
             let registry = Arc::new(TestRegistryService {
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
+                        type_id: golem_common::model::type_id::TypeId::try_from(42u32).unwrap(),
                         agent_type,
                         implemented_by: RegisteredAgentTypeImplementer {
                             component_id,
@@ -4988,6 +4989,7 @@ mod tests {
             let registry = Arc::new(TestRegistryService {
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
+                        type_id: golem_common::model::type_id::TypeId::try_from(42u32).unwrap(),
                         agent_type: latest_agent_type,
                         implemented_by: RegisteredAgentTypeImplementer {
                             component_id,
@@ -7176,20 +7178,23 @@ mod tests {
             },
         };
         let registered = RegisteredTool {
-            deployment_revision: DeploymentRevision::INITIAL,
-            release_id: None,
-            definition: definition.clone(),
-            provision: ToolProvisionConfig::default(),
-            component_bindings: BTreeMap::new(),
-            source: ToolSource::Component {
-                component_id: component.id,
-                component_revision: component.revision,
-                component_name: component.component_name.clone(),
+            type_id: golem_common::model::type_id::TypeId::try_from(1_u32).unwrap(),
+            registration: golem_common::model::tool::ToolRegistration {
+                deployment_revision: DeploymentRevision::INITIAL,
+                release_id: None,
+                definition: definition.clone(),
+                provision: ToolProvisionConfig::default(),
+                component_bindings: BTreeMap::new(),
+                source: ToolSource::Component {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                    component_name: component.component_name.clone(),
+                },
+                owner_account_id: component.account_id,
+                owner_account_email: component.account_email.clone(),
+                metadata_version: "0.1.0".into(),
+                metadata_digest: Default::default(),
             },
-            owner_account_id: component.account_id,
-            owner_account_email: component.account_email.clone(),
-            metadata_version: "0.1.0".into(),
-            metadata_digest: Default::default(),
         };
         let mut state = ToolDeploymentState {
             deployment_revision: DeploymentRevision::INITIAL,
@@ -7220,7 +7225,7 @@ mod tests {
                 owner: owner.clone(),
                 tool_name: tool_name.clone(),
                 version: definition.version.clone(),
-                metadata_version: registered.metadata_version.clone(),
+                metadata_version: registered.registration.metadata_version.clone(),
                 metadata_digest: Default::default(),
                 account_id: component.account_id,
                 account_email: component.account_email.clone(),
@@ -7229,7 +7234,7 @@ mod tests {
                 secret_keys_readable: SecretKeyScope::All,
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: Default::default(),
-                source: registered.source.clone(),
+                source: registered.registration.source.clone(),
             };
             let mut effective_definition = definition.clone();
             effective_definition.commands.nodes[0].doc.summary = summary.into();

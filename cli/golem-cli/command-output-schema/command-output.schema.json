@@ -6957,8 +6957,9 @@
     },
     "DeployedRegisteredAgentType": {
       "type": "object",
-      "required": ["agentType", "implementedBy"],
+      "required": ["typeId", "agentType", "implementedBy"],
       "properties": {
+        "typeId": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
         "agentType": { "$ref": "#/definitions/AgentType" },
         "implementedBy": { "$ref": "#/definitions/RegisteredAgentTypeImplementer" },
         "webhookPrefixAuthorityAndPath": { "type": ["string", "null"] }
@@ -7597,6 +7598,7 @@
     "DeployedRegisteredTool": {
       "type": "object",
       "required": [
+        "typeId",
         "deploymentRevision",
         "releaseId",
         "definition",
@@ -7607,6 +7609,7 @@
         "metadataDigest"
       ],
       "properties": {
+        "typeId": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
         "deploymentRevision": { "type": "integer", "minimum": 0 },
         "releaseId": {
           "oneOf": [

@@ -91,7 +91,7 @@ fn __golem_middleware_tool_concat_globals(
 ///
 fn __golem_middleware_tool_rebase_node(
   node : @tool.CommandNodeDef,
-  offset : Int,
+  offset : Int32,
 ) -> @tool.CommandNodeDef {
   {
     name: node.name,
@@ -215,7 +215,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
             stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[Int]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[Int32]),
               ),
               doc: { summary: "", description: "", examples: [], },
               formatters: [
@@ -266,7 +266,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
             stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[Int]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[Int32]),
               ),
               doc: { summary: "", description: "", examples: [], },
               formatters: [
@@ -377,7 +377,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
             stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[Int]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[Int32]),
               ),
               doc: { summary: "", description: "", examples: [], },
               formatters: [
@@ -926,7 +926,7 @@ pub async fn PresentedUnderlying::start_unit(
 pub async fn PresentedUnderlying::value(
   self : PresentedUnderlying,
   value : String,
-) -> Result[Int, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+) -> Result[Int32, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
   let __golem_command_path = ["value"]
   let __golem_def = __golem_middleware_tool_def_Presented()
   let __golem_index = match
@@ -972,7 +972,7 @@ pub async fn PresentedUnderlying::start_value(
   self : PresentedUnderlying,
   value : String,
 ) -> Result[
-  @toolMiddleware.UnderlyingInvocation[Int, @tool.NoToolError],
+  @toolMiddleware.UnderlyingInvocation[Int32, @tool.NoToolError],
   @toolMiddleware.ToolInvokeError[@tool.NoToolError],
 ] {
   let __golem_command_path = ["value"]
@@ -1020,7 +1020,7 @@ pub async fn PresentedUnderlying::start_value(
 pub async fn PresentedUnderlying::retry(
   self : PresentedUnderlying,
   value : String,
-) -> Result[Int, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+) -> Result[Int32, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
   let __golem_command_path = ["retry"]
   let __golem_def = __golem_middleware_tool_def_Presented()
   let __golem_index = match
@@ -1066,7 +1066,7 @@ pub async fn PresentedUnderlying::start_retry(
   self : PresentedUnderlying,
   value : String,
 ) -> Result[
-  @toolMiddleware.UnderlyingInvocation[Int, @tool.NoToolError],
+  @toolMiddleware.UnderlyingInvocation[Int32, @tool.NoToolError],
   @toolMiddleware.ToolInvokeError[@tool.NoToolError],
 ] {
   let __golem_command_path = ["retry"]
@@ -1209,7 +1209,7 @@ pub async fn PresentedUnderlying::start_value_stdout(
   self : PresentedUnderlying,
   value : String,
 ) -> Result[
-  @toolMiddleware.UnderlyingInvocation[Int, @tool.NoToolError],
+  @toolMiddleware.UnderlyingInvocation[Int32, @tool.NoToolError],
   @toolMiddleware.ToolInvokeError[@tool.NoToolError],
 ] {
   let __golem_command_path = ["value-stdout"]

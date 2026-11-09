@@ -14,22 +14,22 @@
 
 use super::attachment::{AttachmentStreamProducer, AttachmentStreamRead};
 use super::{
-    Accessor, AccessorTask, Arc, AttachmentController, ByteStreamFailure, DurabilityHost,
-    DurableInputEndpoint, DurableStreamHandle, DurableWorkerCtx, EntityBodyFinalization,
-    EntityBodyOutcome, EntityCallMode, EntityInvocationKeyContext, FromSchema, Future,
-    GuestCallSettlementError, HasNativeToolCatalog, HasSelf, HasWorker,
-    HostResponseEntityInvocation, InterruptKind, IntoTypedSchemaValue, LiveStreamEndpoint,
-    NativeToolInvocation, NativeToolKey, NativeToolTask, Resource, RetainedEntityStore,
-    RetainedNativeContext, SchemaGraph, SchemaType, SchemaValueStream,
-    SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
-    SessionError, SessionStreamRole, StreamSession, ToolAttachmentCounterparty, ToolBodyStdin,
-    ToolCallDispatch, ToolCallStdin, ToolCallTarget, ToolInvocationAttempt, ToolInvocationInput,
-    ToolInvocationOutput, ToolOutputWriterEntry, ToolSidecarInvocation, Weak, WorkerCtx,
-    WorkerCtxExecutable, WorkerExecutorError, admit_tool_response_secret_holds, anyhow,
-    cleanup_failed_tool_dispatch, close_stdin, create_native_underlying_stdin,
-    create_output_attachment, dispatch_tool_attempt, durability, encode_tool_operation_terminal,
-    encode_tool_terminal, first_output_limit_error, mcp, native_output_handles, operation,
-    reject_output, spawn_tool_execution, tool_rpc_for_current_owner, validate_native_tool_output,
+    Accessor, Arc, AttachmentController, ByteStreamFailure, DurabilityHost, DurableInputEndpoint,
+    DurableStreamHandle, DurableWorkerCtx, EntityBodyFinalization, EntityBodyOutcome,
+    EntityCallMode, EntityInvocationKeyContext, FromSchema, Future, GuestCallSettlementError,
+    HasNativeToolCatalog, HasSelf, HasWorker, HostResponseEntityInvocation, InterruptKind,
+    IntoTypedSchemaValue, LiveStreamEndpoint, NativeToolInvocation, NativeToolKey, NativeToolTask,
+    Resource, RetainedEntityStore, RetainedNativeContext, SchemaGraph, SchemaType,
+    SchemaValueStream, SerializableEntityBodyExecution, SerializableToolOperationTerminal,
+    SerializableToolRpcError, SessionError, SessionStreamRole, StreamSession,
+    ToolAttachmentCounterparty, ToolBodyStdin, ToolCallDispatch, ToolCallStdin, ToolCallTarget,
+    ToolInvocationAttempt, ToolInvocationInput, ToolInvocationOutput, ToolOutputWriterEntry,
+    ToolSidecarInvocation, Weak, WorkerCtx, WorkerCtxExecutable, WorkerExecutorError,
+    admit_tool_response_secret_holds, anyhow, cleanup_failed_tool_dispatch, close_stdin,
+    create_native_underlying_stdin, create_output_attachment, dispatch_tool_attempt, durability,
+    encode_tool_operation_terminal, encode_tool_terminal, first_output_limit_error, mcp,
+    native_output_handles, operation, reject_output, spawn_tool_execution,
+    tool_rpc_for_current_owner, validate_native_tool_output,
 };
 use crate::durable_host::stream_bus::{LiveStreamPublishError, LiveStreamPublisher};
 use crate::durable_host::stream_transport::{
@@ -524,8 +524,8 @@ pub(super) fn native_output_runtime_teardown_probe(
     })
 }
 
-impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for NativeToolTask {
-    async fn run(
+impl NativeToolTask {
+    pub(super) async fn run<Ctx: WorkerCtx>(
         self,
         accessor: &Accessor<Ctx, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {

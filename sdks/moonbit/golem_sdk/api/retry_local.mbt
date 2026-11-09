@@ -6,16 +6,16 @@ pub suberror LocalRetryError {
 } derive(Debug, Eq)
 
 ///|
-let max_compiled_nodes : Int = 4096
+let max_compiled_nodes : Int32 = 4096
 
 ///|
-let max_compiled_payload_bytes : Int = 1048576
+let max_compiled_payload_bytes : Int32 = 1048576
 
 ///|
-let max_policy_depth : Int = 256
+let max_policy_depth : Int32 = 256
 
 ///|
-let predicate_value_payload_bytes : Int = 16
+let predicate_value_payload_bytes : Int32 = 16
 
 ///|
 priv enum LocalPredicate {
@@ -44,7 +44,7 @@ priv enum LocalPolicy {
   Fibonacci(UInt64, UInt64)
   Immediate
   Never
-  CountBox(UInt, LocalPolicy)
+  CountBox(UInt32, LocalPolicy)
   TimeBox(UInt64, LocalPolicy)
   Clamp(UInt64, UInt64, LocalPolicy)
   AddDelay(UInt64, LocalPolicy)
@@ -57,10 +57,10 @@ priv enum LocalPolicy {
 
 ///|
 priv enum LocalPolicyState {
-  Counter(UInt)
+  Counter(UInt32)
   Terminal
   Wrapper(LocalPolicyState)
-  Counted(UInt, LocalPolicyState)
+  Counted(UInt32, LocalPolicyState)
   Sequenced(LocalPolicyState, LocalPolicyState, Bool)
   Pair(LocalPolicyState, LocalPolicyState)
 }
@@ -78,8 +78,8 @@ fn invalid_policy(message : String) -> LocalRetryError {
 
 ///|
 priv struct LocalPolicyCompiler {
-  mut compiled_nodes : Int
-  mut compiled_payload_bytes : Int
+  mut compiled_nodes : Int32
+  mut compiled_payload_bytes : Int32
   policy_visiting : Array[Bool]
 }
 
@@ -91,7 +91,7 @@ fn policy_too_complex() -> LocalRetryError {
 ///|
 fn LocalPolicyCompiler::enter(
   self : LocalPolicyCompiler,
-  depth : Int,
+  depth : Int32,
 ) -> Unit raise LocalRetryError {
   self.compiled_nodes += 1
   if depth > max_policy_depth || self.compiled_nodes > max_compiled_nodes {
@@ -102,7 +102,7 @@ fn LocalPolicyCompiler::enter(
 ///|
 fn LocalPolicyCompiler::add_payload(
   self : LocalPolicyCompiler,
-  payload_bytes : Int,
+  payload_bytes : Int32,
 ) -> Unit raise LocalRetryError {
   self.compiled_payload_bytes = capped_payload_add(
     self.compiled_payload_bytes,
@@ -114,7 +114,7 @@ fn LocalPolicyCompiler::add_payload(
 }
 
 ///|
-fn capped_payload_add(left : Int, right : Int) -> Int {
+fn capped_payload_add(left : Int32, right : Int32) -> Int32 {
   if right > max_compiled_payload_bytes ||
     left > max_compiled_payload_bytes - right {
     max_compiled_payload_bytes + 1
@@ -124,7 +124,7 @@ fn capped_payload_add(left : Int, right : Int) -> Int {
 }
 
 ///|
-fn utf8_length_up_to(value : String, limit : Int) -> Int {
+fn utf8_length_up_to(value : String, limit : Int32) -> Int32 {
   let mut size = 0
   for char in value {
     let codepoint = char.to_int()
@@ -146,7 +146,7 @@ fn utf8_length_up_to(value : String, limit : Int) -> Int {
 }
 
 ///|
-fn add_string_payload(size : Int, value : String) -> Int {
+fn add_string_payload(size : Int32, value : String) -> Int32 {
   if size > max_compiled_payload_bytes {
     size
   } else {
@@ -158,7 +158,7 @@ fn add_string_payload(size : Int, value : String) -> Int {
 }
 
 ///|
-fn add_predicate_value_payload(size : Int, value : PredicateValue) -> Int {
+fn add_predicate_value_payload(size : Int32, value : PredicateValue) -> Int32 {
   match value {
     PredicateValue::Text(value) => add_string_payload(size, value)
     PredicateValue::Integer(_) | PredicateValue::Boolean(_) => size
@@ -166,7 +166,7 @@ fn add_predicate_value_payload(size : Int, value : PredicateValue) -> Int {
 }
 
 ///|
-fn comparison_payload(comparison : @retry.PropertyComparison) -> Int {
+fn comparison_payload(comparison : @retry.PropertyComparison) -> Int32 {
   add_predicate_value_payload(
     add_string_payload(0, comparison.property_name),
     comparison.value,
@@ -174,7 +174,7 @@ fn comparison_payload(comparison : @retry.PropertyComparison) -> Int {
 }
 
 ///|
-fn pattern_payload(pattern : @retry.PropertyPattern) -> Int {
+fn pattern_payload(pattern : @retry.PropertyPattern) -> Int32 {
   add_string_payload(
     add_string_payload(0, pattern.property_name),
     pattern.pattern,
@@ -182,7 +182,7 @@ fn pattern_payload(pattern : @retry.PropertyPattern) -> Int {
 }
 
 ///|
-fn predicate_node_payload(node : @retry.PredicateNode) -> Int {
+fn predicate_node_payload(node : @retry.PredicateNode) -> Int32 {
   match node {
     @retry.PredicateNode::PropEq(value)
     | @retry.PredicateNode::PropNeq(value)
@@ -223,7 +223,7 @@ fn predicate_node_payload(node : @retry.PredicateNode) -> Int {
 fn LocalPolicyCompiler::parse_predicate(
   self : LocalPolicyCompiler,
   raw : @retry.RetryPredicate,
-  depth : Int,
+  depth : Int32,
 ) -> LocalPredicate raise LocalRetryError {
   if raw.nodes.is_empty() {
     raise invalid_policy("Retry predicate has no root node")
@@ -239,9 +239,9 @@ fn LocalPolicyCompiler::parse_predicate(
 fn LocalPolicyCompiler::parse_predicate_node(
   self : LocalPolicyCompiler,
   nodes : Array[@retry.PredicateNode],
-  index : Int,
+  index : Int32,
   visiting : Array[Bool],
-  depth : Int,
+  depth : Int32,
 ) -> LocalPredicate raise LocalRetryError {
   guard nodes.get(index) is Some(node) else {
     raise invalid_policy("Predicate node index out of bounds: \{index}")
@@ -316,8 +316,8 @@ fn parse_policy(raw : RetryPolicy) -> LocalPolicy raise LocalRetryError {
 fn LocalPolicyCompiler::parse_policy_node(
   self : LocalPolicyCompiler,
   nodes : Array[@retry.PolicyNode],
-  index : Int,
-  depth : Int,
+  index : Int32,
+  depth : Int32,
 ) -> LocalPolicy raise LocalRetryError {
   guard nodes.get(index) is Some(node) else {
     raise invalid_policy("Policy node index out of bounds: \{index}")
@@ -431,7 +431,7 @@ fn saturating_add(left : UInt64, right : UInt64) -> UInt64 {
 }
 
 ///|
-fn saturating_increment(value : UInt) -> UInt {
+fn saturating_increment(value : UInt32) -> UInt32 {
   if value == 4294967295U {
     value
   } else {
@@ -458,7 +458,7 @@ fn multiply_wide(left : UInt64, right : UInt64) -> WideUInt {
 }
 
 ///|
-fn WideUInt::shift_left(self : WideUInt, amount : Int) -> WideUInt {
+fn WideUInt::shift_left(self : WideUInt, amount : Int32) -> WideUInt {
   if amount == 0 {
     self
   } else if amount < 64 {
@@ -472,7 +472,7 @@ fn WideUInt::shift_left(self : WideUInt, amount : Int) -> WideUInt {
 }
 
 ///|
-fn WideUInt::shift_right_low(self : WideUInt, amount : Int) -> UInt64 {
+fn WideUInt::shift_right_low(self : WideUInt, amount : Int32) -> UInt64 {
   if amount == 0 {
     self.lo
   } else if amount < 64 {
@@ -483,7 +483,7 @@ fn WideUInt::shift_right_low(self : WideUInt, amount : Int) -> UInt64 {
 }
 
 ///|
-fn WideUInt::bit(self : WideUInt, index : Int) -> Bool {
+fn WideUInt::bit(self : WideUInt, index : Int32) -> Bool {
   if index < 64 {
     ((self.lo >> index) & 1UL) == 1UL
   } else {
@@ -492,7 +492,7 @@ fn WideUInt::bit(self : WideUInt, index : Int) -> Bool {
 }
 
 ///|
-fn WideUInt::lower_bits_nonzero(self : WideUInt, count : Int) -> Bool {
+fn WideUInt::lower_bits_nonzero(self : WideUInt, count : Int32) -> Bool {
   if count <= 0 {
     false
   } else if count < 64 {
@@ -505,7 +505,7 @@ fn WideUInt::lower_bits_nonzero(self : WideUInt, count : Int) -> Bool {
 }
 
 ///|
-fn round_wide_shift(value : WideUInt, amount : Int) -> UInt64 {
+fn round_wide_shift(value : WideUInt, amount : Int32) -> UInt64 {
   let truncated = value.shift_right_low(amount)
   let half = value.bit(amount - 1)
   let below_half = value.lower_bits_nonzero(amount - 1)
@@ -573,7 +573,7 @@ fn scale_duration(duration : UInt64, factor : Double) -> UInt64 {
 }
 
 ///|
-fn fibonacci_delay(first : UInt64, second : UInt64, nth : UInt) -> UInt64 {
+fn fibonacci_delay(first : UInt64, second : UInt64, nth : UInt32) -> UInt64 {
   match nth {
     0 => 0
     1 => first
@@ -627,7 +627,7 @@ fn compare_values(
   actual : PredicateValue,
   expected : PredicateValue,
   property : String,
-) -> Int raise LocalRetryError {
+) -> Int32 raise LocalRetryError {
   match (actual, expected) {
     (PredicateValue::Integer(left), PredicateValue::Integer(right)) =>
       left.compare(right)
@@ -641,7 +641,7 @@ fn compare_values(
           "Cannot coerce property '\{property}' to integer",
         )
       }
-      let parsed : Int64 = @strconv.from_str(left) catch {
+      let parsed : Int64 = @string.parse_int64(left) catch {
         _ =>
           raise LocalRetryError::PredicateEvaluation(
             "Cannot coerce property '\{property}' to integer",
@@ -756,14 +756,14 @@ fn LocalPredicate::matches(
 
 ///|
 priv struct GlobWildcard {
-  glob_index : Int
-  path_index : Int
+  glob_index : Int32
+  path_index : Int32
 }
 
 ///|
 priv struct GlobState {
-  mut path_index : Int
-  mut glob_index : Int
+  mut path_index : Int32
+  mut glob_index : Int32
   mut wildcard : GlobWildcard
   mut globstar : GlobWildcard
 }
@@ -902,7 +902,10 @@ fn glob_matches(pattern : String, value : String) -> Bool {
           continue
         }
         b'}' if !brace_stack.is_empty() => {
-          longest_brace_match = Int::max(longest_brace_match, state.path_index)
+          longest_brace_match = Int32::max(
+            longest_brace_match,
+            state.path_index,
+          )
           state.glob_index += 1
           let saved = brace_stack.pop().unwrap()
           state = pop_glob_brace(state, saved, longest_brace_match)
@@ -912,7 +915,10 @@ fn glob_matches(pattern : String, value : String) -> Bool {
           continue
         }
         b',' if !brace_stack.is_empty() => {
-          longest_brace_match = Int::max(longest_brace_match, state.path_index)
+          longest_brace_match = Int32::max(
+            longest_brace_match,
+            state.path_index,
+          )
           state.path_index = brace_stack[brace_stack.length() - 1].path_index
           state.glob_index += 1
           state.wildcard = empty_glob_wildcard()
@@ -1012,7 +1018,7 @@ fn copy_glob_state(state : GlobState) -> GlobState {
 }
 
 ///|
-fn skip_globstars(glob : Bytes, start : Int) -> Int {
+fn skip_globstars(glob : Bytes, start : Int32) -> Int32 {
   let mut index = start
   while index + 3 <= glob.length() &&
         glob[index] == b'/' &&
@@ -1024,7 +1030,7 @@ fn skip_globstars(glob : Bytes, start : Int) -> Int {
 }
 
 ///|
-fn unescape_glob(glob : Bytes, index : Int) -> (Byte, Int)? {
+fn unescape_glob(glob : Bytes, index : Int32) -> (Byte, Int32)? {
   let byte = glob[index]
   if byte == b'\\' {
     guard glob.get(index + 1) is Some(escaped) else { return None }
@@ -1085,7 +1091,7 @@ fn skip_glob_braces(
 fn pop_glob_brace(
   state : GlobState,
   saved : GlobState,
-  longest_match : Int,
+  longest_match : Int32,
 ) -> GlobState {
   {
     path_index: longest_match,
@@ -1290,7 +1296,7 @@ async fn[T, E] retry_with_runtime(
 pub async fn[T, E] retry_local(
   policy : RetryPolicy,
   operation : async () -> Result[T, E],
-  properties? : (E) -> Array[(String, PredicateValue)] = _ => [],
+  properties~ : (E) -> Array[(String, PredicateValue)] = _ => [],
 ) -> Result[T, E] {
   retry_with_runtime(
     policy, operation, properties, @monotonic.now, @monotonic.wait_for, default_random,

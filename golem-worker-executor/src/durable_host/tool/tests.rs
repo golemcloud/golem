@@ -466,8 +466,8 @@ fn typed_wasmtime_writer_component(engine: &Engine) -> Component {
   (export $item-export "byte-stream-item" (type $item))
   (type $stream (stream $item-export))
   (core func $stream.new (canon stream.new $stream))
-  (core func $stream.write-async (canon stream.write $stream async (memory $memory "mem")))
-  (core func $stream.write-sync (canon stream.write $stream (memory $memory "mem")))
+  (core func $stream.write-async (canon stream.write $stream async (memory (core memory $memory "mem"))))
+  (core func $stream.write-sync (canon stream.write $stream (memory (core memory $memory "mem"))))
   (core func $stream.cancel-write (canon stream.cancel-write $stream))
   (core func $stream.drop-writable (canon stream.drop-writable $stream))
   (core instance $core (instantiate $core (with "" (instance
@@ -973,20 +973,23 @@ fn registered_tool() -> (RegisteredTool, ComponentId) {
 
     (
         RegisteredTool {
-            deployment_revision: DeploymentRevision::try_from(1_u64).unwrap(),
-            release_id: None,
-            definition,
-            provision: ToolProvisionConfig::default(),
-            component_bindings: Default::default(),
-            source: ToolSource::Component {
-                component_id,
-                component_revision: ComponentRevision::try_from(7_u64).unwrap(),
-                component_name: ComponentName("search-tools".to_string()),
+            type_id: golem_common::model::type_id::TypeId::try_from(1_u32).unwrap(),
+            registration: golem_common::model::tool::ToolRegistration {
+                deployment_revision: DeploymentRevision::try_from(1_u64).unwrap(),
+                release_id: None,
+                definition,
+                provision: ToolProvisionConfig::default(),
+                component_bindings: Default::default(),
+                source: ToolSource::Component {
+                    component_id,
+                    component_revision: ComponentRevision::try_from(7_u64).unwrap(),
+                    component_name: ComponentName("search-tools".to_string()),
+                },
+                owner_account_id: AccountId::new(),
+                owner_account_email: AccountEmail::new("owner@example.com"),
+                metadata_version: "0.1.0".to_string(),
+                metadata_digest: Default::default(),
             },
-            owner_account_id: AccountId::new(),
-            owner_account_email: AccountEmail::new("owner@example.com"),
-            metadata_version: "0.1.0".to_string(),
-            metadata_digest: Default::default(),
         },
         component_id,
     )
@@ -1185,7 +1188,7 @@ fn dynamic_discovery_rejects_first_incompatible_collision_without_selecting_late
 #[test]
 fn registered_component_tool_converts_to_discovery_wit_record() {
     let (registered, component_id) = registered_tool();
-    let expected_definition = registered.definition.clone();
+    let expected_definition = registered.registration.definition.clone();
 
     let discovered = DiscoveredTool::from(registered);
     assert_eq!(discovered.lookup_name, "search");
@@ -1421,6 +1424,7 @@ fn tool_boolean_denials_match_effective_values_including_defaults() {
     for default in [false, true] {
         for value in [false, true] {
             let (mut registered, _) = registered_tool();
+            let registered = &mut registered.registration;
             registered.definition.commands.nodes[0]
                 .body
                 .as_mut()
@@ -1489,6 +1493,7 @@ fn count_flag_respects_declared_optional_maximum() {
 
     for max in [None, Some(200)] {
         let (mut registered, _) = registered_tool();
+        let registered = &mut registered.registration;
         registered.definition.commands.nodes[0]
             .body
             .as_mut()
@@ -1523,6 +1528,7 @@ fn count_flag_respects_declared_optional_maximum() {
 #[test]
 fn command_resolution_validates_path_schema_value_and_constraints() {
     let (registered, _) = registered_tool();
+    let registered = registered.registration;
     let graph = registered
         .definition
         .canonical_input_record_schema(0)
@@ -1572,6 +1578,7 @@ fn command_resolution_validates_path_schema_value_and_constraints() {
 #[test]
 fn command_resolution_omits_optional_values_and_renders_supplied_values() {
     let (mut registered, _) = registered_tool();
+    let registered = &mut registered.registration;
     let body = registered.definition.commands.nodes[0]
         .body
         .as_mut()
@@ -1629,6 +1636,7 @@ fn stream_arguments_require_opaque_permission_without_losing_literal_constraints
     use golem_common::model::card::{ResourcePattern, ToolInvocation, ToolResourcePattern};
 
     let (mut registered, _) = registered_tool();
+    let registered = &mut registered.registration;
     let body = registered.definition.commands.nodes[0]
         .body
         .as_mut()
@@ -1686,6 +1694,7 @@ fn stream_arguments_require_opaque_permission_without_losing_literal_constraints
 #[test]
 fn present_optional_option_value_renders_its_inner_type() {
     let (registered, _) = registered_tool();
+    let registered = registered.registration;
     let option = OptionSpec {
         long: "limit".to_string(),
         short: None,
@@ -1725,6 +1734,7 @@ fn present_optional_option_value_renders_its_inner_type() {
 #[test]
 fn present_optional_option_with_referenced_option_type_preserves_inner_option() {
     let (mut registered, _) = registered_tool();
+    let registered = &mut registered.registration;
     let optional_limit = TypeId::new("optional-limit");
     registered.definition.schema.defs.push(SchemaTypeDef {
         id: optional_limit.clone(),
@@ -1762,6 +1772,7 @@ fn stream_option_values_preserve_repetition_boundaries() {
     use golem_common::schema::tool::RepeatableListShape;
 
     let (registered, _) = registered_tool();
+    let registered = registered.registration;
     let mut option = OptionSpec {
         long: "input".to_string(),
         short: None,

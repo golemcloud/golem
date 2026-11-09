@@ -21,8 +21,10 @@ pub use crate::base_model::worker::AgentConfigEntryDto;
 
 impl ComponentDto {
     pub fn to_diffable(&self) -> Result<diff::Component, diff::DiffError> {
+        let metadata: crate::model::component_metadata::ComponentMetadata =
+            self.metadata.clone().into();
         let agent_type_provision_configs =
-            self.metadata
+            metadata
                 .agent_type_provision_configs()
                 .iter()
                 .map(|(name, config)| {
@@ -83,8 +85,7 @@ impl ComponentDto {
                                     )
                                 })
                                 .collect(),
-                            initial_permissions: self
-                                .metadata
+                            initial_permissions: metadata
                                 .agent_type_initial_permission_card(name)
                                 .map(|card| diff::AgentTypeInitialPermission {
                                     lower_positive: card.lower_positive.clone(),
@@ -103,8 +104,7 @@ impl ComponentDto {
                 })
                 .collect::<Result<_, _>>()?;
 
-        let tool_deployment_configs = self
-            .metadata
+        let tool_deployment_configs = metadata
             .tools()
             .iter()
             .map(|(name, metadata)| {
@@ -168,12 +168,9 @@ impl ComponentDto {
         Ok(diff::Component {
             wasm_hash: self.wasm_hash,
             component_config: diff::ComponentConfig {
-                schema: self.metadata.config_schema().clone(),
+                schema: metadata.config_schema().clone(),
                 initial_permissions: {
-                    let card = &self
-                        .metadata
-                        .component_provision_config()
-                        .initial_permissions;
+                    let card = &metadata.component_provision_config().initial_permissions;
                     diff::AgentTypeInitialPermission {
                         lower_positive: card.lower_positive.clone(),
                         lower_negative: card.lower_negative.clone(),
@@ -181,8 +178,7 @@ impl ComponentDto {
                         upper_negative: card.upper_negative.clone(),
                     }
                 },
-                config: self
-                    .metadata
+                config: metadata
                     .component_provision_config()
                     .config
                     .iter()
@@ -200,9 +196,8 @@ impl ComponentDto {
                         )
                     })
                     .collect(),
-                env: self.metadata.component_provision_config().env.clone(),
-                files_by_path: self
-                    .metadata
+                env: metadata.component_provision_config().env.clone(),
+                files_by_path: metadata
                     .component_provision_config()
                     .files
                     .iter()
@@ -217,8 +212,7 @@ impl ComponentDto {
                         )
                     })
                     .collect(),
-                plugins_by_grant_id: self
-                    .metadata
+                plugins_by_grant_id: metadata
                     .component_provision_config()
                     .plugins
                     .iter()
@@ -239,8 +233,7 @@ impl ComponentDto {
             .into(),
             agent_type_provision_configs,
             tool_deployment_configs,
-            tool_middleware_deployment_configs: self
-                .metadata
+            tool_middleware_deployment_configs: metadata
                 .tool_middlewares()
                 .iter()
                 .map(|(name, metadata)| {
@@ -345,6 +338,13 @@ mod tests {
                     agent_bindings: BTreeMap::new(),
                 },
             )]),
+        )
+        .with_type_ids(
+            BTreeMap::new(),
+            BTreeMap::from([(
+                tool_name.clone(),
+                crate::model::type_id::TypeId::try_from(211_u32).unwrap(),
+            )]),
         );
         let wasm_hash = diff::Hash::empty();
         let dto = ComponentDto {
@@ -356,7 +356,7 @@ mod tests {
             application_id: ApplicationId::new(),
             account_id: AccountId::new(),
             component_size: 0,
-            metadata,
+            metadata: metadata.into(),
             created_at: chrono::Utc::now(),
             wasm_hash,
         };

@@ -119,7 +119,7 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClie
 pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(
   type_name : String,
   constructor_input : C,
-  phantom_id? : @schema.Uuid? = None,
+  phantom_id~ : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   ParsedAgentId::create(
     type_name,

@@ -245,8 +245,11 @@ impl DurableReadWait {
     }
 }
 
-impl<Ctx: WorkerCtx> AccessorTask<Ctx> for PrepareInputObservation {
-    async fn run(self, _accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+impl PrepareInputObservation {
+    pub(super) async fn run<Ctx: WorkerCtx>(
+        self,
+        _accessor: &Accessor<Ctx>,
+    ) -> wasmtime::Result<()> {
         let settled = self.prepare().await?;
         // The event loop must still see host work while the journal receipt settles.
         let _ = settled.await;
@@ -346,8 +349,8 @@ impl PrepareInputObservation {
     }
 }
 
-impl<Ctx: WorkerCtx> AccessorTask<Ctx> for DurableInputLiveAdmission<Ctx> {
-    async fn run(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+impl<Ctx: WorkerCtx> DurableInputLiveAdmission<Ctx> {
+    pub(super) async fn run(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
         let outcome = async {
             loop {
                 let (operation, rejected) = accessor.with(|mut access| {
@@ -403,10 +406,8 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx> for DurableInputLiveAdmission<Ctx> {
     }
 }
 
-impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
-    for DurableInputReceiveAdmission
-{
-    async fn run(
+impl DurableInputReceiveAdmission {
+    pub(crate) async fn run<U: Send + 'static, Ctx: WorkerCtx>(
         self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {

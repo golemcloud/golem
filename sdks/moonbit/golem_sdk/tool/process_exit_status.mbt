@@ -7,6 +7,44 @@ pub(all) struct ProcessExitStatus {
 } derive(Debug, Eq)
 
 ///|
+pub extend ProcessExitStatus with Debug::{to_repr}
+
+///|
+pub extend ProcessExitStatus with Eq::{equal, not_equal}
+
+///|
+pub extend ProcessExitStatus with @schema.IntoSchema::{
+  type_id,
+  register_in,
+  to_value,
+}
+
+///|
+pub extend ProcessExitStatus with @schema.FromSchema::{
+  from_value,
+  from_result_payload,
+}
+
+///|
+pub extend ProcessExitStatus with @schema.IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend ProcessExitStatus with @schema.FromWire::{
+  read_wire,
+  read_result_payload,
+}
+
+///|
+pub extend ProcessExitStatus with @schema.WireSchema::{
+  append_wire_type,
+  append_result_type,
+}
+
+///|
 let process_exit_status_id : String = "golem.tool.ProcessExitStatus"
 
 ///|

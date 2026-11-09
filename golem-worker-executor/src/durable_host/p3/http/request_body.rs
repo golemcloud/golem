@@ -53,11 +53,11 @@ use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 use tokio::sync::oneshot;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, FutureAny, FutureConsumer, FutureProducer, FutureReader,
-    Resource, Source, StreamReader,
+    Access, Accessor, FutureAny, FutureConsumer, FutureProducer, FutureReader, Resource, Source,
+    StreamReader,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
-use wasmtime_wasi_http::p3::WasiHttp;
+use wasmtime_wasi_http::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::types;
 use wasmtime_wasi_http::p3::bindings::http::types::{
     ErrorCode, Headers, Request, RequestOptions, Trailers,
@@ -1415,7 +1415,8 @@ pub(super) fn start_transmission_recording<Ctx, U>(
     pending: Option<PendingHttpRequestBodyTransmission>,
     observational_owner: Option<OplogIndex>,
     invocation_id: InvocationIdSource,
-) where
+) -> wasmtime::Result<()>
+where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
@@ -1425,14 +1426,16 @@ pub(super) fn start_transmission_recording<Ctx, U>(
                 .tail_work_tracker()
                 .activity()
         });
-        store.spawn(HttpRequestBodyTransmissionTask::<Ctx>::new(
+        let task = HttpRequestBodyTransmissionTask::<Ctx>::new(
             pending,
             observational_owner,
             invocation_id,
             activity,
             false,
-        ));
+        );
+        store.spawn(async move |store| task.run(store).await)?;
     }
+    Ok(())
 }
 
 /// Fail the durable transmission task loudly on a durability-machinery error,
@@ -1523,12 +1526,11 @@ impl<Ctx> HttpRequestBodyTransmissionTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for HttpRequestBodyTransmissionTask<Ctx>
+impl<Ctx> HttpRequestBodyTransmissionTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: 'static>(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
         let Self {
             raw_rx,
             resolution_tx,
@@ -1728,12 +1730,14 @@ impl<Ctx> HttpRequestTransmissionPassthroughTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for HttpRequestTransmissionPassthroughTask<Ctx>
+impl<Ctx> HttpRequestTransmissionPassthroughTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: 'static,
 {
-    async fn run(self, _accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: 'static>(
+        self,
+        _accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         // Safe park: the raw value is a pure function of guest behaviour (a
         // guest-side `consume-body` or `drop`), and forwarding it writes no
         // durable entries.
@@ -1788,17 +1792,17 @@ pub(super) fn finish_transmission<Ctx: WorkerCtx, U: Send + 'static>(
                     resolve_current_observational_owner(ctx, custom_invocation_context.as_deref())?;
                 (owner, import_invocation_id(ctx, owner)?)
             };
-            store.spawn(HttpRequestBodyTransmissionTask::<Ctx>::new(
+            let task = HttpRequestBodyTransmissionTask::<Ctx>::new(
                 pending,
                 observational_owner,
                 invocation_id,
                 activity,
                 true,
-            ));
+            );
+            store.spawn(async move |store| task.run(store).await)?;
         } else {
-            store.spawn(HttpRequestTransmissionPassthroughTask::<Ctx>::new(
-                pending, activity,
-            ));
+            let task = HttpRequestTransmissionPassthroughTask::<Ctx>::new(pending, activity);
+            store.spawn(async move |store| task.run(store).await)?;
         }
     }
     Ok(())

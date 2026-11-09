@@ -4,10 +4,22 @@
 pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, Debug)
 
 ///|
+pub extend SchemaFingerprintV1 with Debug::{to_repr}
+
+///|
+pub extend SchemaFingerprintV1 with Eq::{equal, not_equal}
+
+///|
 pub suberror SchemaFingerprintError {
   InvalidSchema(String)
   DuplicateSetValue(field~ : String, value~ : String)
 } derive(Eq, Debug)
+
+///|
+pub extend SchemaFingerprintError with Debug::{to_repr}
+
+///|
+pub extend SchemaFingerprintError with Eq::{equal, not_equal}
 
 ///|
 pub fn SchemaFingerprintV1::as_bytes(
@@ -370,7 +382,7 @@ fn encode_type(
 ///|
 fn encode_leaf(
   e : CborEncoder,
-  tag : Int,
+  tag : Int32,
   metadata : @types.MetadataEnvelope,
 ) -> Unit raise SchemaFingerprintError {
   e.array(2)
@@ -381,7 +393,7 @@ fn encode_leaf(
 ///|
 fn encode_unary(
   e : CborEncoder,
-  tag : Int,
+  tag : Int32,
   inner : SchemaType,
   metadata : @types.MetadataEnvelope,
 ) -> Unit raise SchemaFingerprintError {
@@ -394,7 +406,7 @@ fn encode_unary(
 ///|
 fn encode_names(
   e : CborEncoder,
-  tag : Int,
+  tag : Int32,
   names : Array[String],
   metadata : @types.MetadataEnvelope,
 ) -> Unit raise SchemaFingerprintError {
@@ -421,7 +433,7 @@ fn encode_optional_type(
 ///|
 fn encode_numeric(
   e : CborEncoder,
-  tag : Int,
+  tag : Int32,
   r : @types.NumericRestrictions?,
   metadata : @types.MetadataEnvelope,
 ) -> Unit raise SchemaFingerprintError {
@@ -543,7 +555,7 @@ fn encode_set(
 }
 
 ///|
-fn utf8_compare(a : String, b : String) -> Int {
+fn utf8_compare(a : String, b : String) -> Int32 {
   @utf8.encode(a).lexical_compare(@utf8.encode(b))
 }
 
@@ -624,7 +636,7 @@ fn CborEncoder::null(self : CborEncoder) -> Unit {
 }
 
 ///|
-fn CborEncoder::array(self : CborEncoder, length : Int) -> Unit {
+fn CborEncoder::array(self : CborEncoder, length : Int32) -> Unit {
   self.major(4, length.to_uint64())
 }
 
@@ -646,7 +658,7 @@ fn CborEncoder::optional_text(self : CborEncoder, value : String?) -> Unit {
 }
 
 ///|
-fn CborEncoder::optional_uint(self : CborEncoder, value : UInt?) -> Unit {
+fn CborEncoder::optional_uint(self : CborEncoder, value : UInt32?) -> Unit {
   match value {
     Some(value) => self.unsigned(value.to_uint64())
     None => self.null()
@@ -673,7 +685,11 @@ fn CborEncoder::signed(self : CborEncoder, value : Int64) -> Unit {
 }
 
 ///|
-fn CborEncoder::major(self : CborEncoder, major : Int, value : UInt64) -> Unit {
+fn CborEncoder::major(
+  self : CborEncoder,
+  major : Int32,
+  value : UInt64,
+) -> Unit {
   let prefix = (major << 5).to_byte()
   if value <= 23UL {
     self.bytes.push(prefix | value.to_byte())
@@ -696,7 +712,7 @@ fn CborEncoder::major(self : CborEncoder, major : Int, value : UInt64) -> Unit {
 fn CborEncoder::push_be(
   self : CborEncoder,
   value : UInt64,
-  count : Int,
+  count : Int32,
 ) -> Unit {
   for i in 0..<count {
     self.bytes.push((value >> ((count - i - 1) * 8)).to_byte())
@@ -707,39 +723,39 @@ fn CborEncoder::push_be(
 // crypto dependency in this WASM SDK package.
 
 ///|
-let blake3_iv : FixedArray[UInt] = [
+let blake3_iv : FixedArray[UInt32] = [
   0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB,
   0x5BE0CD19,
 ]
 
 ///|
-let message_permutation : FixedArray[Int] = [
+let message_permutation : FixedArray[Int32] = [
   2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8,
 ]
 
 ///|
 priv struct BlakeOutput {
-  cv : FixedArray[UInt]
-  block : FixedArray[UInt]
+  cv : FixedArray[UInt32]
+  block : FixedArray[UInt32]
   counter : UInt64
-  block_len : Int
-  flags : UInt
+  block_len : Int32
+  flags : UInt32
 }
 
 ///|
-fn rotr(x : UInt, n : Int) -> UInt {
+fn rotr(x : UInt32, n : Int32) -> UInt32 {
   (x >> n) | (x << (32 - n))
 }
 
 ///|
 fn g(
-  v : FixedArray[UInt],
-  a : Int,
-  b : Int,
-  c : Int,
-  d : Int,
-  x : UInt,
-  y : UInt,
+  v : FixedArray[UInt32],
+  a : Int32,
+  b : Int32,
+  c : Int32,
+  d : Int32,
+  x : UInt32,
+  y : UInt32,
 ) -> Unit {
   v[a] = v[a] + v[b] + x
   v[d] = rotr(v[d] ^ v[a], 16)
@@ -752,7 +768,7 @@ fn g(
 }
 
 ///|
-fn compress(output : BlakeOutput, root : Bool) -> FixedArray[UInt] {
+fn compress(output : BlakeOutput, root : Bool) -> FixedArray[UInt32] {
   let v = FixedArray::make(16, 0U)
   for i in 0..<8 {
     v[i] = output.cv[i]
@@ -788,7 +804,7 @@ fn compress(output : BlakeOutput, root : Bool) -> FixedArray[UInt] {
 }
 
 ///|
-fn output_cv(output : BlakeOutput) -> FixedArray[UInt] {
+fn output_cv(output : BlakeOutput) -> FixedArray[UInt32] {
   let full = compress(output, false)
   FixedArray::makei(8, i => full[i])
 }
@@ -796,9 +812,9 @@ fn output_cv(output : BlakeOutput) -> FixedArray[UInt] {
 ///|
 fn words(
   bytes : FixedArray[Byte],
-  start : Int,
-  length : Int,
-) -> FixedArray[UInt] {
+  start : Int32,
+  length : Int32,
+) -> FixedArray[UInt32] {
   let result = FixedArray::make(16, 0U)
   for i in 0..<length {
     result[i / 4] = result[i / 4] | (bytes[start + i].to_uint() << (i % 4 * 8))
@@ -809,8 +825,8 @@ fn words(
 ///|
 fn chunk_output(
   bytes : FixedArray[Byte],
-  start : Int,
-  length : Int,
+  start : Int32,
+  length : Int32,
   counter : UInt64,
 ) -> BlakeOutput {
   let mut cv = blake3_iv.copy()
@@ -824,7 +840,7 @@ fn chunk_output(
   }
   for block in 0..<blocks {
     let offset = block * 64
-    let n = Int::min(64, length - offset)
+    let n = Int32::min(64, length - offset)
     out = {
       cv,
       block: words(bytes, start + offset, n),
@@ -842,8 +858,8 @@ fn chunk_output(
 
 ///|
 fn parent_output(
-  left : FixedArray[UInt],
-  right : FixedArray[UInt],
+  left : FixedArray[UInt32],
+  right : FixedArray[UInt32],
 ) -> BlakeOutput {
   let block = FixedArray::make(16, 0U)
   for i in 0..<8 {
@@ -855,15 +871,15 @@ fn parent_output(
 
 ///|
 fn blake3_256(bytes : FixedArray[Byte]) -> FixedArray[Byte] {
-  let chunks = Int::max(1, (bytes.length() + 1023) / 1024)
-  let stack : Array[FixedArray[UInt]] = []
-  let mut last = chunk_output(bytes, 0, Int::min(1024, bytes.length()), 0UL)
+  let chunks = Int32::max(1, (bytes.length() + 1023) / 1024)
+  let stack : Array[FixedArray[UInt32]] = []
+  let mut last = chunk_output(bytes, 0, Int32::min(1024, bytes.length()), 0UL)
   for chunk in 0..<chunks {
     if chunk > 0 {
       last = chunk_output(
         bytes,
         chunk * 1024,
-        Int::min(1024, bytes.length() - chunk * 1024),
+        Int32::min(1024, bytes.length() - chunk * 1024),
         chunk.to_uint64(),
       )
     }

@@ -23,7 +23,7 @@
 /// carries the optional diagnostic from a consumer terminal.
 pub(all) suberror BridgeError {
   BridgeError(String)
-  Unreachable(endpoint~ : String, window_ms~ : Int, last_cause~ : String)
+  Unreachable(endpoint~ : String, window_ms~ : Int32, last_cause~ : String)
   StreamFailed(StreamFailure)
   ConsumerCancelled(String?)
 } derive(Debug, Eq)
@@ -59,3 +59,18 @@ pub impl Show for BridgeError with fn output(self, logger) {
     }
   }
 }
+
+///|
+pub extend BridgeError with Debug::{to_repr}
+
+///|
+pub extend BridgeError with Eq::{equal, not_equal}
+
+///|
+pub extend BridgeError with Show::{to_string, output}
+
+///|
+pub extend StreamFailure with Debug::{to_repr}
+
+///|
+pub extend StreamFailure with Eq::{equal, not_equal}

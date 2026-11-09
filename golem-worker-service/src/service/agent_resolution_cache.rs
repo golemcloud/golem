@@ -300,6 +300,7 @@ mod tests {
     fn make_resolved(env_id: EnvironmentId, rev: DeploymentRevision) -> ResolvedAgentType {
         ResolvedAgentType {
             registered_agent_type: RegisteredAgentType {
+                type_id: golem_common::model::type_id::TypeId::try_from(42u32).unwrap(),
                 agent_type: AgentTypeSchema {
                     kind: golem_common::schema::agent::AgentTypeKind::Regular,
                     type_name: AgentTypeName("test-agent".to_string()),
@@ -579,6 +580,7 @@ mod tests {
             .resolve(&app, &env, &agent, Some("owner@test.com"), &make_auth())
             .await;
         assert!(result2.is_ok());
+        assert_eq!(result2.unwrap().registered_agent_type.type_id.get(), 42);
     }
 
     #[test]
@@ -717,7 +719,9 @@ mod tests {
             .resolve_pinned(&app, &env, &agent, rev, None, &make_auth())
             .await;
         assert!(r2.is_ok());
-        assert_eq!(r2.unwrap().deployment_revision, rev);
+        let r2 = r2.unwrap();
+        assert_eq!(r2.deployment_revision, rev);
+        assert_eq!(r2.registered_agent_type.type_id.get(), 42);
     }
 
     #[test]

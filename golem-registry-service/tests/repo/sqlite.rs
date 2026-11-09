@@ -611,3 +611,13 @@ async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
 async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &Deps) {
     crate::repo::common::test_tool_middleware_release_and_grant_repository_contracts(deps).await;
 }
+
+#[test]
+async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Deps) {
+    crate::repo::common::test_environment_type_ids_survive_removal_and_readdition(deps).await;
+}
+
+#[test]
+async fn test_environment_type_ids_rollback_and_environment_isolation(deps: &Deps) {
+    crate::repo::common::test_environment_type_ids_rollback_and_environment_isolation(deps).await;
+}

@@ -14,7 +14,6 @@
 
 use super::*;
 use crate::durable_host::tail_work::TailActivity;
-use wasmtime::component::AccessorTask;
 
 impl DropPolicy for Cancellable {
     const CANCEL_ON_TOOL_TRAP: bool = true;
@@ -284,13 +283,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ctx.tail_work_tracker().activity(),
             )
         });
-        store.spawn(ReplayCancelWaiter {
+        let task = ReplayCancelWaiter {
             replay_state,
             replay,
             call: self.dropped_call_snapshot(None),
             get_ctx,
             activity,
-        });
+        };
+        store
+            .spawn(async move |store| task.run(store).await)
+            .map_err(|error| {
+                TerminalCallError::new(WorkerExecutorError::runtime(error.to_string()), context)
+            })?;
         Ok(())
     }
 
@@ -337,10 +341,8 @@ struct ReplayCancelWaiter<T: 'static, Ctx: WorkerCtx> {
     activity: TailActivity,
 }
 
-impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx> AccessorTask<T, D>
-    for ReplayCancelWaiter<T, Ctx>
-{
-    async fn run(self, store: &Accessor<T, D>) -> wasmtime::Result<()> {
+impl<T: 'static, Ctx: WorkerCtx> ReplayCancelWaiter<T, Ctx> {
+    async fn run<D: HasData + ?Sized>(self, store: &Accessor<T, D>) -> wasmtime::Result<()> {
         let context = self.call.trap_context;
         self.finish(store)
             .await

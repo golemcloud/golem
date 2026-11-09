@@ -150,10 +150,17 @@ impl AppTemplate {
 
     fn generate_on_demand_commons(
         &self,
+        application_name: &ApplicationName,
         application_dir: &Path,
         target_path: &Path,
     ) -> anyhow::Result<()> {
-        generate_on_demand_commons_by_template(self, application_dir, target_path, StdFs)
+        generate_on_demand_commons_by_template(
+            self,
+            application_name,
+            application_dir,
+            target_path,
+            StdFs,
+        )
     }
 
     fn generate_component(
@@ -208,9 +215,14 @@ impl AppTemplateCommon {
 pub struct AppTemplateCommonOnDemand(pub AppTemplate);
 
 impl AppTemplateCommonOnDemand {
-    pub fn generate(&self, application_dir: &Path, target_path: &Path) -> anyhow::Result<()> {
+    pub fn generate(
+        &self,
+        application_name: &ApplicationName,
+        application_dir: &Path,
+        target_path: &Path,
+    ) -> anyhow::Result<()> {
         self.0
-            .generate_on_demand_commons(application_dir, target_path)
+            .generate_on_demand_commons(application_name, application_dir, target_path)
     }
 }
 

@@ -72,7 +72,7 @@ fn multimodal(cases: Vec<(&str, SchemaType)>) -> SchemaType {
 
 /// A generated MoonBit bridge module, type-checked with `moon check --target
 /// native`. The module root is the temp dir itself (the generator writes
-/// `moon.mod.json`, `runtime/`, and `client/` directly under the target path).
+/// `moon.mod`, `runtime/`, and `client/` directly under the target path).
 struct GeneratedPackage {
     dir: TempDir,
 }
@@ -179,6 +179,8 @@ fn moon_check_wasm(path: &std::path::Path) {
         .arg("-C")
         .arg(path)
         .arg("check")
+        .arg("client")
+        .args(path.join("consumer").is_dir().then_some("consumer"))
         .arg("--target")
         .arg("wasm")
         .arg("--deny-warn")
@@ -642,18 +644,15 @@ fn explicit_external_mode_is_byte_identical_to_the_default() {
 #[test]
 fn guest_mode_generates_wasm_rpc_project_layout() {
     let guest = generate_without_check(counter_agent(), MoonBitBridgeMode::GuestWasmRpc);
-    let module: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(guest.path().join("moon.mod.json")).unwrap())
-            .unwrap();
+    let module = std::fs::read_to_string(guest.path().join("moon.mod")).unwrap();
+    let workspace = std::fs::read_to_string(guest.path().join("moon.work")).unwrap();
     let sdk_path = workspace_root().unwrap().join("sdks/moonbit/golem_sdk");
 
-    assert_eq!(module["name"], "counter-agent-guest-client");
-    assert_eq!(module["preferred-target"], "wasm");
-    assert_eq!(
-        module["deps"]["golemcloud/golem_sdk"]["path"],
-        sdk_path.to_str().unwrap()
-    );
-    assert!(module["deps"].get("moonbitlang/async").is_none());
+    assert!(module.contains("name = \"counter-agent-guest-client\""));
+    assert!(module.contains("preferred_target = \"wasm\""));
+    assert!(workspace.contains(&serde_json::to_string(&sdk_path).unwrap()));
+    assert!(!module.contains("moonbitlang/async"));
+    assert!(!guest.path().join("moon.mod.json").exists());
     assert!(!guest.path().join("runtime").exists());
 
     let moon_pkg = std::fs::read_to_string(guest.path().join("client/moon.pkg")).unwrap();
@@ -679,11 +678,9 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
     let mut generator = MoonBitToolBridgeGenerator::new(phase_eight_tool(), target, true).unwrap();
     generator.generate().unwrap();
 
-    let module: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(target.join("moon.mod.json")).unwrap())
-            .unwrap();
-    assert_eq!(module["name"], "new-tool-guest-client");
-    assert_eq!(module["preferred-target"], "wasm");
+    let module = std::fs::read_to_string(target.join("moon.mod")).unwrap();
+    assert!(module.contains("name = \"new-tool-guest-client\""));
+    assert!(module.contains("preferred_target = \"wasm\""));
     assert!(!target.join("runtime").exists());
 
     let pkg = std::fs::read_to_string(target.join("client/moon.pkg")).unwrap();
@@ -846,6 +843,7 @@ fn guest_mode_reserves_unstructured_support_type_names() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .arg("--deny-warn")
@@ -877,6 +875,7 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .arg("--deny-warn")
@@ -1058,6 +1057,7 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .args(["client", "consumer"])
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1196,6 +1196,7 @@ fn guest_mode_maps_polymorphic_permission_cards_to_template_cards() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .args(["client", "consumer"])
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1243,6 +1244,7 @@ fn guest_mode_consumers_cannot_forge_or_serialize_permission_cards() {
             .arg("-C")
             .arg(guest.path())
             .arg("check")
+            .args(["client", "forgery"])
             .arg("--target")
             .arg("wasm")
             .output()
@@ -1469,6 +1471,7 @@ fn guest_mode_handles_helper_wrapper_and_local_name_collisions() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1500,6 +1503,7 @@ fn guest_mode_scoped_does_not_shadow_constructor_type_t() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1525,13 +1529,14 @@ fn guest_mode_accepts_numeric_agent_type_names() {
         ),
         MoonBitBridgeMode::GuestWasmRpc,
     );
-    let manifest_path = guest.path().join("moon.mod.json");
-    let mut manifest: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    manifest["name"] = "numeric-agent-guest-client".into();
+    let manifest_path = guest.path().join("moon.mod");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
     std::fs::write(
         manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
+        manifest.replace(
+            "name = \"123-guest-client\"",
+            "name = \"numeric-agent-guest-client\"",
+        ),
     )
     .unwrap();
 
@@ -1539,6 +1544,7 @@ fn guest_mode_accepts_numeric_agent_type_names() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1593,6 +1599,7 @@ fn ephemeral_guest_client_omits_get_and_scoped() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1650,19 +1657,14 @@ fn schema_graph_literal_moon_executes_and_round_trips_through_wit() {
     let dir = TempDir::new().unwrap();
     let sdk_path = workspace_root().unwrap().join("sdks/moonbit/golem_sdk");
     std::fs::create_dir(dir.path().join("client")).unwrap();
+    let mut overrides = golem_cli::sdk_overrides::SdkOverrides::default();
+    overrides.moonbit_sdk_path = Some(sdk_path.to_string_lossy().into_owned());
     std::fs::write(
-        dir.path().join("moon.mod.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "name": "schema-graph-literal-check",
-            "version": "0.0.0",
-            "preferred-target": "wasm",
-            "deps": {
-                "golemcloud/golem_sdk": { "path": sdk_path }
-            }
-        }))
-        .unwrap(),
+        dir.path().join("moon.mod"),
+        format!("name = \"schema-graph-literal-check\"\nversion = \"0.0.0\"\npreferred_target = \"wasm\"\nimport {{\n  {},\n}}\n", golem_cli::sdk_overrides::SdkOverrides::default().moonbit_sdk_dep()),
     )
     .unwrap();
+    std::fs::write(dir.path().join("moon.work"), overrides.moonbit_workspace()).unwrap();
     std::fs::write(
         dir.path().join("client/moon.pkg"),
         "import {\n  \"golemcloud/golem_sdk/schema_model\" @model,\n  \"golemcloud/golem_sdk/interface/golem/core/types\" @types,\n}\n",
@@ -1696,6 +1698,7 @@ fn schema_graph_literal_moon_executes_and_round_trips_through_wit() {
         .arg("-C")
         .arg(dir.path())
         .arg("test")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1734,6 +1737,7 @@ fn guest_mode_moon_checks_result_nested_in_list() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1828,6 +1832,7 @@ fn guest_mode_moon_checks_unstructured_text_codec() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1880,6 +1885,7 @@ fn guest_mode_unstructured_text_encoder_rejects_disallowed_language() {
         .arg("-C")
         .arg(guest.path())
         .arg("test")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1940,6 +1946,7 @@ fn guest_mode_preserves_union_tags_and_moon_checks_multimodal_datetime() {
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -1992,6 +1999,7 @@ fn guest_mode_moon_checks_referenced_unstructured_codecs_with_distinct_restricti
         .arg("-C")
         .arg(guest.path())
         .arg("check")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -2040,6 +2048,7 @@ fn guest_mode_fixed_list_encoder_rejects_wrong_length() {
         .arg("-C")
         .arg(guest.path())
         .arg("test")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -2085,6 +2094,7 @@ fn guest_mode_narrow_integer_encoder_rejects_out_of_range_value() {
         .arg("-C")
         .arg(guest.path())
         .arg("test")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -2146,6 +2156,7 @@ test "u16 decoder enforces schema range" {
         .arg("-C")
         .arg(guest.path())
         .arg("test")
+        .arg("client")
         .arg("--target")
         .arg("wasm")
         .output()
@@ -2315,9 +2326,10 @@ fn kitchen_sink_compiles(#[tagged_as("kitchen_sink")] _pkg: &GeneratedPackage) {
 fn generated_project_layout_is_correct(#[tagged_as("counter_agent")] pkg: &GeneratedPackage) {
     let dir = pkg.module_dir();
 
-    let mod_json = std::fs::read_to_string(dir.join("moon.mod.json")).unwrap();
-    assert!(mod_json.contains("\"name\": \"counter-agent-client\""));
-    assert!(mod_json.contains("\"moonbitlang/async\": \"0.21.2\""));
+    let manifest = std::fs::read_to_string(dir.join("moon.mod")).unwrap();
+    assert!(manifest.contains("name = \"counter-agent-client\""));
+    assert!(manifest.contains("preferred_target = \"native\""));
+    assert!(manifest.contains("\"moonbitlang/async@0.21.2\""));
 
     for runtime_file in [
         "schema_value.mbt",
@@ -3080,11 +3092,13 @@ fn external_recursive_stream_client_compiles() {
         )
         .unwrap();
     }
-    let mod_path = pkg.module_dir().join("moon.mod.json");
-    let mut module: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&mod_path).unwrap()).unwrap();
-    module["deps"]["moonbitlang/x"] = serde_json::json!("0.4.39");
-    std::fs::write(&mod_path, serde_json::to_string_pretty(&module).unwrap()).unwrap();
+    let mod_path = pkg.module_dir().join("moon.mod");
+    let module = std::fs::read_to_string(&mod_path).unwrap();
+    std::fs::write(
+        &mod_path,
+        module.replacen("import {", "import {\n  \"moonbitlang/x@0.5.1\",", 1),
+    )
+    .unwrap();
     let manifest_path = pkg.module_dir().join("runtime/moon.pkg");
     let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
     manifest = manifest.replacen(
@@ -3224,8 +3238,8 @@ test "binary codec matches every frozen public v1 frame" {
     let metadata = parse_strict_json(expect_string(get_field(object, "metadata")))
     let payload_hex = expect_string(get_field(object, "payloadHex"))
     let payload = Bytes::makei(payload_hex.length() / 2, i => {
-      let pair = payload_hex.substring(start=i * 2, end=i * 2 + 2)
-      @string.parse_int(pair[:], base=16).to_byte()
+      let pair = payload_hex[i * 2:i * 2 + 2]
+      @string.parse_int(pair, base=16).to_byte()
     })
     let actual = @base64.encode(encode_binary_envelope(metadata, payload), padding=true)
     assert_true(actual == expect_string(get_field(object, "frameBase64")))
@@ -3276,7 +3290,9 @@ test "text codec directly consumes frozen canonical and malformed fixtures" {
   for vector in expect_array(get_field(malformed, "vectors")) {
     let object = expect_object(vector)
     if expect_string(get_field(object, "name")) == "invalid-json" {
-      assert_true((try? parse_strict_json(expect_string(get_field(object, "input")))) is Err(_))
+      assert_true(raises(() => {
+        ignore(parse_strict_json(expect_string(get_field(object, "input"))))
+      }))
     }
   }
 }
@@ -3423,12 +3439,12 @@ async test "consumed stream cannot move into an invocation" {
   ignore(stream.next())
   let context = StreamEncodeContext::new()
   inspect(
-    (try? register_input_stream(
+    (try Some(register_input_stream(
       context,
       stream,
       async fn(value) { U8Value(value) },
       u8_public_codec(),
-    )) is Err(_),
+    )) catch { _ => None }) is None,
     content="true",
   )
 }
@@ -3481,9 +3497,9 @@ async test "invocation-owned stream rejects application cancellation" {
     async fn(value) { U8Value(value) },
     u8_public_codec(),
   ))
-  let cancel_rejected = (try? cancel_stream.cancel()) is Err(_)
-  let drop_rejected = (try? drop_stream.drop()) is Err(_)
-  inspect([cancel_rejected, drop_rejected], content="[true, true]")
+  let cancel_rejected = (try Some(cancel_stream.cancel()) catch { _ => None }) is None
+  let drop_rejected = (try Some(drop_stream.drop()) catch { _ => None }) is None
+  debug_inspect([cancel_rejected, drop_rejected], content="[true, true]")
   inspect(cancellations, content="0")
 }
 "#,
@@ -3787,14 +3803,15 @@ test "text language outside the schema is rejected on encode and decode" {
 "#,
     )
     .unwrap();
-    let output = std::process::Command::new("moon")
-        .arg("-C")
-        .arg(guest.path())
-        .arg("test")
-        .arg("--target")
-        .arg("wasm")
-        .output()
-        .expect("failed to run moon; is it installed?");
+    let output = std::process::Command::new(
+        workspace_root()
+            .unwrap()
+            .join("sdks/moonbit/golem_sdk/scripts/run-sdk-tests.sh"),
+    )
+    .arg("client")
+    .current_dir(guest.path())
+    .output()
+    .expect("failed to run moon; is it installed?");
     assert!(
         output.status.success(),
         "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
@@ -4110,14 +4127,15 @@ test "s8 range, fixed-list length and datetime range are checked" {
 "#,
     )
     .unwrap();
-    let output = std::process::Command::new("moon")
-        .arg("-C")
-        .arg(guest.path())
-        .arg("test")
-        .arg("--target")
-        .arg("wasm")
-        .output()
-        .expect("failed to run moon; is it installed?");
+    let output = std::process::Command::new(
+        workspace_root()
+            .unwrap()
+            .join("sdks/moonbit/golem_sdk/scripts/run-sdk-tests.sh"),
+    )
+    .arg("client")
+    .current_dir(guest.path())
+    .output()
+    .expect("failed to run moon; is it installed?");
     assert!(
         output.status.success(),
         "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",

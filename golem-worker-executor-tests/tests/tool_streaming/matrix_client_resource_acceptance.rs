@@ -426,7 +426,7 @@ async fn run_resource_contract(
                     .expect("Rust provider exports matrix-permission-issuer")
                     .clone();
                 let rust_provider_component = &stored_providers[0];
-                let issuer_deployment = deployment_state(
+                let mut issuer_deployment = deployment_state(
                     context.account_id,
                     rust_provider_component.id,
                     rust_provider_component.revision,
@@ -434,6 +434,12 @@ async fn run_resource_contract(
                     caller.agent_type,
                     vec![issuer_definition],
                 );
+                for (index, tool) in issuer_deployment.registered_tools.values_mut().enumerate() {
+                    tool.type_id = golem_common::model::type_id::TypeId::try_from(
+                        u32::try_from(deployment.registered_tools.len() + index + 1).unwrap(),
+                    )
+                    .unwrap();
+                }
                 deployment
                     .registered_tools
                     .extend(issuer_deployment.registered_tools);
