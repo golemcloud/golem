@@ -15,10 +15,11 @@
 use super::{
     AsContextMut, AttachmentCharge, AttachmentMode, AttachmentReservationOutcome,
     AttachmentStreamBuffer, AttachmentStreamProducer, AttachmentStreamRead, AttachmentWriteBody,
-    BufferedChunk, ByteStreamCloseCause, ByteStreamFailure, Bytes, Context, Destination, Ordering,
-    OwnedSemaphorePermit, Pin, Poll, RawAttachmentStreamProducer, StreamProducer, StreamResult,
-    VecBuffer, WriteBuffer,
+    BufferedChunk, ByteStreamCloseCause, ByteStreamFailure, Context, Destination, Ordering,
+    OwnedSemaphorePermit, Pin, Poll, StreamProducer, StreamResult, VecBuffer, WriteBuffer,
 };
+#[cfg(test)]
+use super::{Bytes, RawAttachmentStreamProducer};
 use crate::durable_host::stream_bus::StreamTerminalError;
 use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
 
@@ -335,6 +336,7 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
     }
 }
 
+#[cfg(test)]
 impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
     type Item = u8;
     type Buffer = Bytes;

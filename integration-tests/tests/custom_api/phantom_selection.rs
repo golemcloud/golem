@@ -365,14 +365,27 @@ async fn selected_stream_roots_forks_receipts_and_links(
     read(&agent, &selected(&source, Some(q)), json!(["Q"])).await?;
     read(&agent, &p_fork, json!(["P", "fork-P", "P-fork-only"])).await?;
 
-    let generated = agent
+    let failed = agent
         .client
         .put(agent.base_url.join(&selected(&base, Some(p)))?)
         .send()
         .await?;
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(failed.text().await?.contains("stream slot deleted"));
+
+    let generated_root = Uuid::new_v4();
+    let generated = agent
+        .client
+        .put(
+            agent
+                .base_url
+                .join(&selected(&base, Some(generated_root)))?,
+        )
+        .send()
+        .await?;
     assert_eq!(generated.status(), StatusCode::CREATED);
     let location = header(&generated, "location");
-    assert!(location.ends_with(&format!("?instance={p}")));
+    assert!(location.ends_with(&format!("?instance={generated_root}")));
     let manifest = agent
         .client
         .get(agent.base_url.join(&location)?)

@@ -119,10 +119,10 @@ impl StreamSession {
         Ok(())
     }
 
-    /// Sends the guest-authored cancellation of every callee-owned input stream to the attached
-    /// client. Inputs whose acceptance already announced a terminal high water are skipped: the
-    /// client learned about that cancellation from the acceptance, and re-sending the same
-    /// durable offset would violate the strictly increasing offset rule of the session protocol.
+    /// Sends authoritative control terminals of callee-owned inputs to the attached client.
+    /// Source terminals are acknowledged by the input path instead. Inputs whose acceptance
+    /// already announced a terminal high water are skipped: re-sending the same durable offset
+    /// would violate the strictly increasing offset rule of the session protocol.
     pub async fn pump_input_cancellations(
         &self,
         responses: &mpsc::Sender<InvocationResponse>,
@@ -155,9 +155,9 @@ impl StreamSession {
                 .map_err(SessionError::from)?;
             while let Some(event) = reader.next().await.map_err(SessionError::from)? {
                 match event.payload {
-                    CommittedProducerStreamEventPayload::Terminal(
-                        terminal @ StreamTerminal::ConsumerCancelled { .. },
-                    ) => {
+                    CommittedProducerStreamEventPayload::Terminal(terminal)
+                        if event.terminal_origin == Some(StreamTerminalOrigin::Control) =>
+                    {
                         let authored_by = event
                             .terminal_author
                             .ok_or_else(|| "committed stream terminal has no author".to_string())?;

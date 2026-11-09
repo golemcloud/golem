@@ -294,53 +294,6 @@ impl DroppedDurableInput {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test_r::test;
-
-    #[test]
-    fn tool_stdin_delivers_every_producer_failure_as_a_failure_item() {
-        for error in [
-            StreamError::Interrupted("deleted input".into()),
-            StreamError::Trapped("producer trap".into()),
-            StreamError::ResourceExhausted("memory limit".into()),
-            StreamError::Abandoned,
-            StreamError::Cancelled,
-            StreamError::Failed(TypedSchemaValue::new(
-                SchemaGraph::anonymous(SchemaType::u64()),
-                SchemaValue::U64(917),
-            )),
-        ] {
-            let delivery = tool_stdin_delivery(
-                DurableInputItem::Terminal(StreamResult::Dropped),
-                Some(&error),
-            )
-            .unwrap();
-            let ToolStdinDelivery::Failed(failure) = delivery else {
-                panic!("producer failure was lost at tool stdin: {error:?}")
-            };
-            match (error, failure) {
-                (StreamError::Cancelled, ByteStreamFailure::Cancelled)
-                | (StreamError::Abandoned, ByteStreamFailure::Abandoned)
-                | (StreamError::ResourceExhausted(_), ByteStreamFailure::ResourceExhausted) => {}
-                (
-                    StreamError::Trapped(expected) | StreamError::Interrupted(expected),
-                    ByteStreamFailure::Failed(actual),
-                ) => assert_eq!(actual, expected),
-                (StreamError::Failed(expected), ByteStreamFailure::Failed(actual)) => {
-                    assert_eq!(actual, format!("{expected:?}"))
-                }
-                (error, failure) => panic!("wrong tool stdin failure for {error:?}: {failure:?}"),
-            }
-        }
-        assert!(matches!(
-            tool_stdin_delivery(DurableInputItem::Terminal(StreamResult::Dropped), None).unwrap(),
-            ToolStdinDelivery::End(StreamResult::Dropped)
-        ));
-    }
-}
-
 impl<Ctx: WorkerCtx> AccessorTask<Ctx> for DurableInputDropTask {
     async fn run(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
         let result = cancel_dropped_durable_input_access(
@@ -1057,5 +1010,52 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableToolStdinProducer {
                 Poll::Ready(Err(error))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn tool_stdin_delivers_every_producer_failure_as_a_failure_item() {
+        for error in [
+            StreamError::Interrupted("deleted input".into()),
+            StreamError::Trapped("producer trap".into()),
+            StreamError::ResourceExhausted("memory limit".into()),
+            StreamError::Abandoned,
+            StreamError::Cancelled,
+            StreamError::Failed(Box::new(TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::u64()),
+                SchemaValue::U64(917),
+            ))),
+        ] {
+            let delivery = tool_stdin_delivery(
+                DurableInputItem::Terminal(StreamResult::Dropped),
+                Some(&error),
+            )
+            .unwrap();
+            let ToolStdinDelivery::Failed(failure) = delivery else {
+                panic!("producer failure was lost at tool stdin: {error:?}")
+            };
+            match (error, failure) {
+                (StreamError::Cancelled, ByteStreamFailure::Cancelled)
+                | (StreamError::Abandoned, ByteStreamFailure::Abandoned)
+                | (StreamError::ResourceExhausted(_), ByteStreamFailure::ResourceExhausted) => {}
+                (
+                    StreamError::Trapped(expected) | StreamError::Interrupted(expected),
+                    ByteStreamFailure::Failed(actual),
+                ) => assert_eq!(actual, expected),
+                (StreamError::Failed(expected), ByteStreamFailure::Failed(actual)) => {
+                    assert_eq!(actual, format!("{expected:?}"))
+                }
+                (error, failure) => panic!("wrong tool stdin failure for {error:?}: {failure:?}"),
+            }
+        }
+        assert!(matches!(
+            tool_stdin_delivery(DurableInputItem::Terminal(StreamResult::Dropped), None).unwrap(),
+            ToolStdinDelivery::End(StreamResult::Dropped)
+        ));
     }
 }

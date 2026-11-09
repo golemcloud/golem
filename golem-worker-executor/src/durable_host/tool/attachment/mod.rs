@@ -25,6 +25,7 @@ use crate::preview2::golem::tool::host::{
 };
 use crate::services::active_agents::{ActiveAgents, MemoryGrant};
 use crate::workerctx::WorkerCtx;
+#[cfg(test)]
 use bytes::Bytes;
 use golem_common::model::oplog::attachment::{AcceptedAttachmentWriteEnd, ToolAttachmentId};
 use std::collections::{BTreeSet, VecDeque};
@@ -328,6 +329,7 @@ pub(super) enum AttachmentStreamRead {
     },
 }
 
+#[cfg(test)]
 pub(crate) struct RawAttachmentStreamProducer {
     source: AttachmentStreamProducer,
     remainder: Bytes,

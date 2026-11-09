@@ -706,6 +706,7 @@ impl<T: Clone> LiveStreamPublisher<T> {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn publish_error(&self, error: String) -> Result<u64, LiveStreamPublishError> {
         self.publish_terminal(
             StreamTerminalAuthor::Host,
@@ -1661,7 +1662,8 @@ mod tests {
             StreamTerminal::Failed(StreamError::Failed(
                 (f32::from_bits(0x7fc0_0001), -0.0f64)
                     .into_typed_schema_value()
-                    .unwrap(),
+                    .unwrap()
+                    .into(),
             )),
             StreamTerminal::Failed(StreamError::Trapped("trap".into())),
             StreamTerminal::Failed(StreamError::Cancelled),

@@ -42,6 +42,9 @@ without an attachment ID, attempt ID, or epoch authority. It observes the persis
 and `Finished`; result handles are read through the ordinary offset-based stream reader, not
 through output frames on this invocation transport. A persisted result precedes a later failed
 terminal, while a failure before any result is delivered without waiting for guest completion.
+An observer can read accepted work after the worker fails; the same-key lookup does not start
+the failed runtime. A fresh invocation still fails the worker health check, and the persisted
+descriptor and origin remain mandatory for joining.
 Observer disconnects and invalid controls cannot detach or finalize the original attachment.
 A lost observer response retries the retained `Start`, never `ResumeAttach` as the original
 caller.
@@ -440,8 +443,12 @@ the public adapter forwards the typed outcome unchanged, including a declared er
 and value. Unknown outcomes fail decoding rather than becoming clean EOF. Input producer
 terminals use the ordinary sequential acknowledgement path; their exact retry identity includes
 the outcome and author. A client may cancel an output consumer, but cannot choose that output's
-producer outcome. An input-consumer cancellation from the server remains an input terminal,
-not an output failure. The existing sequence, epoch, cursor and cancellation-race checks apply.
+producer outcome. Server-authored Control input terminals stop the client producer, including
+consumer cancellation and finalization failures such as `Failed(Trapped)` or `Failed(Interrupted)`.
+They keep their input direction and do not require a client acknowledgement. Source input
+terminals stay on the acknowledgement path and are not echoed as Control terminals. The existing
+sequence, epoch, cursor and cancellation-race checks apply; completion still requires every input
+to be terminal.
 A clean WebSocket close or a dropped connection only detaches the session. Neither records a
 stream terminal nor cancels the invocation; local input EOF requires an explicit `stream-end`.
 

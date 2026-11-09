@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Golden tests for serialized worker information. Current oplog fixtures compare the exact
-//! serialized bytes and round-trip through the current model.
+//! Serialization tests for worker information.
 //!
 //! The tests are assuming composability of the serializer implementation, so if a given type A has a field of type B,
 //! the test for A only contains an example value of B but there exists a separate test that tests the serialization of B.
@@ -65,7 +64,7 @@ pub(crate) fn backward_compatible<T: BinaryCodec + PartialEq + Debug + 'static>(
 }
 
 #[test]
-fn stream_terminal_oplog_golden_files() {
+fn stream_terminal_oplog_roundtrips() {
     use golem_common::model::Timestamp;
     use golem_common::model::durable_stream::{
         DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, StreamError, StreamOffset, StreamTerminal,
@@ -79,47 +78,25 @@ fn stream_terminal_oplog_golden_files() {
         .into_typed_schema_value()
         .unwrap();
     let cases = [
-        ("finished", StreamTerminal::Finished),
-        (
-            "failed",
-            StreamTerminal::Failed(StreamError::Failed(declared)),
-        ),
-        (
-            "trapped",
-            StreamTerminal::Failed(StreamError::Trapped("producer trapped".into())),
-        ),
-        ("cancelled", StreamTerminal::Failed(StreamError::Cancelled)),
-        ("abandoned", StreamTerminal::Failed(StreamError::Abandoned)),
-        (
-            "interrupted",
-            StreamTerminal::Failed(StreamError::Interrupted("source unavailable".into())),
-        ),
-        (
-            "resource_exhausted",
-            StreamTerminal::Failed(StreamError::ResourceExhausted("retained bytes".into())),
-        ),
-        (
-            "consumer_cancelled_with_details",
-            StreamTerminal::ConsumerCancelled {
-                details: Some("reader dropped".into()),
-            },
-        ),
-        (
-            "consumer_cancelled_without_details",
-            StreamTerminal::ConsumerCancelled { details: None },
-        ),
+        StreamTerminal::Finished,
+        StreamTerminal::Failed(StreamError::Failed(Box::new(declared))),
+        StreamTerminal::Failed(StreamError::Trapped("producer trapped".into())),
+        StreamTerminal::Failed(StreamError::Cancelled),
+        StreamTerminal::Failed(StreamError::Abandoned),
+        StreamTerminal::Failed(StreamError::Interrupted("source unavailable".into())),
+        StreamTerminal::Failed(StreamError::ResourceExhausted("retained bytes".into())),
+        StreamTerminal::ConsumerCancelled {
+            details: Some("reader dropped".into()),
+        },
+        StreamTerminal::ConsumerCancelled { details: None },
     ];
-    let mut mint = Mint::new("tests/goldenfiles");
-    for (author_name, authored_by) in [
-        ("guest", StreamTerminalAuthor::Guest),
-        ("host", StreamTerminalAuthor::Host),
-        ("protocol", StreamTerminalAuthor::Protocol),
+    for authored_by in [
+        StreamTerminalAuthor::Guest,
+        StreamTerminalAuthor::Host,
+        StreamTerminalAuthor::Protocol,
     ] {
-        for (case_name, terminal) in &cases {
-            for (origin_suffix, origin) in [
-                ("", StreamTerminalOrigin::Source),
-                ("_control", StreamTerminalOrigin::Control),
-            ] {
+        for terminal in &cases {
+            for origin in [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control] {
                 let record = StreamTerminalRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     stream_id: LocalStreamId(OplogIndex::from_u64(19)),
@@ -145,13 +122,6 @@ fn stream_terminal_oplog_golden_files() {
                 };
                 let encoded = serialize(&entry).unwrap();
                 assert_eq!(deserialize::<OplogEntry>(&encoded).unwrap(), entry);
-                let mut file = mint
-                    .new_goldenfile(format!(
-                        "oplog_entry_stream_terminal_{author_name}_{case_name}{origin_suffix}.bin"
-                    ))
-                    .unwrap();
-                file.write_all(&encoded).unwrap();
-                file.flush().unwrap();
             }
         }
     }

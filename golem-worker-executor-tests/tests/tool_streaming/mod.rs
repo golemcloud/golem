@@ -23478,7 +23478,7 @@ async fn a_cancelled_stdin_is_replayed_after_a_restart(
             "stdin-failed:ByteStreamFailure::Failed(\"producer trapped\")".to_string(),
         ),
         (
-            StreamTerminal::Failed(StreamError::Failed(typed_failure)),
+            StreamTerminal::Failed(StreamError::Failed(Box::new(typed_failure))),
             format!("stdin-failed:ByteStreamFailure::Failed({typed_message:?})"),
         ),
         (

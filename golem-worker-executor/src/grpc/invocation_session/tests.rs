@@ -252,7 +252,8 @@ async fn explicit_input_failure_records_the_exact_source_terminal_and_ack() {
         StreamTerminal::Failed(StreamError::Failed(
             (73u32, "input rejected".to_string())
                 .into_typed_schema_value()
-                .unwrap(),
+                .unwrap()
+                .into(),
         )),
         StreamTerminal::Failed(StreamError::Interrupted("writer stopped".into())),
         StreamTerminal::Failed(StreamError::Trapped("trap".into())),

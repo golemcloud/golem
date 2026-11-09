@@ -482,7 +482,9 @@ impl TryFrom<PublicStreamOutcome> for crate::model::durable_stream::StreamTermin
                 Self::ConsumerCancelled { details }
             }
             PublicStreamOutcome::Failed { error } => Self::Failed(match error {
-                PublicStreamError::Failed { value } => StreamError::Failed(value.try_into()?),
+                PublicStreamError::Failed { value } => {
+                    StreamError::Failed(Box::new(value.try_into()?))
+                }
                 PublicStreamError::Trapped { message } => StreamError::Trapped(message),
                 PublicStreamError::Cancelled => StreamError::Cancelled,
                 PublicStreamError::Abandoned => StreamError::Abandoned,
@@ -506,7 +508,7 @@ impl TryFrom<crate::model::durable_stream::StreamTerminal> for PublicStreamOutco
             StreamTerminal::Failed(error) => Self::Failed {
                 error: match error {
                     StreamError::Failed(value) => PublicStreamError::Failed {
-                        value: value.try_into()?,
+                        value: (*value).try_into()?,
                     },
                     StreamError::Trapped(message) => PublicStreamError::Trapped { message },
                     StreamError::Cancelled => PublicStreamError::Cancelled,
@@ -560,7 +562,7 @@ mod terminal_protobuf {
                                 .map_err(|errors| {
                                     format!("invalid typed stream failure value: {errors:?}")
                                 })?;
-                                StreamError::Failed(value)
+                                StreamError::Failed(Box::new(value))
                             }
                             proto::stream_error::Error::Trapped(message) => {
                                 StreamError::Trapped(message)
@@ -607,7 +609,7 @@ mod terminal_protobuf {
                                 .map_err(|errors| {
                                     format!("invalid typed stream failure value: {errors:?}")
                                 })?;
-                                proto::stream_error::Error::Failed(value.try_into()?)
+                                proto::stream_error::Error::Failed((*value).try_into()?)
                             }
                             StreamError::Trapped(message) => {
                                 proto::stream_error::Error::Trapped(message)
@@ -1764,9 +1766,9 @@ mod tests {
         use crate::schema::IntoTypedSchemaValue;
         vec![
             StreamTerminal::Finished,
-            StreamTerminal::Failed(StreamError::Failed(
+            StreamTerminal::Failed(StreamError::Failed(Box::new(
                 42u64.into_typed_schema_value().unwrap(),
-            )),
+            ))),
             StreamTerminal::Failed(StreamError::Trapped("trap".into())),
             StreamTerminal::Failed(StreamError::Cancelled),
             StreamTerminal::Failed(StreamError::Abandoned),

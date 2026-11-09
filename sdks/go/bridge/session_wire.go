@@ -467,7 +467,7 @@ func (m message) streamEnd(server bool) (string, error, error) {
 		return "", nil, err
 	}
 	consumer := kind == "consumer-cancelled"
-	if (server && direction == "input" && !consumer) || (!server && consumer != (direction == "output")) {
+	if !server && consumer != (direction == "output") {
 		return "", nil, protocolErrorf("invalid stream-end direction and outcome")
 	}
 	var end error

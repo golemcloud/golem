@@ -821,7 +821,7 @@ class StreamRuntimeTest extends munit.FunSuite {
     assert(Json.parse(Json.asString(Json.requireField(invalid, "input").toOption.get).toOption.get).isLeft)
     Json.asArray(fixtureField(malformed, "vectors")).toOption.get.foreach { vector =>
       Json.field(vector, "input").flatMap(Json.asString(_).toOption).foreach { input =>
-        if (input.contains("stream-end")) {
+        if (input.contains("stream-end") && Json.field(vector, "state").isEmpty) {
           val name = Json.asString(fixtureField(vector, "name")).toOption.get
           val rejected = try {
             StreamSessionProtocol.serverStreamEnd(Json.parse(input).fold(e => throw BridgeException(e), identity))
@@ -847,9 +847,7 @@ class StreamRuntimeTest extends munit.FunSuite {
       val typed = StreamSessionProtocol.streamOutcome(outcome)
       for (direction <- List("input", "output")) {
         val frame = Json.parse(StreamSessionProtocol.streamEnd(1, direction, 0, outcome)).toOption.get
-        if (direction == "output" || typed.isInstanceOf[StreamOutcome.ConsumerCancelled])
-          assertEquals(StreamSessionProtocol.serverStreamEnd(frame)._2, typed)
-        else intercept[BridgeException](StreamSessionProtocol.serverStreamEnd(frame))
+        assertEquals(StreamSessionProtocol.serverStreamEnd(frame)._2, typed)
       }
     }
     for (raw <- List("""{"kind":"unknown"}""", """{"kind":"failed","error":{"kind":"unknown"}}""",

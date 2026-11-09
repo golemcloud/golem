@@ -109,7 +109,7 @@ private[runtime] object StreamSessionProtocol {
     u64(json, "sequence")
     val direction = string(json, "direction")
     val outcome = streamOutcome(Json.requireField(json, "outcome").fold(e => throw BridgeException(e), identity))
-    if (direction != "output" && (direction != "input" || !outcome.isInstanceOf[StreamOutcome.ConsumerCancelled]))
+    if (direction != "output" && direction != "input")
       throw BridgeException("invalid server stream terminal direction")
     val cursor = Json.field(json, "cursorToken").map(v => Json.asString(v).fold(e => throw BridgeException(e), identity))
     cursor.foreach(validateOpaqueToken(_, "cursor token"))

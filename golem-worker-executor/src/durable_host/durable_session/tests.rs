@@ -2126,7 +2126,8 @@ async fn output_drains_preserve_typed_terminals_authors_and_source_origin() {
         StreamTerminal::Failed(StreamError::Failed(
             (73u32, "rejected".to_string())
                 .into_typed_schema_value()
-                .unwrap(),
+                .unwrap()
+                .into(),
         )),
         StreamTerminal::Failed(StreamError::Trapped("trap".into())),
         StreamTerminal::Failed(StreamError::Cancelled),
@@ -5516,10 +5517,10 @@ async fn a_producer_cancel_ends_the_input_and_reports_its_reason() {
         StreamError::ResourceExhausted("memory limit".into()),
         StreamError::Abandoned,
         StreamError::Cancelled,
-        StreamError::Failed(TypedSchemaValue::new(
+        StreamError::Failed(Box::new(TypedSchemaValue::new(
             SchemaGraph::anonymous(SchemaType::u64()),
             SchemaValue::U64(917),
-        )),
+        ))),
     ] {
         assert_eq!(
             producer_cancel_observed_at_the_end_of_input(Some(error.clone())).await,
@@ -9618,7 +9619,8 @@ async fn durable_projection_preserves_typed_outcomes_from_live_and_consumer_hist
             StreamTerminal::Failed(StreamError::Failed(
                 (73u32, "rejected".to_string())
                     .into_typed_schema_value()
-                    .unwrap(),
+                    .unwrap()
+                    .into(),
             )),
             StreamTerminal::Failed(StreamError::Trapped("trap".into())),
             StreamTerminal::Failed(StreamError::Cancelled),

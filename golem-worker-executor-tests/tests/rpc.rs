@@ -1855,7 +1855,10 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
         StreamTerminal::Failed(StreamError::Interrupted("input transport lost".into())),
         StreamTerminal::Failed(StreamError::ResourceExhausted("input limit".into())),
         StreamTerminal::Failed(StreamError::Trapped("input producer trapped".into())),
-        StreamTerminal::Failed(StreamError::Failed(data_value!(73u32, "declared failure"))),
+        StreamTerminal::Failed(StreamError::Failed(Box::new(data_value!(
+            73u32,
+            "declared failure"
+        )))),
         StreamTerminal::Failed(StreamError::Abandoned),
         StreamTerminal::Finished,
     ];
@@ -5038,7 +5041,7 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
         .invoke_agent_session(ReceiverStream::new(receiver))
         .await?
         .into_inner();
-    let mut expected_stream_ids = Vec::new();
+    let mut expected_stream_ids = vec![1];
     let mut terminal_stream_ids = Vec::new();
     let mut accepted = false;
     let mut result_received = false;
@@ -5059,21 +5062,18 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
                     Some(invocation_session_result::Result::MethodResult(value)) => value,
                     other => anyhow::bail!("expected a method result, got {other:?}"),
                 };
-                expected_stream_ids = match value.value {
+                expected_stream_ids.extend(match value.value {
                     Some(schema_value::Value::StreamReference(reference)) => {
                         vec![reference.stream_id]
                     }
                     other => anyhow::bail!("expected transform stream, got {other:?}"),
-                };
+                });
                 requests.send(start.clone()).await?;
             }
             Some(invocation_response::Response::StreamEnd(end)) => {
                 assert!(matches!(
                     end.outcome.and_then(|outcome| outcome.terminal),
-                    Some(
-                        stream_terminal::Terminal::Finished(_)
-                            | stream_terminal::Terminal::Failed(_)
-                    )
+                    Some(stream_terminal::Terminal::Failed(_))
                 ));
                 terminal_stream_ids.push(end.transport_stream_id);
             }
@@ -5283,6 +5283,8 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
     .await??;
     // Both records must already exist when the observer joins: scheduling must not
     // let the failed terminal hide the result's durable stream handles.
+    let mut fresh = observer.clone();
+    fresh.idempotency_key = Some(IdempotencyKey::fresh().into());
     let (_observer_tx, mut observer_rx, observer_accepted) =
         open_raw_session(&executor, observer).await?;
     assert!(observer_accepted.joined_origin_observer);
@@ -5319,6 +5321,11 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
         original_result.response,
         Some(invocation_response::Response::Result(_))
     ));
+    let error = open_raw_session(&executor, fresh)
+        .await
+        .err()
+        .expect("a fresh invocation must not start on a failed worker");
+    assert!(error.to_string().contains("Previous invocation failed"));
     Ok(())
 }
 

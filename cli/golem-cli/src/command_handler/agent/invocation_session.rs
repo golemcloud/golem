@@ -1821,7 +1821,7 @@ async fn handle_response(
             outcome,
             ..
         }) => {
-            failed |= !matches!(outcome, PublicStreamOutcome::Finished);
+            failed |= matches!(outcome, PublicStreamOutcome::Failed { .. });
             if structured {
                 let mut event = event(
                     match outcome {

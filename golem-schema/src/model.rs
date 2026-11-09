@@ -17,12 +17,11 @@ use serde::{Deserialize, Serialize};
 
 /// The producer's failure, independent of a reader dropping its stream.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[allow(clippy::large_enum_variant)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[serde(rename_all = "kebab-case")]
 #[schema(named = "golem.core.StreamError")]
 pub enum StreamError {
-    Failed(crate::schema::TypedSchemaValue),
+    Failed(Box<crate::schema::TypedSchemaValue>),
     Trapped(String),
     /// An invocation cancellation request was recorded and honoured.
     Cancelled,

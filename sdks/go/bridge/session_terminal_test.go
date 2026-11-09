@@ -48,7 +48,7 @@ func TestStreamEndDirectionAndOutcomeMatrix(t *testing.T) {
 				_, _, err := m.streamEnd(server)
 				want := consumer == (direction == "output")
 				if server {
-					want = direction == "output" || consumer
+					want = true
 				}
 				if (err == nil) != want {
 					t.Errorf("server=%v direction=%s outcome=%v: %v", server, direction, outcome, err)
@@ -115,36 +115,45 @@ func TestStreamEndMustMatchMappedChannelDirection(t *testing.T) {
 	}
 }
 
-func TestInputConsumerCancellationWinsSourceFailure(t *testing.T) {
-	c := &sessionConn{}
-	s := &session{conn: c, channels: map[uint32]string{1: "in"}, directions: map[string]string{"in": "input"}, unacked: 5}
-	var stopped string
-	in := &inputStream{
-		s: s, next: 1, pending: &pendingInput{count: 1, bytes: 5}, wake: make(chan struct{}, 1),
-		h: &inputHandle{stop: func(reason string) { stopped = reason }},
-	}
-	s.byToken = map[string]*inputStream{"in": in}
-	data, err := encodeMessage("stream-end", map[string]any{
-		"channel": 1, "direction": "input", "sequence": "0",
-		"outcome": map[string]any{"kind": "consumer-cancelled", "details": "reader gone"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, m, err := parseMessage(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.receiveEnd(c, m); err != nil {
-		t.Fatal(err)
-	}
-	if !in.cancelled || !in.ended || in.pending != nil || s.unacked != 0 || stopped != "reader gone" {
-		t.Fatalf("cancellation did not release input: %+v, stopped=%q", in, stopped)
-	}
-	// The source may finish concurrently with the cancellation. It must not
-	// replace the consumer's terminal with a producer failure.
-	if in.reserve(&pendingInput{terminal: true, failure: errors.New("late failure")}) || len(c.queue) != 0 {
-		t.Fatal("source failure won after consumer cancellation")
+func TestServerInputTerminalWinsSourceFailure(t *testing.T) {
+	for _, outcome := range []map[string]any{
+		{"kind": "consumer-cancelled", "details": "reader gone"},
+		{"kind": "failed", "error": map[string]any{"kind": "trapped", "message": "callee trapped"}},
+		{"kind": "failed", "error": map[string]any{"kind": "interrupted", "message": "protocol failure"}},
+	} {
+		c := &sessionConn{}
+		s := &session{conn: c, channels: map[uint32]string{1: "in"}, directions: map[string]string{"in": "input"}, unacked: 5}
+		var stopped string
+		in := &inputStream{
+			s: s, next: 1, pending: &pendingInput{count: 1, bytes: 5}, wake: make(chan struct{}, 1),
+			h: &inputHandle{stop: func(reason string) { stopped = reason }},
+		}
+		s.byToken = map[string]*inputStream{"in": in}
+		data, err := encodeMessage("stream-end", map[string]any{
+			"channel": 1, "direction": "input", "sequence": "0",
+			"outcome": outcome,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, m, err := parseMessage(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.receiveEnd(c, m); err != nil {
+			t.Fatal(err)
+		}
+		if !in.cancelled || !in.ended || in.pending != nil || s.unacked != 0 || stopped == "" {
+			t.Fatalf("cancellation did not release input: %+v, stopped=%q", in, stopped)
+		}
+		if details, ok := outcome["details"].(string); ok && stopped != details {
+			t.Fatalf("consumer cancellation lost its details: %q", stopped)
+		}
+		// The source may finish concurrently with the cancellation. It must not
+		// replace the consumer's terminal with a producer failure.
+		if in.reserve(&pendingInput{terminal: true, failure: errors.New("late failure")}) || len(c.queue) != 0 {
+			t.Fatal("source failure won after consumer cancellation")
+		}
 	}
 }
 

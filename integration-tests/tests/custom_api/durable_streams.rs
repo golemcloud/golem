@@ -2549,7 +2549,8 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
     };
     use golem_common::model::invocation_session_public::{
         DecimalU64, INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage,
-        PublicServerMessage,
+        PublicInvocationOutcome, PublicServerMessage, PublicStreamDirection, PublicStreamError,
+        PublicStreamOutcome,
     };
 
     let session = Uuid::new_v4().to_string();
@@ -2636,7 +2637,36 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
             expected
         );
     }
-    wait_for_observations(agent, &id, &[1, 1, 1, 0, 1, 0, 0]).await?;
+    let mut input_terminated = false;
+    loop {
+        match receive_public_response(&mut socket).await? {
+            PublicServerMessage::StreamEnd {
+                channel,
+                direction: PublicStreamDirection::Input,
+                outcome:
+                    PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Interrupted { message },
+                    },
+                ..
+            } => {
+                assert_eq!(channel, input_channel);
+                assert_eq!(message, "stream slot deleted");
+                input_terminated = true;
+            }
+            PublicServerMessage::InvocationFinished { outcome, .. } => {
+                assert!(
+                    input_terminated,
+                    "the input terminal must precede completion"
+                );
+                let PublicInvocationOutcome::Failure { message, .. } = outcome else {
+                    anyhow::bail!("deleting an open input must fail its reader");
+                };
+                assert!(message.contains("stream slot deleted"));
+                break;
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
 

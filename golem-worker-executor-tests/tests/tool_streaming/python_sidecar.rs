@@ -327,9 +327,7 @@ async fn exercise_python_session(
                         authored_by: StreamTerminalAuthor::Guest as i32,
                         outcome: Some(
                             golem_common::base_model::durable_stream::StreamTerminal::Failed(
-                                golem_common::base_model::durable_stream::StreamError::Interrupted(
-                                    "stream producer cancelled".to_string(),
-                                ),
+                                golem_common::base_model::durable_stream::StreamError::Cancelled,
                             )
                             .try_into()
                             .map_err(anyhow::Error::msg)?,

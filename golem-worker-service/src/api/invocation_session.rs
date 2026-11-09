@@ -3777,7 +3777,7 @@ mod tests {
         );
         let terminals = vec![
             StreamTerminal::Finished,
-            StreamTerminal::Failed(StreamError::Failed(declared)),
+            StreamTerminal::Failed(StreamError::Failed(Box::new(declared))),
             StreamTerminal::Failed(StreamError::Trapped("trap details".into())),
             StreamTerminal::Failed(StreamError::Cancelled),
             StreamTerminal::Failed(StreamError::Abandoned),

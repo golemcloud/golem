@@ -465,7 +465,7 @@ fn stream_terminal_binary_and_raw_public_protobuf_roundtrip() {
         .unwrap();
     for (origin, terminal) in [
         StreamTerminal::Finished,
-        StreamTerminal::Failed(StreamError::Failed(declared)),
+        StreamTerminal::Failed(StreamError::Failed(Box::new(declared))),
         StreamTerminal::Failed(StreamError::Trapped("trap".into())),
         StreamTerminal::Failed(StreamError::Cancelled),
         StreamTerminal::Failed(StreamError::Abandoned),

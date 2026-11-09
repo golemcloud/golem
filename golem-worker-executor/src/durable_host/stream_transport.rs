@@ -224,6 +224,7 @@ pub(super) fn byte_output_stream_pair(
     Ok((LiveByteOutputConsumer(consumer), stream))
 }
 
+#[cfg(test)]
 pub(super) fn accounted_byte_output_stream_pair(
     capacity: usize,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
@@ -235,8 +236,10 @@ pub(super) fn accounted_byte_output_stream_pair(
     Ok((LiveByteOutputConsumer(consumer), stream))
 }
 
+#[cfg(test)]
 pub(super) struct LiveByteOutputConsumer(LiveOutputConsumer);
 
+#[cfg(test)]
 impl<D> StreamConsumer<D> for LiveByteOutputConsumer {
     type Item = u8;
 

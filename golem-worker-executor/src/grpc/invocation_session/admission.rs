@@ -169,9 +169,31 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
-                let (worker, _response_lease) = self
+                let acquisition = self
                     .get_or_create_pending_with_freshness(request, freshness_disposition)
-                    .await?;
+                    .await;
+                let (worker, _response_lease) = match acquisition {
+                    Err(error @ WorkerExecutorError::PreviousInvocationFailed { .. })
+                        if request.origin_invocation.is_some()
+                            && freshness_disposition
+                                == InvocationFreshnessDisposition::MayExist =>
+                    {
+                        match self.get_or_create_pending_for_lookup(request).await? {
+                            Some((worker, lease))
+                                if !matches!(
+                                    worker.lookup_invocation_result(&ik).await,
+                                    crate::model::LookupResult::New
+                                ) =>
+                            {
+                                // Acceptance still validates the exact origin and descriptor.
+                                // Observing accepted work does not start a failed runtime.
+                                (worker, lease)
+                            }
+                            _ => return Err(error),
+                        }
+                    }
+                    acquisition => acquisition?,
+                };
                 scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime)?;

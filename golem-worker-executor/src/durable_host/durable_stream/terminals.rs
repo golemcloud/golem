@@ -520,6 +520,7 @@ impl DurableStreamStore {
     }
 
     /// Commits and publishes a cancellation at the supplied producer sequence.
+    #[cfg(test)]
     pub(crate) async fn cancel(
         &self,
         stream_id: StreamId,

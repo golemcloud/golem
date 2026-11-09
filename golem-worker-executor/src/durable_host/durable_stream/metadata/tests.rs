@@ -659,10 +659,10 @@ async fn attached_typed_failed_terminal_retry_survives_indexed_cold_load() {
             .await
             .unwrap();
         let failed = |value| {
-            StreamTerminal::Failed(StreamError::Failed(TypedSchemaValue::new(
+            StreamTerminal::Failed(StreamError::Failed(Box::new(TypedSchemaValue::new(
                 SchemaGraph::anonymous(SchemaType::f64()),
                 SchemaValue::F64(value),
-            )))
+            ))))
         };
         let terminal = failed(value);
         let request = ExternalProducer {
@@ -3115,7 +3115,7 @@ async fn cold_metadata_preserves_terminal_author_and_typed_outcome() {
     );
     for terminal in [
         StreamTerminal::Finished,
-        StreamTerminal::Failed(StreamError::Failed(typed)),
+        StreamTerminal::Failed(StreamError::Failed(Box::new(typed))),
         StreamTerminal::Failed(StreamError::Trapped("trap".into())),
         StreamTerminal::Failed(StreamError::Cancelled),
         StreamTerminal::Failed(StreamError::Abandoned),

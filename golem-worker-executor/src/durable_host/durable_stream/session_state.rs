@@ -1957,10 +1957,10 @@ mod tests {
             golem_schema::schema::validation::validate_value(&graph, &graph.root, &selected)
                 .unwrap();
             let typed = |value| {
-                StreamTerminal::Failed(StreamError::Failed(TypedSchemaValue::new(
+                StreamTerminal::Failed(StreamError::Failed(Box::new(TypedSchemaValue::new(
                     graph.clone(),
                     value,
-                )))
+                ))))
             };
             let intent = StreamConsumerCancelIntentRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,

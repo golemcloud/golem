@@ -1759,12 +1759,9 @@ fn decode_stream_outcome(value : Json) -> BridgeError? raise {
 fn validate_server_stream_end(message : Map[String, Json]) -> String raise {
   validate_message_fields(message, "stream-end")
   let direction = expect_string(get_field(message, "direction"))
-  let error = decode_stream_outcome(get_field(message, "outcome"))
-  if direction != "output" &&
-    (direction != "input" || !(error is Some(ConsumerCancelled(_)))) {
-    raise BridgeError(
-      "protocol-error: server input terminal must be consumer-cancelled",
-    )
+  ignore(decode_stream_outcome(get_field(message, "outcome")))
+  if direction != "output" && direction != "input" {
+    raise BridgeError("protocol-error: invalid server stream terminal direction")
   }
   let channel = @string.parse_uint(
     number_literal(get_field(message, "channel")),

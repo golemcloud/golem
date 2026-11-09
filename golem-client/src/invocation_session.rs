@@ -823,6 +823,7 @@ impl ReplayableInput {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ServerFrame {
     Message(PublicServerMessage),
     Binary(BinaryMessage),

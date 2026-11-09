@@ -4474,10 +4474,10 @@ async fn export_cancelled_flag_distinguishes_interim_terminal_outcomes_after_rec
             false,
         ),
         (
-            StreamTerminal::Failed(StreamError::Failed(TypedSchemaValue::new(
+            StreamTerminal::Failed(StreamError::Failed(Box::new(TypedSchemaValue::new(
                 SchemaGraph::anonymous(SchemaType::u64()),
                 SchemaValue::U64(917),
-            ))),
+            )))),
             false,
         ),
     ] {
@@ -7613,10 +7613,11 @@ async fn encoded_size_rejection_has_no_durable_effect_and_sequence_can_retry() {
             None,
             stream_id,
             0,
-            StreamItemsPayload::Values(vec![vec![1]]),
+            StreamItemsPayload::PackedU8(vec![173; MAX_PACKED_U8_STREAM_ITEM_SIZE]),
         )
         .await
         .unwrap();
+    assert_eq!(written.value.len(), MAX_PACKED_U8_STREAM_ITEM_SIZE);
     assert_eq!(
         written.value[0].producer_oplog_index(),
         OplogIndex::from_u64(2)

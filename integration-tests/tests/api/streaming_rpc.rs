@@ -2157,20 +2157,33 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     );
     assert!(recoverable.output_ends.contains(&recoverable_stream_id));
 
+    let failed_target = agent_id!("MoonbitStreamingRpcTarget", format!("{name}-failure"));
     let producer_failure = TrustedInvocationSession::start(
         deps,
         &component,
-        &target_agent_id,
+        &failed_target,
         "produce_failure",
         proto_record_values(Vec::new()),
     )
     .await?
     .finish(TrustedInvocationReport::default())
     .await?;
-    assert!(producer_failure.result.is_none());
-    assert!(producer_failure.outputs.is_empty());
+    if let Some(result) = &producer_failure.result {
+        let stream_id = proto_stream_id(result)?;
+        assert_eq!(
+            producer_failure.decoded_output(stream_id)?,
+            vec![SchemaValue::U32(41)]
+        );
+        assert_eq!(producer_failure.output_errors.len(), 1);
+        assert!(matches!(
+            producer_failure.output_errors[&stream_id].error,
+            Some(golem_api_grpc::proto::golem::worker::stream_error::Error::Trapped(_))
+        ));
+    } else {
+        assert!(producer_failure.outputs.is_empty());
+        assert!(producer_failure.output_errors.is_empty());
+    }
     assert!(producer_failure.output_ends.is_empty());
-    assert!(producer_failure.output_errors.is_empty());
     assert_eq!(
         producer_failure.failure()?.kind(),
         InvocationFailureKind::Execution

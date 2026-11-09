@@ -1152,7 +1152,7 @@ test('session cleanup invalidates a speculative pull before its late rejection',
 });
 
 for (const terminal of [
-  { direction: 'input', outcome: { kind: 'finished' }, code: 'protocol-error' },
+  { direction: 'input', outcome: { kind: 'finished' }, code: 'invalid-channel' },
   { direction: 'input', outcome: { kind: 'consumer-cancelled' }, code: 'invalid-channel' },
   { direction: 'invalid', outcome: { kind: 'finished' }, code: 'malformed-message' },
   { direction: 'output', outcome: { kind: 'future-terminal' }, code: 'malformed-message' },
@@ -3072,80 +3072,86 @@ test('packed u8 source failure follows already-read bytes with a sequenced inter
   }
 });
 
-test('server input consumer cancellation wins an in-flight source pull without a client terminal', async () => {
-  let returned = 0;
-  const frames = [];
-  let resolvePull;
-  const local = await server((socket) => {
-    socket.once('message', (data) => {
-      const start = JSON.parse(data);
-      socket.send(
-        JSON.stringify(
-          accepted(start, [
-            {
-              channel: 1,
-              direction: 'input',
-              streamToken: 'input',
-              provisionalRef: start.methodParameters.input.value.provisionalRef,
-              inputHighWater: { sequence: '0', terminal: false },
+for (const outcome of [
+  { kind: 'consumer-cancelled', details: null },
+  { kind: 'failed', error: { kind: 'trapped', message: 'callee trapped' } },
+  { kind: 'failed', error: { kind: 'interrupted', message: 'protocol failure' } },
+]) {
+  test(`server input terminal stops an in-flight source pull without a client terminal: ${JSON.stringify(outcome)}`, async () => {
+    let returned = 0;
+    const frames = [];
+    let resolvePull;
+    const local = await server((socket) => {
+      socket.once('message', (data) => {
+        const start = JSON.parse(data);
+        socket.send(
+          JSON.stringify(
+            accepted(start, [
+              {
+                channel: 1,
+                direction: 'input',
+                streamToken: 'input',
+                provisionalRef: start.methodParameters.input.value.provisionalRef,
+                inputHighWater: { sequence: '0', terminal: false },
+              },
+            ]),
+          ),
+        );
+        socket.on('message', (data) => frames.push(JSON.parse(data)));
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'stream-end',
+            direction: 'input',
+            channel: 1,
+            sequence: '0',
+            outcome,
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationResult',
+            mappings: [],
+            result: { kind: 'none' },
+          }),
+        );
+        socket.send(
+          JSON.stringify({ version: 1, type: 'invocationFinished', outcome: { kind: 'success' } }),
+        );
+      });
+    });
+    try {
+      const source = agentStream({
+        [Symbol.asyncIterator]() {
+          return {
+            next: () =>
+              new Promise((resolve) => {
+                resolvePull = resolve;
+              }),
+            return: async () => {
+              returned += 1;
+              resolvePull({ done: true });
+              return { done: true };
             },
-          ]),
-        ),
+          };
+        },
+      });
+      const method = createStreamingRemoteMethod(
+        () => ({ server: local.endpoint }),
+        () => descriptor,
+        ([input], register) => ({ input: register(input, (value) => value) }),
+        () => undefined,
       );
-      socket.on('message', (data) => frames.push(JSON.parse(data)));
-      socket.send(
-        JSON.stringify({
-          version: 1,
-          type: 'stream-end',
-          direction: 'input',
-          channel: 1,
-          sequence: '0',
-          outcome: { kind: 'consumer-cancelled', details: null },
-        }),
-      );
-      socket.send(
-        JSON.stringify({
-          version: 1,
-          type: 'invocationResult',
-          mappings: [],
-          result: { kind: 'none' },
-        }),
-      );
-      socket.send(
-        JSON.stringify({ version: 1, type: 'invocationFinished', outcome: { kind: 'success' } }),
-      );
-    });
+      await method(source);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(returned, 1);
+      assert.deepEqual(frames, []);
+    } finally {
+      await local.close();
+    }
   });
-  try {
-    const source = agentStream({
-      [Symbol.asyncIterator]() {
-        return {
-          next: () =>
-            new Promise((resolve) => {
-              resolvePull = resolve;
-            }),
-          return: async () => {
-            returned += 1;
-            resolvePull({ done: true });
-            return { done: true };
-          },
-        };
-      },
-    });
-    const method = createStreamingRemoteMethod(
-      () => ({ server: local.endpoint }),
-      () => descriptor,
-      ([input], register) => ({ input: register(input, (value) => value) }),
-      () => undefined,
-    );
-    await method(source);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal(returned, 1);
-    assert.deepEqual(frames, []);
-  } finally {
-    await local.close();
-  }
-});
+}
 
 test('consumer drop sends cancellation and remains distinct from protocol terminal', async () => {
   let cancellation;

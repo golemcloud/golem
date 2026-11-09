@@ -19,11 +19,13 @@ use super::{
     AttachmentController, AttachmentMode, AttachmentObserver, AttachmentProducer,
     AttachmentReservation, AttachmentStreamProducer, AttachmentTerminalPublication,
     AttachmentTerminalSnapshot, AttachmentWriteBody, AttachmentWriter, BufferedChunk,
-    ByteAttachment, ByteStreamCloseCause, ByteStreamFailure, Bytes, GuestAttachmentWatcher,
-    MemoryGrant, Ordering, PreparedAttachmentTerminal, PreparedAttachmentWrite,
-    RawAttachmentStreamProducer, StagedAttachmentWrite, StreamWriteError, ToolAttachmentId,
-    ToolAttachmentMetadata, WeakAttachmentController, close_cause_eq,
+    ByteAttachment, ByteStreamCloseCause, ByteStreamFailure, GuestAttachmentWatcher, MemoryGrant,
+    Ordering, PreparedAttachmentTerminal, PreparedAttachmentWrite, StagedAttachmentWrite,
+    StreamWriteError, ToolAttachmentId, ToolAttachmentMetadata, WeakAttachmentController,
+    close_cause_eq,
 };
+#[cfg(test)]
+use super::{Bytes, RawAttachmentStreamProducer};
 use crate::durable_host::tool::durability;
 
 impl AttachmentProducer {
@@ -308,6 +310,7 @@ impl AttachmentConsumer {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn into_raw_stream_producer(self) -> RawAttachmentStreamProducer {
         RawAttachmentStreamProducer {
             source: self.into_stream_producer(),

@@ -42,11 +42,6 @@ use golem_common::model::durable_stream::{
     StreamSessionInvocationResultRecord, StreamSessionPreparedRecord, StreamSessionRecord,
     StreamSessionResumeAttemptRecord,
 };
-#[cfg(test)]
-use golem_common::model::durable_stream::{
-    StreamCancellationRequest, StreamEndpointSide, StreamError, StreamTerminal,
-    StreamTerminalAuthor,
-};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::OplogPayload;

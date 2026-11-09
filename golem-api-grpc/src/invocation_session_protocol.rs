@@ -336,7 +336,7 @@ impl InvocationSessionState {
             (SessionPhase::Active, invocation_response::Response::StreamEnd(cancel)) => {
                 let (direction, consumer_cancelled) = validate_stream_end(cancel)?;
                 match direction {
-                    StreamDirection::Input if consumer_cancelled => {
+                    StreamDirection::Input => {
                         let durable_offset = self.validate_input_cancel_frame(cancel)?;
                         self.cancel_input(cancel.transport_stream_id, cancel.producer_sequence)?;
                         self.inputs
@@ -366,7 +366,9 @@ impl InvocationSessionState {
                             )
                         }
                     }
-                    _ => Err("server input stream end must be a consumer cancellation".to_string()),
+                    StreamDirection::Unspecified => {
+                        Err("stream direction is unspecified".to_string())
+                    }
                 }
             }
             (SessionPhase::Active, invocation_response::Response::AttachmentRevoked(_)) => {
@@ -1354,12 +1356,12 @@ impl InvocationSessionState {
         Ok(())
     }
 
-    /// Applies an input consumer cancellation from a server response.
+    /// Applies an authoritative input terminal from a server response.
     ///
     /// The consumer decides to stop while producer frames may still be in flight, so its
-    /// cancellation races with the producer's terminal in both directions: producer events that
-    /// arrive after the consumer cancellation are discarded (`discard_next_offset`), and a
-    /// consumer cancellation that arrives after the producer already published its terminal is
+    /// terminal races with the producer's terminal in both directions: producer events that
+    /// arrive after the server terminal are discarded (`discard_next_offset`), and a
+    /// server terminal that arrives after the producer already published its terminal is
     /// accepted once, abandoning every unacknowledged producer event from `offset` onward.
     fn cancel_input(&mut self, stream_id: u64, offset: u64) -> Result<(), String> {
         let state = self
@@ -3874,6 +3876,69 @@ mod tests {
         assert!(state.all_inputs_terminal());
         state.validate_response(&result(scalar(2))).unwrap();
         state.validate_response(&success()).unwrap();
+    }
+
+    #[test]
+    fn server_input_failures_close_in_flight_inputs_before_completion() {
+        for (author, error) in [
+            (
+                StreamTerminalAuthor::Host,
+                stream_error::Error::Trapped("trap".into()),
+            ),
+            (
+                StreamTerminalAuthor::Protocol,
+                stream_error::Error::Interrupted("protocol failure".into()),
+            ),
+        ] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_public_request(&public_start(stream(7)))
+                .unwrap();
+            state
+                .validate_response(&accepted_with_inputs(&[7]))
+                .unwrap();
+            state
+                .validate_public_request(&input_item(0, Payload::Value(scalar(1))))
+                .unwrap();
+            state
+                .validate_response(&input_ack(7, 0, durable_offset(1)))
+                .unwrap();
+            state
+                .validate_public_request(&input_item(1, Payload::Value(scalar(2))))
+                .unwrap();
+            state
+                .validate_public_request(&public_request(
+                    public_invocation_request::Request::StreamEnd(input_end(7, 2)),
+                ))
+                .unwrap();
+            let terminal = StreamEnd {
+                authored_by: author as i32,
+                outcome: Some(StreamTerminal {
+                    terminal: Some(stream_terminal::Terminal::Failed(StreamError {
+                        error: Some(error),
+                    })),
+                }),
+                ..consumer_end(7, StreamDirection::Input, 1, true)
+            };
+            let mut invalid = terminal.clone();
+            invalid.epoch += 1;
+            assert!(
+                state
+                    .validate_response(&response(invocation_response::Response::StreamEnd(invalid)))
+                    .is_err()
+            );
+            let terminal = response(invocation_response::Response::StreamEnd(terminal));
+            state.validate_response(&terminal).unwrap();
+            assert!(state.validate_response(&terminal).is_err());
+            assert!(
+                state
+                    .validate_response(&input_ack(7, 1, durable_offset(2)))
+                    .is_err()
+            );
+            assert!(state.all_inputs_terminal());
+            state.validate_response(&result(scalar(2))).unwrap();
+            state.validate_response(&success()).unwrap();
+        }
     }
 
     #[test]

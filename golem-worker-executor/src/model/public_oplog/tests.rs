@@ -284,7 +284,7 @@ fn stream_terminal_public_wit_preserves_terminal_payloads() {
         .unwrap();
     for (origin, terminal) in [
         StreamTerminal::Finished,
-        StreamTerminal::Failed(StreamError::Failed(declared)),
+        StreamTerminal::Failed(StreamError::Failed(Box::new(declared))),
         StreamTerminal::Failed(StreamError::Trapped("guest trap".into())),
         StreamTerminal::Failed(StreamError::Interrupted("session deleted".into())),
         StreamTerminal::Failed(StreamError::ResourceExhausted("retention limit".into())),

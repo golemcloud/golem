@@ -249,6 +249,28 @@ test "packed u8 envelope carries every logical byte in one prompt batch" {
 }
 
 ///|
+test "server input failures preserve their typed outcome" {
+  for kind in ["trapped", "interrupted"] {
+    let outcome = Json::object({
+      "kind": Json::string("failed"),
+      "error": Json::object({
+        "kind": Json::string(kind),
+        "message": Json::string("callee failed"),
+      }),
+    })
+    let message = expect_object(Json::object({
+      "version": json_uint(1U),
+      "type": Json::string("stream-end"),
+      "channel": json_uint(1U),
+      "direction": Json::string("input"),
+      "sequence": Json::string("0"),
+      "outcome": outcome,
+    }))
+    assert_eq(validate_server_stream_end(message), "input")
+  }
+}
+
+///|
 test "strict protocol JSON rejects unknown fields and variants" {
   let valid = expect_object(
     @json.parse(
@@ -503,7 +525,7 @@ test "server stream terminal uses explicit direction and canonical sequence" {
   )
   assert_eq(validate_server_stream_end(message), "input")
   message["outcome"] = obj([("kind", Json::string("finished"))])
-  assert_true(raises(() => validate_server_stream_end(message)))
+  assert_eq(validate_server_stream_end(message), "input")
   message["direction"] = Json::string("output")
   message["cursorToken"] = Json::null()
   assert_eq(validate_server_stream_end(message), "output")

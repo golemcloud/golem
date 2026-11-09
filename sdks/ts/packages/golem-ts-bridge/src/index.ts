@@ -4114,11 +4114,6 @@ class StreamingSession {
       case 'stream-end': {
         const terminal = decodeStreamSessionEnd(message);
         if (terminal.direction === 'input') {
-          if (terminal.outcome.kind !== 'consumer-cancelled')
-            throw new StreamingProtocolError(
-              'protocol-error',
-              'server input terminal must be consumer-cancelled',
-            );
           this.cancelChannel(terminal.channel);
           break;
         }

@@ -634,7 +634,6 @@ pub struct StreamTerminalRecord {
 
 /// The first terminal wins, whether authored by the producer or its consumer.
 #[derive(Clone, Debug, IntoSchema, FromSchema)]
-#[allow(clippy::large_enum_variant)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamTerminal {
     Finished,
@@ -1942,14 +1941,15 @@ mod tests {
             .unwrap();
         let terminals = [
             StreamTerminal::Finished,
-            StreamTerminal::Failed(StreamError::Failed(declared)),
+            StreamTerminal::Failed(StreamError::Failed(Box::new(declared))),
             StreamTerminal::Failed(StreamError::Failed(
                 vec![Some((
                     f32::from_bits(0x7fc0_0001),
                     f64::from_bits(0x7ff8_0000_0000_0001),
                 ))]
                 .into_typed_schema_value()
-                .unwrap(),
+                .unwrap()
+                .into(),
             )),
             StreamTerminal::Failed(StreamError::Trapped("producer trapped".into())),
             StreamTerminal::Failed(StreamError::Cancelled),
@@ -2074,7 +2074,7 @@ mod tests {
     fn stream_terminal_declared_failure_equality_uses_float_bits_and_schema() {
         let terminal = |a, b| {
             StreamTerminal::Failed(StreamError::Failed(
-                vec![Some((a, b))].into_typed_schema_value().unwrap(),
+                vec![Some((a, b))].into_typed_schema_value().unwrap().into(),
             ))
         };
         let nan32 = f32::from_bits(0x7fc0_0001);
@@ -2115,8 +2115,8 @@ mod tests {
         }
         let constrained = TypedSchemaValue::new(constrained_graph, plain.value().clone());
         assert_ne!(
-            StreamTerminal::Failed(StreamError::Failed(plain)),
-            StreamTerminal::Failed(StreamError::Failed(constrained))
+            StreamTerminal::Failed(StreamError::Failed(Box::new(plain))),
+            StreamTerminal::Failed(StreamError::Failed(Box::new(constrained)))
         );
     }
 
@@ -2137,7 +2137,8 @@ mod tests {
                         StreamTerminal::Failed(StreamError::Failed(
                             vec![Some((f32::NAN, f64::NAN))]
                                 .into_typed_schema_value()
-                                .unwrap(),
+                                .unwrap()
+                                .into(),
                         )),
                         StreamTerminal::ConsumerCancelled {
                             details: Some("reader dropped".into()),
