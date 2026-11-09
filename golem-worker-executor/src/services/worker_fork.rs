@@ -567,9 +567,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .ok_or(WorkerExecutorError::worker_not_found(
                 source_agent_id.clone(),
             ))?;
-        if source_metadata.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+        if source_metadata.initial_worker_metadata.owner_kind != OwnerKind::ComponentAgent {
             return Err(WorkerExecutorError::invalid_request(
-                "External-tool owners cannot be forked",
+                "Only component-agent owners can be forked",
             ));
         }
 

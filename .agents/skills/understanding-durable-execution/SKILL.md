@@ -1281,7 +1281,8 @@ that owns open nodes. Cleanup drains those nodes; retaining one across the drain
 
 Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
 lifecycle guard. Fork reads persisted source history without constructing an absent source;
-the complete hidden stage is published atomically into an absent target under its lifecycle guard.
+only `ComponentAgent` sources are accepted. Oplog processors and external-tool owners are rejected before staging.
+The complete hidden stage is published atomically into an absent target under its lifecycle guard.
 Source and target guards are never held together, and publication releases the target guard before
 resuming the child. Before the publication, a `ForkCopy` ticket copies the filesystem snapshots of
 the source into the repository of the stage (`AgentSnapshots::agent(target, stage_id)`), and

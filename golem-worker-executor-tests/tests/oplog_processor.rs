@@ -278,7 +278,35 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     executor
         .wait_for_status(&target, AgentStatus::Idle, Duration::from_secs(20))
         .await?;
-    assert_execution_count(&executor.stored_oplog(&target).await, &key, 1);
+    let completed = executor.stored_oplog(&target).await;
+    assert_execution_count(&completed, &key, 1);
+
+    let fork_target = AgentId {
+        component_id: processor.id,
+        agent_id: agent_id!("Clock", "processor-fork-target").to_string(),
+    };
+    let cut = OplogIndex::from_u64(completed.len() as u64);
+    assert!(cut >= OplogIndex::INITIAL.next());
+    let error = executor
+        .fork_worker(&target, &fork_target.agent_id, cut)
+        .await
+        .expect_err("oplog-processor owners must not be forked");
+    let error = format!("{error:?}");
+    assert!(error.contains("InvalidRequest"), "{error}");
+    assert!(
+        error.contains("Only component-agent owners can be forked"),
+        "{error}"
+    );
+    assert!(executor.get_worker_metadata(&fork_target).await.is_err());
+    assert!(executor.stored_oplog(&fork_target).await.is_empty());
+    assert!(
+        !executor
+            .worker_is_cached(&OwnedAgentId::new(
+                context.default_environment_id,
+                &fork_target
+            ))
+            .await
+    );
 
     deliver(&executor, request.clone()).await?;
     let fresh_key = IdempotencyKey::fresh();
