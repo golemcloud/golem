@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::filesystem::errors::OperationContext;
 
 /// What a change of the times of an object with the modification time `before_modified` counts,
 /// when `origin` asks for it. A snapshot keeps no access time, so only a change of the modification
@@ -90,13 +91,13 @@ async fn execute_attribute_changes<Adapter: SandboxFilesystemAdapter>(
             execute_set_times(generation, target, times, TimeOrigin::Call).await
         }
         AttributeChanges::File { size, times } => {
-            let AttributeTarget::Open(SandboxNode::File(file)) = target else {
+            let AttributeTarget::Open(SandboxHandle::File(file)) = target else {
                 return Err(Error::Access(AccessError::WrongGeneration));
             };
             execute_set_size(Arc::clone(&generation), file.clone(), size).await?;
             execute_set_times(
                 generation,
-                AttributeTarget::Open(SandboxNode::File(file)),
+                AttributeTarget::Open(SandboxHandle::File(file)),
                 times,
                 TimeOrigin::Call,
             )
@@ -170,7 +171,7 @@ async fn execute_coordinated_path_attribute_changes<Adapter: SandboxFilesystemAd
 async fn open_followed_object<Adapter: SandboxFilesystemAdapter>(
     generation: &Arc<FilesystemGeneration<Adapter>>,
     target: SandboxPath,
-) -> Result<SandboxNode, Error> {
+) -> Result<SandboxHandle, Error> {
     let read = mutation_attributes(
         generation,
         AttributeTarget::Path {
@@ -188,7 +189,7 @@ async fn open_followed_object<Adapter: SandboxFilesystemAdapter>(
     // The node is not registered and is used only in this operation, so a refusal drops it, as
     // the end of the operation does.
     refuse_read_only_change(opened.is_read_only_file())?;
-    Ok(opened.into_node())
+    Ok(opened)
 }
 
 async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(
@@ -196,7 +197,7 @@ async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(
     file: SandboxFile,
     size: u64,
 ) -> Result<(), Error> {
-    let target = AttributeTarget::Open(SandboxNode::File(file.clone()));
+    let target = AttributeTarget::Open(SandboxHandle::File(file.clone()));
     let before = mutation_attributes(&generation, target.clone()).await?;
     if before.size == size {
         return Ok(());
@@ -326,10 +327,10 @@ async fn mutation_attributes_sandbox<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<SandboxAttributes, FilesystemStorageError> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or_else(|| {
-        FilesystemStorageError::verification(
+        FilesystemStorageError::from(OperationContext::verification(
             "inspect deleted filesystem attribute postcondition",
-            std::path::Path::new("<agent-filesystem>"),
-        )
+            None,
+        ))
     })?;
     read_sandbox_attributes(sandbox.as_ref(), target).await
 }
@@ -339,7 +340,7 @@ pub(super) async fn read_sandbox_attributes<Adapter: SandboxFilesystemAdapter>(
     target: AttributeTarget,
 ) -> Result<SandboxAttributes, FilesystemStorageError> {
     match target {
-        AttributeTarget::Open(node) => sandbox.get_node_attributes(node).await,
+        AttributeTarget::Open(node) => sandbox.get_handle_attributes(node).await,
         AttributeTarget::Path { target, follow } => {
             sandbox.get_path_attributes(target, follow).await
         }
@@ -352,7 +353,7 @@ async fn set_sandbox_times<Adapter: SandboxFilesystemAdapter>(
     times: SandboxTimeChanges,
 ) -> Result<(), FilesystemStorageError> {
     match target {
-        AttributeTarget::Open(node) => sandbox.set_node_times(node, times).await,
+        AttributeTarget::Open(node) => sandbox.set_handle_times(node, times).await,
         AttributeTarget::Path { target, follow } => {
             sandbox.set_path_times(target, follow, times).await
         }

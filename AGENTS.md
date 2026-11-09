@@ -25,6 +25,11 @@ explicitly revised, **do not perform backward-compatibility work**.
 - **cargo-make**: Latest version (`cargo install --force cargo-make`)
 - **cargo-test-r**: Match the version CI installs, pinned in
   `.github/actions/restore-binaries/action.yml` (`cargo install --force --locked cargo-test-r@<VERSION>`)
+- **WASI SDK**: Version pinned by `WASI_SDK_VERSION` in `.github/workflows/ci.yaml`, with
+  `WASI_SDK_PATH` set to its install directory; `cargo make build` compiles C dependencies of the
+  built-in tools for `wasm32-wasip2` with it
+- **Node.js and pnpm**: An official Node.js 24 build (fnm, nvm, or nodejs.org), not Homebrew's,
+  whose system zlib makes the built-in tools' `npm pack` provenance checks fail
 - **redis-server**: Required by worker-executor, service-integration, and CLI integration tests that
   use spawned test dependencies; not required by every unit test
 - **docker**: Required by tests that use containerized dependencies
@@ -283,3 +288,4 @@ their own workspace manifests.
 - `integration-tests/` - Integration test suite
 - `test-components/` - Test WASM components
 - `website/` - Marketing site for golem.cloud (Astro, deployed to Netlify) - separate from `docs/`
+- `golem-cloud-billing/` - Billing app of the hosted Golem Cloud (TypeScript, Effect, Better Auth, pnpm) - **not part of main build flow, see `golem-cloud-billing/README.md`**

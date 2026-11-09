@@ -36,7 +36,7 @@ pub(all) enum SchemaValue {
   F64Value(Double)
   CharValue(Int32)
   StringValue(String)
-  UuidValue(String)
+  UuidValue(Uuid)
   // Structural composites
   RecordValue(Array[SchemaValue])
   VariantValue(Int32, SchemaValue?)

@@ -889,8 +889,16 @@ pub(super) async fn wait<U: Send + 'static, Ctx: WorkerCtx>(
     }
     let response = call
         .run_live_action_access(accessor, accessor.getter(), async move || {
+            let cause = observer.wait_terminal().await;
+            // An owner fence selects `Cancelled` on every open attachment and wakes this wait.
+            // That ends the generation that issued the wait, so it is not the wait's outcome:
+            // as in `abandon_if_owner_fenced`, the `Start` stays incomplete and the next
+            // generation waits again.
+            if observer.owner_fenced() {
+                anyhow::bail!("owner generation fenced tool attachment");
+            }
             Ok::<_, anyhow::Error>(HostResponseToolAttachmentClosed {
-                cause: cause_to_model(&observer.wait_terminal().await),
+                cause: cause_to_model(&cause),
             })
         })
         .await?;

@@ -165,6 +165,7 @@ include_dir = "0.7.4"
 indexmap = { version = "2.12.0", features = ["serde"] }
 indoc = "2.0.6"
 inquire = { version = "0.9.4", default-features = false, features = ["crossterm", "fuzzy"] }
+ipnet = { version = "2.12.1", features = ["serde"] }
 iso8601 = "0.6.2"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
@@ -283,7 +284,7 @@ tap = "1.0.1"
 tar = "0.4.46"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "3.0.12", default-features = true }
+test-r = { version = "3.0.14", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "mysql", ] }
 textwrap = { version = "0.16.1", default-features = false, features = ["unicode-linebreak", "unicode-width"] }
@@ -334,7 +335,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs", rev = "7ab67371df5ee936ed537646f3de4e2607f56e3d", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs", rev = "e057c7d9c9d3934975024ca190778d697871ee0a", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"
@@ -348,7 +349,7 @@ webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console"] }
 which = "8.0.0"
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "67b83d42c135db8c5c42bf26c53ec162bbdca5ea", version = "=0.63.0" }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "6f161c1bce440d7b0506950ee38338ce36742957", version = "=0.63.0" }
 wit-bindgen-rust = "0.58.0"
 wit-component = "0.251"
 wit-encoder = "0.251"

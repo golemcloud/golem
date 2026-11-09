@@ -320,6 +320,7 @@ test_component!(
     "golem:typescript-tools"
 );
 test_component!(python, "python", "../builtin-tools/python", "golem:python");
+test_component!(bash, "bash", "../builtin-tools/bash", "golem:bash");
 test_component!(
     git_tool,
     "git_tool",
@@ -403,6 +404,12 @@ test_component!(
     "snapshot_sqlite_effect",
     "golem_it_snapshot_sqlite_effect",
     "golem-it:snapshot-sqlite-effect"
+);
+test_component!(
+    http_update_effect,
+    "http_update_effect",
+    "golem_it_http_update_effect_baseline",
+    "golem-it:http-update-effect-baseline"
 );
 test_component!(
     agent_counters,

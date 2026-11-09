@@ -19,7 +19,7 @@ pub fn[T : @schema.IntoSchema] typed_config_value(Array[String], T) -> @common.T
 pub(all) struct AgentClient {
   agent_type_name : String
   constructor_input : @types.SchemaValueTree
-  phantom_id : @types.Uuid?
+  phantom_id : @schema.Uuid?
   rpc : @host.WasmRpc
   // private fields
 }
@@ -29,14 +29,14 @@ pub fn AgentClient::ephemeral(String, @types.SchemaValueTree) -> Self
 pub fn AgentClient::ephemeral_with_config(String, @types.SchemaValueTree, Array[@common.TypedAgentConfigValue]) -> Self
 pub fn AgentClient::get(String, @types.SchemaValueTree) -> Self
 pub fn AgentClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn AgentClient::get_phantom(String, @types.SchemaValueTree, @types.Uuid) -> Self
-pub fn AgentClient::get_phantom_with_config(String, @types.SchemaValueTree, @types.Uuid, Array[@common.TypedAgentConfigValue]) -> Self
+pub fn AgentClient::get_phantom(String, @types.SchemaValueTree, @schema.Uuid) -> Self
+pub fn AgentClient::get_phantom_with_config(String, @types.SchemaValueTree, @schema.Uuid, Array[@common.TypedAgentConfigValue]) -> Self
 pub fn AgentClient::get_with_config(String, @types.SchemaValueTree, Array[@common.TypedAgentConfigValue]) -> Self
 pub fn AgentClient::invoke(Self, String, @types.SchemaValueTree) -> InvocationMetadata
 pub async fn AgentClient::invoke_and_await(Self, String, @types.SchemaValueTree, scope_card? : @permissions.ScopeCard) -> InvocationResult[@types.SchemaValueTree?]
 pub fn AgentClient::new_phantom(String, @types.SchemaValueTree) -> Self
 pub fn AgentClient::new_phantom_with_config(String, @types.SchemaValueTree, Array[@common.TypedAgentConfigValue]) -> Self
-pub fn AgentClient::phantom_id(Self) -> @types.Uuid?
+pub fn AgentClient::phantom_id(Self) -> @schema.Uuid?
 pub fn AgentClient::schedule_cancelable_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> CancelableScheduledInvocationReceipt
 pub fn AgentClient::schedule_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> ScheduledInvocationReceipt
 pub fn AgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit

@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "67b83d42c135db8c5c42bf26c53ec162bbdca5ea", version = "=0.63.0", features = ["default", "async-spawn", "inter-task-wakeup"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "6f161c1bce440d7b0506950ee38338ce36742957", version = "=0.63.0", features = ["default", "async-spawn", "inter-task-wakeup"] }
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 
 [profile.release]

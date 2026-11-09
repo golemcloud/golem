@@ -56,7 +56,7 @@ test "structural remote tool errors stay distinct from RPC errors" {
 /// A tool input whose encode fails, carrying `card`.
 fn failing_tool_input(
   card : @card.GuestPermissionCardHandle,
-  quota : Int,
+  quota : Int32,
 ) -> @model.TypedSchemaValue {
   {
     graph: {

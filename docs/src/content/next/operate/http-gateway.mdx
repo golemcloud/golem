@@ -42,18 +42,44 @@ upstream (**h2c prior knowledge**), preserve per-stream resets, and disable requ
 and response buffering for streaming routes. The gateway also accepts HTTP/1, but
 does not support `Upgrade: h2c`.
 
-To accept public-origin headers from a TLS-terminating proxy, list its direct peer
-IP in worker-service configuration:
+To accept public-origin headers from a TLS-terminating proxy, list the address
+range of its direct peer address in worker-service configuration. Each entry is an
+address range in CIDR notation; write one address as `/32` (IPv4) or `/128` (IPv6).
+An entry without a prefix length stops worker-service at startup. An IPv4 peer
+matches IPv4 ranges, also when it reaches a dual-stack listener as `::ffff:a.b.c.d`,
+and IPv4-mapped ranges `::ffff:a.b.c.d/n` with `n` of 96 or more. Other IPv6 ranges,
+such as `::/0`, do not cover IPv4 peers.
 
 ```toml
 [route_resolver]
-trusted_ingress_addresses = ["10.0.0.10"]
+trusted_ingress_addresses = ["10.0.0.10/32"]
 ```
 
 The default list is empty. Configure that proxy to remove client forwarding fields
 and write exactly one valid `X-Forwarded-Proto` and one `X-Forwarded-Host`. Both are
 required; comma-separated proxy chains and `Forwarded` are not alternative origin
 sources. Keep the listener private to the intended ingress.
+
+An ingress that runs as several pods, such as an ingress controller or a Gateway
+API implementation on Kubernetes, has no fixed addresses: its pods get a new
+address at every restart, rollout and scale-up. List the pod address range of the
+cluster instead, for example its pod subnets:
+
+```toml
+[route_resolver]
+trusted_ingress_addresses = ["172.18.128.0/19", "172.18.160.0/19", "172.18.192.0/19"]
+```
+
+Every peer in a listed range can then set the public origin, and every request from
+such a peer must carry both headers, or it fails. So allow only the ingress pods to
+connect to the custom request port and the MCP port, with a network policy whose
+ingress rule for ports 9006 and 9007 selects only the ingress proxy pods, for
+example a Kubernetes `NetworkPolicy` or a `CiliumNetworkPolicy`. For the single
+`golem` binary with `router.management_host`, restrict its router port (default
+9881) in the same way.
+
+The setting applies to the custom request port, the MCP port and, in the single
+`golem` binary, the host routing of `router.management_host`.
 
 Test disconnect/reset through the actual proxy, including while waiting for a
 response head. A client timeout alone does not prove upstream cancellation. Keep

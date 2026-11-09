@@ -2,10 +2,10 @@
 extern "wasm" fn reset_permission_host() = "golem:test" "reset-permission-host"
 
 ///|
-extern "wasm" fn push_permission_host_buffer(ptr : Int, size : Int) = "golem:test" "push-permission-host-buffer"
+extern "wasm" fn push_permission_host_buffer(ptr : Int32, size : Int32) = "golem:test" "push-permission-host-buffer"
 
 ///|
-extern "wasm" fn guest_malloc(size : Int) -> Int =
+extern "wasm" fn guest_malloc(size : Int32) -> Int32 =
   #|(func (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
   #| local.tee 1 i32.const 0 call $moonbit.init_array8

@@ -4871,6 +4871,7 @@ dependencies = [
  "hyper-util",
  "include_dir",
  "indexmap 2.14.0",
+ "ipnet",
  "jsonschema",
  "libsqlite3-sys",
  "mimalloc",
@@ -5822,6 +5823,9 @@ name = "ipnet"
 version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "ipnetwork"
@@ -7033,7 +7037,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http 1.5.0",
@@ -8103,7 +8107,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -8124,7 +8128,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -10636,9 +10640,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "3.0.12"
+version = "3.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dfad2a3c321239151d31a82d84e9ba64ce954c1248e3e945cec27f580b54040"
+checksum = "b35c5648c3bb3c2c0a775dfd53622a68bd3a54c036f0aa28d663812227b42c0a"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -10648,9 +10652,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "11.0.1"
+version = "12.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b178477fa5ca92289c2241984b0c1f806204c0ae8513ee7530389d3e500888fb"
+checksum = "f34c3bb7fcc4a4b332e44d989172c220c0951562b9ca8e8137dda7cfca433954"
 dependencies = [
  "anstream",
  "anstyle",
@@ -10676,9 +10680,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.4.12"
+version = "1.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de99e4f567d527d1f953f9e7d3c521545f65e4dd1f6db1081abf1d23b7ac7866"
+checksum = "7119f56afb32d9d2653229a1f6b086ebbcea66a98c793a3eda7b42577eb8fccd"
 dependencies = [
  "darling 0.21.3",
  "humantime",
@@ -12030,9 +12034,10 @@ dependencies = [
 [[package]]
 name = "wasm-rquickjs"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rquickjs?rev=7ab67371df5ee936ed537646f3de4e2607f56e3d#7ab67371df5ee936ed537646f3de4e2607f56e3d"
+source = "git+https://github.com/golemcloud/wasm-rquickjs?rev=e057c7d9c9d3934975024ca190778d697871ee0a#e057c7d9c9d3934975024ca190778d697871ee0a"
 dependencies = [
  "anyhow",
+ "bytes",
  "camino",
  "heck",
  "include_dir",
@@ -12973,7 +12978,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen"
 version = "0.63.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=67b83d42c135db8c5c42bf26c53ec162bbdca5ea#67b83d42c135db8c5c42bf26c53ec162bbdca5ea"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=6f161c1bce440d7b0506950ee38338ce36742957#6f161c1bce440d7b0506950ee38338ce36742957"
 dependencies = [
  "bitflags 2.13.1",
  "futures",
@@ -12994,7 +12999,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.63.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=67b83d42c135db8c5c42bf26c53ec162bbdca5ea#67b83d42c135db8c5c42bf26c53ec162bbdca5ea"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=6f161c1bce440d7b0506950ee38338ce36742957#6f161c1bce440d7b0506950ee38338ce36742957"
 dependencies = [
  "anyhow",
  "heck",
@@ -13004,7 +13009,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust"
 version = "0.63.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=67b83d42c135db8c5c42bf26c53ec162bbdca5ea#67b83d42c135db8c5c42bf26c53ec162bbdca5ea"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=6f161c1bce440d7b0506950ee38338ce36742957#6f161c1bce440d7b0506950ee38338ce36742957"
 dependencies = [
  "anyhow",
  "heck",
@@ -13019,7 +13024,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust-macro"
 version = "0.63.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=67b83d42c135db8c5c42bf26c53ec162bbdca5ea#67b83d42c135db8c5c42bf26c53ec162bbdca5ea"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=6f161c1bce440d7b0506950ee38338ce36742957#6f161c1bce440d7b0506950ee38338ce36742957"
 dependencies = [
  "anyhow",
  "macro-string",

@@ -145,7 +145,7 @@ pub fn render_argument_help(
 pub fn resolve_command_path(
   tool : @toolCommon.Tool,
   command_path : Array[String],
-) -> Result[Int, ToolBuildError] {
+) -> Result[Int32, ToolBuildError] {
   match resolve_command_path_indices(tool, command_path) {
     Ok(path) => Ok(path[path.length() - 1])
     Err(e) => Err(e)
@@ -162,16 +162,16 @@ priv enum EffectiveCommandField {
 fn resolve_command_path_indices(
   tool : @toolCommon.Tool,
   command_path : Array[String],
-) -> Result[Array[Int], ToolBuildError] {
+) -> Result[Array[Int32], ToolBuildError] {
   guard tool.commands.nodes.length() > 0 else { return Err(EmptyCommandTree) }
-  let indices : Array[Int] = [0]
+  let indices : Array[Int32] = [0]
   let mut idx = 0
   for part in command_path {
     let node = match command_node_at(tool, idx) {
       Some(node) => node
       None => return Err(CommandNotFound(part))
     }
-    let mut found : Int? = None
+    let mut found : Int32? = None
     for child_idx in node.subcommands {
       if found is None {
         match command_node_at(tool, child_idx) {
@@ -197,7 +197,7 @@ fn resolve_command_path_indices(
 ///|
 fn command_node_at(
   tool : @toolCommon.Tool,
-  idx : Int,
+  idx : Int32,
 ) -> @toolCommon.CommandNode? {
   if idx < 0 || idx >= tool.commands.nodes.length() {
     None
@@ -209,7 +209,7 @@ fn command_node_at(
 ///|
 fn effective_globals(
   tool : @toolCommon.Tool,
-  path : Array[Int],
+  path : Array[Int32],
 ) -> Array[EffectiveCommandField] {
   let result : Array[EffectiveCommandField] = []
   for idx in path {

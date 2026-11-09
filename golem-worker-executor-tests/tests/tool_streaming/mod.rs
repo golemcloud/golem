@@ -110,10 +110,12 @@ mod matrix_conformance;
 mod middleware_acceptance;
 mod moonbit_exports;
 mod moonbit_sdk_rows_acceptance;
+mod node_tool_processes;
 mod path_policy_acceptance;
 mod python_sidecar;
 mod rdbms_drop;
 mod rust_sdk_gol40_conformance;
+mod sdk_child_process_tools;
 mod snapshot_attachments;
 mod tool_result_delivery;
 mod trapped_leaf_observers;
@@ -156,6 +158,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("python")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("bash")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -8863,6 +8869,144 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
         consumed == expected,
         "original read observations own exactly the consumed bytes"
     );
+    executor.delete_worker(&worker).await?;
+    Ok(())
+}
+
+/// A crash fences the owner, which selects `Cancelled` on every open attachment and wakes a
+/// pending `tool-stdin-closed` wait inside a tool entity. That wait must stay incomplete rather
+/// than record the fence's `Cancelled`: replayed, it would report an open stdin as closed and the
+/// recovered caller would stop feeding it (GOL-1133).
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn tool_stdin_closed_wait_survives_a_crash_while_stdin_is_open(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const WAIT: &str = "golem::tool::host::tool-stdin-closed::wait";
+    const CHECKPOINT: &str = "nested-stdin-closed-wait-pending";
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_agent_sockets(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.retry.max_attempts = 0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (checkpoint_port, gate_port, _checkpoint_server, mut checkpoints) =
+        start_crash_checkpoint_server().await;
+    let agent = agent_id!("ToolStreamingCaller", "crash-in-stdin-closed-wait");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        "collect",
+        data_value!("nested-open-stdin-wait", Vec::<u8>::new(), 1_u32),
+    );
+    tokio::pin!(invocation);
+    let crash = async {
+        let held = next_crash_checkpoint(&mut checkpoints, CHECKPOINT).await?;
+        // Crash only inside the window: the entity's wait has a committed Start and no End.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                executor.commit_oplog(&worker).await?;
+                let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                let ended = entries
+                    .iter()
+                    .filter_map(|entry| match &entry.entry {
+                        PublicOplogEntry::End(end) => Some(end.start_index),
+                        _ => None,
+                    })
+                    .collect::<BTreeSet<_>>();
+                if entries.iter().any(|entry| {
+                    matches!(
+                        &entry.entry,
+                        PublicOplogEntry::Start(start) if start.function_name == WAIT
+                    ) && !ended.contains(&entry.oplog_index)
+                }) {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        executor.simulated_crash(&worker).await?;
+        drop(held.release);
+        // Replay reaches the checkpoint again; releasing it lets the recovered entity finish its
+        // nested stdin.
+        let recovered = next_crash_checkpoint(&mut checkpoints, CHECKPOINT).await?;
+        let _ = recovered.release.send(());
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::select! {
+        result = invocation.as_mut() => panic!("the call finished before the crash: {result:?}"),
+        crashed = crash => crashed?,
+    }
+    let result: StreamEvidence = tokio::time::timeout(Duration::from_secs(120), invocation)
+        .await??
+        .into_typed()?;
+    assert_eq!(
+        String::from_utf8_lossy(&result.output),
+        "ByteStreamCloseCause::Finished:marker:open-recovered",
+        "the recovered wait reports the stdin's real close, not the owner fence's Cancelled"
+    );
+    assert_eq!(result.completion, "ok");
     executor.delete_worker(&worker).await?;
     Ok(())
 }

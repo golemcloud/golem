@@ -56,6 +56,7 @@ impl InvocationLoops {
             tracker: TaskTracker::new(),
             owner_oplogs,
             construction_admission,
+            drain: Arc::default(),
             exit_stage: Arc::default(),
             _watcher_lifetime: watcher_lifetime,
         }
@@ -158,7 +159,9 @@ impl InvocationLoops {
     ///
     /// A loop that is executing guest code without reaching an await point cannot be cancelled
     /// once the executor's epoch ticker stopped, so callers should bound this wait.
+    /// Concurrent callers serialize drainage. A failed drain keeps its registrations for retry.
     pub async fn wait_for_exit(&self) -> Result<(), String> {
+        let _drain = self.drain.lock().await;
         self.set_exit_stage("worker roots");
         *self.construction_admission.lock().unwrap() = false;
         {

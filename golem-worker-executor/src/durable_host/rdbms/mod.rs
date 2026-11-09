@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::authorization::targets::{RdbmsEngine, rdbms_sql_targets, rdbms_target};
+use crate::durable_host::authorization::targets::{
+    RdbmsEngine, TargetError, rdbms_sql_analysis, rdbms_sql_execution, rdbms_target,
+};
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
 };
@@ -29,7 +31,9 @@ use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, R
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::card::RdbmsVerb;
+use golem_common::model::card::{
+    ClassPermissionTarget, PermissionTarget, RdbmsResourcePattern, RdbmsVerb,
+};
 use golem_common::model::oplog::{DeniablePair, HostPayloadPair};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRdbmsRequest, HostRequestNoInput,
@@ -38,9 +42,11 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::retry_policy::RetryProperties;
 use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, RetryContext, TransactionId};
+use sqlx::ConnectOptions;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
+use tokio::sync::OnceCell;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
 
@@ -137,39 +143,104 @@ pub trait RdbmsDurabilityPairs {
 
 const RDBMS_PERMISSION_DENIED: &str = "RDBMS permission denied";
 
-fn database_and_schema(engine: RdbmsEngine, pool_key: &RdbmsPoolKey) -> (String, String) {
+async fn connection_database<'a>(
+    engine: RdbmsEngine,
+    pool_key: &RdbmsPoolKey,
+    database: &'a OnceCell<String>,
+) -> Result<&'a String, String> {
+    database
+        .get_or_try_init(|| resolve_connection_database(engine, pool_key))
+        .await
+}
+
+async fn resolve_connection_database(
+    engine: RdbmsEngine,
+    pool_key: &RdbmsPoolKey,
+) -> Result<String, String> {
     match engine {
         RdbmsEngine::Mysql => {
-            let database = pool_key.address.path().trim_start_matches('/').to_string();
-            (database.clone(), database)
+            let options = sqlx::mysql::MySqlConnectOptions::from_url(&pool_key.address)
+                .map_err(|error| error.to_string())?;
+            let database = options.get_database().unwrap_or_default().to_string();
+            Ok(database)
         }
-        RdbmsEngine::Postgres => (
-            pool_key.address.path().trim_start_matches('/').to_string(),
-            "public".to_string(),
-        ),
+        RdbmsEngine::Postgres => {
+            let address = pool_key.address.clone();
+            // SQLx also resolves query overrides, environment defaults and password files.
+            let database = tokio::task::spawn_blocking(move || {
+                let options = sqlx::postgres::PgConnectOptions::from_url(&address)
+                    .map_err(|error| error.to_string())?;
+                Ok::<_, String>(
+                    options
+                        .get_database()
+                        .unwrap_or_else(|| options.get_username())
+                        .to_string(),
+                )
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            Ok(database)
+        }
         // Ignite's thin-client URL has no database path. Its SQL namespace starts at PUBLIC.
-        RdbmsEngine::Ignite => ("default".to_string(), "PUBLIC".to_string()),
+        RdbmsEngine::Ignite => Ok("default".to_string()),
     }
 }
 
 async fn authorize_sql<Ctx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     pool_key: &RdbmsPoolKey,
+    database_identity: &OnceCell<String>,
     statement: &str,
+    params: &[T::DbValue],
 ) -> anyhow::Result<Result<LiveAuthorizationPermit, String>>
 where
     Ctx: WorkerCtx,
     T: RdbmsType + RdbmsDurabilityPairs + 'static,
 {
-    let (database, schema) = database_and_schema(T::ENGINE, pool_key);
-    let targets = match rdbms_sql_targets(
+    let database = match connection_database(T::ENGINE, pool_key, database_identity).await {
+        Ok(database) => database,
+        Err(error) => {
+            return Ok(Err(format!(
+                "{RDBMS_PERMISSION_DENIED}: cannot determine connection database: {error}"
+            )));
+        }
+    };
+    let schema = match T::ENGINE {
+        RdbmsEngine::Mysql => database.as_str(),
+        RdbmsEngine::Postgres => "public",
+        RdbmsEngine::Ignite => "PUBLIC",
+    };
+    let targets = match rdbms_sql_analysis(
         environment_owner(ctx),
         T::ENGINE,
-        &database,
-        &schema,
+        database,
+        schema,
         statement,
-    ) {
+    )
+    .and_then(|analysis| {
+        analysis.validate_parameters(|index| is_builtin_text_parameter::<T>(params, index))?;
+        Ok(analysis.targets)
+    }) {
         Ok(targets) => targets,
+        Err(TargetError::SqlNotStaticallyExtractable(reason)) => {
+            let target = PermissionTarget::Rdbms(ClassPermissionTarget {
+                verb: Some(RdbmsVerb::Unanalyzed),
+                owner: environment_owner(ctx),
+                resource: RdbmsResourcePattern::Database {
+                    database: database.clone(),
+                },
+            });
+            return Ok(ctx
+                .authorize_live_permissions(&[target])
+                .await?
+                .map_err(|error| {
+                    format!(
+                        "{RDBMS_PERMISSION_DENIED}: cannot safely determine SQL targets: {reason}; \
+                         unsupported SQL requires an explicitly assigned rdbms unanalyzed grant \
+                         on database({database}): {error}"
+                    )
+                }));
+        }
         Err(error) => {
             return Ok(Err(format!(
                 "{RDBMS_PERMISSION_DENIED}: cannot safely determine SQL targets: {error}"
@@ -182,27 +253,49 @@ where
         .map_err(|error| format!("{RDBMS_PERMISSION_DENIED}: {error}")))
 }
 
+// Use only for an admitted call, including repair of its recorded Start. A failed
+// analysis required explicit Unanalyzed authority at admission and retains the original SQL.
+fn execution_statement<T: RdbmsType>(
+    engine: RdbmsEngine,
+    statement: &str,
+    params: &[T::DbValue],
+) -> String {
+    rdbms_sql_execution(engine, statement, |index| {
+        is_builtin_text_parameter::<T>(params, index)
+    })
+    .unwrap_or_else(|_| statement.to_string())
+}
+
+fn is_builtin_text_parameter<T: RdbmsType>(params: &[T::DbValue], index: usize) -> bool {
+    index
+        .checked_sub(1)
+        .and_then(|index| params.get(index))
+        .is_some_and(T::is_builtin_text_parameter)
+}
+
 async fn authorize_transaction<Ctx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     pool_key: &RdbmsPoolKey,
+    database_identity: &OnceCell<String>,
 ) -> anyhow::Result<Result<LiveAuthorizationPermit, String>>
 where
     Ctx: WorkerCtx,
     T: RdbmsType + RdbmsDurabilityPairs + 'static,
 {
-    let (database, _) = database_and_schema(T::ENGINE, pool_key);
+    let database = match connection_database(T::ENGINE, pool_key, database_identity).await {
+        Ok(database) => database,
+        Err(error) => {
+            return Ok(Err(format!(
+                "{RDBMS_PERMISSION_DENIED}: cannot determine connection database: {error}"
+            )));
+        }
+    };
     let targets = [
-        rdbms_target(
-            environment_owner(ctx),
-            RdbmsVerb::Query,
-            &database,
-            "*",
-            "*",
-        ),
+        rdbms_target(environment_owner(ctx), RdbmsVerb::Query, database, "*", "*"),
         rdbms_target(
             environment_owner(ctx),
             RdbmsVerb::Mutate,
-            &database,
+            database,
             "*",
             "*",
         ),
@@ -284,7 +377,8 @@ where
                 .get::<RdbmsConnection<T>>(entry)?
                 .pool_key
                 .clone();
-            match authorize_transaction::<Ctx, T>(ctx, &pool_key).await? {
+            let database_identity = ctx.table().get(entry)?.database_identity.clone();
+            match authorize_transaction::<Ctx, T>(ctx, &pool_key, &database_identity).await? {
                 Ok(permit) => {
                     let admission = begun
                         .start_live(ctx, HostRequestNoInput {})
@@ -342,11 +436,11 @@ where
                     .get_mut::<RdbmsConnection<T>>(entry)?
                     .initialized = true;
             }
-            let mut entry = RdbmsTransactionEntry::new(
-                pool_key,
+            let persisted = !ctx.state.durability_is_suppressed();
+            let mut entry = ctx.table().get(entry)?.new_transaction(
                 transaction_state,
                 begin_oplog_idx,
-                !ctx.state.durability_is_suppressed(),
+                persisted,
             );
             drop::detach_recorded_drop(ctx, &mut entry).await?;
             let resource = ctx.as_wasi_view().table().push(entry)?;
@@ -413,8 +507,17 @@ where
                     }),
                 };
                 let permit = match prepared.as_ref() {
-                    Ok((pool_key, _)) => {
-                        match authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await? {
+                    Ok((pool_key, db_params)) => {
+                        let database_identity = ctx.table().get(entry)?.database_identity.clone();
+                        match authorize_sql::<Ctx, T>(
+                            ctx,
+                            pool_key,
+                            &database_identity,
+                            &statement,
+                            db_params,
+                        )
+                        .await?
+                        {
                             Ok(permit) => Some(permit),
                             Err(denial) => {
                                 break 'result begun
@@ -455,7 +558,12 @@ where
                                 .rdbms_service
                                 .deref()
                                 .rdbms_type_service()
-                                .execute(pool_key, &agent_id, &statement, db_params.clone())
+                                .execute(
+                                    pool_key,
+                                    &agent_id,
+                                    &execution_statement::<T>(T::ENGINE, &statement, db_params),
+                                    db_params.clone(),
+                                )
                                 .await;
                             match handle
                                 .try_trigger_retry_or_loop_with_properties(
@@ -538,8 +646,17 @@ where
                     }),
                 };
                 let permit = match prepared.as_ref() {
-                    Ok((pool_key, _)) => {
-                        match authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await? {
+                    Ok((pool_key, db_params)) => {
+                        let database_identity = ctx.table().get(entry)?.database_identity.clone();
+                        match authorize_sql::<Ctx, T>(
+                            ctx,
+                            pool_key,
+                            &database_identity,
+                            &statement,
+                            db_params,
+                        )
+                        .await?
+                        {
                             Ok(permit) => Some(permit),
                             Err(denial) => {
                                 break 'result begun
@@ -580,7 +697,12 @@ where
                                 .rdbms_service
                                 .deref()
                                 .rdbms_type_service()
-                                .query(pool_key, &agent_id, &statement, db_params.clone())
+                                .query(
+                                    pool_key,
+                                    &agent_id,
+                                    &execution_statement::<T>(T::ENGINE, &statement, db_params),
+                                    db_params.clone(),
+                                )
                                 .await;
                             match handle
                                 .try_trigger_retry_or_loop_with_properties(
@@ -647,7 +769,17 @@ where
             async |ctx| {
                 authorization = match prepared.as_ref() {
                     Ok(request) => {
-                        Some(authorize_sql::<Ctx, T>(ctx, &request.pool_key, &statement).await?)
+                        let database_identity = ctx.table().get(entry)?.database_identity.clone();
+                        Some(
+                            authorize_sql::<Ctx, T>(
+                                ctx,
+                                &request.pool_key,
+                                &database_identity,
+                                &statement,
+                                &request.params,
+                            )
+                            .await?,
+                        )
                     }
                     Err(_) => None,
                 };
@@ -757,6 +889,7 @@ where
                 },
                 None,
                 begin_index,
+                T::ENGINE,
             );
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
@@ -1055,7 +1188,20 @@ where
             },
             async |ctx| {
                 let pool_key = ctx.table().get(entry)?.pool_key.clone();
-                authorization = Some(authorize_sql::<Ctx, T>(ctx, &pool_key, &statement).await?);
+                let database_identity = ctx.table().get(entry)?.database_identity.clone();
+                authorization = Some(
+                    authorize_sql::<Ctx, T>(
+                        ctx,
+                        &pool_key,
+                        &database_identity,
+                        &statement,
+                        prepared
+                            .as_ref()
+                            .map(|(_, _, params)| params.as_slice())
+                            .unwrap_or_default(),
+                    )
+                    .await?,
+                );
                 Ok::<_, anyhow::Error>(
                     authorization
                         .as_ref()
@@ -1091,7 +1237,12 @@ where
 
         let result = match &prepared {
             Ok((_pool_key, transaction, db_params)) => {
-                transaction.query(&statement, db_params.clone()).await
+                transaction
+                    .query(
+                        &execution_statement::<T>(T::ENGINE, &statement, db_params),
+                        db_params.clone(),
+                    )
+                    .await
             }
             Err(error) => Err(error.clone()),
         };
@@ -1164,7 +1315,20 @@ where
             },
             async |ctx| {
                 let pool_key = ctx.table().get(entry)?.pool_key.clone();
-                authorization = Some(authorize_sql::<Ctx, T>(ctx, &pool_key, &statement).await?);
+                let database_identity = ctx.table().get(entry)?.database_identity.clone();
+                authorization = Some(
+                    authorize_sql::<Ctx, T>(
+                        ctx,
+                        &pool_key,
+                        &database_identity,
+                        &statement,
+                        prepared
+                            .as_ref()
+                            .map(|(_, _, params)| params.as_slice())
+                            .unwrap_or_default(),
+                    )
+                    .await?,
+                );
                 Ok::<_, anyhow::Error>(
                     authorization
                         .as_ref()
@@ -1200,7 +1364,12 @@ where
 
         let result = match &prepared {
             Ok((_pool_key, transaction, db_params)) => {
-                transaction.execute(&statement, db_params.clone()).await
+                transaction
+                    .execute(
+                        &execution_statement::<T>(T::ENGINE, &statement, db_params),
+                        db_params.clone(),
+                    )
+                    .await
             }
             Err(error) => Err(error.clone()),
         };
@@ -1242,7 +1411,17 @@ where
             async |ctx| {
                 authorization = match prepared.as_ref() {
                     Ok(request) => {
-                        Some(authorize_sql::<Ctx, T>(ctx, &request.pool_key, &statement).await?)
+                        let database_identity = ctx.table().get(entry)?.database_identity.clone();
+                        Some(
+                            authorize_sql::<Ctx, T>(
+                                ctx,
+                                &request.pool_key,
+                                &database_identity,
+                                &statement,
+                                &request.params,
+                            )
+                            .await?,
+                        )
                     }
                     Err(_) => None,
                 };
@@ -1307,6 +1486,7 @@ where
                 },
                 Some(entry_rep),
                 stream_parent,
+                T::ENGINE,
             );
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
@@ -1568,6 +1748,8 @@ where
 
 pub struct RdbmsConnection<T: RdbmsType> {
     pool_key: RdbmsPoolKey,
+    // Only the stable database identity is shared; execution namespaces can change per statement.
+    database_identity: Arc<OnceCell<String>>,
     initialized: bool,
     _owner: PhantomData<T>,
 }
@@ -1576,15 +1758,32 @@ impl<T: RdbmsType> RdbmsConnection<T> {
     fn new(pool_key: RdbmsPoolKey) -> Self {
         Self {
             pool_key,
+            database_identity: Arc::new(OnceCell::new()),
             initialized: false,
             _owner: PhantomData,
         }
+    }
+
+    fn new_transaction(
+        &self,
+        state: RdbmsTransactionState<T>,
+        begin_index: OplogIndex,
+        persisted: bool,
+    ) -> RdbmsTransactionEntry<T>
+    where
+        T: 'static,
+    {
+        let mut transaction =
+            RdbmsTransactionEntry::new(self.pool_key.clone(), state, begin_index, persisted);
+        transaction.database_identity = self.database_identity.clone();
+        transaction
     }
 }
 
 #[derive(Clone)]
 pub struct RdbmsResultStreamEntry<T: RdbmsType + 'static> {
     request: RdbmsRequest<T>,
+    executable_statement: String,
     state: RdbmsResultStreamState<T>,
     transaction_handle: Option<u32>,
     begin_index: OplogIndex,
@@ -1596,8 +1795,14 @@ impl<T: RdbmsType + 'static> RdbmsResultStreamEntry<T> {
         state: RdbmsResultStreamState<T>,
         transaction_handle: Option<u32>,
         begin_index: OplogIndex,
+        engine: RdbmsEngine,
     ) -> Self {
         Self {
+            executable_statement: execution_statement::<T>(
+                engine,
+                &request.statement,
+                &request.params,
+            ),
             request,
             state,
             transaction_handle,
@@ -1669,7 +1874,7 @@ where
                         get_db_transaction(ctx, &Resource::new_own(transaction_handle))?;
                     transaction
                         .query_stream(
-                            &query_stream_entry.request.statement,
+                            &query_stream_entry.executable_statement,
                             query_stream_entry.request.params,
                         )
                         .await
@@ -1682,7 +1887,7 @@ where
                         .query_stream(
                             &query_stream_entry.request.pool_key,
                             &ctx.state.owned_agent_id.agent_id,
-                            &query_stream_entry.request.statement,
+                            &query_stream_entry.executable_statement,
                             query_stream_entry.request.params,
                         )
                         .await
@@ -1708,6 +1913,7 @@ where
 #[derive(Clone)]
 pub struct RdbmsTransactionEntry<T: RdbmsType + 'static> {
     pool_key: RdbmsPoolKey,
+    database_identity: Arc<OnceCell<String>>,
     state: RdbmsTransactionState<T>,
     begin_index: OplogIndex,
     persisted: bool,
@@ -1727,6 +1933,7 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
     ) -> Self {
         Self {
             pool_key,
+            database_identity: Arc::new(OnceCell::new()),
             state,
             begin_index,
             persisted,
@@ -1984,8 +2191,117 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::rdbms::postgres::PostgresType;
     use golem_common::model::oplog::payload::types::SerializableRdbmsError;
     use test_r::test;
+
+    #[test]
+    fn sql_execution_derivation_preserves_the_recorded_guest_statement() {
+        let statement = "SELECT now(), 'allowed'::regclass /* keep */";
+        let request = RdbmsRequest::<PostgresType>::new(
+            RdbmsPoolKey::from("postgres://user@localhost/postgres").unwrap(),
+            statement.to_string(),
+            vec![],
+            None,
+        );
+        let stream = RdbmsResultStreamEntry::new(
+            request,
+            RdbmsResultStreamState::New,
+            None,
+            OplogIndex::INITIAL,
+            RdbmsEngine::Postgres,
+        );
+        assert_eq!(stream.request.statement, statement);
+        assert_eq!(
+            stream.executable_statement,
+            "SELECT pg_catalog.now(), E'public.allowed'::pg_catalog.regclass /* keep */"
+        );
+        let serialized: golem_common::model::oplog::types::SerializableRdbmsRequest =
+            stream.request.into();
+        assert_eq!(serialized.statement, statement);
+        let unsupported = "SELECT untrusted(now()) /* original fallback */";
+        assert_eq!(
+            execution_statement::<PostgresType>(RdbmsEngine::Postgres, unsupported, &[]),
+            unsupported
+        );
+    }
+
+    #[test]
+    fn sql_cast_admission_and_execution_require_actual_builtin_text_parameters() {
+        use crate::services::rdbms::postgres::types::{Composite, DbValue, Domain};
+        use golem_common::model::card::owner::EnvironmentOwnerPattern;
+
+        for sql in ["SELECT now(), $1::regclass", "SELECT $1::uuid"] {
+            let analysis = rdbms_sql_analysis(
+                EnvironmentOwnerPattern::parse("a@b.com/app/prod").unwrap(),
+                RdbmsEngine::Postgres,
+                "db",
+                "public",
+                sql,
+            )
+            .unwrap();
+            let text = vec![DbValue::Text("allowed".to_string())];
+            assert!(
+                analysis
+                    .validate_parameters(|index| is_builtin_text_parameter::<PostgresType>(
+                        &text, index
+                    ))
+                    .is_ok()
+            );
+            assert_ne!(
+                execution_statement::<PostgresType>(RdbmsEngine::Postgres, sql, &text),
+                sql
+            );
+            for params in [
+                vec![],
+                vec![DbValue::Null],
+                vec![DbValue::Int4(1)],
+                vec![DbValue::Array(text.clone())],
+                vec![DbValue::Composite(Composite::new(
+                    "public.payload".to_string(),
+                    text.clone(),
+                ))],
+                vec![DbValue::Domain(Box::new(Domain::new(
+                    "public.payload".to_string(),
+                    text[0].clone(),
+                )))],
+            ] {
+                assert!(matches!(
+                    analysis.validate_parameters(
+                        |index| is_builtin_text_parameter::<PostgresType>(&params, index)
+                    ),
+                    Err(TargetError::SqlNotStaticallyExtractable(_))
+                ));
+                assert_eq!(
+                    execution_statement::<PostgresType>(RdbmsEngine::Postgres, sql, &params),
+                    sql
+                );
+                let request = RdbmsRequest::<PostgresType>::new(
+                    RdbmsPoolKey::from("postgres://user@localhost/postgres").unwrap(),
+                    sql.to_string(),
+                    params,
+                    None,
+                );
+                let stream = RdbmsResultStreamEntry::new(
+                    request,
+                    RdbmsResultStreamState::New,
+                    None,
+                    OplogIndex::INITIAL,
+                    RdbmsEngine::Postgres,
+                );
+                assert_eq!(stream.executable_statement, sql);
+                assert_eq!(stream.request.statement, sql);
+            }
+        }
+        assert!(!is_builtin_text_parameter::<PostgresType>(
+            &[DbValue::Text("x".to_string())],
+            0
+        ));
+        assert!(!is_builtin_text_parameter::<PostgresType>(
+            &[DbValue::Text("x".to_string())],
+            2
+        ));
+    }
 
     #[test]
     fn resource_loss_is_typed_and_permanent() {

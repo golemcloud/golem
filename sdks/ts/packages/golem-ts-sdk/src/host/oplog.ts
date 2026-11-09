@@ -20,39 +20,7 @@ import {
   AgentId as RawAgentId,
   EnvironmentId as RawEnvironmentId,
 } from 'golem:api/oplog@1.5.0';
-import type {
-  OplogIndex,
-  ComponentRevision,
-  Datetime,
-  StartParameters,
-  EndParameters,
-  CancelledParameters,
-  AgentInvocationStartedParameters,
-  AgentInvocationFinishedParameters,
-  ErrorParameters,
-  JumpParameters,
-  SetRetryPolicyParameters,
-  PendingAgentInvocationParameters,
-  PendingUpdateParameters,
-  SuccessfulUpdateParameters,
-  FailedUpdateParameters,
-  GrowMemoryParameters,
-  CreateResourceParameters,
-  DropResourceParameters,
-  LogParameters,
-  ActivatePluginParameters,
-  DeactivatePluginParameters,
-  RevertParameters,
-  CancelPendingInvocationParameters,
-  BeginRemoteTransactionParameters,
-  RemoteTransactionParameters,
-  SnapshotParameters,
-  SnapshotConfirmedParameters,
-  SpanClosedParameters,
-  Timestamp,
-  PluginInstallationDescription,
-  LocalAgentConfigEntry,
-} from 'golem:api/oplog@1.5.0';
+import type * as OplogTypes from 'golem:api/oplog@1.5.0';
 
 import { Uuid } from '../uuid';
 import { ComponentId, AccountId, EnvironmentId } from '../ids';
@@ -64,107 +32,104 @@ export { ComponentId, AccountId, EnvironmentId } from '../ids';
 export type { AgentId } from './hostapi';
 
 // Re-export types that don't contain UUID-based types
-export type {
-  Datetime,
-  SchemaValueTree,
-  ComponentRevision,
-  OplogIndex,
-  SnapshotBasedUpdateParameters,
-  Attribute,
-  AttributeValue,
-  SpanId,
-  TraceId,
-  WrappedFunctionType,
-  PluginInstallationDescription,
-  RawLocalAgentConfigEntry,
-  LocalAgentConfigEntry,
-  StartParameters,
-  EndParameters,
-  CancelledParameters,
-  SpanData,
-  LocalSpanData,
-  ExternalSpanData,
-  OplogErrorKind,
-  ErrorParameters,
-  OplogRegion,
-  JumpParameters,
-  SetRetryPolicyParameters,
-  TypedSchemaValue,
-  AgentInitializationParameters,
-  AgentMethodInvocationParameters,
-  LoadSnapshotParameters,
-  ProcessOplogEntriesParameters,
-  ManualUpdateParameters,
-  AgentInvocation,
-  AgentInvocationStartedParameters,
-  AgentInvocationOutputParameters,
-  FallibleResultParameters,
-  SaveSnapshotResultParameters,
-  AgentInvocationResult,
-  AgentInvocationFinishedParameters,
-  PendingAgentInvocationParameters,
-  UpdateDescription,
-  PendingUpdateParameters,
-  SuccessfulUpdateParameters,
-  FailedUpdateParameters,
-  GrowMemoryParameters,
-  AgentResourceId,
-  CreateResourceParameters,
-  DropResourceParameters,
-  LogLevel,
-  LogTraceContext,
-  LogParameters,
-  ActivatePluginParameters,
-  DeactivatePluginParameters,
-  RevertParameters,
-  CancelPendingInvocationParameters,
-  SpanKind,
-  SpanOutcome,
-  SpanLink,
-  SpanStarted,
-  SpanFinished,
-  SpanAttributes,
-  BeginRemoteTransactionParameters,
-  RemoteTransactionParameters,
-  SnapshotParameters,
-  SnapshotConfirmedParameters,
-  SpanClosedParameters,
-  Timestamp,
-} from 'golem:api/oplog@1.5.0';
+export type Datetime = OplogTypes.Datetime;
+export type SchemaValueTree = OplogTypes.SchemaValueTree;
+export type ComponentRevision = OplogTypes.ComponentRevision;
+export type OplogIndex = OplogTypes.OplogIndex;
+export type SnapshotBasedUpdateParameters = OplogTypes.SnapshotBasedUpdateParameters;
+export type Attribute = OplogTypes.Attribute;
+export type AttributeValue = OplogTypes.AttributeValue;
+export type SpanId = OplogTypes.SpanId;
+export type TraceId = OplogTypes.TraceId;
+export type WrappedFunctionType = OplogTypes.WrappedFunctionType;
+export type PluginInstallationDescription = OplogTypes.PluginInstallationDescription;
+export type RawLocalAgentConfigEntry = OplogTypes.RawLocalAgentConfigEntry;
+export type LocalAgentConfigEntry = OplogTypes.LocalAgentConfigEntry;
+export type StartParameters = OplogTypes.StartParameters;
+export type EndParameters = OplogTypes.EndParameters;
+export type CancelledParameters = OplogTypes.CancelledParameters;
+export type SpanData = OplogTypes.SpanData;
+export type LocalSpanData = OplogTypes.LocalSpanData;
+export type ExternalSpanData = OplogTypes.ExternalSpanData;
+export type OplogErrorKind = OplogTypes.OplogErrorKind;
+export type ErrorParameters = OplogTypes.ErrorParameters;
+export type OplogRegion = OplogTypes.OplogRegion;
+export type JumpParameters = OplogTypes.JumpParameters;
+export type SetRetryPolicyParameters = OplogTypes.SetRetryPolicyParameters;
+export type TypedSchemaValue = OplogTypes.TypedSchemaValue;
+export type AgentInitializationParameters = OplogTypes.AgentInitializationParameters;
+export type AgentMethodInvocationParameters = OplogTypes.AgentMethodInvocationParameters;
+export type LoadSnapshotParameters = OplogTypes.LoadSnapshotParameters;
+export type ProcessOplogEntriesParameters = OplogTypes.ProcessOplogEntriesParameters;
+export type ManualUpdateParameters = OplogTypes.ManualUpdateParameters;
+export type AgentInvocation = OplogTypes.AgentInvocation;
+export type AgentInvocationStartedParameters = OplogTypes.AgentInvocationStartedParameters;
+export type AgentInvocationOutputParameters = OplogTypes.AgentInvocationOutputParameters;
+export type FallibleResultParameters = OplogTypes.FallibleResultParameters;
+export type SaveSnapshotResultParameters = OplogTypes.SaveSnapshotResultParameters;
+export type AgentInvocationResult = OplogTypes.AgentInvocationResult;
+export type AgentInvocationFinishedParameters = OplogTypes.AgentInvocationFinishedParameters;
+export type PendingAgentInvocationParameters = OplogTypes.PendingAgentInvocationParameters;
+export type UpdateDescription = OplogTypes.UpdateDescription;
+export type PendingUpdateParameters = OplogTypes.PendingUpdateParameters;
+export type SuccessfulUpdateParameters = OplogTypes.SuccessfulUpdateParameters;
+export type FailedUpdateParameters = OplogTypes.FailedUpdateParameters;
+export type GrowMemoryParameters = OplogTypes.GrowMemoryParameters;
+export type AgentResourceId = OplogTypes.AgentResourceId;
+export type CreateResourceParameters = OplogTypes.CreateResourceParameters;
+export type DropResourceParameters = OplogTypes.DropResourceParameters;
+export type LogLevel = OplogTypes.LogLevel;
+export type LogTraceContext = OplogTypes.LogTraceContext;
+export type LogParameters = OplogTypes.LogParameters;
+export type ActivatePluginParameters = OplogTypes.ActivatePluginParameters;
+export type DeactivatePluginParameters = OplogTypes.DeactivatePluginParameters;
+export type RevertParameters = OplogTypes.RevertParameters;
+export type CancelPendingInvocationParameters = OplogTypes.CancelPendingInvocationParameters;
+export type SpanKind = OplogTypes.SpanKind;
+export type SpanOutcome = OplogTypes.SpanOutcome;
+export type SpanLink = OplogTypes.SpanLink;
+export type SpanStarted = OplogTypes.SpanStarted;
+export type SpanFinished = OplogTypes.SpanFinished;
+export type SpanAttributes = OplogTypes.SpanAttributes;
+export type BeginRemoteTransactionParameters = OplogTypes.BeginRemoteTransactionParameters;
+export type RemoteTransactionParameters = OplogTypes.RemoteTransactionParameters;
+export type SnapshotParameters = OplogTypes.SnapshotParameters;
+export type SnapshotConfirmedParameters = OplogTypes.SnapshotConfirmedParameters;
+export type SpanClosedParameters = OplogTypes.SpanClosedParameters;
+export type Timestamp = OplogTypes.Timestamp;
 
 // Re-export raw/internal types
-export type {
-  OplogPayload,
-  OplogExternalPayload,
-  WorkerError,
-  RawCreateParameters,
-  RawStartParameters,
-  RawEndParameters,
-  RawCancelledParameters,
-  RawCompletionDiscardedParameters,
-  RawCompletionDeliveredParameters,
-  RawHostStreamFrameParameters,
-  DurableStreamOutcome,
-  DurableStreamEventSummary,
-  RawDurableStreamRecordParameters,
-  RawAgentInvocationStartedParameters,
-  RawAgentInvocationFinishedParameters,
-  RawErrorParameters,
-  RawPendingAgentInvocationParameters,
-  RawSnapshotBasedUpdate,
-  RawUpdateDescription,
-  RawPendingUpdateParameters,
-  RawSuccessfulUpdateParameters,
-  ResourceTypeId,
-  RawCreateResourceParameters,
-  RawDropResourceParameters,
-  RawActivatePluginParameters,
-  RawDeactivatePluginParameters,
-  RawBeginRemoteTransactionParameters,
-  RawSnapshotParameters,
-  RawOplogProcessorCheckpointParameters,
-  OplogEntry,
-} from 'golem:api/oplog@1.5.0';
+export type OplogPayload = OplogTypes.OplogPayload;
+export type OplogExternalPayload = OplogTypes.OplogExternalPayload;
+export type WorkerError = OplogTypes.WorkerError;
+export type RawCreateParameters = OplogTypes.RawCreateParameters;
+export type RawStartParameters = OplogTypes.RawStartParameters;
+export type RawEndParameters = OplogTypes.RawEndParameters;
+export type RawCancelledParameters = OplogTypes.RawCancelledParameters;
+export type RawCompletionDiscardedParameters = OplogTypes.RawCompletionDiscardedParameters;
+export type RawCompletionDeliveredParameters = OplogTypes.RawCompletionDeliveredParameters;
+export type RawHostStreamFrameParameters = OplogTypes.RawHostStreamFrameParameters;
+export type DurableStreamOutcome = OplogTypes.DurableStreamOutcome;
+export type DurableStreamEventSummary = OplogTypes.DurableStreamEventSummary;
+export type RawDurableStreamRecordParameters = OplogTypes.RawDurableStreamRecordParameters;
+export type RawAgentInvocationStartedParameters = OplogTypes.RawAgentInvocationStartedParameters;
+export type RawAgentInvocationFinishedParameters = OplogTypes.RawAgentInvocationFinishedParameters;
+export type RawErrorParameters = OplogTypes.RawErrorParameters;
+export type RawPendingAgentInvocationParameters = OplogTypes.RawPendingAgentInvocationParameters;
+export type RawSnapshotBasedUpdate = OplogTypes.RawSnapshotBasedUpdate;
+export type RawUpdateDescription = OplogTypes.RawUpdateDescription;
+export type RawPendingUpdateParameters = OplogTypes.RawPendingUpdateParameters;
+export type RawSuccessfulUpdateParameters = OplogTypes.RawSuccessfulUpdateParameters;
+export type ResourceTypeId = OplogTypes.ResourceTypeId;
+export type RawCreateResourceParameters = OplogTypes.RawCreateResourceParameters;
+export type RawDropResourceParameters = OplogTypes.RawDropResourceParameters;
+export type RawActivatePluginParameters = OplogTypes.RawActivatePluginParameters;
+export type RawDeactivatePluginParameters = OplogTypes.RawDeactivatePluginParameters;
+export type RawBeginRemoteTransactionParameters = OplogTypes.RawBeginRemoteTransactionParameters;
+export type RawSnapshotParameters = OplogTypes.RawSnapshotParameters;
+export type RawOplogProcessorCheckpointParameters =
+  OplogTypes.RawOplogProcessorCheckpointParameters;
+export type OplogEntry = OplogTypes.OplogEntry;
 
 // Enriched types containing UUID-based fields
 

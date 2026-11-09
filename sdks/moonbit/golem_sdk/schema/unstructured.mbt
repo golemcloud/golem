@@ -14,9 +14,9 @@
 // Restrictions are type-level, like `Text[S]` and `Quantity[U]`: the phantom
 // type argument implements `AllowedLanguages` or `AllowedMimeTypes`, and its
 // static method lists the allowed codes. `AnyLanguage` and `AnyMimeType`
-// allow every value. Decoders accept the wrapper variant or a bare text/binary
-// value, and reject an inline language or MIME type that the restriction set
-// does not allow. Constructors do not validate.
+// allow every value. Decoders accept only the wrapper variant, and reject an
+// inline language or MIME type that the restriction set does not allow.
+// Constructors do not validate.
 
 ///|
 /// The set of language codes allowed for an `UnstructuredText[L]`.
@@ -359,8 +359,7 @@ pub impl[L : AllowedLanguages] FromSchema for UnstructuredText[L] with fn from_v
   v,
 ) {
   match v {
-    Variant(0, Some(Text(text, language))) | Text(text, language) =>
-      text_from_parts(text, language)
+    Variant(0, Some(Text(text, language))) => text_from_parts(text, language)
     Variant(1, Some(Url(url))) => Url(url)
     Variant(case, _) if case > 1 =>
       raise FromSchemaError::out_of_range(case, 2, "UnstructuredText")
@@ -376,7 +375,7 @@ pub impl[L : AllowedLanguages] FromSchema for UnstructuredText[L] with fn from_v
       )
     other =>
       raise FromSchemaError::shape_mismatch(
-        "variant or text",
+        "variant",
         value_kind(other),
         "UnstructuredText",
       )
@@ -427,7 +426,7 @@ pub impl[M : AllowedMimeTypes] FromSchema for UnstructuredBinary[M] with fn from
   v,
 ) {
   match v {
-    Variant(0, Some(Binary(bytes, mime_type))) | Binary(bytes, mime_type) =>
+    Variant(0, Some(Binary(bytes, mime_type))) =>
       binary_from_parts(bytes, mime_type)
     Variant(1, Some(Url(url))) => Url(url)
     Variant(case, _) if case > 1 =>
@@ -444,7 +443,7 @@ pub impl[M : AllowedMimeTypes] FromSchema for UnstructuredBinary[M] with fn from
       )
     other =>
       raise FromSchemaError::shape_mismatch(
-        "variant or binary",
+        "variant",
         value_kind(other),
         "UnstructuredBinary",
       )
@@ -504,13 +503,16 @@ pub impl[L] IntoWire for UnstructuredText[L] with fn append_wire(self, encoder) 
       append_unstructured_wire_value(
         encoder,
         unstructured_inline_case,
-        @types.TextValue({ text, language, }),
+        @types.TextValue({
+          text: wire_text(text, "unstructured text"),
+          language: wire_optional_text(language, "unstructured text language"),
+        }),
       )
     Url(url) =>
       append_unstructured_wire_value(
         encoder,
         unstructured_url_case,
-        @types.UrlValue(url),
+        @types.UrlValue(wire_text(url, "unstructured url")),
       )
   }
 }
@@ -532,7 +534,6 @@ pub impl[L : AllowedLanguages] FromWire for UnstructuredText[L] with fn read_wir
   index,
 ) {
   match wire_node(reader, index) {
-    @types.TextValue(value) => read_text_wire(value.text, value.language)
     @types.VariantValue({ case, payload, }) =>
       match (case, wire_node(reader, wire_payload(payload))) {
         (0, @types.TextValue(value)) =>
@@ -543,10 +544,7 @@ pub impl[L : AllowedLanguages] FromWire for UnstructuredText[L] with fn read_wir
             "UnstructuredText: expected inline text or url payload",
           )
       }
-    _ =>
-      raise WireError::Invalid(
-        "UnstructuredText: expected variant or text value",
-      )
+    _ => raise WireError::Invalid("UnstructuredText: expected variant value")
   }
 }
 
@@ -573,13 +571,18 @@ pub impl[M] IntoWire for UnstructuredBinary[M] with fn append_wire(
       append_unstructured_wire_value(
         encoder,
         unstructured_inline_case,
-        @types.BinaryValue({ bytes: bytes.to_fixedarray(), mime_type, }),
+        @types.BinaryValue({
+          bytes: bytes.to_fixedarray(),
+          mime_type: wire_optional_text(
+            mime_type, "unstructured binary mime type",
+          ),
+        }),
       )
     Url(url) =>
       append_unstructured_wire_value(
         encoder,
         unstructured_url_case,
-        @types.UrlValue(url),
+        @types.UrlValue(wire_text(url, "unstructured url")),
       )
   }
 }
@@ -601,7 +604,6 @@ pub impl[M : AllowedMimeTypes] FromWire for UnstructuredBinary[M] with fn read_w
   index,
 ) {
   match wire_node(reader, index) {
-    @types.BinaryValue(value) => read_binary_wire(value.bytes, value.mime_type)
     @types.VariantValue({ case, payload, }) =>
       match (case, wire_node(reader, wire_payload(payload))) {
         (0, @types.BinaryValue(value)) =>
@@ -612,9 +614,6 @@ pub impl[M : AllowedMimeTypes] FromWire for UnstructuredBinary[M] with fn read_w
             "UnstructuredBinary: expected inline binary or url payload",
           )
       }
-    _ =>
-      raise WireError::Invalid(
-        "UnstructuredBinary: expected variant or binary value",
-      )
+    _ => raise WireError::Invalid("UnstructuredBinary: expected variant value")
   }
 }

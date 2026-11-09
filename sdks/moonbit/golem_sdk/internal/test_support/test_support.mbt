@@ -3,21 +3,21 @@
 
 ///|
 /// The `resource-drop-count` kind of secrets.
-pub const SECRET_DROPS : Int = 0
+pub const SECRET_DROPS : Int32 = 0
 
 ///|
 /// The `resource-drop-count` kind of quota tokens.
-pub const QUOTA_TOKEN_DROPS : Int = 1
+pub const QUOTA_TOKEN_DROPS : Int32 = 1
 
 ///|
 /// The `resource-drop-count` kind of permission cards.
-pub const PERMISSION_CARD_DROPS : Int = 2
+pub const PERMISSION_CARD_DROPS : Int32 = 2
 
 ///|
 extern "wasm" fn reset_resource_drop_counts_ffi() = "golem:test" "reset-resource-drop-counts"
 
 ///|
-extern "wasm" fn resource_drop_count_ffi(kind : Int) -> Int = "golem:test" "resource-drop-count"
+extern "wasm" fn resource_drop_count_ffi(kind : Int32) -> Int32 = "golem:test" "resource-drop-count"
 
 ///|
 /// Resets the fake host's resource drop counters.
@@ -28,7 +28,7 @@ pub fn reset_resource_drop_counts() -> Unit {
 ///|
 /// The number of resources of `kind` that the guest dropped since the last
 /// reset.
-pub fn resource_drop_count(kind : Int) -> Int {
+pub fn resource_drop_count(kind : Int32) -> Int32 {
   resource_drop_count_ffi(kind)
 }
 
@@ -58,7 +58,7 @@ pub fn run_async(body : async () -> Unit) -> Unit raise {
 /// handle `quota`, and a secret that was already transferred.
 pub fn failing_card_input(
   card : @card.GuestPermissionCardHandle,
-  quota : Int,
+  quota : Int32,
 ) -> Array[@model.SchemaValue] {
   let consumed = @model.GuestSecretHandle::new(@types.Secret::Secret(quota + 1))
   ignore(consumed.take())

@@ -49,6 +49,8 @@ object FromSchema {
     }
   }
 
+  implicit val uri: FromSchema[java.net.URI] = RichSchemas.uriFromSchema
+
   implicit def derived[A](implicit schema: Schema[A]): FromSchema[A] =
     new FromSchema[A] {
       override def fromValue(value: SchemaValue): Either[FromSchemaError, A] =

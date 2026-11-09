@@ -163,8 +163,12 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
     where
         E: Executor<'c, Database = sqlx::Postgres>,
     {
+        // SQLx caches statements by SQL text, not parameter types. Guest statements
+        // must not seed that cache: a later call can bind a different source type.
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement).bind_params(params)?;
+            sqlx::query(statement)
+                .persistent(false)
+                .bind_params(params)?;
 
         let result = query
             .execute(executor)
@@ -182,7 +186,9 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         E: Executor<'c, Database = sqlx::Postgres>,
     {
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement).bind_params(params)?;
+            sqlx::query(statement)
+                .persistent(false)
+                .bind_params(params)?;
         let result = query
             .fetch_all(executor)
             .await
@@ -200,7 +206,9 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         E: Executor<'c, Database = sqlx::Postgres>,
     {
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement.to_string().leak()).bind_params(params)?;
+            sqlx::query(statement.to_string().leak())
+                .persistent(false)
+                .bind_params(params)?;
 
         let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(executor);
 
@@ -708,7 +716,7 @@ fn get_db_value_helper<G: PgValueGetter>(
             getter.try_get_db_value::<PgMoney>(value_category, |v| DbValue::Money(v.0))?
         }
         DbColumnType::Oid => {
-            getter.try_get_db_value::<Oid>(value_category, |v| DbValue::Oid(v.0))?
+            getter.try_get_db_value::<PgOid>(value_category, |v| DbValue::Oid(v.0))?
         }
         DbColumnType::Vector => getter
             .try_get_db_value::<pgvector::Vector>(value_category, |v| {
@@ -801,7 +809,7 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
         pg_type_name::MACADDR => Ok(DbColumnType::Macaddr),
         pg_type_name::BIT => Ok(DbColumnType::Bit),
         pg_type_name::VARBIT => Ok(DbColumnType::Varbit),
-        pg_type_name::OID => Ok(DbColumnType::Oid),
+        pg_type_name::OID | pg_type_name::REGCLASS => Ok(DbColumnType::Oid),
         pg_type_name::MONEY => Ok(DbColumnType::Money),
         pg_type_name::INT4RANGE => Ok(DbColumnType::Int4range),
         pg_type_name::INT8RANGE => Ok(DbColumnType::Int8range),
@@ -840,7 +848,9 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
         pg_type_name::MACADDR_ARRAY => Ok(DbColumnType::Macaddr.into_array()),
         pg_type_name::BIT_ARRAY => Ok(DbColumnType::Bit.into_array()),
         pg_type_name::VARBIT_ARRAY => Ok(DbColumnType::Varbit.into_array()),
-        pg_type_name::OID_ARRAY => Ok(DbColumnType::Oid.into_array()),
+        pg_type_name::OID_ARRAY | pg_type_name::REGCLASS_ARRAY => {
+            Ok(DbColumnType::Oid.into_array())
+        }
         pg_type_name::MONEY_ARRAY => Ok(DbColumnType::Money.into_array()),
         pg_type_name::INT4RANGE_ARRAY => Ok(DbColumnType::Int4range.into_array()),
         pg_type_name::INT8RANGE_ARRAY => Ok(DbColumnType::Int8range.into_array()),
@@ -1070,6 +1080,40 @@ impl PgValueGetter for PgValueRefValueGetter<'_> {
         T: for<'a> sqlx::Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
     {
         T::decode(self.0.clone()).map_err(|e| e.to_string())
+    }
+}
+
+struct PgOid(u32);
+
+impl Type<sqlx::Postgres> for PgOid {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <Oid as Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        matches!(
+            get_db_type_name(ty).as_str(),
+            pg_type_name::OID | pg_type_name::REGCLASS
+        )
+    }
+}
+
+impl sqlx::postgres::PgHasArrayType for PgOid {
+    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+        <Oid as sqlx::postgres::PgHasArrayType>::array_type_info()
+    }
+
+    fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        matches!(
+            get_db_type_name(ty).as_str(),
+            pg_type_name::OID_ARRAY | pg_type_name::REGCLASS_ARRAY
+        )
+    }
+}
+
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for PgOid {
+    fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        <Oid as sqlx::Decode<sqlx::Postgres>>::decode(value).map(|value| Self(value.0))
     }
 }
 
@@ -1498,6 +1542,13 @@ fn get_db_column_type_attributes(
 }
 
 fn get_db_type_name(type_info: &sqlx::postgres::PgTypeInfo) -> String {
+    // PostgreSQL qualifies a catalog type's name when the session shadows it.
+    // Its OID, unlike that display name, still identifies the built-in type.
+    match type_info.oid() {
+        Some(Oid(2205)) => return pg_type_name::REGCLASS.to_string(),
+        Some(Oid(2210)) => return pg_type_name::REGCLASS_ARRAY.to_string(),
+        _ => {}
+    }
     match type_info.kind() {
         PgTypeKind::Enum(_)
         | PgTypeKind::Composite(_)
@@ -1536,6 +1587,8 @@ pub(crate) mod pg_type_name {
     pub(crate) const INT4: &str = "INT4";
     pub(crate) const TEXT: &str = "TEXT";
     pub(crate) const OID: &str = "OID";
+    pub(crate) const REGCLASS: &str = "REGCLASS";
+    pub(crate) const REGCLASS_ARRAY: &str = "REGCLASS[]";
     pub(crate) const JSON: &str = "JSON";
     pub(crate) const JSON_ARRAY: &str = "JSON[]";
     pub(crate) const POINT: &str = "POINT";

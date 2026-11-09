@@ -771,7 +771,7 @@ test "narrow integer values are range-checked on decode" {
 /// `@types.Secret` is a plain index wrapper, so a handle can be fabricated for
 /// codec tests without a host call — as long as the resource is never dropped or
 /// passed to a host import.
-fn fake_secret_handle(index : Int) -> GuestSecretHandle {
+fn fake_secret_handle(index : Int32) -> GuestSecretHandle {
   GuestSecretHandle::new(@types.Secret::Secret(index))
 }
 
@@ -810,7 +810,7 @@ test "encode preflight rejects the same secret handle used twice" {
 /// fabricated for codec tests without a host call — as long as the resource is
 /// never dropped or passed to a host import (which a happy-path codec round-trip
 /// never does).
-fn fake_quota_handle(index : Int) -> GuestQuotaTokenHandle {
+fn fake_quota_handle(index : Int32) -> GuestQuotaTokenHandle {
   GuestQuotaTokenHandle::new(@types.QuotaToken::QuotaToken(index))
 }
 
@@ -989,7 +989,9 @@ test "decode rejects a handle node unreachable from the root" {
 ///|
 /// Build an opaque permission-card handle around a fake resource index. The
 /// handle is used only by the host-free schema codec tests.
-fn fake_permission_card_handle(index : Int) -> @card.GuestPermissionCardHandle {
+fn fake_permission_card_handle(
+  index : Int32,
+) -> @card.GuestPermissionCardHandle {
   @card.adopt(@types.PermissionCard::PermissionCard(index))
 }
 

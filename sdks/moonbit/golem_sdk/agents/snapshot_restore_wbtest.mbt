@@ -58,7 +58,7 @@ test "snapshot restoration installs only after success" {
   }
   let identity : String = context.identity(0)
   debug_inspect(identity, content="\"identity\"")
-  let numeric_identity : UInt = context.identity(1)
+  let numeric_identity : UInt32 = context.identity(1)
   assert_eq(numeric_identity, 42U)
   let failed = finish_restoration(
     registered,

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::filesystem::errors::OperationContext;
 
 impl<Adapter: SandboxFilesystemAdapter> FilesystemGenerationHandle<Adapter> {
     /// Gives one body its own admission and drainage boundary without sealing its siblings.
@@ -93,8 +94,7 @@ pub(crate) fn create_fresh(
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    let accounting = provisioning.agent_accounting();
-    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits, accounting)
+    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits)
 }
 
 /// Creates an empty sandbox filesystem and returns it in the `Created` stage.
@@ -109,14 +109,12 @@ pub fn create_fresh_with_pressure_recovery(
     limits: ResolvedStorageLimits,
     pressure_recovery: FilesystemWriteRecovery,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    let accounting = provisioning.agent_accounting();
     create_fresh_with_recovery::<SandboxFilesystem>(
         provisioning,
         scratch,
         agent,
         limits,
         Some(pressure_recovery),
-        accounting,
     )
 }
 
@@ -126,19 +124,17 @@ fn create_fresh_with<Adapter: SandboxFilesystemAdapter>(
     scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
-    accounting: AgentAccounting,
 ) -> impl Future<Output = Result<CreatedFilesystem<Adapter>, CreateFailure>> + Send + 'static {
-    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None, accounting)
+    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None)
 }
 
-/// Creates a generation on storage that accounts for each agent as `accounting` says.
+/// Creates a generation with the accounting policy of its sandbox.
 pub(super) async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
     provisioning: Adapter::Provisioning,
     scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
     pressure_recovery: Option<FilesystemWriteRecovery>,
-    accounting: AgentAccounting,
 ) -> Result<CreatedFilesystem<Adapter>, CreateFailure> {
     let name = SandboxFilesystemName::new(
         agent.environment_id.to_string(),
@@ -150,6 +146,7 @@ pub(super) async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter
         .await
         .map_err(|source| CreateFailure { source })?;
     let allocation_reader = sandbox.allocation_reader();
+    let accounting = sandbox.agent_accounting();
     Ok(AgentFilesystem {
         generation: Some(Arc::new(FilesystemGeneration {
             usage_activation: None,
@@ -546,7 +543,7 @@ async fn complete_limit_transition<Adapter: SandboxFilesystemAdapter>(
 }
 
 pub(super) fn decide_limit_transition(
-    allocation: crate::sandbox_filesystem::FilesystemAllocation,
+    allocation: crate::filesystem::volume::FilesystemAllocation,
     limits: FilesystemLimits,
 ) -> LimitDecision {
     if allocation.allocated_bytes > limits.allocated_bytes
@@ -680,9 +677,11 @@ fn spawn_cleanup<Adapter: SandboxFilesystemAdapter>(
                         .get_or_init(Default::default)
                         .fail(crate::metrics::resource_release::Failure::ExclusiveOwnership);
                     *sandbox = Some(adapter);
-                    Err(FilesystemStorageError::verification(
-                        "take exclusive ownership for agent filesystem deletion",
-                        std::path::Path::new("<agent-filesystem>"),
+                    Err(FilesystemStorageError::from(
+                        OperationContext::verification(
+                            "take exclusive ownership for agent filesystem deletion",
+                            None,
+                        ),
                     ))
                 }
             },
@@ -729,7 +728,7 @@ pub(super) fn spawn_module_task(task: impl Future<Output = ()> + Send + 'static)
     }
 }
 
-impl<Reader: crate::sandbox_filesystem::SandboxFilesystemAllocationReader> FilesystemUsageReader
+impl<Reader: crate::filesystem::sandbox::SandboxFilesystemAllocationReader> FilesystemUsageReader
     for GenerationUsageReader<Reader>
 {
     fn observe(

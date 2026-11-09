@@ -1,26 +1,26 @@
 import { spawnSync } from "node:child_process"
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { templateMatrix } from "./template-matrix.mjs"
+import {
+  templateGeneratorArgs,
+  toolProcessModules,
+} from "../../javascript/tool-process-template.mjs"
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sourceWit = join(packageDir, "wit")
-const witBindgenLine =
-  'wit-bindgen-p3 = { package = "wit-bindgen", version = "0.63.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
-const forkedLine =
-  'wit-bindgen-p3 = { package = "wit-bindgen", git = "https://github.com/golemcloud/wit-bindgen", rev = "67b83d42c135db8c5c42bf26c53ec162bbdca5ea", version = "=0.63.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
-
 const sharedModules = [
   ["effect", "dist/effect.mjs"],
   ["effect/http", "dist/effect-http.mjs"],
   ["effect/http-api", "dist/effect-httpapi.mjs"],
+  ...toolProcessModules,
 ]
 
 for (const template of templateMatrix) {
   const modules = [[template.sdkModuleName, template.sdkEntry], ...sharedModules]
   for (const [, entry] of modules) {
-    if (!existsSync(join(packageDir, entry))) {
+    if (!existsSync(resolve(packageDir, entry))) {
       throw new Error(`${entry} does not exist; run npm run build:bundle first`)
     }
   }
@@ -39,17 +39,9 @@ for (const template of templateMatrix) {
     "wasi-p3",
   ]
   for (const [name, entry] of modules) args.push("--js-modules", `${name}=${entry}`)
-  args.push("--js-modules", "user=@slot")
+  args.push("--js-modules", "user=@slot", ...templateGeneratorArgs)
 
   const result = spawnSync("wasm-rquickjs", args, { cwd: packageDir, stdio: "inherit" })
   if (result.error) throw result.error
   if (result.status !== 0) process.exit(result.status ?? 1)
-
-  const cargoToml = join(output, "Cargo.toml")
-  const original = readFileSync(cargoToml, "utf8")
-  const count = original.split(witBindgenLine).length - 1
-  if (count !== 1)
-    throw new Error(`Expected one pinned wit-bindgen line in ${cargoToml}, found ${count}`)
-  writeFileSync(cargoToml, original.replace(witBindgenLine, forkedLine))
-  rmSync(join(output, "Cargo.lock"), { force: true })
 }

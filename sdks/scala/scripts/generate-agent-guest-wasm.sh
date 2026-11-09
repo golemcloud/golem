@@ -12,6 +12,8 @@ set -euo pipefail
 # 2) runs `wasm-rquickjs generate-wrapper-crate` with a `@slot` for user JS injection.
 #    Unlike the TS SDK, we do NOT embed a separate SDK JS module here.
 #    Scala.js bundles the SDK into the user's `scala.js`, which golem-cli injects later.
+#    The shared tool-process modules and native bridge from sdks/javascript are embedded,
+#    so `node:child_process` dispatches to the component's bound tools as in the TS SDK.
 # 3) builds the component with `cargo build --target wasm32-wasip2`
 # 4) updates embedded plugin resources (used by sbt/mill plugins).
 #
@@ -20,6 +22,7 @@ set -euo pipefail
 #
 # Requirements:
 # - `wasm-rquickjs` (from crate `wasm-rquickjs-cli`)
+# - Node.js, to run the shared tool-process template helper
 # - Rust toolchain with `wasm32-wasip2` target (`rustup target add wasm32-wasip2`)
 #
 # Usage:
@@ -31,6 +34,31 @@ sdk_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 if ! command -v wasm-rquickjs &>/dev/null; then
   echo "[agent-guest] ERROR: wasm-rquickjs not found. Install it with: cargo install wasm-rquickjs-cli" >&2
+  exit 1
+fi
+
+if ! command -v node &>/dev/null; then
+  echo "[agent-guest] ERROR: node not found; it runs sdks/javascript/tool-process-template.mjs" >&2
+  exit 1
+fi
+
+tool_process_template="$sdk_root/../javascript/tool-process-template.mjs"
+# The user slot, the tool-process JavaScript modules, and the shared generator arguments
+# (the native bridge module and the forked wit-bindgen), one argument per line. The user
+# slot comes first: wasm-rquickjs takes the guest exports from the first module.
+template_args=()
+while IFS= read -r argument; do
+  template_args+=("$argument")
+done < <(
+  node --input-type=module -e '
+    const { templateGeneratorArgs, toolProcessModules } = await import(process.argv[1]);
+    console.log("--js-modules\nuser=@slot");
+    for (const [name, source] of toolProcessModules) console.log(`--js-modules\n${name}=${source}`);
+    for (const argument of templateGeneratorArgs) console.log(argument);
+  ' "$tool_process_template"
+)
+if (( ${#template_args[@]} == 0 )); then
+  echo "[agent-guest] ERROR: no template arguments from $tool_process_template" >&2
   exit 1
 fi
 
@@ -51,9 +79,6 @@ if [[ ! -d "$wit_dir/deps" ]]; then
   echo "[agent-guest]   Run 'cargo make wit' from the repository root first." >&2
   exit 1
 fi
-
-wit_bindgen_line='wit-bindgen-p3 = { package = "wit-bindgen", version = "0.63.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
-forked_line='wit-bindgen-p3 = { package = "wit-bindgen", git = "https://github.com/golemcloud/wit-bindgen", rev = "67b83d42c135db8c5c42bf26c53ec162bbdca5ea", version = "=0.63.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
 
 if [[ -f "$HOME/.cargo/env" ]]; then
   # shellcheck disable=SC1091
@@ -111,30 +136,8 @@ for role_spec in "${roles[@]}"; do
     --wit "$wit_root" \
     --world "$world" \
     --target wasi-p3 \
-    --js-modules "user=@slot" \
+    "${template_args[@]}" \
     --output "$wrapper_dir"
-
-  # wasm-rquickjs has no dependency override for its generated skeleton, so
-  # point Preview 3 bindings at Golem's outline-lift fork for every role.
-  cargo_toml="$wrapper_dir/Cargo.toml"
-  if [[ "$(grep -cF -- "$wit_bindgen_line" "$cargo_toml")" != "1" ]]; then
-    echo "[agent-guest] ERROR: expected exactly one wit-bindgen dependency line in $cargo_toml" >&2
-    echo "[agent-guest]   The wasm-rquickjs skeleton may have changed; update this script." >&2
-    exit 1
-  fi
-  WB_LINE="$wit_bindgen_line" FORK_LINE="$forked_line" \
-    perl -ni -e '
-      chomp(my $chomped = $_);
-      if ($chomped eq $ENV{WB_LINE}) { print "$ENV{FORK_LINE}\n"; next; }
-      print;
-    ' "$cargo_toml"
-  if ! grep -qF -- "$forked_line" "$cargo_toml" || grep -qF -- "$wit_bindgen_line" "$cargo_toml"; then
-    echo "[agent-guest] ERROR: failed to rewrite wit-bindgen dependency in $cargo_toml" >&2
-    exit 1
-  fi
-
-  # The generated lock still pins the replaced upstream dependency graph.
-  rm -f "$wrapper_dir/Cargo.lock"
 
   out_wasm="$target_dir/wasm32-wasip2/release/$artifact"
   rm -f "$out_wasm"

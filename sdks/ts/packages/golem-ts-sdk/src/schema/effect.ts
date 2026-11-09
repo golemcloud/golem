@@ -133,9 +133,9 @@ function walkAstBody(ast: Ast, reg: RecursionRegistry): SchemaCodec {
       );
     case 'BigIntKeyword':
       return leaf(
-        t.u64(),
-        (value) => v.u64(value as bigint),
-        (sv) => (sv as Extract<SchemaValue, { tag: 'u64' }>).value,
+        t.s64(),
+        (value) => v.s64(value as bigint),
+        (sv) => (sv as Extract<SchemaValue, { tag: 's64' }>).value,
       );
     case 'Literal': {
       const lit = ast.literal;
@@ -160,8 +160,8 @@ function walkAstBody(ast: Ast, reg: RecursionRegistry): SchemaCodec {
           );
         case 'bigint':
           return leaf(
-            t.u64(),
-            () => v.u64(lit as bigint),
+            t.s64(),
+            () => v.s64(lit as bigint),
             () => lit,
           );
         default:

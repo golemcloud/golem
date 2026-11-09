@@ -6,6 +6,7 @@ import {
 }
 
 // Filesystem helpers preserve WASI success/error values as Result data.
+
 warnings = "-result_error_return"
 
 supported_targets = "+wasm"

@@ -2,40 +2,40 @@
 #derive.golem_schema
 pub(all) struct NestedStreamInput {
   labels : @schema.AgentStream[String]
-  values : @schema.AgentStream[UInt]
+  values : @schema.AgentStream[UInt32]
 }
 
 ///|
 #derive.golem_schema
 pub(all) struct NestedStreamItem {
   label : String
-  values : @schema.AgentStream[UInt]
+  values : @schema.AgentStream[UInt32]
 }
 
 ///|
 #derive.golem_schema
 pub(all) struct MoonbitStreamingRpcReport {
-  consumed : Array[UInt]
-  produced : Array[UInt]
-  transformed : Array[UInt]
+  consumed : Array[UInt32]
+  produced : Array[UInt32]
+  transformed : Array[UInt32]
   scalar_label : String
-  scalar_values : Array[UInt]
+  scalar_values : Array[UInt32]
   nested_labels : Array[String]
-  nested_values : Array[UInt]
+  nested_values : Array[UInt32]
   nested_item_labels : Array[String]
-  nested_item_values : Array[Array[UInt]]
-  first_sibling : Array[UInt]
-  second_sibling : Array[UInt]
-  forwarded : Array[UInt]
-  recoverable : Array[Result[UInt, String]]
-  early_value : UInt
+  nested_item_values : Array[Array[UInt32]]
+  first_sibling : Array[UInt32]
+  second_sibling : Array[UInt32]
+  forwarded : Array[UInt32]
+  recoverable : Array[Result[UInt32, String]]
+  early_value : UInt32
   ping : String
   increment : UInt64
 }
 
 ///|
-fn uint_range(start : Int, count : Int) -> Array[UInt] {
-  let values : Array[UInt] = []
+fn uint_range(start : Int32, count : Int32) -> Array[UInt32] {
+  let values : Array[UInt32] = []
   for i in 0..<count {
     values.push((start + i).reinterpret_as_uint())
   }
@@ -43,16 +43,18 @@ fn uint_range(start : Int, count : Int) -> Array[UInt] {
 }
 
 ///|
-fn uint_stream(values : Array[UInt]) -> @schema.AgentStream[UInt] {
+fn uint_stream(values : Array[UInt32]) -> @schema.AgentStream[UInt32] {
   @schema.AgentStream::produce(async fn(writer) {
     let _ = writer.write_all(values)
   })
 }
 
 ///|
-async fn collect_uint_stream(stream : @schema.AgentStream[UInt]) -> Array[UInt] {
+async fn collect_uint_stream(
+  stream : @schema.AgentStream[UInt32],
+) -> Array[UInt32] {
   defer stream.drop()
-  let values : Array[UInt] = []
+  let values : Array[UInt32] = []
   for ;; {
     match stream.read() {
       Some(value) => values.push(value)
@@ -77,10 +79,10 @@ async fn collect_string_stream(
 
 ///|
 async fn collect_result_stream(
-  stream : @schema.AgentStream[Result[UInt, String]],
-) -> Array[Result[UInt, String]] {
+  stream : @schema.AgentStream[Result[UInt32, String]],
+) -> Array[Result[UInt32, String]] {
   defer stream.drop()
-  let values : Array[Result[UInt, String]] = []
+  let values : Array[Result[UInt32, String]] = []
   for ;; {
     match stream.read() {
       Some(value) => values.push(value)
@@ -104,8 +106,8 @@ fn MoonbitStreamingRpcTarget::new(name : String) -> MoonbitStreamingRpcTarget {
 ///|
 pub async fn MoonbitStreamingRpcTarget::consume(
   self : Self,
-  input : @schema.AgentStream[UInt],
-) -> Array[UInt] {
+  input : @schema.AgentStream[UInt32],
+) -> Array[UInt32] {
   let _ = self
   collect_uint_stream(input)
 }
@@ -113,7 +115,7 @@ pub async fn MoonbitStreamingRpcTarget::consume(
 ///|
 pub fn MoonbitStreamingRpcTarget::produce(
   self : Self,
-) -> @schema.AgentStream[UInt] {
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   uint_stream([3U, 5U, 8U])
 }
@@ -121,8 +123,8 @@ pub fn MoonbitStreamingRpcTarget::produce(
 ///|
 pub fn MoonbitStreamingRpcTarget::transform(
   self : Self,
-  input : @schema.AgentStream[UInt],
-) -> @schema.AgentStream[UInt] {
+  input : @schema.AgentStream[UInt32],
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   @schema.AgentStream::produce(
     async fn(writer) {
@@ -144,7 +146,7 @@ pub fn MoonbitStreamingRpcTarget::transform(
 ///|
 pub fn MoonbitStreamingRpcTarget::scalar_and_stream(
   self : Self,
-) -> (String, @schema.AgentStream[UInt]) {
+) -> (String, @schema.AgentStream[UInt32]) {
   let _ = self
   ("moonbit", uint_stream([13U, 21U, 34U]))
 }
@@ -153,7 +155,7 @@ pub fn MoonbitStreamingRpcTarget::scalar_and_stream(
 pub async fn MoonbitStreamingRpcTarget::consume_nested(
   self : Self,
   input : NestedStreamInput,
-) -> (Array[String], Array[UInt]) {
+) -> (Array[String], Array[UInt32]) {
   let _ = self
   let { labels, values, } = input
   @asyncCore.with_task_group(async fn(group) {
@@ -184,7 +186,7 @@ pub fn MoonbitStreamingRpcTarget::produce_nested_items(
 ///|
 pub fn MoonbitStreamingRpcTarget::produce_siblings(
   self : Self,
-) -> (@schema.AgentStream[UInt], @schema.AgentStream[UInt]) {
+) -> (@schema.AgentStream[UInt32], @schema.AgentStream[UInt32]) {
   let _ = self
   (uint_stream(uint_range(0, 192)), uint_stream(uint_range(1000, 192)))
 }
@@ -192,8 +194,8 @@ pub fn MoonbitStreamingRpcTarget::produce_siblings(
 ///|
 pub fn MoonbitStreamingRpcTarget::forward_unread(
   self : Self,
-  input : @schema.AgentStream[UInt],
-) -> @schema.AgentStream[UInt] {
+  input : @schema.AgentStream[UInt32],
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   input
 }
@@ -201,7 +203,7 @@ pub fn MoonbitStreamingRpcTarget::forward_unread(
 ///|
 pub fn MoonbitStreamingRpcTarget::produce_recoverable_results(
   self : Self,
-) -> @schema.AgentStream[Result[UInt, String]] {
+) -> @schema.AgentStream[Result[UInt32, String]] {
   let _ = self
   @schema.AgentStream::produce(async fn(writer) {
     let _ = writer.write_all([Ok(1U), Err("recoverable"), Ok(2U)])
@@ -211,7 +213,7 @@ pub fn MoonbitStreamingRpcTarget::produce_recoverable_results(
 ///|
 pub fn MoonbitStreamingRpcTarget::produce_failure(
   self : Self,
-) -> @schema.AgentStream[UInt] {
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   @schema.AgentStream::produce(async fn(writer) {
     let _ = writer.write_one(41U)
@@ -222,7 +224,7 @@ pub fn MoonbitStreamingRpcTarget::produce_failure(
 ///|
 pub fn MoonbitStreamingRpcTarget::produce_cancellable(
   self : Self,
-) -> @schema.AgentStream[UInt] {
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   @schema.AgentStream::produce(async fn(writer) {
     if writer.write_one(43U) is @schema.PeerDropped {
@@ -239,7 +241,7 @@ pub fn MoonbitStreamingRpcTarget::produce_cancellable(
 ///|
 pub fn MoonbitStreamingRpcTarget::produce_many(
   self : Self,
-) -> @schema.AgentStream[UInt] {
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   uint_stream(uint_range(0, 192))
 }
@@ -272,8 +274,8 @@ fn MoonbitStreamingRpcCrossTarget::new(
 ///|
 pub async fn MoonbitStreamingRpcCrossTarget::consume(
   self : Self,
-  input : @schema.AgentStream[UInt],
-) -> Array[UInt] {
+  input : @schema.AgentStream[UInt32],
+) -> Array[UInt32] {
   let _ = self
   collect_uint_stream(input)
 }
@@ -281,8 +283,8 @@ pub async fn MoonbitStreamingRpcCrossTarget::consume(
 ///|
 pub async fn MoonbitStreamingRpcCrossTarget::consume_one_then_drop(
   self : Self,
-  input : @schema.AgentStream[UInt],
-) -> UInt {
+  input : @schema.AgentStream[UInt32],
+) -> UInt32 {
   let _ = self
   defer input.drop()
   input.read().unwrap()
@@ -291,7 +293,7 @@ pub async fn MoonbitStreamingRpcCrossTarget::consume_one_then_drop(
 ///|
 pub fn MoonbitStreamingRpcCrossTarget::produce(
   self : Self,
-) -> @schema.AgentStream[UInt] {
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   uint_stream([3U, 5U, 8U])
 }
@@ -299,8 +301,8 @@ pub fn MoonbitStreamingRpcCrossTarget::produce(
 ///|
 pub fn MoonbitStreamingRpcCrossTarget::transform(
   self : Self,
-  input : @schema.AgentStream[UInt],
-) -> @schema.AgentStream[UInt] {
+  input : @schema.AgentStream[UInt32],
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   @schema.AgentStream::produce(
     async fn(writer) {
@@ -322,7 +324,7 @@ pub fn MoonbitStreamingRpcCrossTarget::transform(
 ///|
 pub fn MoonbitStreamingRpcCrossTarget::scalar_and_stream(
   self : Self,
-) -> (String, @schema.AgentStream[UInt]) {
+) -> (String, @schema.AgentStream[UInt32]) {
   let _ = self
   ("moonbit", uint_stream([13U, 21U, 34U]))
 }
@@ -331,7 +333,7 @@ pub fn MoonbitStreamingRpcCrossTarget::scalar_and_stream(
 pub async fn MoonbitStreamingRpcCrossTarget::consume_nested(
   self : Self,
   input : NestedStreamInput,
-) -> (Array[String], Array[UInt]) {
+) -> (Array[String], Array[UInt32]) {
   let _ = self
   let { labels, values, } = input
   @asyncCore.with_task_group(async fn(group) {
@@ -362,7 +364,7 @@ pub fn MoonbitStreamingRpcCrossTarget::produce_nested_items(
 ///|
 pub fn MoonbitStreamingRpcCrossTarget::produce_siblings(
   self : Self,
-) -> (@schema.AgentStream[UInt], @schema.AgentStream[UInt]) {
+) -> (@schema.AgentStream[UInt32], @schema.AgentStream[UInt32]) {
   let _ = self
   (uint_stream(uint_range(0, 192)), uint_stream(uint_range(1000, 192)))
 }
@@ -370,8 +372,8 @@ pub fn MoonbitStreamingRpcCrossTarget::produce_siblings(
 ///|
 pub fn MoonbitStreamingRpcCrossTarget::forward_unread(
   self : Self,
-  input : @schema.AgentStream[UInt],
-) -> @schema.AgentStream[UInt] {
+  input : @schema.AgentStream[UInt32],
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   input
 }
@@ -379,7 +381,7 @@ pub fn MoonbitStreamingRpcCrossTarget::forward_unread(
 ///|
 pub fn MoonbitStreamingRpcCrossTarget::produce_recoverable_results(
   self : Self,
-) -> @schema.AgentStream[Result[UInt, String]] {
+) -> @schema.AgentStream[Result[UInt32, String]] {
   let _ = self
   @schema.AgentStream::produce(async fn(writer) {
     let _ = writer.write_all([Ok(1U), Err("recoverable"), Ok(2U)])
@@ -389,7 +391,7 @@ pub fn MoonbitStreamingRpcCrossTarget::produce_recoverable_results(
 ///|
 pub fn MoonbitStreamingRpcCrossTarget::produce_failure(
   self : Self,
-) -> @schema.AgentStream[UInt] {
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   @schema.AgentStream::produce(async fn(writer) {
     let _ = writer.write_one(41U)
@@ -400,7 +402,7 @@ pub fn MoonbitStreamingRpcCrossTarget::produce_failure(
 ///|
 pub fn MoonbitStreamingRpcCrossTarget::produce_cancellable(
   self : Self,
-) -> @schema.AgentStream[UInt] {
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   @schema.AgentStream::produce(async fn(writer) {
     if writer.write_one(43U) is @schema.PeerDropped {
@@ -417,7 +419,7 @@ pub fn MoonbitStreamingRpcCrossTarget::produce_cancellable(
 ///|
 pub fn MoonbitStreamingRpcCrossTarget::produce_many(
   self : Self,
-) -> @schema.AgentStream[UInt] {
+) -> @schema.AgentStream[UInt32] {
   let _ = self
   uint_stream(uint_range(0, 192))
 }
@@ -469,7 +471,7 @@ pub async fn MoonbitStreamingRpcCaller::run(
     let nested_items = target.produce_nested_items()
     defer nested_items.drop()
     let nested_item_labels : Array[String] = []
-    let nested_item_values : Array[Array[UInt]] = []
+    let nested_item_values : Array[Array[UInt32]] = []
     for ;; {
       match nested_items.read() {
         Some(item) => {
@@ -522,7 +524,7 @@ pub async fn MoonbitStreamingRpcCaller::run(
 ///|
 pub async fn MoonbitStreamingRpcCaller::call_producer_failure(
   self : Self,
-) -> Array[UInt] {
+) -> Array[UInt32] {
   MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
     target,
   ) {
@@ -533,7 +535,7 @@ pub async fn MoonbitStreamingRpcCaller::call_producer_failure(
 ///|
 pub async fn MoonbitStreamingRpcCaller::call_producer_cancellation(
   self : Self,
-) -> (UInt, String) {
+) -> (UInt32, String) {
   MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
     target,
   ) {
@@ -547,7 +549,7 @@ pub async fn MoonbitStreamingRpcCaller::call_producer_cancellation(
 ///|
 pub async fn MoonbitStreamingRpcCaller::call_server_cancellation(
   self : Self,
-) -> (UInt, Bool, String) {
+) -> (UInt32, Bool, String) {
   MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
     target,
   ) {
@@ -568,7 +570,7 @@ pub async fn MoonbitStreamingRpcCaller::call_server_cancellation(
 ///|
 pub async fn MoonbitStreamingRpcCaller::drop_output_early(
   self : Self,
-) -> (UInt, String) {
+) -> (UInt32, String) {
   MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
     target,
   ) {

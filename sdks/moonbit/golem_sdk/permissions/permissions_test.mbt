@@ -13,35 +13,35 @@
 extern "wasm" fn reset_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
 
 ///|
-extern "wasm" fn resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+extern "wasm" fn resource_drop_count(kind : Int32) -> Int32 = "golem:test" "resource-drop-count"
 
 ///|
 extern "wasm" fn reset_permission_host() = "golem:test" "reset-permission-host"
 
 ///|
-extern "wasm" fn set_persistent_template(enabled : Int) = "golem:test" "set-persistent-template"
+extern "wasm" fn set_persistent_template(enabled : Int32) = "golem:test" "set-persistent-template"
 
 ///|
 extern "wasm" fn lend_permission_scope_card() = "golem:test" "lend-permission-scope-card"
 
 ///|
-extern "wasm" fn set_permission_card_expiry(handle : Int, seconds : Int) = "golem:test" "set-permission-card-expiry"
+extern "wasm" fn set_permission_card_expiry(handle : Int32, seconds : Int32) = "golem:test" "set-permission-card-expiry"
 
 ///|
-extern "wasm" fn push_permission_host_buffer(ptr : Int, size : Int) = "golem:test" "push-permission-host-buffer"
+extern "wasm" fn push_permission_host_buffer(ptr : Int32, size : Int32) = "golem:test" "push-permission-host-buffer"
 
 ///|
-extern "wasm" fn permission_host_stat(field : Int) -> Int = "golem:test" "permission-host-stat"
+extern "wasm" fn permission_host_stat(field : Int32) -> Int32 = "golem:test" "permission-host-stat"
 
 ///|
-extern "wasm" fn guest_malloc(size : Int) -> Int =
+extern "wasm" fn guest_malloc(size : Int32) -> Int32 =
   #|(func (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
   #| local.tee 1 i32.const 0 call $moonbit.init_array8
   #| local.get 1)
 
 ///|
-const PERMISSION_CARD_DROPS : Int = 2
+const PERMISSION_CARD_DROPS : Int32 = 2
 
 ///|
 /// Resets the fake host and gives it guest buffers for returned strings and
@@ -393,7 +393,7 @@ test "panic using a revoked template card aborts" {
 test "panic revoking an installed card aborts" {
   fresh_host()
   let card = wallet_cards().0
-  card.install(App({ high_bits: 0, low_bits: 0, })) catch {
+  card.install(App(@schema.Uuid::from_bits(0, 0))) catch {
     _ => ()
   }
   ignore(card.revoke()) catch {
@@ -405,7 +405,7 @@ test "panic revoking an installed card aborts" {
 test "panic revoking an installed template card aborts" {
   fresh_host()
   let card = wallet_cards().1
-  card.install(App({ high_bits: 0, low_bits: 0, })) catch {
+  card.install(App(@schema.Uuid::from_bits(0, 0))) catch {
     _ => ()
   }
   ignore(card.revoke()) catch {
@@ -463,7 +463,7 @@ test "a card lowered into an agent value moves exactly once" {
 ///|
 /// A wire tree that names the handle of a held card, built with the public raw
 /// bindings.
-fn forged_tree(index : Int) -> @types.SchemaValueTree {
+fn forged_tree(index : Int32) -> @types.SchemaValueTree {
   { value_nodes: [PermissionCardHandle(PermissionCard(index))], root: 0, }
 }
 

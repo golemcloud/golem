@@ -20,6 +20,7 @@ import golem.host.Rdbms
 import golem.host.Rdbms._
 import golem.runtime.annotations.agentImplementation
 
+import java.util.UUID
 import scala.annotation.unused
 import scala.concurrent.Future
 
@@ -62,7 +63,7 @@ final class DatabaseDemoImpl(@unused private val name: String) extends DatabaseD
                 case PostgresDbValue.BooleanVal(b) => sb.append(s"    bool: $b\n")
                 case PostgresDbValue.Timestamp(ts) =>
                   sb.append(s"    ts: ${ts.date.year}-${ts.date.month}-${ts.date.day}\n")
-                case PostgresDbValue.Uuid(u) => sb.append(s"    uuid: hi=${u.highBits} lo=${u.lowBits}\n")
+                case PostgresDbValue.Uuid(u) => sb.append(s"    uuid: $u\n")
                 case PostgresDbValue.Json(j) => sb.append(s"    json: $j\n")
                 case PostgresDbValue.Null    => sb.append("    null\n")
                 case other                   => sb.append(s"    other: $other\n")
@@ -146,14 +147,14 @@ final class DatabaseDemoImpl(@unused private val name: String) extends DatabaseD
     val ts     = DbTimestamp(date, time)
     val tstz   = DbTimestampTz(ts, 3600)
     val timeTz = DbTimeTz(time, -18000)
-    val uuid   = DbUuid(BigInt("123456789012345678"), BigInt("987654321098765432"))
+    val uuid   = UUID.fromString("01b69b4b-acd0-5f4e-0db4-da5f7ef5d578")
 
     sb.append(s"DbDate: $date\n")
     sb.append(s"DbTime: $time\n")
     sb.append(s"DbTimestamp: $ts\n")
     sb.append(s"DbTimestampTz: $tstz\n")
     sb.append(s"DbTimeTz: $timeTz\n")
-    sb.append(s"DbUuid: $uuid\n")
+    sb.append(s"UUID: $uuid\n")
 
     val ipv4 = IpAddress.Ipv4(192, 168, 1, 1)
     val ipv6 = IpAddress.Ipv6(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1)

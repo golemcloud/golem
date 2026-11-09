@@ -10,56 +10,6 @@ import {
 // Values
 pub async fn audit(@tool-middleware.RawToolInvocation, @tool-middleware.UnderlyingTool) -> Result[@tool-middleware.RawInvocationResult, @tool-middleware.ToolInvokeError[@tool-middleware.RawTypedSchemaValue]]
 
-pub fn cabi_realloc(Int32, Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInitialize(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInvokeGolemAgentGuest(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInvokeGolemToolGuest(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInvokeToolMiddleware(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncLoad(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncSave(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportDiscoverAgentTypes() -> Int32
-
-pub fn wasmExportDiscoverAgentTypesPostReturn(Int32) -> Unit
-
-pub fn wasmExportDiscoverToolMiddlewares() -> Int32
-
-pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int32) -> Unit
-
-pub fn wasmExportDiscoverTools() -> Int32
-
-pub fn wasmExportDiscoverToolsPostReturn(Int32) -> Unit
-
-pub fn wasmExportGetDefinition() -> Int32
-
-pub fn wasmExportGetDefinitionPostReturn(Int32) -> Unit
-
-pub fn wasmExportGetTool(Int32, Int32) -> Int32
-
-pub fn wasmExportGetToolMiddleware(Int32, Int32) -> Int32
-
-pub fn wasmExportGetToolMiddlewarePostReturn(Int32) -> Unit
-
-pub fn wasmExportGetToolPostReturn(Int32) -> Unit
-
-pub fn wasmExportInitialize(Int32) -> Int32
-
-pub fn wasmExportInvokeGolemAgentGuest(Int32) -> Int32
-
-pub fn wasmExportInvokeGolemToolGuest(Int32) -> Int32
-
-pub fn wasmExportInvokeToolMiddleware(Int32) -> Int32
-
-pub fn wasmExportLoad(Int32, Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportSave() -> Int32
-
 // Errors
 
 // Types and methods

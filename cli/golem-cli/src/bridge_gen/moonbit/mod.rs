@@ -27,6 +27,7 @@
 pub mod mbt_writer;
 #[allow(clippy::module_inception)]
 pub mod moonbit;
+mod rich;
 mod streams;
 pub mod tool;
 pub mod type_name;
@@ -38,6 +39,7 @@ use crate::bridge_gen::moonbit::moonbit::{
     RESERVED_TYPE_NAMES, to_moonbit_constructor_ident, to_moonbit_term_ident, unique_idents,
     unique_idents_with_reserved,
 };
+use crate::bridge_gen::moonbit::rich::RichMarkers;
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, projected_input_schema_graph,
@@ -144,6 +146,7 @@ pub struct MoonBitBridgeGenerator {
     /// deduplicated by case list. Precomputed during construction so the
     /// `&self` emitters can look them up.
     multimodals: Vec<MultimodalEnum>,
+    rich: RichMarkers,
 }
 
 impl BridgeGenerator for MoonBitBridgeGenerator {
@@ -252,6 +255,13 @@ impl MoonBitBridgeGenerator {
 
         let multimodals =
             Self::collect_multimodals(&agent_type, &type_naming, same_language, &reserved_names)?;
+        let used_names = reserved_names
+            .iter()
+            .cloned()
+            .chain(type_naming.types().map(|(_, name)| name.name.clone()))
+            .chain(multimodals.iter().map(|mm| mm.name.clone()))
+            .collect::<Vec<_>>();
+        let rich = RichMarkers::collect(&agent_type, type_naming.graph(), &used_names);
 
         Ok(Self {
             target_path: target_path.to_path_buf(),
@@ -261,6 +271,7 @@ impl MoonBitBridgeGenerator {
             same_language,
             type_naming,
             multimodals,
+            rich,
         })
     }
 
@@ -505,6 +516,11 @@ impl MoonBitBridgeGenerator {
     // --- Type definitions ---------------------------------------------------
 
     fn write_type_definitions(&self, writer: &mut MoonBitWriter) -> anyhow::Result<()> {
+        let package = match self.mode {
+            MoonBitBridgeMode::ExternalRest => "@runtime",
+            MoonBitBridgeMode::GuestWasmRpc => "@schema",
+        };
+        self.rich.write(writer, package, &self.module_name());
         let types: Vec<(SchemaType, MoonBitTypeName)> = self
             .type_naming
             .types()
@@ -840,21 +856,21 @@ fn[T] codec_mismatch(expected : String, value : @model.SchemaValue) -> T raise {
 
 fn guest_as_bool(v : @model.SchemaValue) -> Bool raise { match v { Bool(x) => x; o => codec_mismatch("bool", o) } }
 fn guest_as_s8(v : @model.SchemaValue) -> Int raise { match v { S8(x) => { if x < -128 || x > 127 { raise CodecError("s8 value out of range: " + x.to_string()) }; x }; o => codec_mismatch("s8", o) } }
-fn guest_as_s16(v : @model.SchemaValue) -> Int raise { match v { S16(x) => { if x < -32768 || x > 32767 { raise CodecError("s16 value out of range: " + x.to_string()) }; x }; o => codec_mismatch("s16", o) } }
+fn guest_as_s16(v : @model.SchemaValue) -> Int16 raise { match v { S16(x) => { if x < -32768 || x > 32767 { raise CodecError("s16 value out of range: " + x.to_string()) }; Int16::from_int(x) }; o => codec_mismatch("s16", o) } }
 fn guest_as_s32(v : @model.SchemaValue) -> Int raise { match v { S32(x) => x; o => codec_mismatch("s32", o) } }
 fn guest_as_s64(v : @model.SchemaValue) -> Int64 raise { match v { S64(x) => x; o => codec_mismatch("s64", o) } }
 fn guest_as_u8(v : @model.SchemaValue) -> Byte raise { match v { U8(x) => x; o => codec_mismatch("u8", o) } }
-fn guest_as_u16(v : @model.SchemaValue) -> Int raise { match v { U16(x) => { if x > 65535 { raise CodecError("u16 value out of range: " + x.to_string()) }; x.reinterpret_as_int() }; o => codec_mismatch("u16", o) } }
+fn guest_as_u16(v : @model.SchemaValue) -> UInt16 raise { match v { U16(x) => { if x > 65535 { raise CodecError("u16 value out of range: " + x.to_string()) }; x.to_uint16() }; o => codec_mismatch("u16", o) } }
 fn guest_as_u32(v : @model.SchemaValue) -> UInt raise { match v { U32(x) => x; o => codec_mismatch("u32", o) } }
 fn guest_as_u64(v : @model.SchemaValue) -> UInt64 raise { match v { U64(x) => x; o => codec_mismatch("u64", o) } }
 fn guest_as_f32(v : @model.SchemaValue) -> Float raise { match v { F32(x) => x; o => codec_mismatch("f32", o) } }
 fn guest_as_f64(v : @model.SchemaValue) -> Double raise { match v { F64(x) => x; o => codec_mismatch("f64", o) } }
 fn guest_as_char(v : @model.SchemaValue) -> Char raise { match v { Char(x) => x; o => codec_mismatch("char", o) } }
 fn guest_as_string(v : @model.SchemaValue) -> String raise { match v { String(x) => x; o => codec_mismatch("string", o) } }
-fn guest_as_path(v : @model.SchemaValue) -> String raise { match v { Path(x) => x; o => codec_mismatch("path", o) } }
-fn guest_as_url(v : @model.SchemaValue) -> String raise { match v { Url(x) => x; o => codec_mismatch("url", o) } }
-fn guest_as_datetime(v : @model.SchemaValue) -> @types.Datetime raise { match v { Datetime(x) => x; o => codec_mismatch("datetime", o) } }
-fn guest_as_duration(v : @model.SchemaValue) -> Int64 raise { match v { Duration(x) => x; o => codec_mismatch("duration", o) } }
+fn guest_as_path(v : @model.SchemaValue) -> @schema.Path raise { match v { Path(x) => @schema.Path::new(x); o => codec_mismatch("path", o) } }
+fn guest_as_url(v : @model.SchemaValue) -> @schema.Url raise { match v { Url(x) => @schema.Url::new(x); o => codec_mismatch("url", o) } }
+fn guest_as_datetime(v : @model.SchemaValue) -> @schema.Datetime raise { match v { Datetime(x) => @schema.Datetime::from_wit(x) catch { @schema.DatetimeError(message) => raise CodecError(message) }; o => codec_mismatch("datetime", o) } }
+fn guest_as_duration(v : @model.SchemaValue) -> @schema.Duration raise { match v { Duration(x) => @schema.Duration::new(x); o => codec_mismatch("duration", o) } }
 fn guest_as_record(v : @model.SchemaValue) -> Array[@model.SchemaValue] raise { match v { Record(x) => x; o => codec_mismatch("record", o) } }
 fn guest_as_variant(v : @model.SchemaValue) -> (UInt, @model.SchemaValue?) raise { match v { Variant(i, x) => (i, x); o => codec_mismatch("variant", o) } }
 fn guest_as_enum(v : @model.SchemaValue) -> UInt raise { match v { Enum(x) => x; o => codec_mismatch("enum", o) } }
@@ -868,6 +884,10 @@ fn guest_as_result(v : @model.SchemaValue) -> @model.SchemaValue raise { match v
 fn guest_as_union(v : @model.SchemaValue) -> (String, @model.SchemaValue) raise { match v { Union(t, x) => (t, x); o => codec_mismatch("union", o) } }
 fn guest_variant_payload(index : UInt, payload : @model.SchemaValue?) -> @model.SchemaValue raise { match payload { Some(x) => x; None => raise CodecError("Missing payload for variant case " + index.to_string()) } }
 fn guest_required_payload(payload : @model.SchemaValue?, context : String) -> @model.SchemaValue raise { match payload { Some(x) => x; None => raise CodecError("Missing payload for " + context) } }
+fn guest_as_text(v : @model.SchemaValue) -> (String, String?) raise { match v { Text(x, l) => (x, l); o => codec_mismatch("text", o) } }
+fn guest_as_binary(v : @model.SchemaValue, allowed : Array[String]) -> @schema.AgentBinary raise { match v { Binary(x, mime_type) => { guest_allowed(mime_type, allowed, "MIME type"); @schema.AgentBinary::{ bytes: Bytes::from_array(x[:]), mime_type } }; o => codec_mismatch("binary", o) } }
+fn guest_as_quantity(v : @model.SchemaValue) -> @types.QuantityValue raise { match v { Quantity(x) => x; o => codec_mismatch("quantity", o) } }
+fn guest_quantity_unit(unit : String, base_unit : String, suffixes : Array[String]) -> Unit raise { if !(if suffixes.is_empty() { unit == base_unit } else { suffixes.contains(unit) }) { raise CodecError("Unsupported quantity unit: " + unit) } }
 fn guest_allowed(value : String?, allowed : Array[String], kind : String) -> Unit raise { match value { Some(x) => if allowed.length() > 0 && !allowed.contains(x) { raise CodecError("Unsupported " + kind + ": " + x) }; None => () } }
 fn guest_encode_unstructured_text(value : UnstructuredText, allowed : Array[String]) -> @model.SchemaValue raise { match value { Inline(text, language) => { guest_allowed(language, allowed, "text language"); Variant(0, Some(Text(text, language))) }; Url(url) => Variant(1, Some(Url(url))) } }
 fn guest_decode_unstructured_text(value : @model.SchemaValue, allowed : Array[String]) -> UnstructuredText raise { match value { Variant(0, Some(Text(text, language))) => { guest_allowed(language, allowed, "text language"); Inline(text, language) }; Variant(1, Some(Url(url))) => Url(url); o => codec_mismatch("unstructured-text variant", o) } }
@@ -1174,13 +1194,13 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
 
         // configure delegates to the shared runtime configuration cell.
         writer.doc(
-            "Configures every generated bridge client in this module to target the given server.",
+            "Configures every generated bridge client in this module to target the given server. `reconnect` bounds how long a streaming call keeps reconnecting while the server accepts neither its start nor a resume.",
         );
         writer.line(format!(
-            "pub fn {agent}::configure(server : @runtime.GolemServer, app_name : String, env_name : String) -> Unit {{"
+            "pub fn {agent}::configure(server : @runtime.GolemServer, app_name : String, env_name : String, reconnect? : @runtime.ReconnectPolicy = @runtime.default_reconnect_policy) -> Unit {{"
         ));
         writer.indent();
-        writer.line("@runtime.configure(server, app_name, env_name)");
+        writer.line("@runtime.configure(server, app_name, env_name, reconnect~)");
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1232,7 +1252,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             writer.blank();
 
             writer.line(format!(
-                "pub fn {client}::phantom_id(self : {client}) -> @types.Uuid? {{"
+                "pub fn {client}::phantom_id(self : {client}) -> @schema.Uuid? {{"
             ));
             writer.indent();
             writer.line("self.client.phantom_id()");
@@ -1349,7 +1369,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 client,
                 agent_type_name,
                 "get_phantom",
-                &append_param("phantom_id : @types.Uuid", &param_decls),
+                &append_param("phantom_id : @schema.Uuid", &param_decls),
                 &input,
                 Some("phantom_id"),
                 None,
@@ -1408,7 +1428,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 "get_phantom_with_config",
                 &append_param(
                     &config_decls,
-                    &append_param("phantom_id : @types.Uuid", &param_decls),
+                    &append_param("phantom_id : @schema.Uuid", &param_decls),
                 ),
                 &input,
                 Some("phantom_id"),
@@ -1783,7 +1803,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         }
 
         // Explicit phantom identities are supported only by durable agents.
-        let phantom_decls = append_param("phantom : String", &param_decls);
+        let phantom_decls = append_param("phantom : @runtime.Uuid", &param_decls);
         if self.agent_type.mode == AgentMode::Durable {
             writer
                 .doc("Gets (creating if necessary) the agent with the given explicit phantom id.");
@@ -1818,7 +1838,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         ));
         writer.indent();
         if self.agent_type.mode == AgentMode::Durable {
-            let phantom_call_args = append_arg("@runtime.random_uuid()", &param_names);
+            let phantom_call_args = append_arg("@runtime.Uuid::random()", &param_names);
             writer.line(format!("{agent}::get_phantom({phantom_call_args})"));
         } else {
             writer.line("let configuration = @runtime.get_configuration()");
@@ -1907,7 +1927,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         // get_phantom_with_config (durable only)
         let phantom_config_decls = append_param(
             &config_decls,
-            &append_param("phantom : String", param_decls),
+            &append_param("phantom : @runtime.Uuid", param_decls),
         );
         if self.agent_type.mode == AgentMode::Durable {
             writer.doc("Gets (creating if necessary) the agent with an explicit phantom id, overriding the given configuration values.");
@@ -1944,7 +1964,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         if self.agent_type.mode == AgentMode::Durable {
             let call_args = append_arg_list(
                 param_names,
-                &std::iter::once("@runtime.random_uuid()".to_string())
+                &std::iter::once("@runtime.Uuid::random()".to_string())
                     .chain(config_names.iter().cloned())
                     .collect::<Vec<_>>(),
             );
@@ -2669,18 +2689,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let next = depth + 1;
         let rendered = match resolved {
             SchemaType::Bool { .. } => format!("@runtime.BoolValue({val})"),
+            // External encoders do not raise: the public value codec checks the
+            // s8 range and the fixed-list length when it encodes the value.
             SchemaType::S8 { .. } => match self.mode {
                 MoonBitBridgeMode::ExternalRest => format!("@runtime.S8Value({val})"),
-                MoonBitBridgeMode::GuestWasmRpc => format!(
-                    "{{ if {val} < -128 || {val} > 127 {{ raise @runtime.BridgeError(\"s8 value out of range\") }}; @runtime.S8Value({val}) }}"
-                ),
+                MoonBitBridgeMode::GuestWasmRpc => {
+                    let s8 = format!("s8_{depth}");
+                    format!(
+                        "{{ let {s8} = {val}; if {s8} < -128 || {s8} > 127 {{ raise @runtime.BridgeError(\"s8 value out of range: \\{{{s8}}}\") }}; @runtime.S8Value({s8}) }}"
+                    )
+                }
             },
-            SchemaType::S16 { .. } => match self.mode {
-                MoonBitBridgeMode::ExternalRest => format!("@runtime.S16Value({val})"),
-                MoonBitBridgeMode::GuestWasmRpc => format!(
-                    "{{ if {val} < -32768 || {val} > 32767 {{ raise @runtime.BridgeError(\"s16 value out of range\") }}; @runtime.S16Value({val}) }}"
-                ),
-            },
+            SchemaType::S16 { .. } => format!("@runtime.S16Value(({val}).to_int())"),
             SchemaType::S32 { .. } => format!("@runtime.S32Value({val})"),
             SchemaType::S64 { .. } => format!("@runtime.S64Value({val})"),
             SchemaType::U8 { .. } => match self.mode {
@@ -2688,10 +2708,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 MoonBitBridgeMode::GuestWasmRpc => format!("@runtime.U8Value({val})"),
             },
             SchemaType::U16 { .. } => match self.mode {
-                MoonBitBridgeMode::ExternalRest => format!("@runtime.U16Value({val})"),
-                MoonBitBridgeMode::GuestWasmRpc => format!(
-                    "{{ if {val} < 0 || {val} > 65535 {{ raise @runtime.BridgeError(\"u16 value out of range\") }}; @runtime.U16Value({val}.reinterpret_as_uint()) }}"
-                ),
+                MoonBitBridgeMode::ExternalRest => format!("@runtime.U16Value(({val}).to_int())"),
+                MoonBitBridgeMode::GuestWasmRpc => format!("@runtime.U16Value(({val}).to_uint())"),
             },
             SchemaType::U32 { .. } => format!("@runtime.U32Value({val})"),
             SchemaType::U64 { .. } => format!("@runtime.U64Value({val})"),
@@ -2714,14 +2732,17 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 element, length, ..
             } => {
                 let inner_enc = self.encode_expr_mode(&e, element, next, cleanup, preflight)?;
-                match self.mode {
-                    MoonBitBridgeMode::ExternalRest => {
-                        format!("@runtime.FixedListValue({val}.map(({e}) => {inner_enc}))")
-                    }
+                let items = format!("items{depth}");
+                let encoded = format!("encoded{depth}");
+                let check = match self.mode {
+                    MoonBitBridgeMode::ExternalRest => String::new(),
                     MoonBitBridgeMode::GuestWasmRpc => format!(
-                        "{{\n  if {val}.length() != {length} {{ raise @runtime.BridgeError(\"Expected fixed-list of length {length}, got \\{{{val}.length()}}\") }}\n  @runtime.FixedListValue({val}.map(({e}) => {inner_enc}))\n}}"
+                        "  if {items}.length() != {length} {{ raise @runtime.BridgeError(\"Expected fixed-list of length {length}, got \\{{{items}.length()}}\") }}\n"
                     ),
-                }
+                };
+                format!(
+                    "{{\n  let {items} = {val}\n{check}  let {encoded} : Array[@runtime.SchemaValue] = []\n  for {e} in {items} {{ {encoded}.push({inner_enc}) }}\n  @runtime.FixedListValue({encoded})\n}}"
+                )
             }
             SchemaType::Map { key, value, .. } => {
                 let entries = format!("entries{depth}");
@@ -2784,14 +2805,25 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 };
                 format!("match {val} {{\n  {ok_arm}\n  {err_arm}\n}}")
             }
-            SchemaType::Path { .. } => format!("@runtime.PathValue({val})"),
-            SchemaType::Url { .. } => format!("@runtime.UrlValue({val})"),
+            SchemaType::Path { .. } => format!("@runtime.PathValue(({val}).value)"),
+            SchemaType::Url { .. } => format!("@runtime.UrlValue(({val}).value)"),
             SchemaType::Uuid { .. } => match self.mode {
                 MoonBitBridgeMode::ExternalRest => format!("@runtime.UuidValue({val})"),
-                MoonBitBridgeMode::GuestWasmRpc => format!("@model.SchemaValue::Uuid({val})"),
+                MoonBitBridgeMode::GuestWasmRpc => {
+                    format!("@model.SchemaValue::Uuid(({val}).to_wit())")
+                }
             },
-            SchemaType::Datetime { .. } => format!("@runtime.DatetimeValue({val})"),
-            SchemaType::Duration { .. } => format!("@runtime.DurationValue({val})"),
+            SchemaType::Datetime { .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => {
+                    format!("@runtime.DatetimeValue(({val}).to_string())")
+                }
+                MoonBitBridgeMode::GuestWasmRpc => {
+                    format!("@runtime.DatetimeValue(({val}).to_wit())")
+                }
+            },
+            SchemaType::Duration { .. } => {
+                format!("@runtime.DurationValue(({val}).nanoseconds)")
+            }
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
             | SchemaType::Enum { .. }
@@ -2824,10 +2856,38 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     .context("MoonBit guest streams require an element schema")?;
                 format!("{val}.to_schema_value()")
             }
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
-                "Bare text/binary rich scalars have no MoonBit bridge encoding; \
-                 wrap them in the unstructured text/binary variant ({resolved:?})"
-            ),
+            SchemaType::Text { restrictions, .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => {
+                    format!("@runtime.TextValue({val}.value, {val}.language)")
+                }
+                MoonBitBridgeMode::GuestWasmRpc => {
+                    let txt = format!("txt{depth}");
+                    let allowed = moonbit_string_array(restrictions.languages.as_deref());
+                    format!(
+                        "{{ let {txt} = {val}; guest_allowed({txt}.language(), {allowed}, \"text language\"); @model.SchemaValue::Text({txt}.value(), {txt}.language()) }}"
+                    )
+                }
+            },
+            SchemaType::Binary { restrictions, .. } => {
+                let bin = format!("bin{depth}");
+                let allowed = moonbit_string_array(restrictions.mime_types.as_deref());
+                format!(
+                    "{{ let {bin} = {val}; guest_allowed({bin}.mime_type, {allowed}, \"MIME type\"); @model.SchemaValue::Binary({bin}.bytes.to_fixedarray(), {bin}.mime_type) }}"
+                )
+            }
+            SchemaType::Quantity { spec, .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => {
+                    format!("@runtime.QuantityValue({val}.mantissa, {val}.scale, {val}.unit)")
+                }
+                MoonBitBridgeMode::GuestWasmRpc => {
+                    let qty = format!("qty{depth}");
+                    format!(
+                        "{{ let {qty} = {val}.value(); guest_quantity_unit({qty}.unit, {}, {}); @model.SchemaValue::Quantity({qty}) }}",
+                        moonbit_string_literal(&spec.base_unit),
+                        moonbit_string_array(Some(spec.allowed_suffixes.as_slice())),
+                    )
+                }
+            },
             SchemaType::Secret { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
                 format!("@model.SchemaValue::Secret({val})")
             }
@@ -2837,8 +2897,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
                 format!("@schema.to_value_as({val})")
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => {
@@ -2923,8 +2982,10 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 let inner_dec = self.decode_expr(&e, element, next)?;
                 let len = *length;
                 let elems = format!("elems{depth}");
+                let decoded = format!("decoded{depth}");
+                let elem_ty = self.type_reference(element)?;
                 format!(
-                    "{{\n  let {elems} = @runtime.as_fixed_list({val})\n  if {elems}.length() != {len} {{ raise @runtime.BridgeError(\"Expected fixed-list of length {len}, got \\{{{elems}.length()}}\") }}\n  {elems}.map(({e}) => {inner_dec})\n}}"
+                    "{{\n  let {elems} = @runtime.as_fixed_list({val})\n  if {elems}.length() != {len} {{ raise @runtime.BridgeError(\"Expected fixed-list of length {len}, got \\{{{elems}.length()}}\") }}\n  let {decoded} : Array[{elem_ty}] = []\n  for {e} in {elems} {{ {decoded}.push({inner_dec}) }}\n  FixedArray::from_array({decoded})\n}}"
                 )
             }
             SchemaType::Map { key, value, .. } => {
@@ -2979,7 +3040,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     "match {val} {{ @runtime.UuidValue(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }}"
                 ),
                 MoonBitBridgeMode::GuestWasmRpc => format!(
-                    "match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }}"
+                    "@schema.Uuid::from_wit(match {val} {{ Uuid(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }})"
                 ),
             },
             SchemaType::Datetime { .. } => format!("@runtime.as_datetime({val})"),
@@ -3021,10 +3082,39 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     "@schema.AgentStream::from_value_with_codec({val}, ({e}) => {{ {decoded} catch {{ error => raise @schema.FromSchemaError::custom(repr(error)) }} }})"
                 )
             }
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
-                "Bare text/binary rich scalars have no MoonBit bridge decoding; \
-                 wrap them in the unstructured text/binary variant ({resolved:?})"
+            SchemaType::Text { restrictions, .. } => {
+                let marker = self.rich.text_name(restrictions)?;
+                let txt = format!("txt{depth}");
+                match self.mode {
+                    MoonBitBridgeMode::ExternalRest => format!(
+                        "{{ let {txt} = @runtime.as_text({val}); (@runtime.Text::new({txt}.0, language?={txt}.1) : @runtime.Text[{marker}]) }}"
+                    ),
+                    MoonBitBridgeMode::GuestWasmRpc => {
+                        let allowed = moonbit_string_array(restrictions.languages.as_deref());
+                        format!(
+                            "{{ let {txt} = guest_as_text({val}); guest_allowed({txt}.1, {allowed}, \"text language\"); (@schema.Text::new({txt}.0, language?={txt}.1) : @schema.Text[{marker}]) }}"
+                        )
+                    }
+                }
+            }
+            SchemaType::Binary { restrictions, .. } => format!(
+                "guest_as_binary({val}, {})",
+                moonbit_string_array(restrictions.mime_types.as_deref())
             ),
+            SchemaType::Quantity { spec, .. } => {
+                let marker = self.rich.unit_name(spec)?;
+                let qty = format!("qty{depth}");
+                match self.mode {
+                    MoonBitBridgeMode::ExternalRest => format!(
+                        "{{ let {qty} = @runtime.as_quantity({val}); (@runtime.Quantity::new({qty}.0, {qty}.1, {qty}.2) : @runtime.Quantity[{marker}]) }}"
+                    ),
+                    MoonBitBridgeMode::GuestWasmRpc => format!(
+                        "{{ let {qty} = guest_as_quantity({val}); guest_quantity_unit({qty}.unit, {}, {}); (@schema.Quantity::new({qty}.mantissa, {qty}.scale, {qty}.unit) : @schema.Quantity[{marker}]) }}",
+                        moonbit_string_literal(&spec.base_unit),
+                        moonbit_string_array(Some(spec.allowed_suffixes.as_slice())),
+                    ),
+                }
+            }
             SchemaType::Secret { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
                 format!(
                     "match {val} {{ @model.SchemaValue::Secret(handle) => handle; other => codec_mismatch(\"secret\", other) }}"
@@ -3036,8 +3126,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
                 format!("@schema.from_value_as({val})")
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => {
@@ -3118,6 +3207,14 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
 
     // --- Type references ----------------------------------------------------
 
+    /// The SDK's type for a rich kind; the external runtime has a copy of it.
+    fn rich_type_reference(&self, name: &str) -> String {
+        match self.mode {
+            MoonBitBridgeMode::ExternalRest => format!("@runtime.{name}"),
+            MoonBitBridgeMode::GuestWasmRpc => format!("@schema.{name}"),
+        }
+    }
+
     fn type_reference(&self, typ: &SchemaType) -> anyhow::Result<String> {
         if self.mode == MoonBitBridgeMode::GuestWasmRpc {
             if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
@@ -3157,12 +3254,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let resolved = self.resolve_ref(typ);
         match resolved {
             SchemaType::Bool { .. } => Ok("Bool".to_string()),
-            SchemaType::S8 { .. } | SchemaType::S16 { .. } | SchemaType::S32 { .. } => {
-                Ok("Int".to_string())
-            }
+            SchemaType::S8 { .. } | SchemaType::S32 { .. } => Ok("Int".to_string()),
+            SchemaType::S16 { .. } => Ok("Int16".to_string()),
             SchemaType::S64 { .. } => Ok("Int64".to_string()),
             SchemaType::U8 { .. } => Ok("Byte".to_string()),
-            SchemaType::U16 { .. } => Ok("Int".to_string()),
+            SchemaType::U16 { .. } => Ok("UInt16".to_string()),
             SchemaType::U32 { .. } => Ok("UInt".to_string()),
             SchemaType::U64 { .. } => Ok("UInt64".to_string()),
             SchemaType::F32 { .. } => Ok("Float".to_string()),
@@ -3170,8 +3266,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Char { .. } => Ok("Char".to_string()),
             SchemaType::String { .. } => Ok("String".to_string()),
             SchemaType::Option { inner, .. } => Ok(format!("{}?", self.type_reference(inner)?)),
-            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            SchemaType::List { element, .. } => {
                 Ok(format!("Array[{}]", self.type_reference(element)?))
+            }
+            SchemaType::FixedList { element, .. } => {
+                Ok(format!("FixedArray[{}]", self.type_reference(element)?))
             }
             SchemaType::Map { key, value, .. } => Ok(format!(
                 "Map[{}, {}]",
@@ -3190,18 +3289,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 };
                 Ok(format!("Result[{ok_type}, {err_type}]"))
             }
-            SchemaType::Path { .. } | SchemaType::Url { .. } => Ok("String".to_string()),
-            SchemaType::Uuid { .. } => Ok(match self.mode {
-                MoonBitBridgeMode::ExternalRest => "String",
-                MoonBitBridgeMode::GuestWasmRpc => "@types.Uuid",
-            }
-            .to_string()),
-            SchemaType::Datetime { .. } => Ok(match self.mode {
-                MoonBitBridgeMode::ExternalRest => "String",
-                MoonBitBridgeMode::GuestWasmRpc => "@types.Datetime",
-            }
-            .to_string()),
-            SchemaType::Duration { .. } => Ok("Int64".to_string()),
+            SchemaType::Path { .. } => Ok(self.rich_type_reference("Path")),
+            SchemaType::Url { .. } => Ok(self.rich_type_reference("Url")),
+            SchemaType::Uuid { .. } => Ok(self.rich_type_reference("Uuid")),
+            SchemaType::Datetime { .. } => Ok(self.rich_type_reference("Datetime")),
+            SchemaType::Duration { .. } => Ok(self.rich_type_reference("Duration")),
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
             | SchemaType::Enum { .. }
@@ -3231,10 +3323,21 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     self.type_reference(inner)?
                 ))
             }
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
-                "Bare text/binary rich scalars have no MoonBit bridge type; \
-                 wrap them in the unstructured text/binary variant ({resolved:?})"
-            ),
+            SchemaType::Text { restrictions, .. } => {
+                let marker = self.rich.text_name(restrictions)?;
+                Ok(match self.mode {
+                    MoonBitBridgeMode::ExternalRest => format!("@runtime.Text[{marker}]"),
+                    MoonBitBridgeMode::GuestWasmRpc => format!("@schema.Text[{marker}]"),
+                })
+            }
+            SchemaType::Binary { .. } => Ok("@schema.AgentBinary".to_string()),
+            SchemaType::Quantity { spec, .. } => {
+                let marker = self.rich.unit_name(spec)?;
+                Ok(match self.mode {
+                    MoonBitBridgeMode::ExternalRest => format!("@runtime.Quantity[{marker}]"),
+                    MoonBitBridgeMode::GuestWasmRpc => format!("@schema.Quantity[{marker}]"),
+                })
+            }
             SchemaType::Secret { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
                 Ok("@model.GuestSecretHandle".to_string())
             }
@@ -3250,8 +3353,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     Ok("@permissions.PermissionCard".to_string())
                 }
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => bail!(

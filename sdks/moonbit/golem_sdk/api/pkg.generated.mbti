@@ -24,7 +24,7 @@ pub fn fork() -> @host.ForkResult
 
 pub fn fork_agent(@types.AgentId, @types.AgentId, UInt64) -> Unit
 
-pub fn generate_idempotency_key() -> @types.Uuid
+pub fn generate_idempotency_key() -> @schema.Uuid
 
 pub fn generate_idempotency_key_string() -> String
 

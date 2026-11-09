@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     async fn only_a_trusted_ingress_can_select_the_host_with_forwarded_headers() {
-        let router = router(&["10.0.0.1"]);
+        let router = router(&["10.0.0.1/32"]);
         let headers = [
             ("Host", "golem:9881"),
             ("X-Forwarded-Host", "api.golem.example.com"),
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     async fn trusted_ingress_without_forwarded_headers_reaches_the_public_endpoint() {
-        let router = router(&["10.0.0.1"]);
+        let router = router(&["10.0.0.1/32"]);
         assert_eq!(
             served_by(
                 &router,

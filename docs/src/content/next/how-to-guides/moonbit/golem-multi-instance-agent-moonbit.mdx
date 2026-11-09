@@ -58,10 +58,14 @@ let phantom2 = CounterClient::new_phantom("shared")
 // phantom1 and phantom2 are different agents, both with name="shared"
 
 // Retrieve the phantom ID to reconnect later
-let id : @rpcTypes.Uuid? = phantom1.phantom_id()
+let id : @schema.Uuid? = phantom1.phantom_id()
 
 // Reconnect to an existing phantom by its UUID
 let same_as_phantom1 = CounterClient::get_phantom("shared", id.unwrap())
+
+// Persist the UUID as a string and parse it back later
+let saved : String = id.unwrap().to_string()
+let restored = CounterClient::get_phantom("shared", @schema.Uuid::parse(saved))
 ```
 
 ### Scoped Variants
@@ -105,7 +109,7 @@ Use the `phantom_id()` method on any client instance:
 
 ```moonbit
 let phantom = CounterClient::new_phantom("shared")
-let id : @rpcTypes.Uuid? = phantom.phantom_id()
+let id : @schema.Uuid? = phantom.phantom_id()
 // Returns Some(uuid) for phantom agents, None for non-phantom agents
 ```
 

@@ -846,22 +846,22 @@ fi
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::managed_xfs_sandbox_filesystem_owns_allocation_limits_and_cleanup
+  filesystem::sandbox::host_adapter::sandbox_provisioning::managed::tests::managed_xfs_sandbox_filesystem_owns_allocation_limits_and_cleanup
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota
+  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::managed_xfs_write_after_copy_contents_consumes_one_cow_extent
+  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_write_after_copy_contents_consumes_one_cow_extent
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::managed_xfs_seed_charges_the_project_and_follows_the_placement
+  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_seed_charges_the_project_and_follows_the_placement
 
 run_privileged_test \
   lib \
@@ -967,42 +967,42 @@ run_privileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::adapter::tests::an_empty_standard_seed_succeeds_after_root_retirement
+  filesystem::sandbox::host_adapter::tree_copy::tests::an_empty_standard_seed_succeeds_after_root_retirement
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::tree_copy::tests::linux_volume_seed_batch_uses_the_root_path_without_root_admission
+  filesystem::sandbox::host_adapter::tree_copy::tests::linux_volume_seed_batch_uses_the_root_path_without_root_admission
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::reflink_xfs_copy_contents_and_seed_share_extents
+  filesystem::sandbox::host_adapter::tree_copy::tests::reflink_xfs_copy_contents_and_seed_share_extents
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::xfs_without_reflink_is_refused_at_startup
+  filesystem::volume::xfs::tests::xfs_without_reflink_is_refused_at_startup
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::host_directory::tests::reflink_xfs_a_provision_dropped_while_its_setup_is_queued_keeps_its_root_until_the_setup_ends
+  services::agent_filesystem::executor_directories::tests::reflink_xfs_a_provision_dropped_while_its_setup_is_queued_keeps_its_root_until_the_setup_ends
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::reflink_xfs_refuses_a_volume_with_project_quota_accounting
+  filesystem::volume::xfs::tests::reflink_xfs_refuses_a_volume_with_project_quota_accounting
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::reflink_xfs_refuses_a_root_with_a_project_identity
+  filesystem::volume::xfs::tests::reflink_xfs_refuses_a_root_with_a_project_identity
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::reflink_xfs_refuses_a_host_directory_with_a_project_identity
+  services::agent_filesystem::executor_directories::tests::xfs_directory_checks::reflink_xfs_refuses_a_host_directory_with_a_project_identity
 
 run_unprivileged_test \
   integration \

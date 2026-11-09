@@ -1,6 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
+import type * as WitTypes from 'golem:core/types@2.0.0';
 import type { UnstructuredBinary as SdkUnstructuredBinary } from '../newTypes/binaryInput';
 import type { UnstructuredText as SdkUnstructuredText } from '../newTypes/textInput';
 
@@ -22,6 +23,7 @@ export {
   typedSchemaValueToWit,
 } from '../internal/schema-model/wit';
 export { Uuid } from '../uuid';
+export { Datetime } from '../datetime';
 export { Result } from '../host/result';
 export { UnstructuredText } from '../newTypes/textInput';
 export { UnstructuredBinary } from '../newTypes/binaryInput';
@@ -37,4 +39,4 @@ export { withNativeStreamScope, ownSchemaValueStreams } from '../internal/schema
 export { throwIfAborted } from '../internal/pollableUtils';
 export { withCapabilityAdoptionTransaction } from '../internal/schema-model/capabilityTransaction';
 export { SchemaValueWriter } from '../schema/codec';
-export type { SchemaValueTree } from 'golem:core/types@2.0.0';
+export type SchemaValueTree = WitTypes.SchemaValueTree;

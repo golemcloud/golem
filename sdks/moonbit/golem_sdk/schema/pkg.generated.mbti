@@ -88,6 +88,10 @@ pub fn AgentStreamReadError::equal(Self, Self) -> Bool
 pub fn AgentStreamReadError::not_equal(Self, Self) -> Bool
 pub fn AgentStreamReadError::to_repr(Self) -> @debug.Repr
 
+pub suberror DatetimeError {
+  DatetimeError(String)
+} derive(Eq, @debug.Debug)
+
 pub suberror FromSchemaError {
   ShapeMismatch(expected~ : String, actual~ : String, context~ : String)
   OutOfRange(index~ : UInt32, len~ : UInt32, context~ : String)
@@ -101,6 +105,10 @@ pub fn FromSchemaError::out_of_range(UInt32, UInt32, String) -> Self
 pub fn FromSchemaError::shape_mismatch(String, String, String) -> Self
 pub fn FromSchemaError::to_repr(Self) -> @debug.Repr
 
+pub suberror UuidParseError {
+  UuidParseError(String)
+} derive(Eq, @debug.Debug)
+
 pub(all) suberror WireError {
   Invalid(String)
 } derive(Eq, @debug.Debug)
@@ -109,6 +117,16 @@ pub fn WireError::not_equal(Self, Self) -> Bool
 pub fn WireError::to_repr(Self) -> @debug.Repr
 
 // Types and methods
+pub(all) struct AgentBinary {
+  bytes : Bytes
+  mime_type : String?
+} derive(Eq, @debug.Debug)
+pub impl FromSchema for AgentBinary
+pub impl FromWire for AgentBinary
+pub impl IntoSchema for AgentBinary
+pub impl IntoWire for AgentBinary
+pub impl WireSchema for AgentBinary
+
 pub(all) struct AgentStream[T] {
   // private fields
 }
@@ -168,9 +186,26 @@ pub fn AnyMimeType::not_equal(Self, Self) -> Bool
 pub fn AnyMimeType::to_repr(Self) -> @debug.Repr
 pub impl AllowedMimeTypes for AnyMimeType
 
+pub struct Datetime {
+  // private fields
+} derive(Compare, Eq, Hash)
+pub fn Datetime::from_wit(@types.Datetime) -> Self raise DatetimeError
+pub fn Datetime::nanoseconds(Self) -> UInt32
+pub fn Datetime::new(Int64, UInt32) -> Self raise DatetimeError
+pub fn Datetime::parse(String) -> Self raise DatetimeError
+pub fn Datetime::seconds(Self) -> Int64
+pub fn Datetime::to_wit(Self) -> @types.Datetime
+pub impl FromSchema for Datetime
+pub impl FromWire for Datetime
+pub impl IntoSchema for Datetime
+pub impl IntoWire for Datetime
+pub impl WireSchema for Datetime
+pub impl Show for Datetime
+pub impl @debug.Debug for Datetime
+
 pub(all) struct Duration {
   nanoseconds : Int64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Hash, @debug.Debug)
 pub fn Duration::append_result_payload(Self, WireEncoder) -> Int32? raise WireError
 pub fn Duration::append_result_type(WireTypeEncoder) -> Int32?
 pub fn Duration::append_wire(Self, WireEncoder) -> Int32 raise WireError
@@ -194,7 +229,7 @@ pub impl WireSchema for Duration
 
 pub(all) struct Path {
   value : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Hash, @debug.Debug)
 pub fn Path::append_result_payload(Self, WireEncoder) -> Int32? raise WireError
 pub fn Path::append_result_type(WireTypeEncoder) -> Int32?
 pub fn Path::append_wire(Self, WireEncoder) -> Int32 raise WireError
@@ -331,7 +366,7 @@ pub impl[L] @debug.Debug for UnstructuredText[L]
 
 pub(all) struct Url {
   value : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Hash, @debug.Debug)
 pub fn Url::append_result_payload(Self, WireEncoder) -> Int32? raise WireError
 pub fn Url::append_result_type(WireTypeEncoder) -> Int32?
 pub fn Url::append_wire(Self, WireEncoder) -> Int32 raise WireError
@@ -353,6 +388,24 @@ pub impl IntoSchema for Url
 pub impl IntoWire for Url
 pub impl WireSchema for Url
 
+pub struct Uuid {
+  // private fields
+} derive(Compare, Eq, Hash)
+pub fn Uuid::from_bits(UInt64, UInt64) -> Self
+pub fn Uuid::from_wit(@types.Uuid) -> Self
+pub fn Uuid::high_bits(Self) -> UInt64
+pub fn Uuid::low_bits(Self) -> UInt64
+pub fn Uuid::parse(String) -> Self raise UuidParseError
+pub fn Uuid::random() -> Self
+pub fn Uuid::to_wit(Self) -> @types.Uuid
+pub impl FromSchema for Uuid
+pub impl FromWire for Uuid
+pub impl IntoSchema for Uuid
+pub impl IntoWire for Uuid
+pub impl WireSchema for Uuid
+pub impl Show for Uuid
+pub impl @debug.Debug for Uuid
+
 pub(all) struct WireEncoder {
   nodes : Array[@types.SchemaValueNode]
   // private fields
@@ -364,6 +417,7 @@ pub struct WireReader {
   tree : @types.SchemaValueTree
   visited : Array[Bool]
   resources : Array[@types.SchemaValueNode]
+  discarded : Array[@types.SchemaValueNode]
   rollback : Array[() -> Unit]
   drop_resource : (@types.SchemaValueNode) -> Unit
   mut settled : Bool
@@ -402,12 +456,14 @@ pub(open) trait AllowedMimeTypes {
 
 pub(open) trait FromSchema {
   fn from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
+  fn from_result_payload(@schema_model.SchemaValue?) -> Self raise FromSchemaError = _
 }
 pub impl FromSchema for Unit
 pub impl FromSchema for Bool
 pub impl FromSchema for Byte
 pub impl FromSchema for Char
 pub impl FromSchema for Int32
+pub impl FromSchema for Int16
 pub impl FromSchema for Int64
 pub impl FromSchema for UInt32
 pub impl FromSchema for UInt16
@@ -417,8 +473,6 @@ pub impl FromSchema for Double
 pub impl FromSchema for String
 pub impl[T : FromSchema] FromSchema for T?
 pub impl FromSchema for Bytes
-pub impl FromSchema for @types.Datetime
-pub impl FromSchema for @types.Uuid
 pub impl[T : FromSchema] FromSchema for Array[T]
 pub impl[K : FromSchema + Hash + Eq, V : FromSchema] FromSchema for Map[K, V]
 pub impl[T : FromSchema, E : FromSchema] FromSchema for Result[T, E]
@@ -439,6 +493,7 @@ pub impl FromWire for Bool
 pub impl FromWire for Byte
 pub impl FromWire for Char
 pub impl FromWire for Int32
+pub impl FromWire for Int16
 pub impl FromWire for Int64
 pub impl FromWire for UInt32
 pub impl FromWire for UInt16
@@ -448,8 +503,6 @@ pub impl FromWire for Double
 pub impl FromWire for String
 pub impl[T : FromWire] FromWire for T?
 pub impl FromWire for Bytes
-pub impl FromWire for @types.Datetime
-pub impl FromWire for @types.Uuid
 pub impl FromWire for @permission_card.GuestPermissionCardHandle
 pub impl FromWire for @schema_model.GuestQuotaTokenHandle
 pub impl FromWire for @schema_model.GuestSchemaValueStreamHandle
@@ -475,6 +528,7 @@ pub impl IntoSchema for Bool
 pub impl IntoSchema for Byte
 pub impl IntoSchema for Char
 pub impl IntoSchema for Int32
+pub impl IntoSchema for Int16
 pub impl IntoSchema for Int64
 pub impl IntoSchema for UInt32
 pub impl IntoSchema for UInt16
@@ -484,8 +538,6 @@ pub impl IntoSchema for Double
 pub impl IntoSchema for String
 pub impl[T : IntoSchema] IntoSchema for T?
 pub impl IntoSchema for Bytes
-pub impl IntoSchema for @types.Datetime
-pub impl IntoSchema for @types.Uuid
 pub impl[T : IntoSchema] IntoSchema for Array[T]
 pub impl[K : IntoSchema, V : IntoSchema] IntoSchema for Map[K, V]
 pub impl[T : IntoSchema, E : IntoSchema] IntoSchema for Result[T, E]
@@ -507,6 +559,7 @@ pub impl IntoWire for Bool
 pub impl IntoWire for Byte
 pub impl IntoWire for Char
 pub impl IntoWire for Int32
+pub impl IntoWire for Int16
 pub impl IntoWire for Int64
 pub impl IntoWire for UInt32
 pub impl IntoWire for UInt16
@@ -516,8 +569,6 @@ pub impl IntoWire for Double
 pub impl IntoWire for String
 pub impl[T : IntoWire] IntoWire for T?
 pub impl IntoWire for Bytes
-pub impl IntoWire for @types.Datetime
-pub impl IntoWire for @types.Uuid
 pub impl IntoWire for @permission_card.GuestPermissionCardHandle
 pub impl IntoWire for @schema_model.GuestQuotaTokenHandle
 pub impl IntoWire for @schema_model.GuestSchemaValueStreamHandle
@@ -556,6 +607,7 @@ pub impl WireSchema for Bool
 pub impl WireSchema for Byte
 pub impl WireSchema for Char
 pub impl WireSchema for Int32
+pub impl WireSchema for Int16
 pub impl WireSchema for Int64
 pub impl WireSchema for UInt32
 pub impl WireSchema for UInt16
@@ -565,8 +617,6 @@ pub impl WireSchema for Double
 pub impl WireSchema for String
 pub impl[T : WireSchema] WireSchema for T?
 pub impl WireSchema for Bytes
-pub impl WireSchema for @types.Datetime
-pub impl WireSchema for @types.Uuid
 pub impl[T : WireSchema] WireSchema for Array[T]
 pub impl[K : WireSchema, V : WireSchema] WireSchema for Map[K, V]
 pub impl[T : WireSchema, E : WireSchema] WireSchema for Result[T, E]

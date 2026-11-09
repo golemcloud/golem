@@ -16,7 +16,7 @@
 
 package golem.host
 
-import golem.{Principal, Uuid}
+import golem.Principal
 import golem.host.js.PrincipalConverter
 import zio.test._
 
@@ -61,7 +61,7 @@ object PrincipalConverterSpec extends ZIOSpecDefault {
       },
       test("Agent") {
         val p = Principal.Agent(
-          componentId = Uuid(BigInt("123456789012345678"), BigInt("987654321098765432")),
+          componentId = new java.util.UUID(123456789012345678L, 987654321098765432L),
           agentId = "my-agent-1"
         )
         val json = PrincipalConverter.toJson(p)
@@ -70,7 +70,7 @@ object PrincipalConverterSpec extends ZIOSpecDefault {
       },
       test("GolemUser") {
         val p = Principal.GolemUser(
-          accountId = Uuid(BigInt("111222333444555666"), BigInt("777888999000111222"))
+          accountId = new java.util.UUID(111222333444555666L, 777888999000111222L)
         )
         val json = PrincipalConverter.toJson(p)
         val back = PrincipalConverter.fromJson(json)
@@ -87,11 +87,32 @@ object PrincipalConverterSpec extends ZIOSpecDefault {
         val jsObj = js.Dynamic.literal()
         val back  = PrincipalConverter.fromJs(jsObj)
         assertTrue(back == Principal.Anonymous)
+      },
+      test("GolemUser through fromJs reads the u64 halves as unsigned UUID bits") {
+        val max   = js.BigInt("18446744073709551615")
+        val jsObj = js.Dynamic.literal(
+          "tag" -> "golem-user",
+          "val" -> js.Dynamic.literal(
+            "accountId" -> js.Dynamic.literal(
+              "uuid" -> js.Dynamic.literal("highBits" -> max, "lowBits" -> js.BigInt(0))
+            )
+          )
+        )
+        val back = PrincipalConverter.fromJs(jsObj)
+        assertTrue(
+          back == Principal.GolemUser(java.util.UUID.fromString("ffffffff-ffff-ffff-0000-000000000000"))
+        )
       }
     ),
     suite("fromJson error handling")(
       test("invalid JSON returns Left") {
         val result = PrincipalConverter.fromJson("not-json".getBytes("UTF-8"))
+        assertTrue(result.isLeft)
+      },
+      test("non-canonical UUID text returns Left") {
+        val result = PrincipalConverter.fromJson(
+          """{"tag":"golem-user","val":{"accountId":"550E8400-E29B-41D4-A716-446655440000"}}""".getBytes("UTF-8")
+        )
         assertTrue(result.isLeft)
       }
     )

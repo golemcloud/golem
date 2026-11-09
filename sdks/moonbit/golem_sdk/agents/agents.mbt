@@ -102,7 +102,7 @@ pub(all) struct SnapshotRestoreContext {
   agent_id : String
   agent_type : String
   identity_fields : SnapshotIdentity
-  phantom_id : @types.Uuid?
+  phantom_id : @schema.Uuid?
   principal : @common.Principal
 }
 

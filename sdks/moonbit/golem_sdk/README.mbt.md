@@ -187,7 +187,7 @@ producer with `AgentStream::produce`, and consume it one item at a time with `re
 
 ```moonbit nocheck
 ///|
-fn stream_values(values : Array[UInt]) -> @schema.AgentStream[UInt] {
+fn stream_values(values : Array[UInt32]) -> @schema.AgentStream[UInt32] {
   @schema.AgentStream::produce(async fn(writer) {
     for value in values {
       match writer.write_one(value) {
@@ -201,8 +201,8 @@ fn stream_values(values : Array[UInt]) -> @schema.AgentStream[UInt] {
 ///|
 pub async fn Counter::sum(
   self : Self,
-  input : @schema.AgentStream[UInt],
-) -> UInt {
+  input : @schema.AgentStream[UInt32],
+) -> UInt32 {
   let _ = self
   defer input.drop()
   let mut total = 0U
@@ -288,7 +288,7 @@ pub fn Weather::weather(city : String) -> Result[String, WeatherError] {
 #derive.arg("days", scope="option", short="d", min="1", max="10")
 pub fn Weather::forecast(
   city : String,
-  days : UInt?,
+  days : UInt32?,
 ) -> Result[Array[String], WeatherError] {
   // ...
 }

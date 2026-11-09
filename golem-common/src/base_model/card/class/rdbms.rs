@@ -28,6 +28,9 @@ pub enum RdbmsResourcePattern {
         schema: String,
         table: String,
     },
+    Database {
+        database: String,
+    },
 }
 
 impl RdbmsResourcePattern {
@@ -40,6 +43,22 @@ impl RdbmsResourcePattern {
     }
 
     fn parse_value(value: &str) -> Result<Self, String> {
+        if let Some(database) = value
+            .strip_prefix("database(")
+            .and_then(|value| value.strip_suffix(')'))
+        {
+            if database.is_empty()
+                || database
+                    .chars()
+                    .any(|ch| ch.is_whitespace() || "()?".contains(ch))
+                || (database.contains('*') && database != "*")
+            {
+                return Err(value.to_string());
+            }
+            return Ok(Self::Database {
+                database: database.to_string(),
+            });
+        }
         let parts = value.split('.').collect::<Vec<_>>();
         if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
             return Err(value.to_string());
@@ -78,6 +97,10 @@ impl ResourcePattern for RdbmsResourcePattern {
                     && component_subsumes(a_schema, b_schema)
                     && component_subsumes(a_table, b_table)
             }
+            (Self::Database { database: left }, Self::Database { database: right }) => {
+                component_subsumes(left, right)
+            }
+            _ => false,
         }
     }
 }
@@ -86,12 +109,14 @@ impl ResourcePattern for RdbmsResourcePattern {
 pub enum RdbmsVerb {
     Query,
     Mutate,
+    Unanalyzed,
 }
 impl VerbPattern for RdbmsVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
         match verb {
             "query" => Some(Self::Query),
             "mutate" => Some(Self::Mutate),
+            "unanalyzed" => Some(Self::Unanalyzed),
             _ => None,
         }
     }
@@ -106,6 +131,38 @@ impl PermissionClass for RdbmsClass {
     type Owner = EnvironmentOwnerPattern;
     type Resource = RdbmsResourcePattern;
     const NAME: &'static str = "rdbms";
+
+    fn verb_subsumes(grant: Option<Self::Verb>, target: Option<Self::Verb>) -> bool {
+        if target == Some(RdbmsVerb::Unanalyzed) {
+            grant == target
+        } else {
+            grant.is_none() || grant == target
+        }
+    }
+
+    fn parse_resource(
+        verb: Option<Self::Verb>,
+        resource: &str,
+    ) -> Result<Self::Resource, CardParseError> {
+        let parsed = RdbmsResourcePattern::parse_resource(resource)?;
+        if matches!(
+            (verb, &parsed),
+            (
+                Some(RdbmsVerb::Unanalyzed),
+                RdbmsResourcePattern::Database { .. }
+            ) | (
+                None | Some(RdbmsVerb::Query | RdbmsVerb::Mutate),
+                RdbmsResourcePattern::Table { .. }
+            )
+        ) {
+            Ok(parsed)
+        } else {
+            Err(CardParseError::InvalidResource {
+                class: Self::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+        }
+    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Rdbms(pattern)

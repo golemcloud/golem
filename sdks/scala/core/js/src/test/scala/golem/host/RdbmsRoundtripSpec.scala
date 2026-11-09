@@ -368,8 +368,10 @@ object RdbmsRoundtripSpec extends ZIOSpecDefault {
     },
 
     test("Postgres Uuid round-trip") {
-      val v = PostgresDbValue.Uuid(DbUuid(BigInt("123456789012345678"), BigInt("987654321098765432")))
+      val v = PostgresDbValue.Uuid(new java.util.UUID(123456789012345678L, 987654321098765432L))
       roundtripPg(v, "uuid")
+      val max = PostgresDbValue.Uuid(java.util.UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff"))
+      roundtripPg(max, "uuid")
       assertCompletes
     },
 

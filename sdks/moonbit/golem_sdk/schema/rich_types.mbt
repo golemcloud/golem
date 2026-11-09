@@ -1,7 +1,7 @@
 ///|
 pub(all) struct Path {
   value : String
-} derive(Debug, Eq)
+} derive(Debug, Eq, Hash)
 
 ///|
 pub extend Path with Debug::{to_repr}
@@ -36,7 +36,7 @@ pub fn Path::new(value : String) -> Path {
 ///|
 pub(all) struct Url {
   value : String
-} derive(Debug, Eq)
+} derive(Debug, Eq, Hash)
 
 ///|
 pub extend Url with Debug::{to_repr}
@@ -123,7 +123,7 @@ pub fn[S] Text::language(self : Text[S]) -> String? {
 ///|
 pub(all) struct Duration {
   nanoseconds : Int64
-} derive(Debug, Eq)
+} derive(Debug, Eq, Hash)
 
 ///|
 pub extend Duration with Debug::{to_repr}
@@ -153,6 +153,127 @@ pub extend Duration with WireSchema::{append_wire_type, append_result_type}
 ///|
 pub fn Duration::new(nanoseconds : Int64) -> Duration {
   { nanoseconds, }
+}
+
+///|
+/// A universally unique identifier (RFC 9562), stored as its 128 bits. `Show`
+/// and `Uuid::to_string` print the lowercase hyphenated form.
+pub struct Uuid {
+  priv high_bits : UInt64
+  priv low_bits : UInt64
+} derive(Eq, Compare, Hash)
+
+///|
+pub suberror UuidParseError {
+  UuidParseError(String)
+} derive(Debug, Eq)
+
+///|
+pub fn Uuid::from_bits(high_bits : UInt64, low_bits : UInt64) -> Uuid {
+  { high_bits, low_bits, }
+}
+
+///|
+pub fn Uuid::high_bits(self : Uuid) -> UInt64 {
+  self.high_bits
+}
+
+///|
+pub fn Uuid::low_bits(self : Uuid) -> UInt64 {
+  self.low_bits
+}
+
+///|
+pub fn Uuid::from_wit(uuid : @types.Uuid) -> Uuid {
+  { high_bits: uuid.high_bits, low_bits: uuid.low_bits, }
+}
+
+///|
+pub fn Uuid::to_wit(self : Uuid) -> @types.Uuid {
+  { high_bits: self.high_bits, low_bits: self.low_bits, }
+}
+
+///|
+/// Generates a random (version 4) UUID from `wasi:random/random`. Golem
+/// records the random bits in the oplog, so the value is stable on replay.
+pub fn Uuid::random() -> Uuid {
+  let high = @random.get_random_u64()
+  let low = @random.get_random_u64()
+  {
+    high_bits: (high & 0xFFFFFFFFFFFF0FFFUL) | 0x0000000000004000UL,
+    low_bits: (low & 0x3FFFFFFFFFFFFFFFUL) | 0x8000000000000000UL,
+  }
+}
+
+///|
+fn uuid_hex_digit(c : UInt16) -> UInt64? {
+  let c = c.to_int()
+  if c >= '0' && c <= '9' {
+    Some((c - '0').to_uint64())
+  } else if c >= 'a' && c <= 'f' {
+    Some((c - 'a' + 10).to_uint64())
+  } else if c >= 'A' && c <= 'F' {
+    Some((c - 'A' + 10).to_uint64())
+  } else {
+    None
+  }
+}
+
+///|
+/// Parses the hyphenated form `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`. Hex
+/// digits may be upper or lower case.
+pub fn Uuid::parse(value : String) -> Uuid raise UuidParseError {
+  if value.length() != 36 {
+    raise UuidParseError("invalid UUID '\{value}': expected 36 characters")
+  }
+  let mut high = 0UL
+  let mut low = 0UL
+  let mut digits = 0
+  for i in 0..<36 {
+    let c = value.code_unit_at(i)
+    if i == 8 || i == 13 || i == 18 || i == 23 {
+      if c.to_int() != '-' {
+        raise UuidParseError("invalid UUID '\{value}': expected '-' at \{i}")
+      }
+      continue
+    }
+    guard uuid_hex_digit(c) is Some(digit) else {
+      raise UuidParseError("invalid UUID '\{value}': invalid hex digit at \{i}")
+    }
+    if digits < 16 {
+      high = (high << 4) | digit
+    } else {
+      low = (low << 4) | digit
+    }
+    digits += 1
+  }
+  { high_bits: high, low_bits: low, }
+}
+
+///|
+fn uuid_write_hex(logger : &Logger, value : UInt64, digits : Int32) -> Unit {
+  for i = digits - 1; i >= 0; i = i - 1 {
+    let nibble = ((value >> (i * 4)) & 0xFUL).to_int()
+    logger.write_char("0123456789abcdef".unsafe_get(nibble).unsafe_to_char())
+  }
+}
+
+///|
+pub impl Show for Uuid with fn output(self, logger) {
+  uuid_write_hex(logger, self.high_bits >> 32, 8)
+  logger.write_char('-')
+  uuid_write_hex(logger, self.high_bits >> 16, 4)
+  logger.write_char('-')
+  uuid_write_hex(logger, self.high_bits, 4)
+  logger.write_char('-')
+  uuid_write_hex(logger, self.low_bits >> 48, 4)
+  logger.write_char('-')
+  uuid_write_hex(logger, self.low_bits, 12)
+}
+
+///|
+pub impl Debug for Uuid with fn to_repr(self) {
+  Repr::ctor("Uuid", [(None, Repr::string(self.to_string()))])
 }
 
 ///|
@@ -330,54 +451,26 @@ pub impl[S] FromSchema for Text[S] with fn from_value(v) {
 }
 
 ///|
-pub impl IntoSchema for @types.Uuid with fn type_id() {
+pub impl IntoSchema for Uuid with fn type_id() {
   "golem.core.Uuid"
 }
 
 ///|
-pub impl IntoSchema for @types.Uuid with fn register_in(_b) {
+pub impl IntoSchema for Uuid with fn register_in(_b) {
   @model.schema_type(Uuid)
 }
 
 ///|
-pub impl IntoSchema for @types.Uuid with fn to_value(self) {
-  Uuid(self)
+pub impl IntoSchema for Uuid with fn to_value(self) {
+  Uuid(self.to_wit())
 }
 
 ///|
-pub impl FromSchema for @types.Uuid with fn from_value(v) {
+pub impl FromSchema for Uuid with fn from_value(v) {
   match v {
-    Uuid(value) => value
+    Uuid(value) => Uuid::from_wit(value)
     other =>
       raise FromSchemaError::shape_mismatch("uuid", value_kind(other), "Uuid")
-  }
-}
-
-///|
-pub impl IntoSchema for @types.Datetime with fn type_id() {
-  "golem.core.Datetime"
-}
-
-///|
-pub impl IntoSchema for @types.Datetime with fn register_in(_b) {
-  @model.schema_type(Datetime)
-}
-
-///|
-pub impl IntoSchema for @types.Datetime with fn to_value(self) {
-  Datetime(self)
-}
-
-///|
-pub impl FromSchema for @types.Datetime with fn from_value(v) {
-  match v {
-    Datetime(value) => value
-    other =>
-      raise FromSchemaError::shape_mismatch(
-        "datetime",
-        value_kind(other),
-        "Datetime",
-      )
   }
 }
 
@@ -455,7 +548,7 @@ pub impl[U : QuantityUnit] FromSchema for Quantity[U] with fn from_value(v) {
 
 ///|
 pub impl IntoWire for Url with fn append_wire(self, encoder) {
-  encoder.push(@types.UrlValue(self.value))
+  encoder.push(@types.UrlValue(wire_text(self.value, "url")))
 }
 
 ///|
@@ -473,7 +566,10 @@ pub impl WireSchema for Url with fn append_wire_type(encoder) {
 
 ///|
 pub impl[S] IntoWire for Text[S] with fn append_wire(self, encoder) {
-  encoder.push(@types.TextValue({ text: self.value, language: self.language, }))
+  let language = wire_optional_text(self.language, "text language")
+  encoder.push(
+    @types.TextValue({ text: wire_text(self.value, "text"), language, }),
+  )
 }
 
 ///|
@@ -509,7 +605,9 @@ pub impl WireSchema for Duration with fn append_wire_type(encoder) {
 
 ///|
 pub impl[U] IntoWire for Quantity[U] with fn append_wire(self, encoder) {
-  encoder.push(@types.QuantityValueNode(self.value()))
+  let value = self.value()
+  ignore(wire_text(value.unit, "quantity unit"))
+  encoder.push(@types.QuantityValueNode(value))
 }
 
 ///|
@@ -538,6 +636,79 @@ pub impl[U : QuantityUnit] WireSchema for Quantity[U] with fn append_wire_type(
       allowed_suffixes: U::allowed_suffixes(),
       min: None,
       max: None,
+    }),
+  )
+}
+
+///|
+/// The `binary` kind with its optional MIME type. `Bytes` maps to the same
+/// kind but drops the MIME type.
+pub(all) struct AgentBinary {
+  bytes : Bytes
+  mime_type : String?
+} derive(Debug, Eq)
+
+///|
+pub impl IntoSchema for AgentBinary with fn type_id() {
+  "golem.core.AgentBinary"
+}
+
+///|
+pub impl IntoSchema for AgentBinary with fn register_in(_b) {
+  @model.schema_type(
+    Binary({ mime_types: None, min_bytes: None, max_bytes: None, }),
+  )
+}
+
+///|
+pub impl IntoSchema for AgentBinary with fn to_value(self) {
+  Binary(self.bytes.to_fixedarray(), self.mime_type)
+}
+
+///|
+pub impl FromSchema for AgentBinary with fn from_value(v) {
+  match v {
+    Binary(bytes, mime_type) =>
+      { bytes: Bytes::from_array(bytes[:]), mime_type, }
+    other =>
+      raise FromSchemaError::shape_mismatch(
+        "binary",
+        value_kind(other),
+        "AgentBinary",
+      )
+  }
+}
+
+///|
+pub impl IntoWire for AgentBinary with fn append_wire(self, encoder) {
+  let mime_type = match self.mime_type {
+    Some(mime_type) => Some(wire_text(mime_type, "MIME type"))
+    None => None
+  }
+  encoder.push(
+    @types.SchemaValueNode::BinaryValue({
+      bytes: self.bytes.to_fixedarray(),
+      mime_type,
+    }),
+  )
+}
+
+///|
+pub impl FromWire for AgentBinary with fn read_wire(reader, index) {
+  match wire_node(reader, index) {
+    @types.SchemaValueNode::BinaryValue(value) =>
+      { bytes: Bytes::from_array(value.bytes[:]), mime_type: value.mime_type, }
+    _ => raise WireError::Invalid("expected binary value")
+  }
+}
+
+///|
+pub impl WireSchema for AgentBinary with fn append_wire_type(encoder) {
+  encoder.push(
+    @types.SchemaTypeBody::BinaryType({
+      mime_types: None,
+      min_bytes: None,
+      max_bytes: None,
     }),
   )
 }

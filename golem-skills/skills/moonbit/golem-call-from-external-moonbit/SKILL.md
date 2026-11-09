@@ -127,6 +127,14 @@ moon run --target native src/main
 
 `configure(server, appName, envName)` sets the connection shared by every generated client in the module.
 
+### Reconnect window of streaming calls
+
+A streaming call reconnects with a growing delay (50 ms up to 3 s) while the server accepts neither its start nor a resume; HTTP 429 and 5xx on the upgrade and retryable rejections are retried too. The optional `reconnect` argument of `configure` bounds the time without progress: `@runtime.Within(milliseconds)` (the default is `@runtime.default_reconnect_policy`, 5 minutes) or `@runtime.Unlimited`. Past the window the call raises `@runtime.Unreachable(endpoint~, window_ms~, last_cause~)`, a case of `@runtime.BridgeError`. Cancelling the task that runs the call stops it earlier.
+
+```moonbit
+@client.MyAgent::configure(@runtime.Local, "my-app", "local", reconnect=@runtime.Within(30000))
+```
+
 ## Phantom Agents
 
 To create multiple agent instances that share the same constructor parameters, use phantom agents. The phantom id is the last argument, after the constructor parameters:
@@ -207,10 +215,27 @@ which is either inline content or a URL reference:
 ```
 
 These wrappers do not represent arbitrary bare text or binary schema values. Bare binary maps to
-`@runtime.AgentBinary`, and bare text is not supported by this bridge mapping. When a role-marked
+`@runtime.AgentBinary { bytes, mime_type }`, the same shape as `@schema.AgentBinary` in the MoonBit
+SDK. When a role-marked
 value restricts the allowed language codes or MIME types, the generated
 client validates returned values against the allowed set and raises a
 `@runtime.BridgeError` on a disallowed code.
+
+## Text and Quantity
+
+Bare text maps to `@runtime.Text[S]` and a quantity maps to `@runtime.Quantity[U]`, the same
+shapes as `@schema.Text[S]` and `@schema.Quantity[U]` in the MoonBit SDK. The generated client
+declares the marker types: one `UnitXxx` per quantity unit (for example `UnitKg`) and one
+`TextSpec<N>` per set of text restrictions.
+
+```moonbit
+let weight : @runtime.Quantity[UnitKg] = @runtime.Quantity::new(1500L, 3, "kg")
+let caption : @runtime.Text[TextSpec0] = @runtime.Text::new("hello", language="en")
+```
+
+`Quantity::new` raises a `@runtime.BridgeError` when the unit is not one the schema allows. The
+client checks text restrictions and quantity units and bounds against the schema when it sends
+and receives a value.
 
 ## Generated Module Layout
 
