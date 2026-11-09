@@ -3779,14 +3779,15 @@ test "text language outside the schema is rejected on encode and decode" {
 "#,
     )
     .unwrap();
-    let output = std::process::Command::new("moon")
-        .arg("-C")
-        .arg(guest.path())
-        .arg("test")
-        .arg("--target")
-        .arg("wasm")
-        .output()
-        .expect("failed to run moon; is it installed?");
+    let output = std::process::Command::new(
+        workspace_root()
+            .unwrap()
+            .join("sdks/moonbit/golem_sdk/scripts/run-sdk-tests.sh"),
+    )
+    .arg("client")
+    .current_dir(guest.path())
+    .output()
+    .expect("failed to run moon; is it installed?");
     assert!(
         output.status.success(),
         "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
@@ -4102,14 +4103,15 @@ test "s8 range, fixed-list length and datetime range are checked" {
 "#,
     )
     .unwrap();
-    let output = std::process::Command::new("moon")
-        .arg("-C")
-        .arg(guest.path())
-        .arg("test")
-        .arg("--target")
-        .arg("wasm")
-        .output()
-        .expect("failed to run moon; is it installed?");
+    let output = std::process::Command::new(
+        workspace_root()
+            .unwrap()
+            .join("sdks/moonbit/golem_sdk/scripts/run-sdk-tests.sh"),
+    )
+    .arg("client")
+    .current_dir(guest.path())
+    .output()
+    .expect("failed to run moon; is it installed?");
     assert!(
         output.status.success(),
         "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",

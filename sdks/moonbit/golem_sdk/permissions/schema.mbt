@@ -11,7 +11,10 @@ pub extend PermissionCard with @schema.IntoSchema::{
 }
 
 ///|
-pub extend PermissionCard with @schema.FromSchema::{from_value}
+pub extend PermissionCard with @schema.FromSchema::{
+  from_value,
+  from_result_payload,
+}
 
 ///|
 pub extend PermissionCard with @schema.IntoWire::{
@@ -40,7 +43,10 @@ pub extend PolymorphicPermissionCard with @schema.IntoSchema::{
 }
 
 ///|
-pub extend PolymorphicPermissionCard with @schema.FromSchema::{from_value}
+pub extend PolymorphicPermissionCard with @schema.FromSchema::{
+  from_value,
+  from_result_payload,
+}
 
 ///|
 pub extend PolymorphicPermissionCard with @schema.IntoWire::{

@@ -91,6 +91,9 @@ pub fn AgentStreamReadError::to_repr(Self) -> @debug.Repr
 pub suberror DatetimeError {
   DatetimeError(String)
 } derive(Eq, @debug.Debug)
+pub fn DatetimeError::equal(Self, Self) -> Bool
+pub fn DatetimeError::not_equal(Self, Self) -> Bool
+pub fn DatetimeError::to_repr(Self) -> @debug.Repr
 
 pub suberror FromSchemaError {
   ShapeMismatch(expected~ : String, actual~ : String, context~ : String)
@@ -108,6 +111,9 @@ pub fn FromSchemaError::to_repr(Self) -> @debug.Repr
 pub suberror UuidParseError {
   UuidParseError(String)
 } derive(Eq, @debug.Debug)
+pub fn UuidParseError::equal(Self, Self) -> Bool
+pub fn UuidParseError::not_equal(Self, Self) -> Bool
+pub fn UuidParseError::to_repr(Self) -> @debug.Repr
 
 pub(all) suberror WireError {
   Invalid(String)
@@ -121,6 +127,21 @@ pub(all) struct AgentBinary {
   bytes : Bytes
   mime_type : String?
 } derive(Eq, @debug.Debug)
+pub fn AgentBinary::append_result_payload(Self, WireEncoder) -> Int32? raise WireError
+pub fn AgentBinary::append_result_type(WireTypeEncoder) -> Int32?
+pub fn AgentBinary::append_wire(Self, WireEncoder) -> Int32 raise WireError
+pub fn AgentBinary::append_wire_type(WireTypeEncoder) -> Int32
+pub fn AgentBinary::equal(Self, Self) -> Bool
+pub fn AgentBinary::from_result_payload(@schema_model.SchemaValue?) -> Self raise FromSchemaError
+pub fn AgentBinary::from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
+pub fn AgentBinary::not_equal(Self, Self) -> Bool
+pub fn AgentBinary::read_result_payload(WireReader, Int32?) -> Self raise WireError
+pub fn AgentBinary::read_wire(WireReader, Int32) -> Self raise WireError
+pub fn AgentBinary::register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
+pub fn AgentBinary::release_wire(Self, WireReleaser) -> Unit
+pub fn AgentBinary::to_repr(Self) -> @debug.Repr
+pub fn AgentBinary::to_value(Self) -> @schema_model.SchemaValue
+pub fn AgentBinary::type_id() -> String
 pub impl FromSchema for AgentBinary
 pub impl FromWire for AgentBinary
 pub impl IntoSchema for AgentBinary
@@ -135,6 +156,7 @@ pub fn[T : WireSchema] AgentStream::append_result_type(WireTypeEncoder) -> Int32
 pub fn[T] AgentStream::append_wire(Self[T], WireEncoder) -> Int32 raise WireError
 pub fn[T : WireSchema] AgentStream::append_wire_type(WireTypeEncoder) -> Int32
 pub fn[T] AgentStream::drop(Self[T]) -> Unit
+pub fn[T : FromSchema] AgentStream::from_result_payload(@schema_model.SchemaValue?) -> Self[T] raise FromSchemaError
 pub fn[T : FromSchema] AgentStream::from_value(@schema_model.SchemaValue) -> Self[T] raise FromSchemaError
 pub fn[T] AgentStream::from_value_with_codec(@schema_model.SchemaValue, (@schema_model.SchemaValue) -> T raise FromSchemaError) -> Self[T] raise FromSchemaError
 pub fn[T : IntoWire + FromWire] AgentStream::new() -> (AgentStreamWriter[T], Self[T])
@@ -189,12 +211,36 @@ pub impl AllowedMimeTypes for AnyMimeType
 pub struct Datetime {
   // private fields
 } derive(Compare, Eq, Hash)
+pub fn Datetime::append_result_payload(Self, WireEncoder) -> Int32? raise WireError
+pub fn Datetime::append_result_type(WireTypeEncoder) -> Int32?
+pub fn Datetime::append_wire(Self, WireEncoder) -> Int32 raise WireError
+pub fn Datetime::append_wire_type(WireTypeEncoder) -> Int32
+pub fn Datetime::compare(Self, Self) -> Int32
+pub fn Datetime::equal(Self, Self) -> Bool
+pub fn Datetime::from_result_payload(@schema_model.SchemaValue?) -> Self raise FromSchemaError
+pub fn Datetime::from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
 pub fn Datetime::from_wit(@types.Datetime) -> Self raise DatetimeError
+pub fn Datetime::hash(Self) -> Int32
+pub fn Datetime::hash_combine(Self, Hasher) -> Unit
 pub fn Datetime::nanoseconds(Self) -> UInt32
 pub fn Datetime::new(Int64, UInt32) -> Self raise DatetimeError
+pub fn Datetime::not_equal(Self, Self) -> Bool
+pub fn Datetime::op_ge(Self, Self) -> Bool
+pub fn Datetime::op_gt(Self, Self) -> Bool
+pub fn Datetime::op_le(Self, Self) -> Bool
+pub fn Datetime::op_lt(Self, Self) -> Bool
+pub fn Datetime::output(Self, &Logger) -> Unit
 pub fn Datetime::parse(String) -> Self raise DatetimeError
+pub fn Datetime::read_result_payload(WireReader, Int32?) -> Self raise WireError
+pub fn Datetime::read_wire(WireReader, Int32) -> Self raise WireError
+pub fn Datetime::register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
+pub fn Datetime::release_wire(Self, WireReleaser) -> Unit
 pub fn Datetime::seconds(Self) -> Int64
+pub fn Datetime::to_repr(Self) -> @debug.Repr
+pub fn Datetime::to_string(Self) -> String
+pub fn Datetime::to_value(Self) -> @schema_model.SchemaValue
 pub fn Datetime::to_wit(Self) -> @types.Datetime
+pub fn Datetime::type_id() -> String
 pub impl FromSchema for Datetime
 pub impl FromWire for Datetime
 pub impl IntoSchema for Datetime
@@ -211,7 +257,10 @@ pub fn Duration::append_result_type(WireTypeEncoder) -> Int32?
 pub fn Duration::append_wire(Self, WireEncoder) -> Int32 raise WireError
 pub fn Duration::append_wire_type(WireTypeEncoder) -> Int32
 pub fn Duration::equal(Self, Self) -> Bool
+pub fn Duration::from_result_payload(@schema_model.SchemaValue?) -> Self raise FromSchemaError
 pub fn Duration::from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
+pub fn Duration::hash(Self) -> Int32
+pub fn Duration::hash_combine(Self, Hasher) -> Unit
 pub fn Duration::new(Int64) -> Self
 pub fn Duration::not_equal(Self, Self) -> Bool
 pub fn Duration::read_result_payload(WireReader, Int32?) -> Self raise WireError
@@ -235,7 +284,10 @@ pub fn Path::append_result_type(WireTypeEncoder) -> Int32?
 pub fn Path::append_wire(Self, WireEncoder) -> Int32 raise WireError
 pub fn Path::append_wire_type(WireTypeEncoder) -> Int32
 pub fn Path::equal(Self, Self) -> Bool
+pub fn Path::from_result_payload(@schema_model.SchemaValue?) -> Self raise FromSchemaError
 pub fn Path::from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
+pub fn Path::hash(Self) -> Int32
+pub fn Path::hash_combine(Self, Hasher) -> Unit
 pub fn Path::new(String) -> Self
 pub fn Path::not_equal(Self, Self) -> Bool
 pub fn Path::read_result_payload(WireReader, Int32?) -> Self raise WireError
@@ -261,6 +313,7 @@ pub fn[U : QuantityUnit] Quantity::append_result_type(WireTypeEncoder) -> Int32?
 pub fn[U] Quantity::append_wire(Self[U], WireEncoder) -> Int32 raise WireError
 pub fn[U : QuantityUnit] Quantity::append_wire_type(WireTypeEncoder) -> Int32
 pub fn[U : Eq] Quantity::equal(Self[U], Self[U]) -> Bool
+pub fn[U : QuantityUnit] Quantity::from_result_payload(@schema_model.SchemaValue?) -> Self[U] raise FromSchemaError
 pub fn[U : QuantityUnit] Quantity::from_value(@schema_model.SchemaValue) -> Self[U] raise FromSchemaError
 pub fn[U : QuantityUnit] Quantity::new(Int64, Int32, String) -> Self[U] raise FromSchemaError
 pub fn[U : Eq] Quantity::not_equal(Self[U], Self[U]) -> Bool
@@ -287,6 +340,7 @@ pub fn[S : TextSpec] Text::append_result_type(WireTypeEncoder) -> Int32?
 pub fn[S] Text::append_wire(Self[S], WireEncoder) -> Int32 raise WireError
 pub fn[S : TextSpec] Text::append_wire_type(WireTypeEncoder) -> Int32
 pub fn[S : Eq] Text::equal(Self[S], Self[S]) -> Bool
+pub fn[S] Text::from_result_payload(@schema_model.SchemaValue?) -> Self[S] raise FromSchemaError
 pub fn[S] Text::from_value(@schema_model.SchemaValue) -> Self[S] raise FromSchemaError
 pub fn[S] Text::language(Self[S]) -> String?
 pub fn[S] Text::new(String, language? : String) -> Self[S]
@@ -317,6 +371,7 @@ pub fn[M : AllowedMimeTypes] UnstructuredBinary::append_result_type(WireTypeEnco
 pub fn[M] UnstructuredBinary::append_wire(Self[M], WireEncoder) -> Int32 raise WireError
 pub fn[M : AllowedMimeTypes] UnstructuredBinary::append_wire_type(WireTypeEncoder) -> Int32
 pub fn[M] UnstructuredBinary::equal(Self[M], Self[M]) -> Bool
+pub fn[M : AllowedMimeTypes] UnstructuredBinary::from_result_payload(@schema_model.SchemaValue?) -> Self[M] raise FromSchemaError
 pub fn[M : AllowedMimeTypes] UnstructuredBinary::from_value(@schema_model.SchemaValue) -> Self[M] raise FromSchemaError
 pub fn[M] UnstructuredBinary::inline(Bytes, mime_type? : String) -> Self[M]
 pub fn[M] UnstructuredBinary::not_equal(Self[M], Self[M]) -> Bool
@@ -345,6 +400,7 @@ pub fn[L : AllowedLanguages] UnstructuredText::append_result_type(WireTypeEncode
 pub fn[L] UnstructuredText::append_wire(Self[L], WireEncoder) -> Int32 raise WireError
 pub fn[L : AllowedLanguages] UnstructuredText::append_wire_type(WireTypeEncoder) -> Int32
 pub fn[L] UnstructuredText::equal(Self[L], Self[L]) -> Bool
+pub fn[L : AllowedLanguages] UnstructuredText::from_result_payload(@schema_model.SchemaValue?) -> Self[L] raise FromSchemaError
 pub fn[L : AllowedLanguages] UnstructuredText::from_value(@schema_model.SchemaValue) -> Self[L] raise FromSchemaError
 pub fn[L] UnstructuredText::inline(String, language? : String) -> Self[L]
 pub fn[L] UnstructuredText::not_equal(Self[L], Self[L]) -> Bool
@@ -372,7 +428,10 @@ pub fn Url::append_result_type(WireTypeEncoder) -> Int32?
 pub fn Url::append_wire(Self, WireEncoder) -> Int32 raise WireError
 pub fn Url::append_wire_type(WireTypeEncoder) -> Int32
 pub fn Url::equal(Self, Self) -> Bool
+pub fn Url::from_result_payload(@schema_model.SchemaValue?) -> Self raise FromSchemaError
 pub fn Url::from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
+pub fn Url::hash(Self) -> Int32
+pub fn Url::hash_combine(Self, Hasher) -> Unit
 pub fn Url::new(String) -> Self
 pub fn Url::not_equal(Self, Self) -> Bool
 pub fn Url::read_result_payload(WireReader, Int32?) -> Self raise WireError
@@ -391,13 +450,37 @@ pub impl WireSchema for Url
 pub struct Uuid {
   // private fields
 } derive(Compare, Eq, Hash)
+pub fn Uuid::append_result_payload(Self, WireEncoder) -> Int32? raise WireError
+pub fn Uuid::append_result_type(WireTypeEncoder) -> Int32?
+pub fn Uuid::append_wire(Self, WireEncoder) -> Int32 raise WireError
+pub fn Uuid::append_wire_type(WireTypeEncoder) -> Int32
+pub fn Uuid::compare(Self, Self) -> Int32
+pub fn Uuid::equal(Self, Self) -> Bool
 pub fn Uuid::from_bits(UInt64, UInt64) -> Self
+pub fn Uuid::from_result_payload(@schema_model.SchemaValue?) -> Self raise FromSchemaError
+pub fn Uuid::from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
 pub fn Uuid::from_wit(@types.Uuid) -> Self
+pub fn Uuid::hash(Self) -> Int32
+pub fn Uuid::hash_combine(Self, Hasher) -> Unit
 pub fn Uuid::high_bits(Self) -> UInt64
 pub fn Uuid::low_bits(Self) -> UInt64
+pub fn Uuid::not_equal(Self, Self) -> Bool
+pub fn Uuid::op_ge(Self, Self) -> Bool
+pub fn Uuid::op_gt(Self, Self) -> Bool
+pub fn Uuid::op_le(Self, Self) -> Bool
+pub fn Uuid::op_lt(Self, Self) -> Bool
+pub fn Uuid::output(Self, &Logger) -> Unit
 pub fn Uuid::parse(String) -> Self raise UuidParseError
 pub fn Uuid::random() -> Self
+pub fn Uuid::read_result_payload(WireReader, Int32?) -> Self raise WireError
+pub fn Uuid::read_wire(WireReader, Int32) -> Self raise WireError
+pub fn Uuid::register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
+pub fn Uuid::release_wire(Self, WireReleaser) -> Unit
+pub fn Uuid::to_repr(Self) -> @debug.Repr
+pub fn Uuid::to_string(Self) -> String
+pub fn Uuid::to_value(Self) -> @schema_model.SchemaValue
 pub fn Uuid::to_wit(Self) -> @types.Uuid
+pub fn Uuid::type_id() -> String
 pub impl FromSchema for Uuid
 pub impl FromWire for Uuid
 pub impl IntoSchema for Uuid

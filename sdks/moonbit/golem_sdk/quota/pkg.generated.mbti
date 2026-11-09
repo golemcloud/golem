@@ -24,6 +24,7 @@ pub fn QuotaToken::append_result_type(@schema.WireTypeEncoder) -> Int32?
 pub fn QuotaToken::append_wire(Self, @schema.WireEncoder) -> Int32 raise @schema.WireError
 pub fn QuotaToken::append_wire_type(@schema.WireTypeEncoder) -> Int32
 pub fn QuotaToken::drop(Self) -> Unit
+pub fn QuotaToken::from_result_payload(@schema_model.SchemaValue?) -> Self raise @schema.FromSchemaError
 pub fn QuotaToken::from_value(@schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
 pub fn QuotaToken::merge(Self, Self) -> Unit
 pub fn QuotaToken::new(String, UInt64) -> Self

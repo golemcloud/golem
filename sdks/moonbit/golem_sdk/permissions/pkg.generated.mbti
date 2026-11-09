@@ -137,6 +137,7 @@ pub fn PermissionCard::append_wire_type(@schema.WireTypeEncoder) -> Int32
 pub fn PermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> PersistentCard raise PermissionError
 pub fn PermissionCard::drop(Self) -> Unit
 pub fn PermissionCard::expires_at(Self) -> Timestamp?
+pub fn PermissionCard::from_result_payload(@schema_model.SchemaValue?) -> Self raise @schema.FromSchemaError
 pub fn PermissionCard::from_value(@schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
 pub fn PermissionCard::id(Self) -> CardId
 pub fn PermissionCard::inspect(Self) -> CardView raise PermissionError
@@ -180,6 +181,7 @@ pub fn PolymorphicPermissionCard::append_wire_type(@schema.WireTypeEncoder) -> I
 pub fn PolymorphicPermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> PersistentCard raise PermissionError
 pub fn PolymorphicPermissionCard::drop(Self) -> Unit
 pub fn PolymorphicPermissionCard::expires_at(Self) -> Timestamp?
+pub fn PolymorphicPermissionCard::from_result_payload(@schema_model.SchemaValue?) -> Self raise @schema.FromSchemaError
 pub fn PolymorphicPermissionCard::from_value(@schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
 pub fn PolymorphicPermissionCard::id(Self) -> CardId
 pub fn PolymorphicPermissionCard::inspect(Self) -> CardView raise PermissionError

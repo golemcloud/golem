@@ -89,7 +89,7 @@ pub extend UnstructuredText with Eq::{equal, not_equal}
 pub extend UnstructuredText with IntoSchema::{type_id, register_in, to_value}
 
 ///|
-pub extend UnstructuredText with FromSchema::{from_value}
+pub extend UnstructuredText with FromSchema::{from_value, from_result_payload}
 
 ///|
 pub extend UnstructuredText with IntoWire::{
@@ -164,7 +164,7 @@ pub extend UnstructuredBinary with Eq::{equal, not_equal}
 pub extend UnstructuredBinary with IntoSchema::{type_id, register_in, to_value}
 
 ///|
-pub extend UnstructuredBinary with FromSchema::{from_value}
+pub extend UnstructuredBinary with FromSchema::{from_value, from_result_payload}
 
 ///|
 pub extend UnstructuredBinary with IntoWire::{

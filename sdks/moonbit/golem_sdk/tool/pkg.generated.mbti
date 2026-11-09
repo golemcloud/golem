@@ -167,6 +167,21 @@ pub(all) struct CollectedToolInvocation[T, E] {
 pub(all) struct ProcessExitStatus {
   exit_code : Byte
 } derive(Eq, @debug.Debug)
+pub fn ProcessExitStatus::append_result_payload(Self, @schema.WireEncoder) -> Int32? raise @schema.WireError
+pub fn ProcessExitStatus::append_result_type(@schema.WireTypeEncoder) -> Int32?
+pub fn ProcessExitStatus::append_wire(Self, @schema.WireEncoder) -> Int32 raise @schema.WireError
+pub fn ProcessExitStatus::append_wire_type(@schema.WireTypeEncoder) -> Int32
+pub fn ProcessExitStatus::equal(Self, Self) -> Bool
+pub fn ProcessExitStatus::from_result_payload(@schema_model.SchemaValue?) -> Self raise @schema.FromSchemaError
+pub fn ProcessExitStatus::from_value(@schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
+pub fn ProcessExitStatus::not_equal(Self, Self) -> Bool
+pub fn ProcessExitStatus::read_result_payload(@schema.WireReader, Int32?) -> Self raise @schema.WireError
+pub fn ProcessExitStatus::read_wire(@schema.WireReader, Int32) -> Self raise @schema.WireError
+pub fn ProcessExitStatus::register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
+pub fn ProcessExitStatus::release_wire(Self, @schema.WireReleaser) -> Unit
+pub fn ProcessExitStatus::to_repr(Self) -> @debug.Repr
+pub fn ProcessExitStatus::to_value(Self) -> @schema_model.SchemaValue
+pub fn ProcessExitStatus::type_id() -> String
 pub impl @schema.FromSchema for ProcessExitStatus
 pub impl @schema.FromWire for ProcessExitStatus
 pub impl @schema.IntoSchema for ProcessExitStatus

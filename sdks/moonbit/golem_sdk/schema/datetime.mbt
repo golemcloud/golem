@@ -9,9 +9,49 @@ pub struct Datetime {
 } derive(Eq, Compare, Hash)
 
 ///|
+pub extend Datetime with Eq::{equal, not_equal}
+
+///|
+pub extend Datetime with Compare::{compare, op_lt, op_le, op_gt, op_ge}
+
+///|
+pub extend Datetime with Hash::{hash, hash_combine}
+
+///|
+pub extend Datetime with Show::{to_string, output}
+
+///|
+pub extend Datetime with Debug::{to_repr}
+
+///|
+pub extend Datetime with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Datetime with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend Datetime with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Datetime with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Datetime with WireSchema::{append_wire_type, append_result_type}
+
+///|
 pub suberror DatetimeError {
   DatetimeError(String)
 } derive(Debug, Eq)
+
+///|
+pub extend DatetimeError with Debug::{to_repr}
+
+///|
+pub extend DatetimeError with Eq::{equal, not_equal}
 
 ///|
 let datetime_min_seconds : Int64 = -62167219200L

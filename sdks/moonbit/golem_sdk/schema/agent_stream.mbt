@@ -15,7 +15,7 @@ pub(all) struct AgentStream[T] {
 pub extend AgentStream with IntoSchema::{type_id, register_in, to_value}
 
 ///|
-pub extend AgentStream with FromSchema::{from_value}
+pub extend AgentStream with FromSchema::{from_value, from_result_payload}
 
 ///|
 pub extend AgentStream with IntoWire::{

@@ -10,10 +10,13 @@ pub extend Path with Debug::{to_repr}
 pub extend Path with Eq::{equal, not_equal}
 
 ///|
+pub extend Path with Hash::{hash, hash_combine}
+
+///|
 pub extend Path with IntoSchema::{type_id, register_in, to_value}
 
 ///|
-pub extend Path with FromSchema::{from_value}
+pub extend Path with FromSchema::{from_value, from_result_payload}
 
 ///|
 pub extend Path with IntoWire::{
@@ -45,10 +48,13 @@ pub extend Url with Debug::{to_repr}
 pub extend Url with Eq::{equal, not_equal}
 
 ///|
+pub extend Url with Hash::{hash, hash_combine}
+
+///|
 pub extend Url with IntoSchema::{type_id, register_in, to_value}
 
 ///|
-pub extend Url with FromSchema::{from_value}
+pub extend Url with FromSchema::{from_value, from_result_payload}
 
 ///|
 pub extend Url with IntoWire::{append_wire, append_result_payload, release_wire}
@@ -90,7 +96,7 @@ pub extend Text with Eq::{equal, not_equal}
 pub extend Text with IntoSchema::{type_id, register_in, to_value}
 
 ///|
-pub extend Text with FromSchema::{from_value}
+pub extend Text with FromSchema::{from_value, from_result_payload}
 
 ///|
 pub extend Text with IntoWire::{
@@ -132,10 +138,13 @@ pub extend Duration with Debug::{to_repr}
 pub extend Duration with Eq::{equal, not_equal}
 
 ///|
+pub extend Duration with Hash::{hash, hash_combine}
+
+///|
 pub extend Duration with IntoSchema::{type_id, register_in, to_value}
 
 ///|
-pub extend Duration with FromSchema::{from_value}
+pub extend Duration with FromSchema::{from_value, from_result_payload}
 
 ///|
 pub extend Duration with IntoWire::{
@@ -164,9 +173,49 @@ pub struct Uuid {
 } derive(Eq, Compare, Hash)
 
 ///|
+pub extend Uuid with Eq::{equal, not_equal}
+
+///|
+pub extend Uuid with Compare::{compare, op_lt, op_le, op_gt, op_ge}
+
+///|
+pub extend Uuid with Hash::{hash, hash_combine}
+
+///|
+pub extend Uuid with Show::{to_string, output}
+
+///|
+pub extend Uuid with Debug::{to_repr}
+
+///|
+pub extend Uuid with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Uuid with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend Uuid with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Uuid with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Uuid with WireSchema::{append_wire_type, append_result_type}
+
+///|
 pub suberror UuidParseError {
   UuidParseError(String)
 } derive(Debug, Eq)
+
+///|
+pub extend UuidParseError with Debug::{to_repr}
+
+///|
+pub extend UuidParseError with Eq::{equal, not_equal}
 
 ///|
 pub fn Uuid::from_bits(high_bits : UInt64, low_bits : UInt64) -> Uuid {
@@ -301,7 +350,7 @@ pub extend Quantity with Eq::{equal, not_equal}
 pub extend Quantity with IntoSchema::{type_id, register_in, to_value}
 
 ///|
-pub extend Quantity with FromSchema::{from_value}
+pub extend Quantity with FromSchema::{from_value, from_result_payload}
 
 ///|
 pub extend Quantity with IntoWire::{
@@ -647,6 +696,31 @@ pub(all) struct AgentBinary {
   bytes : Bytes
   mime_type : String?
 } derive(Debug, Eq)
+
+///|
+pub extend AgentBinary with Debug::{to_repr}
+
+///|
+pub extend AgentBinary with Eq::{equal, not_equal}
+
+///|
+pub extend AgentBinary with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend AgentBinary with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend AgentBinary with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend AgentBinary with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend AgentBinary with WireSchema::{append_wire_type, append_result_type}
 
 ///|
 pub impl IntoSchema for AgentBinary with fn type_id() {

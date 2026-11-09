@@ -24,7 +24,7 @@ pub(all) struct QuotaToken {
 pub extend QuotaToken with @schema.IntoSchema::{type_id, register_in, to_value}
 
 ///|
-pub extend QuotaToken with @schema.FromSchema::{from_value}
+pub extend QuotaToken with @schema.FromSchema::{from_value, from_result_payload}
 
 ///|
 pub extend QuotaToken with @schema.IntoWire::{
