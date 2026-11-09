@@ -115,6 +115,7 @@ args = [
     "--src", "wit/deps", "--dst", "sdks/scala/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/moonbit/golem_sdk/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/go/golem/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/kotlin/wit-native/deps",
 ]
 
 [tasks.wit-golem-cli]
@@ -133,7 +134,7 @@ args = [
 private = true
 script_runner = "@duckscript"
 script = '''
-status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/effect/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps sdks/go/golem/wit/deps
+status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/effect/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps sdks/go/golem/wit/deps sdks/kotlin/wit-native/deps
 ok = eq ${status.code} 0
 if not ${ok}
     echo "git status failed (exit ${status.code}):"
