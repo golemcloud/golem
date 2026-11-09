@@ -51,7 +51,7 @@ export const cleanupDeletedAccounts = Effect.gen(function* () {
   yield* Effect.logInfo("Cleaned up the deleted accounts").pipe(
     Effect.annotateLogs({
       deletedCustomers: summary.deletedCustomers,
-      owing: summary.owing,
+      unsettled: summary.unsettled,
       deletedUsers: summary.deletedUsers
     })
   )

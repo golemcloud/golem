@@ -3,6 +3,7 @@ import type pg from "pg"
 import { Database } from "./Database.ts"
 import { Polar, type PolarError } from "./Polar.ts"
 import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts.ts"
+import { holdFor } from "./Settlement.ts"
 import { Subscriptions, type SubscriptionsError } from "./Subscriptions.ts"
 
 /**
@@ -10,16 +11,16 @@ import { Subscriptions, type SubscriptionsError } from "./Subscriptions.ts"
  * Better Auth user of the account.
  *
  * The deletion hold of `Settlement.holdFor` lets the registry delete an account only when the
- * account owes no paid overage and can no longer run up any. The cleanup checks the same again:
- * an account with paid overage that no order bills yet, or with an unpaid order for paid overage,
- * keeps its Polar customer and its user, and the cleanup logs the warning `deleted_account_owes`.
+ * account has no billable subscription and owes no paid overage. The cleanup checks the same
+ * reasons again, because an administrator can remove the hold. An account with a reason keeps its
+ * Polar customer and its user, and each run logs the warning `deleted_account_unsettled`.
  *
  * The delete of the Polar customer cancels its subscriptions at once, with no refund, and clears
- * its external ID. The cleanup deletes the user only after the Polar customer, and the identity
- * bridge refuses the user of a deleted account, so a checkout of a new account starts only after
- * the Polar customer of the deleted account is gone. The table
- * `deleted_account_cleanups` records the delete, so a later run does not call Polar again. The
- * user goes after the Polar customer, with its sessions and GitHub accounts. The subscriptions,
+ * its external ID. With no billable subscription left, nothing ends early. The cleanup deletes the
+ * user only after the Polar customer, and the identity bridge refuses the user of a deleted
+ * account, so a checkout of a new account starts only after the Polar customer of the deleted
+ * account is gone. The table `deleted_account_cleanups` records the delete, so a later run does
+ * not call Polar again. The user goes with its sessions and GitHub accounts. The subscriptions,
  * orders and usage events of the account stay.
  */
 
@@ -34,8 +35,11 @@ export class CleanupError extends Data.TaggedError("CleanupError")<{
 export interface CleanupSummary {
   /** Deleted accounts whose Polar customer this run deleted, or found already gone. */
   readonly deletedCustomers: number
-  /** Deleted accounts that keep their Polar customer, because they owe paid overage. */
-  readonly owing: number
+  /**
+   * Deleted accounts that keep their Polar customer, because they have a billable subscription or
+   * owe paid overage.
+   */
+  readonly unsettled: number
   /** Better Auth users that this run deleted. */
   readonly deletedUsers: number
 }
@@ -73,16 +77,18 @@ export const cleanupDeletedAccounts: Effect.Effect<
   )
 
   let deletedCustomers = 0
-  let owing = 0
+  let unsettled = 0
   let failed = 0
   for (const accountId of deleted.filter((accountId) => !finished.has(accountId))) {
-    const pendingOrders = yield* subscriptions.pendingOrders(accountId, undefined)
-    const unbilledUsage = yield* subscriptions.unbilledUsage(accountId)
-    const unpaidOverage = pendingOrders.some((order) => order.meteredAmount > 0)
-    if (unbilledUsage || unpaidOverage) {
-      owing++
-      yield* Effect.logWarning("A deleted account owes paid overage; its Polar customer stays").pipe(
-        Effect.annotateLogs({ event: "deleted_account_owes", golemAccountId: accountId, unbilledUsage, unpaidOverage })
+    const reasons = holdFor(
+      yield* subscriptions.ofAccount(accountId, undefined),
+      yield* subscriptions.pendingOrders(accountId, undefined),
+      yield* subscriptions.unbilledUsage(accountId)
+    )
+    if (reasons.length > 0) {
+      unsettled++
+      yield* Effect.logWarning("A deleted account is not settled; its Polar customer stays").pipe(
+        Effect.annotateLogs({ event: "deleted_account_unsettled", golemAccountId: accountId, reasons: reasons.join(",") })
       )
       continue
     }
@@ -120,5 +126,5 @@ export const cleanupDeletedAccounts: Effect.Effect<
   if (failed > 0) {
     return yield* new CleanupError({ reason: `${failed} Polar customers of deleted accounts are not deleted` })
   }
-  return { deletedCustomers, owing, deletedUsers }
+  return { deletedCustomers, unsettled, deletedUsers }
 })

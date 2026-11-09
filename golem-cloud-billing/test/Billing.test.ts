@@ -66,7 +66,7 @@ describe("Polar billing", () => {
     const schema = config.db.schema
     await pool.query(
       `TRUNCATE "${schema}"."user", "${schema}".polar_subscriptions, "${schema}".polar_orders,
-         "${schema}".polar_webhook_deliveries, "${schema}".usage_events CASCADE`
+         "${schema}".polar_webhook_deliveries, "${schema}".usage_events, "${schema}".deletion_holds CASCADE`
     )
   })
 
@@ -691,9 +691,11 @@ describe("Polar billing", () => {
   })
 
   describe("deletion hold", () => {
-    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Paid. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period.`
+    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Paid. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
+    const canceledHold =
+      "Golem Cloud billing: The subscription to Paid is canceled and runs to the end of the period. Delete the account after the period ends."
     const unbilledHold =
-      "Golem Cloud billing: The account has paid overage that Polar has not billed yet. Polar bills it on the next invoice of the subscription. Delete the account after that invoice is paid."
+      "Golem Cloud billing: The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid."
     const unpaidHold = `Golem Cloud billing: An invoice for paid overage is not paid. Pay it in Manage billing at ${baseUrl}.`
 
     /** A usage event of the usage push, sent `ago` milliseconds before now unless `held`. */
@@ -712,7 +714,7 @@ describe("Polar billing", () => {
       )
     }
 
-    it("holds the account of an active subscription as the billing account, and frees it after the cancellation", async () => {
+    it("holds the account of a subscription as the billing account until the subscription ends, also after the cancellation", async () => {
       const accountId = randomUUID()
 
       await deliver("subscription.active", subscription(accountId))
@@ -727,31 +729,45 @@ describe("Polar billing", () => {
         "subscription.updated",
         subscription(accountId, { cancel_at_period_end: true, modified_at: "2026-11-05T10:00:00Z" })
       )
+      expect(upstreams.deletionHolds.get(accountId)).toBe(canceledHold)
 
+      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2026-12-04T10:00:00Z" }))
       expect(upstreams.deletionHolds.has(accountId)).toBe(false)
       expect(upstreams.holdChanges().at(-1)!.method).toBe("DELETE")
     })
 
-    it("keeps the hold after the cancellation while paid overage is on, and for the margin after it is off", async () => {
-      const accountId = await registry.account()
-      await registry.usageMode(accountId, "allow_overage", new Date(Date.now() - DAY))
-      const end = new Date(Date.now() + 30 * DAY)
+    it("places the hold before the move to the paid plan, and removes it after the move to the free plan", async () => {
+      const accountId = randomUUID()
 
-      await deliver(
-        "subscription.updated",
-        subscription(accountId, { cancel_at_period_end: true, current_period_end: end.toISOString() })
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: "2026-12-04T10:00:00Z" }))
+
+      const changes = upstreams.requests
+        .filter((request) => request.method !== "GET")
+        .filter((request) => request.url.pathname.includes("/deletion-holds/") || request.url.pathname.endsWith("/plan"))
+        .map((request) => `${request.method} ${request.url.pathname.endsWith("/plan") ? "plan" : "hold"}`)
+      expect(changes).toEqual(["PUT hold", "PUT plan", "PUT plan", "DELETE hold"])
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+    })
+
+    it("holds a billable subscription that no reconcile has held yet, at the next sweep", async () => {
+      // A subscription from before the app placed holds: no webhook has reconciled it since.
+      const accountId = randomUUID()
+      await pool.query(
+        `INSERT INTO polar_subscriptions
+           (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at,
+            metered_price_ids)
+         VALUES ($1, $2, $3, 'active', now() + interval '20 days', false, now(), '{}')`,
+        [`sub_${accountId}`, accountId, polarProductId]
       )
-      expect(upstreams.deletionHolds.get(accountId)).toContain("Paid overage is on")
 
-      const off = new Date()
-      await registry.usageMode(accountId, "hard_limit", off)
-      await sweep(new Date(off.getTime() + MINUTE))
-      expect(upstreams.deletionHolds.get(accountId)).toBe(
-        "Golem Cloud billing: Paid overage was on less than 15 minutes ago, and its last usage is not recorded yet. Try again in 15 minutes."
-      )
+      await sweep(new Date())
+      expect(upstreams.deletionHolds.get(accountId)).toBe(subscriptionHold)
+      const recorded = await pool.query("SELECT reason FROM deletion_holds WHERE account_id = $1", [accountId])
+      expect(recorded.rows).toEqual([{ reason: subscriptionHold }])
 
-      await sweep(new Date(off.getTime() + Settlement.SETTLEMENT_MARGIN_MS + MINUTE))
-      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+      await sweep(new Date())
+      expect(upstreams.holdChanges()).toHaveLength(1)
     })
 
     it("holds an ended subscription while sent overage waits for its order, and while the order is unpaid", async () => {

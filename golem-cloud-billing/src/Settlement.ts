@@ -1,7 +1,7 @@
 import { Effect, Layer, Option, Ref, Schedule } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
-import { Registry, type RegistryError } from "./Registry.ts"
-import { RegistryAccounts, type RegistryAccountsError, type UsageMode } from "./RegistryAccounts.ts"
+import { type Account, Registry, type RegistryError } from "./Registry.ts"
+import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts.ts"
 import {
   billableStatuses,
   type PendingOrder,
@@ -33,9 +33,10 @@ import {
  * The registry sets an account on a plan without overage to hardLimit. Only the owner can turn
  * paid overage on again, also after the account is back on the paid plan.
  *
- * Settlement also places a deletion hold on the account while the account can owe paid overage
- * (`holdFor`), so the registry refuses to delete it. Golem does not charge early: the person
- * deletes the account after the overage is billed and paid.
+ * Settlement also places a deletion hold on the account while the account has a billable
+ * subscription or owes paid overage (`holdFor`), so the registry refuses to delete it. Golem does
+ * not charge early and does not end a paid period early: the person deletes the account after the
+ * subscription ends and Polar has billed the paid overage and been paid for it.
  */
 
 /**
@@ -97,43 +98,35 @@ export const planFor = (
 export type HoldReason =
   /** A billable subscription is not canceled at the period end. */
   | "subscription"
-  /** A billable subscription exists and paid overage is on, so the account can still use it. */
-  | "overageOn"
-  /**
-   * A billable subscription exists and paid overage was on less than `SETTLEMENT_MARGIN_MS` ago,
-   * so the usage push may not have recorded the last overage yet.
-   */
-  | "overageRecentlyOn"
+  /** A billable subscription is canceled at the period end, and runs to the end of the period. */
+  | "canceledSubscription"
   /** The usage push recorded paid overage that no order bills yet. */
   | "unbilledUsage"
   /** A pending order has an amount for a metered price. */
   | "unpaidOverage"
 
 /**
- * The reasons for a deletion hold on the account at `now`; none when the account owes nothing and
- * can no longer run up paid overage. `unbilledUsage` is `Subscriptions.unbilledUsage`.
+ * The reasons for a deletion hold on the account; none when the account has no billable
+ * subscription and owes no paid overage. `unbilledUsage` is `Subscriptions.unbilledUsage`.
+ *
+ * A billable subscription holds the account to the end of the period, also after a cancellation.
+ * Paid overage needs the paid plan, and the paid plan needs a billable subscription, so the
+ * account has a hold for as long as it can run up paid overage. The owner turns paid overage on
+ * and off in the registry, which the app does not see, so a hold that followed the switch would
+ * come too late. The cleanup of deleted accounts checks the same reasons before it deletes a
+ * Polar customer, so it never ends a paid period early.
  */
 export const holdFor = (
   subscriptions: ReadonlyArray<Subscription>,
   pendingOrders: ReadonlyArray<PendingOrder>,
-  usageMode: UsageMode,
-  unbilledUsage: boolean,
-  now: Date
+  unbilledUsage: boolean
 ): ReadonlyArray<HoldReason> => {
   const reasons: Array<HoldReason> = []
   const billable = subscriptions.filter((subscription) => billableStatuses.includes(subscription.status))
   if (billable.some((subscription) => !subscription.cancelAtPeriodEnd)) {
     reasons.push("subscription")
-  }
-  if (billable.length > 0) {
-    if (usageMode.mode === "allowOverage") {
-      reasons.push("overageOn")
-    } else if (
-      usageMode.changedAt !== undefined &&
-      now.getTime() - usageMode.changedAt.getTime() < SETTLEMENT_MARGIN_MS
-    ) {
-      reasons.push("overageRecentlyOn")
-    }
+  } else if (billable.length > 0) {
+    reasons.push("canceledSubscription")
   }
   if (unbilledUsage) {
     reasons.push("unbilledUsage")
@@ -144,20 +137,17 @@ export const holdFor = (
   return reasons
 }
 
-const marginMinutes = SETTLEMENT_MARGIN_MS / (60 * 1000)
-
 /**
  * The reason text of the deletion hold. The registry shows it to the person who tries to delete
  * the account, so each sentence says what to do. `billingUrl` is the page of the billing app.
  */
 export const holdReasonText = (reasons: ReadonlyArray<HoldReason>, billingUrl: string): string => {
   const sentences: Record<HoldReason, string> = {
-    subscription: `The account has a subscription to Paid. Cancel it in Manage billing at ${billingUrl}. The subscription then runs to the end of the period.`,
-    overageOn:
-      "Paid overage is on, and the account can use it until the subscription ends. Turn paid overage off, or wait until the subscription ends.",
-    overageRecentlyOn: `Paid overage was on less than ${marginMinutes} minutes ago, and its last usage is not recorded yet. Try again in ${marginMinutes} minutes.`,
+    subscription: `The account has a subscription to Paid. Cancel it in Manage billing at ${billingUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`,
+    canceledSubscription:
+      "The subscription to Paid is canceled and runs to the end of the period. Delete the account after the period ends.",
     unbilledUsage:
-      "The account has paid overage that Polar has not billed yet. Polar bills it on the next invoice of the subscription. Delete the account after that invoice is paid.",
+      "The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid.",
     unpaidOverage: `An invoice for paid overage is not paid. Pay it in Manage billing at ${billingUrl}.`
   }
   return ["Golem Cloud billing:", ...reasons.map((reason) => sentences[reason])].join(" ")
@@ -218,6 +208,24 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
         )
       )
 
+    const changePlan = (account: Account, plan: ManagedPlan) =>
+      Effect.gen(function* () {
+        const target = planIds[plan]
+        if (account.planId === target) {
+          return
+        }
+        if (!managed.has(account.planId)) {
+          yield* Effect.logWarning("The account has a plan that subscriptions do not change").pipe(
+            Effect.annotateLogs({ golemAccountId: account.id, planId: account.planId })
+          )
+          return
+        }
+        yield* registry.setAccountPlan(config.registryBillingToken, account, target)
+        yield* Effect.logInfo("Changed the plan of the account").pipe(
+          Effect.annotateLogs({ golemAccountId: account.id, fromPlanId: account.planId, toPlanId: target, plan })
+        )
+      })
+
     const reconcile = (accountId: string, now: Date) =>
       Effect.gen(function* () {
         const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
@@ -231,42 +239,22 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
         }
         const account = found.value
 
-        const reasons = holdFor(
-          accountSubscriptions,
-          pendingOrders,
-          yield* registryAccounts.usageMode(accountId),
-          yield* subscriptions.unbilledUsage(accountId),
-          now
-        )
+        const reasons = holdFor(accountSubscriptions, pendingOrders, yield* subscriptions.unbilledUsage(accountId))
         const holderId = yield* holderAccountId
+        // The hold goes on before the plan changes and comes off after it, so the account is never
+        // on the paid plan without a hold.
         if (reasons.length > 0) {
-          yield* registry.placeDeletionHold(
-            config.registryBillingToken,
-            accountId,
-            holderId,
-            holdReasonText(reasons, billingUrl)
-          )
-        } else {
+          const reason = holdReasonText(reasons, billingUrl)
+          yield* registry.placeDeletionHold(config.registryBillingToken, accountId, holderId, reason)
+          yield* subscriptions.recordHold(accountId, reason)
+        }
+        yield* changePlan(account, planFor(accountSubscriptions, pendingOrders, now))
+        if (reasons.length === 0) {
           yield* registry.removeDeletionHold(config.registryBillingToken, accountId, holderId)
+          yield* subscriptions.forgetHold(accountId)
         }
         yield* Effect.logDebug("Set the deletion hold of the account").pipe(
           Effect.annotateLogs({ golemAccountId: accountId, reasons: reasons.join(",") })
-        )
-
-        const plan = planFor(accountSubscriptions, pendingOrders, now)
-        const target = planIds[plan]
-        if (account.planId === target) {
-          return
-        }
-        if (!managed.has(account.planId)) {
-          yield* Effect.logWarning("The account has a plan that subscriptions do not change").pipe(
-            Effect.annotateLogs({ golemAccountId: accountId, planId: account.planId })
-          )
-          return
-        }
-        yield* registry.setAccountPlan(config.registryBillingToken, account, target)
-        yield* Effect.logInfo("Changed the plan of the account").pipe(
-          Effect.annotateLogs({ golemAccountId: accountId, fromPlanId: account.planId, toPlanId: target, plan })
         )
       }).pipe(
         // 409: the account changed between the read and the write; read it again.
@@ -300,8 +288,11 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
           at(-ORDER_PAYMENT_GRACE_MS)
         )
         const holdCandidates = yield* subscriptions.holdCandidates(config.polar.productId, at(-SWEEP_WINDOW_MS))
+        const candidates = [...new Set([...ending, ...awaitingPayment, ...holdCandidates])]
+        // The reconcile changes nothing for a deleted account, so the sweep skips it.
+        const deleted = new Set(yield* registryAccounts.deletedAmong(candidates))
         yield* Effect.forEach(
-          new Set([...ending, ...awaitingPayment, ...holdCandidates]),
+          candidates.filter((accountId) => !deleted.has(accountId)),
           (accountId) => settle(accountId, now),
           { discard: true }
         )

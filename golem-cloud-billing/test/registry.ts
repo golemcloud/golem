@@ -16,8 +16,7 @@ export const meteringTables = [
 
 /** The registry columns that the database role of the billing app can read, for each table. */
 export const accountColumns: Readonly<Record<string, ReadonlyArray<string>>> = {
-  accounts: ["account_id", "deleted_at"],
-  account_monthly_usage_modes: ["account_id", "mode", "changed_at"]
+  accounts: ["account_id", "deleted_at"]
 }
 
 export interface Dimensions {
@@ -132,16 +131,6 @@ export class RegistryDatabase {
     await this.admin.query("UPDATE accounts SET deleted_at = now(), updated_at = now() WHERE account_id = $1", [
       accountId
     ])
-  }
-
-  /** Sets the monthly usage mode of the account, changed at `changedAt`. */
-  async usageMode(accountId: string, mode: "hard_limit" | "allow_overage", changedAt: Date): Promise<void> {
-    await this.admin.query(
-      `INSERT INTO account_monthly_usage_modes (account_id, mode, revision, changed_by, changed_at)
-       VALUES ($1, $2, 1, $1, $3::timestamptz AT TIME ZONE 'UTC')
-       ON CONFLICT (account_id) DO UPDATE SET mode = EXCLUDED.mode, changed_at = EXCLUDED.changed_at`,
-      [accountId, mode, changedAt]
-    )
   }
 
   async revision(

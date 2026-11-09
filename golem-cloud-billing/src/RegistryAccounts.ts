@@ -1,5 +1,4 @@
 import { Context, Data, Effect, Layer } from "effect"
-import type { MonthlyUsageMode } from "./BillableUsage.ts"
 import { Database } from "./Database.ts"
 
 /** A failed read of the account tables of the registry. */
@@ -9,13 +8,6 @@ export class RegistryAccountsError extends Data.TaggedError("RegistryAccountsErr
   override get message(): string {
     return `Reading the account tables of the registry failed: ${this.reason}`
   }
-}
-
-/** The usage mode of an account, and when it changed last. */
-export interface UsageMode {
-  readonly mode: MonthlyUsageMode
-  /** Undefined when the mode never changed: the account is on `hardLimit` since it was created. */
-  readonly changedAt: Date | undefined
 }
 
 export interface RegistryAccountsShape {
@@ -29,14 +21,12 @@ export interface RegistryAccountsShape {
   readonly deletedAmong: (
     accountIds: ReadonlyArray<string>
   ) => Effect.Effect<ReadonlyArray<string>, RegistryAccountsError>
-  readonly usageMode: (accountId: string) => Effect.Effect<UsageMode, RegistryAccountsError>
 }
 
 /**
- * Reads two columns of each of two registry tables: `accounts (account_id, deleted_at)` and
- * `account_monthly_usage_modes (account_id, mode, changed_at)`. The database role of the app has
- * a column grant on these columns and on no other column of the tables, which hold the email and
- * the actor of a change.
+ * Reads two columns of the registry table `accounts`: `account_id` and `deleted_at`. The database
+ * role of the app has a column grant on these columns and on no other column of the table, which
+ * holds the email.
  */
 export class RegistryAccounts extends Context.Service<RegistryAccounts, RegistryAccountsShape>()(
   "golem-cloud-billing/RegistryAccounts"
@@ -68,21 +58,6 @@ export const layer: Layer.Layer<RegistryAccounts, never, Database> = Layer.effec
             [accountIds]
           ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
 
-    // `changed_at` is a UTC timestamp without a time zone, which node-pg would read as local time.
-    const usageMode = (accountId: string) =>
-      query<{ mode: string; changed_at: Date }>(
-        `SELECT mode, changed_at AT TIME ZONE 'UTC' AS changed_at
-           FROM ${registry}.account_monthly_usage_modes WHERE account_id = $1`,
-        [accountId]
-      ).pipe(
-        Effect.map((result): UsageMode => {
-          const row = result.rows[0]
-          return row === undefined
-            ? { mode: "hardLimit", changedAt: undefined }
-            : { mode: row.mode === "allow_overage" ? "allowOverage" : "hardLimit", changedAt: row.changed_at }
-        })
-      )
-
-    return { isDeleted, deletedAmong, usageMode }
+    return { isDeleted, deletedAmong }
   })
 )

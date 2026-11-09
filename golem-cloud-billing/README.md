@@ -56,19 +56,17 @@ tables hold API token secrets and agent secrets, so the role can read only these
 
 - the three metering tables (see [Billable overage](#billable-overage)),
 - `accounts (account_id, deleted_at)`: the registry answers 404 both for a deleted account and for
-  an account that the billing account cannot see, and only this column tells them apart,
-- `account_monthly_usage_modes (account_id, mode, changed_at)`: whether paid overage is on (see
-  [Deletion hold](#deletion-hold)).
+  an account that the billing account cannot see, and only this column tells them apart.
 
-The other columns of the two account tables, for example the email, stay out of reach. Everything
+The other columns of `accounts`, for example the email, stay out of reach. Everything
 else comes from the registry HTTP API. As the signed-in user, the app calls
 `POST /v1/login/oauth2` at sign-in and `GET /v1/accounts/{account_id}` for the account page. As
 the billing account, the webhooks and the sweep call `GET /v1/me/token`,
 `GET /v1/accounts/{account_id}`, `PUT /v1/accounts/{account_id}/plan`, and `PUT` and `DELETE`
 `/v1/accounts/{account_id}/deletion-holds/{holder_account_id}` (see
 [Subscriptions](#subscriptions)). The app also keeps tables of its own: `polar_subscriptions`,
-`polar_orders`, `polar_webhook_deliveries`, `usage_events` and `deleted_account_cleanups`. An
-administrator creates the role once:
+`polar_orders`, `polar_webhook_deliveries`, `usage_events`, `deleted_account_cleanups` and
+`deletion_holds`. An administrator creates the role once:
 
 ```sql
 CREATE ROLE golem_cloud_billing LOGIN PASSWORD '…' CONNECTION LIMIT 10;
@@ -78,7 +76,6 @@ GRANT USAGE ON SCHEMA public TO golem_cloud_billing;
 GRANT SELECT ON public.account_usage_stats, public.account_monthly_policy_revisions,
   public.account_monthly_policy_attribution TO golem_cloud_billing;
 GRANT SELECT (account_id, deleted_at) ON public.accounts TO golem_cloud_billing;
-GRANT SELECT (account_id, mode, changed_at) ON public.account_monthly_usage_modes TO golem_cloud_billing;
 ```
 
 When the schema does not exist, the app creates it, which needs the CREATE privilege on the
@@ -201,25 +198,38 @@ The usage push does not send an event that Polar would not bill (see
 
 ### Deletion hold
 
-Golem does not charge early: Polar bills paid overage on the next order. So the registry must not
-delete an account while the account owes paid overage or can still run some up. The app places a
-deletion hold on the account through the registry (`Settlement.holdFor`) while any of these is
-true, and removes it when none is:
+Golem does not charge early, and a cancellation runs to the end of the period: Polar bills paid
+overage on the order at the end of the period. So the registry must not delete an account while
+the account has a billable subscription or owes paid overage. The app places a deletion hold on
+the account through the registry (`Settlement.holdFor`) while any of these is true, and removes it
+when none is:
 
 | Reason | When |
 | --- | --- |
 | `subscription` | a billable subscription (`active`, `trialing` or `past_due`) is not canceled at the period end |
-| `overageOn` | a billable subscription exists and paid overage is on |
-| `overageRecentlyOn` | a billable subscription exists and paid overage was on less than 15 minutes ago, so the usage push may not have its last usage yet |
+| `canceledSubscription` | a billable subscription is canceled at the period end and runs to the end of the period |
 | `unbilledUsage` | a usage event that is not held is newer than the newest order of the account: Polar bills it only on the next order |
 | `unpaidOverage` | a `pending` order has an amount for a metered price |
+
+The hold stays for the whole life of a billable subscription, also after a cancellation. Paid
+overage needs the paid plan, and the paid plan needs a billable subscription, so the account has a
+hold for as long as it can run up paid overage. The owner turns paid overage on and off in the
+registry, and no webhook tells the app, so a hold that followed the switch would come too late.
+The account moves to the free plan `SETTLEMENT_MARGIN_MS` before a canceled subscription ends, so
+the usage push records the last paid overage before Polar bills it.
+
+A reconcile places the hold before it changes the plan, and removes the hold after it changes the
+plan, so the account is never on the paid plan without a hold. The table `deletion_holds` records
+the holds that the app placed. The sweep reconciles every account with a billable subscription and
+no row there: a subscription from before the app placed holds, or one whose last placement failed.
+It also reconciles the accounts without a billable subscription whose usage events changed, because
+no webhook comes for a usage event.
 
 The registry refuses `DELETE /v1/accounts/{account_id}` with 409 while the account has a hold, and
 shows the reason text to the person, for example in `golem-cli account delete`. The text starts
 with `Golem Cloud billing:` and has one sentence for each reason that tells the person what to do:
-cancel the subscription, turn paid overage off, wait for the invoice, or pay it. So a person who
-cancels, has no paid overage in the period and has paid overage off can delete the account at
-once. The rest of the paid period is not refunded.
+cancel the subscription and wait for the end of the period, wait for the invoice, or pay it. The
+rest of the paid period is not refunded.
 
 ## Billable overage
 
@@ -277,11 +287,12 @@ variables, with a Polar token that has only `customers:write`.
 
 For each account in `user.golem_account_id` or `polar_subscriptions` that the registry deleted, it:
 
-1. checks that the account owes no paid overage (the reasons `unbilledUsage` and `unpaidOverage`
-   of [Deletion hold](#deletion-hold)). An account that owes keeps its Polar customer and its user,
-   and each run logs the warning `deleted_account_owes`;
+1. checks the reasons of [Deletion hold](#deletion-hold) again, with the subscriptions and orders
+   of every product. The hold makes them false before the delete, but an administrator can remove
+   the hold. An account with a reason keeps its Polar customer and its user, and each run logs the
+   warning `deleted_account_unsettled`, so the cleanup never ends a paid period early;
 2. deletes the Polar customer with `DELETE /v1/customers/external/{external_id}`. Polar cancels
-   its subscriptions at once, with no refund, and clears its external ID. A 404 counts as
+   its subscriptions, which have all ended by now, and clears its external ID. A 404 counts as
    deleted. The table `deleted_account_cleanups` records the account, so later runs do
    not call Polar for it again;
 3. deletes the Better Auth user of the account, with its sessions and GitHub accounts.

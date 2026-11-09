@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest"
 import { BillingConfig } from "../src/BillingConfig.ts"
 import * as Registry from "../src/Registry.ts"
 import * as RegistryAccounts from "../src/RegistryAccounts.ts"
-import type { UsageMode } from "../src/RegistryAccounts.ts"
 import {
   holdFor,
   holdReasonText,
@@ -79,68 +78,44 @@ describe("planFor", () => {
   })
 })
 
-const hardLimit: UsageMode = { mode: "hardLimit", changedAt: undefined }
-const allowOverage: UsageMode = { mode: "allowOverage", changedAt: new Date(now.getTime() - 60 * MINUTE) }
-const turnedOff = (minutesAgo: number): UsageMode => ({
-  mode: "hardLimit",
-  changedAt: new Date(now.getTime() - minutesAgo * MINUTE)
-})
 const canceledAtPeriodEnd = subscription({ cancelAtPeriodEnd: true })
 
 describe("holdFor", () => {
   it.each([
-    ["no subscription", [], [], [], hardLimit, false],
-    ["no subscription with paid overage on", [], [], [], allowOverage, false],
-    ["an active subscription", ["subscription"], [subscription()], [], hardLimit, false],
-    ["a trialing subscription", ["subscription"], [subscription({ status: "trialing" })], [], hardLimit, false],
-    ["a past_due subscription", ["subscription"], [pastDue], [], hardLimit, false],
-    ["an active subscription with paid overage on", ["subscription", "overageOn"], [subscription()], [], allowOverage, false],
-    ["a subscription canceled at the period end", [], [canceledAtPeriodEnd], [], hardLimit, false],
-    ["a canceled subscription with paid overage on", ["overageOn"], [canceledAtPeriodEnd], [], allowOverage, false],
+    ["no subscription", [], [], [], false],
+    ["an active subscription", ["subscription"], [subscription()], [], false],
+    ["a trialing subscription", ["subscription"], [subscription({ status: "trialing" })], [], false],
+    ["a past_due subscription", ["subscription"], [pastDue], [], false],
+    ["a subscription canceled at the period end", ["canceledSubscription"], [canceledAtPeriodEnd], [], false],
     [
-      "a canceled subscription with paid overage turned off within the margin",
-      ["overageRecentlyOn"],
-      [canceledAtPeriodEnd],
+      "a canceled subscription next to one that continues",
+      ["subscription"],
+      [canceledAtPeriodEnd, subscription({ subscriptionId: "sub_2" })],
       [],
-      turnedOff(SETTLEMENT_MARGIN_MS / MINUTE - 1),
       false
     ],
-    [
-      "a canceled subscription with paid overage turned off before the margin",
-      [],
-      [canceledAtPeriodEnd],
-      [],
-      turnedOff(SETTLEMENT_MARGIN_MS / MINUTE),
-      false
-    ],
-    ["an ended subscription with paid overage on", [], [subscription({ status: "canceled" })], [], allowOverage, false],
-    ["an ended subscription with unbilled usage", ["unbilledUsage"], [subscription({ status: "canceled" })], [], hardLimit, true],
-    ["an unpaid order with overage", ["unpaidOverage"], [subscription({ status: "canceled" })], [pending()], hardLimit, false],
-    ["an unpaid order of the price alone", [], [subscription({ status: "canceled" })], [priceOnly], hardLimit, false],
+    ["an ended subscription", [], [subscription({ status: "canceled" })], [], false],
+    ["a paused subscription", [], [subscription({ status: "paused" })], [], false],
+    ["an ended subscription with unbilled usage", ["unbilledUsage"], [subscription({ status: "canceled" })], [], true],
+    ["an unpaid order with overage", ["unpaidOverage"], [subscription({ status: "canceled" })], [pending()], false],
+    ["an unpaid order of the price alone", [], [subscription({ status: "canceled" })], [priceOnly], false],
     [
       "an active subscription with every other reason",
-      ["subscription", "overageOn", "unbilledUsage", "unpaidOverage"],
+      ["subscription", "unbilledUsage", "unpaidOverage"],
       [subscription()],
       [overdue],
-      allowOverage,
       true
     ]
-  ] as const)("%s gives %j", (_, reasons, subscriptions, orders, usageMode, unbilledUsage) => {
-    expect(holdFor(subscriptions, orders, usageMode, unbilledUsage, now)).toEqual(reasons)
+  ] as const)("%s gives %j", (_, reasons, subscriptions, orders, unbilledUsage) => {
+    expect(holdFor(subscriptions, orders, unbilledUsage)).toEqual(reasons)
   })
 
   it("writes every reason within the 1000 characters of a registry hold", () => {
-    const every: ReadonlyArray<HoldReason> = [
-      "subscription",
-      "overageOn",
-      "overageRecentlyOn",
-      "unbilledUsage",
-      "unpaidOverage"
-    ]
+    const every: ReadonlyArray<HoldReason> = ["subscription", "canceledSubscription", "unbilledUsage", "unpaidOverage"]
     const text = holdReasonText(every, "https://billing.golem.cloud")
 
     expect(text.length).toBeLessThanOrEqual(1000)
-    expect(text).toMatch(/^Golem Cloud billing: The account has a subscription to Paid\. Cancel it in Manage billing at https:\/\/billing\.golem\.cloud\. The subscription then runs to the end of the period\./)
+    expect(text).toMatch(/^Golem Cloud billing: The account has a subscription to Paid\. Cancel it in Manage billing at https:\/\/billing\.golem\.cloud\. The subscription then runs to the end of the period\. Delete the account after the period ends\./)
   })
 })
 
@@ -151,6 +126,8 @@ describe("sweeper", () => {
       ending: (productId: string) => Effect.sync(() => (sweeps.push(productId), [])),
       awaitingPayment: () => Effect.succeed([]),
       holdCandidates: () => Effect.succeed([]),
+      recordHold: () => Effect.die("unused"),
+      forgetHold: () => Effect.die("unused"),
       record: () => Effect.die("unused"),
       recordOrder: () => Effect.die("unused"),
       pendingOrders: () => Effect.die("unused"),
@@ -164,7 +141,10 @@ describe("sweeper", () => {
     const services = Layer.mergeAll(
       subscriptions,
       Layer.succeed(Registry.Registry, {} as Registry.RegistryShape),
-      Layer.succeed(RegistryAccounts.RegistryAccounts, {} as RegistryAccounts.RegistryAccountsShape),
+      Layer.succeed(RegistryAccounts.RegistryAccounts, {
+        isDeleted: () => Effect.die("unused"),
+        deletedAmong: () => Effect.succeed([])
+      }),
       Layer.succeed(BillingConfig, testConfig())
     )
 

@@ -67,10 +67,13 @@ export interface SubscriptionsShape {
   readonly record: (subscription: Subscription) => Effect.Effect<void, SubscriptionsError>
   /** Stores the order, unless the stored state is newer. */
   readonly recordOrder: (order: Order) => Effect.Effect<void, SubscriptionsError>
-  /** The subscriptions of the product that the account has, in every status. */
+  /**
+   * The subscriptions of the product that the account has, in every status, or of every product
+   * when `productId` is undefined.
+   */
   readonly ofAccount: (
     accountId: string,
-    productId: string
+    productId: string | undefined
   ) => Effect.Effect<ReadonlyArray<Subscription>, SubscriptionsError>
   /**
    * The `pending` orders of the subscriptions of the product that the account has, or of every
@@ -87,11 +90,13 @@ export interface SubscriptionsShape {
    */
   readonly unbilledUsage: (accountId: string) => Effect.Effect<boolean, SubscriptionsError>
   /**
-   * The accounts whose deletion hold can change with the time alone: a billable subscription of
-   * the product that is canceled at the period end, with the period end after `since`, and usage
-   * events that the usage push recorded, sent or held after `since`, without a billable
-   * subscription that continues. A held event no longer counts as unbilled, so it can remove the
-   * hold.
+   * The accounts whose deletion hold the sweep sets:
+   *
+   * - an account with a billable subscription of the product and no hold in `deletion_holds`:
+   *   the subscription began before the app placed holds, or the last placement failed,
+   * - an account without a billable subscription of the product, with usage events that the usage
+   *   push recorded, sent or held after `since`. No webhook comes for these events: a new one can
+   *   need a hold, and a held one no longer counts as unbilled, so it can remove the hold.
    */
   readonly holdCandidates: (
     productId: string,
@@ -117,6 +122,10 @@ export interface SubscriptionsShape {
     accountId: string,
     productId: string
   ) => Effect.Effect<Subscription | undefined, SubscriptionsError>
+  /** Records that the app placed a deletion hold on the account in the registry, with this reason. */
+  readonly recordHold: (accountId: string, reason: string) => Effect.Effect<void, SubscriptionsError>
+  /** Records that the app removed its deletion hold from the account. */
+  readonly forgetHold: (accountId: string) => Effect.Effect<void, SubscriptionsError>
   /** Whether a webhook with this `webhook-id` was handled before. */
   readonly isDelivered: (webhookId: string) => Effect.Effect<boolean, SubscriptionsError>
   readonly markDelivered: (webhookId: string, eventType: string) => Effect.Effect<void, SubscriptionsError>
@@ -136,7 +145,8 @@ export class Subscriptions extends Context.Service<Subscriptions, SubscriptionsS
 
 /**
  * The tables of the app besides the tables of Better Auth: the subscriptions and their orders,
- * the usage events of the usage push, and the deleted accounts that the cleanup has finished.
+ * the usage events of the usage push, the deleted accounts that the cleanup has finished, and the
+ * deletion holds that the app placed in the registry.
  * The web app, the usage push and the cleanup each create them, because each reads tables that
  * another one writes and can run first.
  */
@@ -189,6 +199,11 @@ export const tables = `
   CREATE TABLE IF NOT EXISTS deleted_account_cleanups (
     account_id UUID PRIMARY KEY,
     polar_customer_deleted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+  );
+  CREATE TABLE IF NOT EXISTS deletion_holds (
+    account_id UUID PRIMARY KEY,
+    reason TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
   )`
 
 /**
@@ -297,10 +312,10 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
         ]
       ).pipe(Effect.asVoid)
 
-    const ofAccount = (accountId: string, productId: string) =>
+    const ofAccount = (accountId: string, productId: string | undefined) =>
       query<SubscriptionRow>(
-        `SELECT ${columns} FROM polar_subscriptions WHERE account_id = $1 AND product_id = $2`,
-        [accountId, productId]
+        `SELECT ${columns} FROM polar_subscriptions WHERE account_id = $1 AND ($2::text IS NULL OR product_id = $2)`,
+        [accountId, productId ?? null]
       ).pipe(Effect.map((result) => result.rows.map(fromRow)))
 
     // An order of a subscription that no webhook has reported yet has no metered prices to match;
@@ -333,19 +348,29 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
 
     const holdCandidates = (productId: string, since: Date) =>
       query<{ account_id: string }>(
-        `SELECT account_id::text AS account_id
-           FROM polar_subscriptions
-          WHERE product_id = $1 AND status = ANY($2) AND cancel_at_period_end AND current_period_end > $3
+        `SELECT s.account_id::text AS account_id
+           FROM polar_subscriptions s
+          WHERE s.product_id = $1 AND s.status = ANY($2)
+            AND NOT EXISTS (SELECT 1 FROM deletion_holds h WHERE h.account_id = s.account_id)
          UNION
          SELECT e.account_id::text AS account_id
            FROM usage_events e
           WHERE greatest(e.created_at, e.sent_at, e.held_at) > $3
             AND NOT EXISTS (
               SELECT 1 FROM polar_subscriptions s
-               WHERE s.account_id = e.account_id AND s.product_id = $1 AND s.status = ANY($2)
-                 AND NOT s.cancel_at_period_end)`,
+               WHERE s.account_id = e.account_id AND s.product_id = $1 AND s.status = ANY($2))`,
         [productId, billableStatuses, since]
       ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
+
+    const recordHold = (accountId: string, reason: string) =>
+      query(
+        `INSERT INTO deletion_holds (account_id, reason) VALUES ($1, $2)
+         ON CONFLICT (account_id) DO UPDATE SET reason = EXCLUDED.reason, updated_at = clock_timestamp()`,
+        [accountId, reason]
+      ).pipe(Effect.asVoid)
+
+    const forgetHold = (accountId: string) =>
+      query("DELETE FROM deletion_holds WHERE account_id = $1", [accountId]).pipe(Effect.asVoid)
 
     const ending = (productId: string, from: Date, to: Date) =>
       query<{ account_id: string }>(
@@ -422,6 +447,8 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
       pendingOrders,
       unbilledUsage,
       holdCandidates,
+      recordHold,
+      forgetHold,
       ending,
       awaitingPayment,
       latest,

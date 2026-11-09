@@ -21,12 +21,13 @@ const startServices = (config: BillingConfigShape) =>
   )
 
 /**
- * The tables of Better Auth, of the Polar subscriptions and orders, of the usage push and of the
- * cleanup, in the order of their names.
+ * The tables of Better Auth, of the Polar subscriptions and orders, of the usage push, of the
+ * cleanup and of the deletion holds, in the order of their names.
  */
 const appTables = [
   "account",
   "deleted_account_cleanups",
+  "deletion_holds",
   "polar_orders",
   "polar_subscriptions",
   "polar_webhook_deliveries",
