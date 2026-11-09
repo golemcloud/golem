@@ -587,7 +587,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     )> {
         (self.agent_mode() == AgentMode::Durable).then(|| {
             (
-                self.state.wakeup_scheduler(),
+                self.state.wakeup_scheduler(
+                    self.public_state
+                        .worker()
+                        .get_initial_worker_metadata()
+                        .fingerprint,
+                ),
                 self.state.config.suspend.clone(),
             )
         })
@@ -1371,6 +1376,7 @@ pub(crate) struct WakeupScheduler {
     oplog: Arc<dyn Oplog>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
+    target_worker_fingerprint: golem_common::model::AgentFingerprint,
 }
 
 impl WakeupScheduler {
@@ -1391,6 +1397,7 @@ impl WakeupScheduler {
                     account_id: self.created_by,
                     environment_id: self.owned_agent_id.environment_id(),
                     promise_id,
+                    target_worker_fingerprint: self.target_worker_fingerprint,
                 },
             )
             .await;
@@ -1485,13 +1492,17 @@ impl PrivateDurableWorkerState {
         self.tail_work.clone()
     }
 
-    fn wakeup_scheduler(&self) -> WakeupScheduler {
+    fn wakeup_scheduler(
+        &self,
+        target_worker_fingerprint: golem_common::model::AgentFingerprint,
+    ) -> WakeupScheduler {
         WakeupScheduler {
             promise_service: self.promise_service.clone(),
             scheduler_service: self.scheduler_service.clone(),
             oplog: self.oplog.clone(),
             owned_agent_id: self.owned_agent_id.clone(),
             created_by: self.created_by,
+            target_worker_fingerprint,
         }
     }
 

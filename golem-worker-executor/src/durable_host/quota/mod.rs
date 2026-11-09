@@ -18,6 +18,7 @@ use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, Not
 use crate::durable_host::quota::types::{LeaseInterestHandle, QuotaTokenEntry, ReservationEntry};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::quota::types::{FailedReservation, Host, HostReservation};
+use crate::services::HasWorker;
 use crate::services::quota::LeaseInterest;
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
@@ -252,6 +253,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     EnforcementAction::Throttle => {
                         let agent_created_by = self.created_by();
                         let owned_agent_id = self.owned_agent_id().clone();
+                        let target_worker_fingerprint = self
+                            .public_state
+                            .worker()
+                            .get_initial_worker_metadata()
+                            .fingerprint;
                         let scheduler_service = self.scheduler_service();
                         let agent_mode = self.agent_mode();
 
@@ -287,6 +293,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                                     ScheduledAction::Resume {
                                         agent_created_by,
                                         owned_agent_id,
+                                        target_worker_fingerprint,
                                     },
                                 )
                                 .await;

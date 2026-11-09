@@ -583,6 +583,7 @@ pub enum ScheduledAction {
         account_id: AccountId,
         environment_id: EnvironmentId,
         promise_id: PromiseId,
+        target_worker_fingerprint: AgentFingerprint,
     },
     /// Archives all entries from the first non-empty layer of an oplog to the next layer,
     /// if the last oplog index did not change. If there are more layers below, schedules
@@ -598,11 +599,8 @@ pub enum ScheduledAction {
     /// Invoke the given action on the worker. The invocation will only
     /// be persisted in the oplog when it's actually getting scheduled.
     ///
-    /// `target_worker_fingerprint` guards against stale invocations: when `Some(fp)`, the
-    /// scheduler compares `fp` against the current worker's `fingerprint` before firing. A
-    /// mismatch means the original worker was deleted and a new one was created with the same
-    /// ID — the invocation is silently dropped. `None` means fire unconditionally (used for
-    /// legacy entries and non-wasm-rpc invocations).
+    /// Delivery requires the existing incarnation identified by `target_worker_fingerprint`.
+    /// A missing agent or a fingerprint mismatch drops the action without creating an agent.
     Invoke {
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
@@ -613,6 +611,7 @@ pub enum ScheduledAction {
     Resume {
         agent_created_by: AccountId,
         owned_agent_id: OwnedAgentId,
+        target_worker_fingerprint: AgentFingerprint,
     },
     /// Invokes a fresh ephemeral agent without pre-creating it. The scheduler uses the checked
     /// creation path because delivery may be retried after an ambiguous failure.
