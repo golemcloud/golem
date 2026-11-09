@@ -2330,7 +2330,7 @@ end
 set_env GOLEM_RUST_PATH "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/sdks/rust/golem-rust"
 cd builtin-tools/web-fetch
 exec --fail-on-error ${golem} build -P release --force-build --yes
-cp golem-temp/agents/golem_web_fetch_release.wasm ../web-fetch.wasm
+exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 

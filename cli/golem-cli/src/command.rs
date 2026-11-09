@@ -1067,7 +1067,7 @@ pub mod shared_args {
         ///                 cargo, npm, scala-cli, moon are installed and the
         ///                 expected versions are available).
         ///   build         Run the per-language build for each selected
-        ///                 component and copy its WASM to the final output path.
+        ///                 component to produce its componentWasm artifact.
         ///   gen-bridge    Generate language-specific Bridge SDK client code
         ///                 from agent type interfaces, so other components in
         ///                 the application can call this component as a typed

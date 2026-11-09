@@ -22,7 +22,6 @@ componentTemplates:
         module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
         into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
     componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
-    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
 components:
   effect-golem:durable-streams:
     dir: components/agents

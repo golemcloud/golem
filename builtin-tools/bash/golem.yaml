@@ -10,10 +10,9 @@ componentTemplates:
           - command: cargo build --locked --release --target wasm32-wasip2 --package golem-bash-tool --lib
             dir: "{{ appRootDir }}"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/golem_bash.wasm"
-        outputWasm: "{{ golemTempDir }}/components/golem_bash.wasm"
         customCommands:
           copy:
-            - command: cp "{{ golemTempDir }}/components/golem_bash.wasm" "{{ appRootDir }}/../bash.wasm"
+            - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/golem_bash.wasm" "{{ appRootDir }}/../bash.wasm"
 
 components:
   golem:bash:

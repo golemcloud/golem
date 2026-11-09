@@ -72,8 +72,7 @@ components:
     dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps ("module" for Go)
     templates:                     # Parent template names (inherit build, env, plugins, files)
       - rust
-    componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Path to built WASM
-    outputWasm: golem-temp/billing.wasm                       # Path to final output WASM
+    componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Final WASM for extraction and upload
     build:                         # Build commands (see Build Commands below)
       - command: cargo build --target wasm32-wasip2
     env:                           # Environment variables
@@ -104,8 +103,7 @@ components:
 |-------|------|-------------|
 | `dir` | string | Base directory for resolving paths. `"."` for single-component apps (Go uses `"module"`) |
 | `templates` | string or string[] | Parent template name(s) to inherit from |
-| `componentWasm` | string | Path to the built WASM component |
-| `outputWasm` | string | Path for the final output WASM ready for upload |
+| `componentWasm` | string | Path to the final WASM component used unchanged for metadata extraction and upload, relative to the effective component directory |
 | `build` | array | Build commands (see Build Commands) |
 | `env` | map | Environment variables (string → string) |
 | `envMergeMode` | enum | `upsert` (default), `replace`, or `remove` |
@@ -827,7 +825,6 @@ This table shows where each property can be defined:
 | `clean` | ✅ | ✅ | ✅ | — | ✅ | — |
 | `dir` | — | — | ✅ | — | — | — |
 | `componentWasm` | — | ✅ | ✅ | — | ✅ | — |
-| `outputWasm` | — | ✅ | ✅ | — | ✅ | — |
 
 ## Related Skills
 

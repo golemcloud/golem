@@ -9,7 +9,7 @@ components:
     templates: rust
     customCommands:
       copy:
-        - command: cp golem-temp/agents/golem_audit_middleware_release.wasm ../golem_audit_middleware_release.wasm
+        - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/golem_audit_middleware.wasm" ../golem_audit_middleware_release.wasm
 
 tools:
   middleware:

@@ -5241,7 +5241,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             arb_component_layer_id(),
             proptest::option::of(arb_small_string()),
             proptest::option::of(arb_small_string()),
-            proptest::option::of(arb_small_string()),
             arb_vec_merge_mode(),
             proptest::collection::vec(arb_manifest_build_command(), 1..3),
             arb_map_merge_mode(),
@@ -5272,7 +5271,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                 second_layer_id,
                 selection,
                 component_wasm,
-                output_wasm,
                 _build_mode,
                 build,
                 _custom_commands_mode,
@@ -5328,9 +5326,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             properties
                 .component_wasm
                 .apply_layer(&second_layer_id, selection, component_wasm);
-            properties
-                .output_wasm
-                .apply_layer(&second_layer_id, selection, output_wasm);
             properties.build.apply_layer(
                 &layer_id,
                 selection,

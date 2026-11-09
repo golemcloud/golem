@@ -51,6 +51,39 @@ fn node_http_router_ports_match_manifest_schema() {
     }
 }
 
+#[test]
+fn component_wasm_is_the_only_manifest_artifact_path() {
+    for section in ["components", "componentTemplates"] {
+        for preset in [false, true] {
+            let mut properties = serde_json::json!({"componentWasm": "component.wasm"});
+            for removed_field in [false, true] {
+                if removed_field {
+                    properties["outputWasm"] = Value::String("output.wasm".to_string());
+                }
+                let component = if preset {
+                    serde_json::json!({"presets": {"quick": properties.clone()}})
+                } else {
+                    properties.clone()
+                };
+                let document = serde_json::json!({
+                    "app": "test-app",
+                    section: {"app:main": component}
+                });
+                assert_eq!(
+                    serde_json::from_value::<Application>(document.clone()).is_ok(),
+                    !removed_field,
+                    "{document}"
+                );
+                assert_eq!(
+                    JSON_SCHEMA_VALIDATOR.is_valid(&document),
+                    !removed_field,
+                    "{document}"
+                );
+            }
+        }
+    }
+}
+
 fn arb_opt<T: Clone + std::fmt::Debug + 'static>(
     strategy: BoxedStrategy<T>,
 ) -> BoxedStrategy<Option<T>> {
@@ -450,7 +483,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
     (
         any::<bool>(),
         arb_opt(arb_ident()),
-        arb_opt(arb_ident()),
         (
             arb_opt(arb_vec_merge_mode_model()),
             arb_build_commands_model(),
@@ -485,7 +517,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             |(
                 is_default,
                 component_wasm,
-                output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
                 (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
@@ -493,7 +524,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             )| ComponentPreset {
                 default: is_default.then_some(Marker),
                 component_wasm,
-                output_wasm,
                 dependencies: ComponentDependencies::default(),
                 node_http_routers: None,
                 build_merge_mode,
@@ -519,7 +549,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
 fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
     (
         (arb_token_list_model(), arb_opt(arb_guest_language_model())),
-        arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         (
             arb_opt(arb_vec_merge_mode_model()),
@@ -557,7 +586,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
             |(
                 (templates, guest_language),
                 component_wasm,
-                output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
                 (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
@@ -567,7 +595,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 templates,
                 guest_language,
                 component_wasm,
-                output_wasm,
                 dependencies: ComponentDependencies::default(),
                 node_http_routers: None,
                 build_merge_mode,
@@ -594,7 +621,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
 fn arb_component_model() -> BoxedStrategy<Component> {
     (
         arb_token_list_model(),
-        arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         (
@@ -634,7 +660,6 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 templates,
                 dir,
                 component_wasm,
-                output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
                 (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
@@ -644,7 +669,6 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 templates,
                 dir,
                 component_wasm,
-                output_wasm,
                 dependencies: ComponentDependencies::default(),
                 node_http_routers: None,
                 build_merge_mode,

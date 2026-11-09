@@ -24,7 +24,6 @@ components:
     - preinitializeJs: .golem/agents/scala_examples.dynamic.wasm
       into: .golem/agents/scala_examples.preinitialized.wasm
     componentWasm: .golem/agents/scala_examples.preinitialized.wasm
-    outputWasm: .golem/agents/scala_examples.wasm
 
 agents:
   ScalaWebsite:

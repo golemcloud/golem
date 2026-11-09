@@ -268,10 +268,6 @@
           "type": "string",
           "description": "File path for the built WASM component."
         },
-        "outputWasm": {
-          "type": "string",
-          "description": "File path for the output WASM component which is ready to be uploaded to Golem."
-        },
         "dependencies": {
           "description": "Guest bridge dependencies required by this component. Agents are provider-qualified; tools may use a logical name from tools or an explicit provider-qualified reference.",
           "$ref": "#/definitions/componentDependencies"
@@ -370,10 +366,6 @@
         "componentWasm": {
           "type": "string",
           "description": "File path for the built WASM component."
-        },
-        "outputWasm": {
-          "type": "string",
-          "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
           "description": "Guest bridge dependencies required by this component. Agents are provider-qualified; tools may use a logical name from tools or an explicit provider-qualified reference.",
@@ -502,10 +494,6 @@
           "type": "string",
           "description": "File path for the built WASM component."
         },
-        "outputWasm": {
-          "type": "string",
-          "description": "File path for the output WASM component which is ready to be uploaded to Golem."
-        },
         "dependencies": {
           "description": "Guest bridge dependencies required by this component. Agents are provider-qualified; tools may use a logical name from tools or an explicit provider-qualified reference.",
           "$ref": "#/definitions/componentDependencies"
@@ -603,10 +591,6 @@
         "componentWasm": {
           "type": "string",
           "description": "File path for the built WASM component."
-        },
-        "outputWasm": {
-          "type": "string",
-          "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
           "description": "Guest bridge dependencies required by this component. Agents are provider-qualified; tools may use a logical name from tools or an explicit provider-qualified reference.",

@@ -160,7 +160,7 @@ use colored::Colorize;
 use expectrl::process::unix::{Signal, WaitStatus};
 use expectrl::{Eof, Expect};
 use golem_cli::app::build::task_result_marker::{
-    ComponentGeneratorMarkerHash, ExtractComponentMetadataMarkerHash, TaskResultMarker,
+    ExtractComponentMetadataMarkerHash, TaskResultMarker,
 };
 use golem_cli::app::edit;
 use golem_cli::fs;
@@ -1485,10 +1485,9 @@ impl TestContext {
 ///
 /// The file's modification time is backdated so that metadata files seeded afterwards are
 /// strictly newer than prebuilt copies made with [`copy_placeholder_wasm`]. Build commands
-/// that refresh the metadata must backdate the input to 2000, preserve the placeholder's
-/// timestamp on the output with `cp -p`, then refresh the metadata. This keeps the output newer
-/// than the input and the metadata
-/// newer than the output, as required by the strict timestamp-based up-to-date checks.
+/// that refresh the metadata must backdate the component wasm to 2000 before refreshing
+/// the metadata, so that the metadata stays newer than the component wasm, as required
+/// by the strict timestamp-based up-to-date checks.
 /// Otherwise extraction would run against the placeholder, which exports no agent guest
 /// interface.
 fn placeholder_component_wasm(ctx: &TestContext) -> PathBuf {
@@ -1596,11 +1595,11 @@ fn seed_extracted_metadata(
     )
 }
 
-fn seed_empty_component(ctx: &TestContext, component_name: &str, output_wasm: impl AsRef<Path>) {
-    let output_wasm = ctx.cwd_path_join(output_wasm);
-    fs::create_dir_all(output_wasm.parent().unwrap()).unwrap();
-    copy_placeholder_wasm(placeholder_component_wasm(ctx), &output_wasm);
-    seed_extracted_metadata(ctx, component_name, &output_wasm, "[]");
+fn seed_empty_component(ctx: &TestContext, component_name: &str, wasm: impl AsRef<Path>) {
+    let wasm = ctx.cwd_path_join(wasm);
+    fs::create_dir_all(wasm.parent().unwrap()).unwrap();
+    copy_placeholder_wasm(placeholder_component_wasm(ctx), &wasm);
+    seed_extracted_metadata(ctx, component_name, &wasm, "[]");
     seed_extraction_marker(ctx, component_name);
 }
 
@@ -1608,17 +1607,6 @@ fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {
     let marker_dir = ctx.cwd_path_join("golem-temp/task-results");
     fs::create_dir_all(&marker_dir).unwrap();
     let component_name = ComponentName(component_name.to_string());
-    // Seed the output copy too: these fixtures represent an already built component.
-    TaskResultMarker::new(
-        &marker_dir,
-        ComponentGeneratorMarkerHash {
-            component_name: &component_name,
-            generator_kind: "output-wasm",
-        },
-    )
-    .unwrap()
-    .success()
-    .unwrap();
     TaskResultMarker::new(
         &marker_dir,
         ExtractComponentMetadataMarkerHash {

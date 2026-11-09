@@ -13,4 +13,3 @@ componentTemplates:
     - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
       into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
     componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
-    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

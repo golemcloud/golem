@@ -268,7 +268,7 @@ async fn build_components_with_dependency_ordering(
                 .cloned()
                 .collect::<Vec<_>>()
             {
-                let wasm = ctx.application().component(&component_name).output_wasm();
+                let wasm = ctx.application().component(&component_name).wasm();
                 if !wasm.exists() {
                     continue;
                 }
@@ -350,7 +350,7 @@ async fn build_components_with_dependency_ordering(
             built_components.insert(component_name.clone());
             if has_dependency_guest_request {
                 let component = ctx.application().component(&component_name);
-                if component.output_wasm().exists() {
+                if component.wasm().exists() {
                     let metadata =
                         extract_and_store_component_metadata(ctx, &component_name).await?;
                     validate_no_ambient_tool_collisions(ctx, &component_name, &metadata.tools)?;
@@ -458,12 +458,7 @@ async fn generate_available_dependency_guest_bridges(
     let built_component_names = built_components.iter().cloned().collect::<Vec<_>>();
     let source_component_names = built_component_names
         .iter()
-        .filter(|component_name| {
-            ctx.application()
-                .component(component_name)
-                .output_wasm()
-                .exists()
-        })
+        .filter(|component_name| ctx.application().component(component_name).wasm().exists())
         .cloned()
         .collect::<Vec<_>>();
     let plan = plan_dependency_guest_bridge_generation_for_components_lenient(
@@ -1092,7 +1087,7 @@ fn add_existing_component_manifest_bridge_output_dir_claims(
         return false;
     }
 
-    let wasm = component.output_wasm();
+    let wasm = component.wasm();
     let extracted_component_metadata = component.extracted_component_metadata(&wasm);
     if !extracted_component_metadata.exists() {
         return false;
@@ -1449,12 +1444,7 @@ fn validate_wildcard_manifest_sources_resolved(
 ) -> anyhow::Result<()> {
     let missing_component_names = selected_component_names
         .iter()
-        .filter(|component_name| {
-            !ctx.application()
-                .component(component_name)
-                .output_wasm()
-                .exists()
-        })
+        .filter(|component_name| !ctx.application().component(component_name).wasm().exists())
         .collect::<Vec<_>>();
 
     if !missing_component_names.is_empty() {
@@ -1481,11 +1471,7 @@ fn component_matcher_is_not_expected_to_resolve(
     let selected = selected_component_names
         .iter()
         .any(|selected_component_name| selected_component_name == component_name);
-    let wasm_exists = ctx
-        .application()
-        .component(component_name)
-        .output_wasm()
-        .exists();
+    let wasm_exists = ctx.application().component(component_name).wasm().exists();
 
     !selected || wasm_exists
 }

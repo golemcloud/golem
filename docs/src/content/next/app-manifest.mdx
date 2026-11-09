@@ -1305,9 +1305,11 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "components.<component-name>.componentWasm",
   }}>
-    ***File path*** for the built _WASM_ component. It must be nonempty after templates and presets resolve.
+    ***File path*** for the final _WASM_ component used unchanged for metadata extraction and upload. It must be nonempty after templates and presets resolve. There is no output-copy build stage.
 
     The path is relative to the effective component directory, including when inherited from a template in another manifest.
+
+    Built-in Rust templates select the Cargo artifact under the resolved `cargoTarget` directory (`target` by default), in `wasm32-wasip2/debug/` or `wasm32-wasip2/release/`. TypeScript, Effect, and Scala templates select the `.preinitialized.wasm` artifact for the `optimized` preset or the `.dynamic.wasm` artifact for the `quick` preset under `golem-temp/agents/`.
 
     <Example>
       { /* @formatter:off */ }
@@ -1316,27 +1318,6 @@ For registry-backed tools, the generator reads only the release's safe tool defi
         pack-ns:component-name:
           # ...
           componentWasm: build/component.wasm
-      ```
-      { /* @formatter:on */}
-    </Example>
-
-  </Field>
-
-  <Field meta={{
-    path: "components.<component-name>.outputWasm",
-    since: Release.R_1_5_0
-  }}>
-    ***Optional file path*** for the output _WASM_ component which is ready to be uploaded to Golem.
-
-    The path is relative to the effective component directory. Defaults to `<golemTempDir>/final-wasm/<component-name>.wasm`.
-
-    <Example>
-      { /* @formatter:off */ }
-      ```yaml
-      components:
-        pack-ns:component-name:
-          # ...
-          outputWasm: build/output.wasm
       ```
       { /* @formatter:on */}
     </Example>
@@ -1759,13 +1740,6 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field
     meta={{
       path: "componentTemplates.<template-name>.componentWasm",
-    }}
-  ></Field>
-
-  <Field
-    meta={{
-      path: "componentTemplates.<template-name>.outputWasm",
-      since: Release.R_1_5_0,
     }}
   ></Field>
 

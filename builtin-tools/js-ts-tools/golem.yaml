@@ -44,6 +44,6 @@ environments:
 
 customCommands:
   copy-javascript:
-    - command: cp golem-temp/agents/golem_javascript_tools.wasm ../javascript-tools.wasm
+    - command: cp golem-temp/agents/golem_javascript_tools.preinitialized.wasm ../javascript-tools.wasm
   copy-typescript:
-    - command: cp golem-temp/agents/golem_typescript_tools.wasm ../typescript-tools.wasm
+    - command: cp golem-temp/agents/golem_typescript_tools.preinitialized.wasm ../typescript-tools.wasm

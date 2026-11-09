@@ -182,7 +182,6 @@ fn write_manifest(ctx: &TestContext, tools_agents_and_environments: &str) {
               targets:
               - "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
             componentWasm: "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
-            outputWasm: "{{{{ golemTempDir }}}}/agents/builtin_bash_fixture.wasm"
         components:
           builtin-bash:owner:
             dir: component

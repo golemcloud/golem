@@ -9,7 +9,7 @@ components:
     templates: rust
     customCommands:
       copy:
-        - command: cp golem-temp/agents/golem_filesystem_tools_release.wasm ../filesystem-tools.wasm
+        - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/golem_filesystem_tools.wasm" ../filesystem-tools.wasm
 
 environments:
   local:

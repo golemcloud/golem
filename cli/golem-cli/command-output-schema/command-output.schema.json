@@ -3537,7 +3537,6 @@
       "required": [
         "guestLanguage",
         "componentWasm",
-        "outputWasm",
         "dependencyAgents",
         "dependencyTools",
         "build",
@@ -3555,7 +3554,6 @@
         "appliedLayers": { "type": "array", "items": { "type": "string" } },
         "guestLanguage": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageProperty" },
         "componentWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
-        "outputWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "dependencyAgents": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
         "dependencyTools": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
         "buildMergeMode": { "$ref": "#/definitions/VecMergeMode" },

@@ -21,11 +21,11 @@ components:
       debug:
         customCommands:
           copy:
-          - command: cp golem-temp/agents/it_agent_update_debug.wasm ../it_agent_update_v4_debug.wasm
+          - command: cp "{{ cargoTarget }}/wasm32-wasip2/debug/it_agent_update.wasm" ../it_agent_update_v4_debug.wasm
       release:
         customCommands:
           copy:
-          - command: cp golem-temp/agents/it_agent_update_release.wasm ../it_agent_update_v4_release.wasm
+          - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/it_agent_update.wasm" ../it_agent_update_v4_release.wasm
 
 environments:
   local:
