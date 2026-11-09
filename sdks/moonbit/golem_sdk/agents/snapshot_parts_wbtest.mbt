@@ -1,8 +1,8 @@
 ///|
 fn snapshot_test_wire(
   parts : Array[(String, String, Bytes)],
-  boundary? : String = "fixture-boundary",
-  newline? : String = "\r\n",
+  boundary~ : String = "fixture-boundary",
+  newline~ : String = "\r\n",
 ) -> Bytes {
   let out = @buffer.Buffer()
   for entry in parts {
@@ -53,7 +53,7 @@ test "multipart framing preserves payload tails and exact delimiter near misses"
 
 ///|
 priv struct SnapshotSavedState {
-  revision : Int
+  revision : Int32
   label : String
 } derive(ToJson, FromJson, Debug, Eq)
 

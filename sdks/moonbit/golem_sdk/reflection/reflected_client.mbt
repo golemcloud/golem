@@ -140,7 +140,7 @@ pub(all) struct ReflectedAgentClient {
 ///|
 fn decode_root_type(
   decoded : @model.DecodedSchemaGraph,
-  root : Int,
+  root : Int32,
 ) -> @model.SchemaType raise ReflectError {
   guard decoded.roots.get(root) is Some(selected) else {
     raise Schema("reflected schema root index \{root} is out of range")
@@ -267,7 +267,7 @@ pub fn AgentType::find_method(self : AgentType, name : String) -> AgentMethod? {
 pub fn AgentType::agent_id_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id? : @schema.Uuid? = None,
+  phantom_id~ : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   self.constructor_input.validate_value(constructor_value)
   ParsedAgentId::create(self.name, constructor_value, phantom_id~)
@@ -277,7 +277,7 @@ pub fn AgentType::agent_id_value(
 pub fn AgentType::agent_id_json(
   self : AgentType,
   constructor_json : Json,
-  phantom_id? : @schema.Uuid? = None,
+  phantom_id~ : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   self.agent_id_value(
     self.constructor_input.pack_json(constructor_json),

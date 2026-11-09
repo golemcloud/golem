@@ -799,33 +799,40 @@ fn deployment_state(
     let email = AccountEmail::new("e2@golem");
     let registered_tools = definitions
         .into_iter()
-        .map(|definition| {
+        .enumerate()
+        .map(|(index, definition)| {
             let name = ToolName::try_from(definition.commands.nodes[0].name.clone()).unwrap();
             (
                 name,
                 RegisteredTool {
-                    deployment_revision,
-                    release_id: None,
-                    metadata_digest: Default::default(),
-                    definition,
-                    provision: ToolProvisionConfig {
-                        env: BTreeMap::from([
-                            ("OWNER_MARKER".to_string(), "publisher-config".to_string()),
-                            ("EFFECT_PORT".to_string(), "1".to_string()),
-                        ]),
-                        ..Default::default()
+                    type_id: golem_common::model::type_id::TypeId::try_from(
+                        u32::try_from(index + 1).unwrap(),
+                    )
+                    .unwrap(),
+                    registration: golem_common::model::tool::ToolRegistration {
+                        deployment_revision,
+                        release_id: None,
+                        metadata_digest: Default::default(),
+                        definition,
+                        provision: ToolProvisionConfig {
+                            env: BTreeMap::from([
+                                ("OWNER_MARKER".to_string(), "publisher-config".to_string()),
+                                ("EFFECT_PORT".to_string(), "1".to_string()),
+                            ]),
+                            ..Default::default()
+                        },
+                        component_bindings: Default::default(),
+                        source: ToolSource::Component {
+                            component_id: provider_id,
+                            component_revision: provider_revision,
+                            component_name: ComponentName(
+                                "golem-it:tool-runtime-bypass-provider".to_string(),
+                            ),
+                        },
+                        owner_account_id: account_id,
+                        owner_account_email: email.clone(),
+                        metadata_version: "0.1.0".to_string(),
                     },
-                    component_bindings: Default::default(),
-                    source: ToolSource::Component {
-                        component_id: provider_id,
-                        component_revision: provider_revision,
-                        component_name: ComponentName(
-                            "golem-it:tool-runtime-bypass-provider".to_string(),
-                        ),
-                    },
-                    owner_account_id: account_id,
-                    owner_account_email: email.clone(),
-                    metadata_version: "0.1.0".to_string(),
                 },
             )
         })
@@ -841,8 +848,8 @@ fn deployment_state(
                     metadata_digest: Default::default(),
                     owner: owner.clone(),
                     tool_name: name.clone(),
-                    version: tool.definition.version.clone(),
-                    metadata_version: tool.metadata_version.clone(),
+                    version: tool.registration.definition.version.clone(),
+                    metadata_version: tool.registration.metadata_version.clone(),
                     account_id,
                     account_email: email.clone(),
                     parameters: NormalizedJsonValue::new(serde_json::json!({})),
@@ -850,7 +857,7 @@ fn deployment_state(
                     secret_keys_readable: SecretKeyScope::All,
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access: ToolFilesystemAccess::Unset,
-                    source: tool.source.clone(),
+                    source: tool.registration.source.clone(),
                 },
             )
         })
@@ -876,7 +883,9 @@ fn install_chain(
     names: &[&str],
 ) {
     let email = AccountEmail::new("middleware@golem");
-    let account_id = deployment.registered_tools[tool_name].owner_account_id;
+    let account_id = deployment.registered_tools[tool_name]
+        .registration
+        .owner_account_id;
     let registrations = definitions
         .iter()
         .map(|definition| {
@@ -903,7 +912,10 @@ fn install_chain(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let mut effective = deployment.registered_tools[tool_name].definition.clone();
+    let mut effective = deployment.registered_tools[tool_name]
+        .registration
+        .definition
+        .clone();
     let mut occurrences = names
         .iter()
         .rev()

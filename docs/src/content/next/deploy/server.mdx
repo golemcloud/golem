@@ -106,14 +106,14 @@ max_jitter_factor = 0.15
 management_host = "golem.example.com"
 
 [worker_service.route_resolver]
-trusted_ingress_addresses = ["127.0.0.1"]
+trusted_ingress_addresses = ["127.0.0.1/32"]
 ```
 
 - `namespace_prefixes = true` lets all blob kinds share one bucket. Choose it before the first start and do not change it later. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs).
 - For an S3-compatible service, add `aws_endpoint_url = "https://<endpoint>"` and, if the service needs it, `aws_path_style = true` to each `blob_storage.config`.
 - The S3 client reads its credentials from the standard AWS sources: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the environment file, or the role of the machine.
 - `management_host` makes the main API port serve the HTTP API and MCP deployments of every other host. See [One port](#one-port).
-- `trusted_ingress_addresses` makes the worker service take the public scheme and host from the `X-Forwarded-Proto` and `X-Forwarded-Host` headers of a reverse proxy on the same host. A request from a trusted address without both headers fails, so a request sent directly to the custom request port from that host does too.
+- `trusted_ingress_addresses` makes the worker service take the public scheme and host from the `X-Forwarded-Proto` and `X-Forwarded-Host` headers of a reverse proxy on the same host. Each entry is an address range in CIDR notation. A request from a trusted address without both headers fails, so a request sent directly to the custom request port from that host does too.
 
 ## Managed Postgres
 

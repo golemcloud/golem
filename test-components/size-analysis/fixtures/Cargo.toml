@@ -20,7 +20,7 @@ edition = "2024"
 
 [workspace.dependencies]
 golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "6f161c1bce440d7b0506950ee38338ce36742957", version = "=0.63.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
 
 [profile.release]
 opt-level = "s"

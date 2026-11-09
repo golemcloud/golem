@@ -1630,7 +1630,10 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     assert_eq!(
         component
             .metadata
-            .find_agent_type_by_name_ref(&target_agent_id.agent_type)
+            .agent_types
+            .iter()
+            .map(|agent| &agent.declaration)
+            .find(|agent| agent.type_name == target_agent_id.agent_type)
             .ok_or_else(|| anyhow::anyhow!("MoonBit streaming target metadata is missing"))?
             .mode,
         AgentMode::Ephemeral

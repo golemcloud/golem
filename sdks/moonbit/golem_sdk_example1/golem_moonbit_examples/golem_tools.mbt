@@ -498,7 +498,7 @@ fn __golem_tool_concat_globals(
 ///
 fn __golem_tool_rebase_node(
   node : @tool.CommandNodeDef,
-  offset : Int,
+  offset : Int32,
 ) -> @tool.CommandNodeDef {
   {
     name: node.name,
@@ -782,7 +782,6 @@ async fn __golem_tool_invoke_MoonBitStreaming(
       let __golem_value = MoonBitStreaming::stream(mode, stdin, stdout)
       Ok(
         @tool.invocation_result_wire(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
           error => raise error
@@ -904,6 +903,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                   Some(@types.PathDirection::INPUT),
                   Some(@types.PathKind::FILE),
                   None,
+                  extensions=None,
                 ),
                 min: 0U,
                 max: None,
@@ -925,7 +925,14 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                     (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 }),
-                default: None,
+                default: Some(
+                  @tool.literal_to_schema_value(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{ } : @schema.TypeTag[Array[String]]),
+                    ),
+                    @tool.ToolLiteral::List([]),
+                  ),
+                ),
                 required: false,
                 env_var: None,
               },
@@ -938,7 +945,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 shape: @tool.OptionShapeDef::Scalar(
                   @tool.refine_numeric(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
                     ),
                     Some("1"),
                     None,
@@ -1081,6 +1088,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                   Some(@types.PathDirection::IN_OUT),
                   Some(@types.PathKind::FILE),
                   None,
+                  extensions=None,
                 ),
                 min: 0U,
                 max: None,
@@ -1301,7 +1309,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
         )
       }
     }
-    let max_count : UInt? = @schema.FromWire::read_wire(
+    let max_count : UInt32? = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[5],
     ) catch {
@@ -1364,7 +1372,6 @@ async fn __golem_tool_invoke_CanonicalGrep(
       Ok(__golem_value) =>
         Ok(
           @tool.invocation_result_wire(__golem_value) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
             @types.ToolError::InvalidResult(message) =>
               return Err(@types.ToolError::InvalidResult(message))
             error => raise error
@@ -1374,7 +1381,6 @@ async fn __golem_tool_invoke_CanonicalGrep(
         match error {
           InvalidPattern(reason~) => {
             let payload = @tool.encode_wire_result(reason) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -1388,7 +1394,6 @@ async fn __golem_tool_invoke_CanonicalGrep(
           }
           NoMatch => {
             let payload = @tool.encode_wire_result(()) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -1531,7 +1536,6 @@ async fn __golem_tool_invoke_CanonicalGrep(
       Ok(__golem_value) =>
         Ok(
           @tool.invocation_result_wire(__golem_value) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
             @types.ToolError::InvalidResult(message) =>
               return Err(@types.ToolError::InvalidResult(message))
             error => raise error
@@ -1541,7 +1545,6 @@ async fn __golem_tool_invoke_CanonicalGrep(
         match error {
           InvalidPattern(reason~) => {
             let payload = @tool.encode_wire_result(reason) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -1555,7 +1558,6 @@ async fn __golem_tool_invoke_CanonicalGrep(
           }
           NoMatch => {
             let payload = @tool.encode_wire_result(()) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -1616,6 +1618,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                     None,
                     Some(@types.PathKind::DIRECTORY),
                     None,
+                    extensions=None,
                   ),
                 ),
                 default: Some(
@@ -1627,6 +1630,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                       None,
                       Some(@types.PathKind::DIRECTORY),
                       None,
+                      extensions=None,
                     ),
                     @tool.ToolLiteral::Scalar(".git"),
                   ),
@@ -1647,7 +1651,16 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                   ),
                   duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
                 }),
-                default: None,
+                default: Some(
+                  @tool.literal_to_schema_value(
+                    @schema.into_schema_graph(
+                      (
+                        @schema.TypeTag::{ } :
+                        @schema.TypeTag[Map[String, String]]),
+                    ),
+                    @tool.ToolLiteral::Map([]),
+                  ),
+                ),
                 required: false,
                 env_var: None,
               },
@@ -1851,6 +1864,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                   Some(@types.PathDirection::INPUT),
                   Some(@types.PathKind::FILE),
                   None,
+                  extensions=None,
                 ),
                 min: 0U,
                 max: None,
@@ -1922,7 +1936,14 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                     (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 }),
-                default: None,
+                default: Some(
+                  @tool.literal_to_schema_value(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{ } : @schema.TypeTag[Array[String]]),
+                    ),
+                    @tool.ToolLiteral::List([]),
+                  ),
+                ),
                 required: false,
                 env_var: None,
               },
@@ -1938,7 +1959,14 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                     (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 }),
-                default: None,
+                default: Some(
+                  @tool.literal_to_schema_value(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{ } : @schema.TypeTag[Array[String]]),
+                    ),
+                    @tool.ToolLiteral::List([]),
+                  ),
+                ),
                 required: false,
                 env_var: None,
               },
@@ -2106,6 +2134,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
                 None,
                 Some(@types.PathKind::DIRECTORY),
                 None,
+                extensions=None,
               ),
             ),
             default: Some(
@@ -2117,6 +2146,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
                   None,
                   Some(@types.PathKind::DIRECTORY),
                   None,
+                  extensions=None,
                 ),
                 @tool.ToolLiteral::Scalar(".git"),
               ),
@@ -2137,7 +2167,14 @@ fn __golem_tool_def_prepare_CanonicalGit(
               ),
               duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
             }),
-            default: None,
+            default: Some(
+              @tool.literal_to_schema_value(
+                @schema.into_schema_graph(
+                  (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
+                ),
+                @tool.ToolLiteral::Map([]),
+              ),
+            ),
             required: false,
             env_var: None,
           },
@@ -2191,6 +2228,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
                 None,
                 Some(@types.PathKind::DIRECTORY),
                 None,
+                extensions=None,
               ),
             ),
             default: Some(
@@ -2202,6 +2240,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
                   None,
                   Some(@types.PathKind::DIRECTORY),
                   None,
+                  extensions=None,
                 ),
                 @tool.ToolLiteral::Scalar(".git"),
               ),
@@ -2327,7 +2366,7 @@ async fn __golem_tool_invoke_CanonicalGit(
         ),
       )
     }
-    let verbose : UInt = @schema.FromWire::read_wire(
+    let verbose : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[2],
     ) catch {
@@ -2503,7 +2542,6 @@ async fn __golem_tool_invoke_CanonicalGit(
       Ok(__golem_value) =>
         Ok(
           @tool.invocation_result_wire(__golem_value) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
             @types.ToolError::InvalidResult(message) =>
               return Err(@types.ToolError::InvalidResult(message))
             error => raise error
@@ -2513,7 +2551,6 @@ async fn __golem_tool_invoke_CanonicalGit(
         match error {
           NothingStaged => {
             let payload = @tool.encode_wire_result(()) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -2524,7 +2561,6 @@ async fn __golem_tool_invoke_CanonicalGit(
           }
           DirtyMerge => {
             let payload = @tool.encode_wire_result(()) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -2535,7 +2571,6 @@ async fn __golem_tool_invoke_CanonicalGit(
           }
           BadAuthorFormat(author~) => {
             let payload = @tool.encode_wire_result(author) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -2761,7 +2796,6 @@ async fn __golem_tool_invoke_CanonicalGit(
       Ok(__golem_value) =>
         Ok(
           @tool.invocation_result_wire(__golem_value) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
             @types.ToolError::InvalidResult(message) =>
               return Err(@types.ToolError::InvalidResult(message))
             error => raise error
@@ -2771,7 +2805,6 @@ async fn __golem_tool_invoke_CanonicalGit(
         match error {
           BadRevision => {
             let payload = @tool.encode_wire_result(()) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -2782,7 +2815,6 @@ async fn __golem_tool_invoke_CanonicalGit(
           }
           NotARepository => {
             let payload = @tool.encode_wire_result(()) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -2859,7 +2891,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_1(
         ),
       )
     }
-    let verbose : UInt = @schema.FromWire::read_wire(
+    let verbose : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[2],
     ) catch {
@@ -3021,7 +3053,6 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_1(
         match error {
           NoSuchRemote(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -3118,7 +3149,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_1(
         )
       }
     }
-    let __golem_unused_2 : UInt = @schema.FromWire::read_wire(
+    let __golem_unused_2 : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[2],
     ) catch {
@@ -3161,7 +3192,6 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_1(
         match error {
           NoSuchRemote(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -3331,7 +3361,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_1(
         )
       }
     }
-    let __golem_unused_2 : UInt = @schema.FromWire::read_wire(
+    let __golem_unused_2 : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[2],
     ) catch {
@@ -3375,7 +3405,6 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_1(
         match error {
           Failed(__golem_payload) => {
             let payload = @tool.encode_wire_result(__golem_payload) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -3446,7 +3475,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_2(
         ),
       )
     }
-    let verbose : UInt = @schema.FromWire::read_wire(
+    let verbose : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[1],
     ) catch {
@@ -3519,7 +3548,6 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_2(
         match error {
           NoSuchStash(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -3590,7 +3618,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_2(
         )
       }
     }
-    let index : UInt? = @schema.FromWire::read_wire(
+    let index : UInt32? = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[3],
     ) catch {
@@ -3617,7 +3645,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_2(
         )
       }
     }
-    let __golem_unused_1 : UInt = @schema.FromWire::read_wire(
+    let __golem_unused_1 : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[1],
     ) catch {
@@ -3646,7 +3674,6 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_2(
         match error {
           NoSuchStash(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -3717,7 +3744,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_2(
         )
       }
     }
-    let index : UInt? = @schema.FromWire::read_wire(
+    let index : UInt32? = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[3],
     ) catch {
@@ -3744,7 +3771,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_2(
         )
       }
     }
-    let __golem_unused_1 : UInt = @schema.FromWire::read_wire(
+    let __golem_unused_1 : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[1],
     ) catch {
@@ -3773,7 +3800,6 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_2(
         match error {
           NoSuchStash(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -3879,7 +3905,14 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                     (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 }),
-                default: None,
+                default: Some(
+                  @tool.literal_to_schema_value(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{ } : @schema.TypeTag[Array[String]]),
+                    ),
+                    @tool.ToolLiteral::List([]),
+                  ),
+                ),
                 required: false,
                 env_var: None,
               },
@@ -4218,7 +4251,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
         ),
       )
     }
-    let verbose : UInt = @schema.FromWire::read_wire(
+    let verbose : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[0],
     ) catch {
@@ -4341,7 +4374,6 @@ async fn __golem_tool_invoke_CanonicalRemote(
         match error {
           NoSuchRemote(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -4429,7 +4461,6 @@ async fn __golem_tool_invoke_CanonicalRemote(
         match error {
           NoSuchRemote(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -4591,7 +4622,6 @@ async fn __golem_tool_invoke_CanonicalRemote(
         match error {
           Failed(__golem_payload) => {
             let payload = @tool.encode_wire_result(__golem_payload) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -4723,7 +4753,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
                   ),
                 ),
                 default: None,
@@ -4785,7 +4815,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
                   ),
                 ),
                 default: None,
@@ -4928,7 +4958,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         ),
       )
     }
-    let verbose : UInt = @schema.FromWire::read_wire(
+    let verbose : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[0],
     ) catch {
@@ -4988,7 +5018,6 @@ async fn __golem_tool_invoke_CanonicalStash(
         match error {
           NoSuchStash(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -5059,7 +5088,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         )
       }
     }
-    let index : UInt? = @schema.FromWire::read_wire(
+    let index : UInt32? = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[2],
     ) catch {
@@ -5074,7 +5103,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         )
       }
     }
-    let __golem_unused_0 : UInt = @schema.FromWire::read_wire(
+    let __golem_unused_0 : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[0],
     ) catch {
@@ -5102,7 +5131,6 @@ async fn __golem_tool_invoke_CanonicalStash(
         match error {
           NoSuchStash(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -5173,7 +5201,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         )
       }
     }
-    let index : UInt? = @schema.FromWire::read_wire(
+    let index : UInt32? = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[2],
     ) catch {
@@ -5188,7 +5216,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         )
       }
     }
-    let __golem_unused_0 : UInt = @schema.FromWire::read_wire(
+    let __golem_unused_0 : UInt32 = @schema.FromWire::read_wire(
       __golem_reader,
       __golem_fields[0],
     ) catch {
@@ -5216,7 +5244,6 @@ async fn __golem_tool_invoke_CanonicalStash(
         match error {
           NoSuchStash(name~) => {
             let payload = @tool.encode_wire_result(name) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -5444,7 +5471,6 @@ async fn __golem_tool_invoke_CanonicalBigBound(
         match error {
           InvalidPattern(reason~) => {
             let payload = @tool.encode_wire_result(reason) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -5458,7 +5484,6 @@ async fn __golem_tool_invoke_CanonicalBigBound(
           }
           NoMatch => {
             let payload = @tool.encode_wire_result(()) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
               @types.ToolError::InvalidResult(message) =>
                 return Err(@types.ToolError::InvalidResult(message))
               error => raise error
@@ -5842,7 +5867,6 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
       let __golem_value = MoonBitReflectionTest::echo(label)
       Ok(
         @tool.invocation_result_wire(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
           error => raise error
@@ -5924,7 +5948,6 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
       let __golem_value = MoonBitReflectionTest::optional(maybe)
       Ok(
         @tool.invocation_result_wire(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
           error => raise error
@@ -6068,7 +6091,6 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
       )
       Ok(
         @tool.invocation_result_wire(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
           error => raise error
@@ -6284,6 +6306,7 @@ fn __golem_tool_wire_CanonicalGrep() -> @toolCommon.Tool {
                 Some(@types.PathDirection::INPUT),
                 Some(@types.PathKind::FILE),
                 None,
+                extensions=None,
               ).index,
               min: 0U,
               max: None,
@@ -6306,7 +6329,15 @@ fn __golem_tool_wire_CanonicalGrep() -> @toolCommon.Tool {
                   (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                 ).index,
               }),
-              default: None,
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{ } : @schema.TypeTag[Array[String]]),
+                  ),
+                  @tool.ToolLiteral::List([]),
+                ),
+              ),
               required: false,
               env_var: None,
             },
@@ -6320,7 +6351,7 @@ fn __golem_tool_wire_CanonicalGrep() -> @toolCommon.Tool {
                 @tool.wire_refine_numeric(
                   @tool.wire_tool_type(
                     __golem_schema,
-                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
                   ),
                   Some("1"),
                   None,
@@ -6450,6 +6481,7 @@ fn __golem_tool_wire_CanonicalGrep() -> @toolCommon.Tool {
                 Some(@types.PathDirection::IN_OUT),
                 Some(@types.PathKind::FILE),
                 None,
+                extensions=None,
               ).index,
               min: 0U,
               max: None,
@@ -6579,6 +6611,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                   None,
                   Some(@types.PathKind::DIRECTORY),
                   None,
+                  extensions=None,
                 ).index,
               ),
               default: Some(
@@ -6591,6 +6624,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                     None,
                     Some(@types.PathKind::DIRECTORY),
                     None,
+                    extensions=None,
                   ),
                   @tool.ToolLiteral::Scalar(".git"),
                 ),
@@ -6612,7 +6646,15 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                 ).index,
                 duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
               }),
-              default: None,
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
+                  ),
+                  @tool.ToolLiteral::Map([]),
+                ),
+              ),
               required: false,
               env_var: None,
             },
@@ -6856,6 +6898,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                   None,
                   Some(@types.PathKind::DIRECTORY),
                   None,
+                  extensions=None,
                 ).index,
               ),
               default: Some(
@@ -6868,6 +6911,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                     None,
                     Some(@types.PathKind::DIRECTORY),
                     None,
+                    extensions=None,
                   ),
                   @tool.ToolLiteral::Scalar(".git"),
                 ),
@@ -6889,7 +6933,15 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                 ).index,
                 duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
               }),
-              default: None,
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
+                  ),
+                  @tool.ToolLiteral::Map([]),
+                ),
+              ),
               required: false,
               env_var: None,
             },
@@ -6977,7 +7029,15 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                   (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                 ).index,
               }),
-              default: None,
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{ } : @schema.TypeTag[Array[String]]),
+                  ),
+                  @tool.ToolLiteral::List([]),
+                ),
+              ),
               required: false,
               env_var: None,
             },
@@ -7254,6 +7314,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                   None,
                   Some(@types.PathKind::DIRECTORY),
                   None,
+                  extensions=None,
                 ).index,
               ),
               default: Some(
@@ -7266,6 +7327,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                     None,
                     Some(@types.PathKind::DIRECTORY),
                     None,
+                    extensions=None,
                   ),
                   @tool.ToolLiteral::Scalar(".git"),
                 ),
@@ -7384,7 +7446,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
               shape: @toolCommon.OptionShape::Scalar(
                 @tool.wire_tool_type(
                   __golem_schema,
-                  (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
+                  (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
                 ).index,
               ),
               default: None,
@@ -7458,7 +7520,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
               shape: @toolCommon.OptionShape::Scalar(
                 @tool.wire_tool_type(
                   __golem_schema,
-                  (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
+                  (@schema.TypeTag::{ } : @schema.TypeTag[UInt32]),
                 ).index,
               ),
               default: None,
@@ -7515,6 +7577,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                 Some(@types.PathDirection::INPUT),
                 Some(@types.PathKind::FILE),
                 None,
+                extensions=None,
               ).index,
               min: 0U,
               max: None,
@@ -7590,7 +7653,15 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                   (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                 ).index,
               }),
-              default: None,
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{ } : @schema.TypeTag[Array[String]]),
+                  ),
+                  @tool.ToolLiteral::List([]),
+                ),
+              ),
               required: false,
               env_var: None,
             },
@@ -7607,7 +7678,15 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
                   (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                 ).index,
               }),
-              default: None,
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{ } : @schema.TypeTag[Array[String]]),
+                  ),
+                  @tool.ToolLiteral::List([]),
+                ),
+              ),
               required: false,
               env_var: None,
             },

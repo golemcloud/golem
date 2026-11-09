@@ -18,6 +18,12 @@ pub suberror SchemaModelError {
 } derive(Debug, Eq)
 
 ///|
+pub extend SchemaModelError with Debug::{to_repr}
+
+///|
+pub extend SchemaModelError with Eq::{equal, not_equal}
+
+///|
 /// Failures while acquiring or reading a retained schema-value stream.
 #doc(hidden)
 pub suberror SchemaValueStreamReadError {
@@ -26,3 +32,9 @@ pub suberror SchemaValueStreamReadError {
   /// The component-model endpoint could not be unwrapped or read.
   Transport(String)
 } derive(Debug, Eq)
+
+///|
+pub extend SchemaValueStreamReadError with Debug::{to_repr}
+
+///|
+pub extend SchemaValueStreamReadError with Eq::{equal, not_equal}

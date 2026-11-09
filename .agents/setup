@@ -166,7 +166,10 @@ if [[ -z "$wasm_rquickjs_version" ]]; then
     echo "Failed to read WASM_RQUICKJS_VERSION from .github/workflows/benchmark.yaml" >&2
     exit 1
 fi
-if [[ "$(wasm-rquickjs --version 2>/dev/null || true)" != "wasm-rquickjs-cli $wasm_rquickjs_version" ]]; then
+if [[ "$wasm_rquickjs_version" =~ ^[0-9a-f]{40}$ ]]; then
+    cargo install --locked --git https://github.com/golemcloud/wasm-rquickjs \
+        --rev "$wasm_rquickjs_version" wasm-rquickjs-cli
+elif [[ "$(wasm-rquickjs --version 2>/dev/null || true)" != "wasm-rquickjs-cli $wasm_rquickjs_version" ]]; then
     cargo binstall --force --locked --no-confirm --disable-telemetry \
         "wasm-rquickjs-cli@$wasm_rquickjs_version"
 fi

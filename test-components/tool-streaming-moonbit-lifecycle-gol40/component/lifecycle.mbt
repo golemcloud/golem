@@ -281,7 +281,7 @@ pub async fn MoonBitLifecycleGol40Caller::output_reader_cancellation(
     let was_pending = read.try_wait() is None
     read.cancel()
     let cancelled = try read.wait() catch {
-      @asyncCore.Cancelled::Cancelled => true
+      @asyncCore.TaskCancelled::TaskCancelled => true
       _ => false
     } noraise {
       _ => false
@@ -323,9 +323,4 @@ pub async fn MoonBitLifecycleGol40Caller::dropped_observer(
     streamTerminal,
     resultTerminal: "observer-dropped",
   }
-}
-
-///|
-fn main {
-
 }

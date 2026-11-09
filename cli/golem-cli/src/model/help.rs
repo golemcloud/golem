@@ -304,7 +304,9 @@ impl AvailableAgentConstructorsHelp {
         component: &ComponentDto,
         target_agent_type: Option<&AgentTypeName>,
     ) -> Self {
-        let agent_types = component.metadata.agent_types();
+        let metadata: golem_common::model::component_metadata::ComponentMetadata =
+            component.metadata.clone().into();
+        let agent_types = metadata.agent_types();
         let constructors = if let Some(target_agent_type) = target_agent_type {
             agent_types
                 .iter()

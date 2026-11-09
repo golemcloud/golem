@@ -14,7 +14,7 @@
 /// generated `@types.QuotaToken` is a plain index wrapper, so a handle can be
 /// built without a host call as long as the resource is never dropped or passed
 /// to a host import.
-fn fake_token(index : Int) -> QuotaToken {
+fn fake_token(index : Int32) -> QuotaToken {
   {
     handle: @model.GuestQuotaTokenHandle::new(
       @types.QuotaToken::QuotaToken(index),

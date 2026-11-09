@@ -18,9 +18,10 @@ message RegisteredAgentTypeImplementer {
 message RegisteredAgentType {
   golem.schema.AgentTypeSchema agent_type = 1;
   RegisteredAgentTypeImplementer implemented_by = 2;
+  uint32 type_id = 3;
 }
 
-// Schema-model form of a registered agent type, used by the MCP export path.
+// ID-free discovery and MCP projection of an agent declaration and its implementer.
 message RegisteredAgentTypeSchema {
   golem.schema.AgentTypeSchema agent_type = 1;
   RegisteredAgentTypeImplementer implemented_by = 2;

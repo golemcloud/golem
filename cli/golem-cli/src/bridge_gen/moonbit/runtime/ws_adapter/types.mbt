@@ -64,6 +64,9 @@ pub(all) enum MessageKind {
 } derive(Debug)
 
 ///|
+pub extend MessageKind with Debug::{to_repr}
+
+///|
 /// WebSocket close status codes
 pub(all) enum CloseCode {
   Normal // 1000
@@ -78,6 +81,12 @@ pub(all) enum CloseCode {
   InternalError // 1011
   Other(UInt16)
 } derive(Debug, Eq)
+
+///|
+pub extend CloseCode with Debug::{to_repr}
+
+///|
+pub extend CloseCode with Eq::{equal, not_equal}
 
 ///|
 fn CloseCode::to_uint16(self : CloseCode) -> UInt16 {
@@ -97,7 +106,7 @@ fn CloseCode::to_uint16(self : CloseCode) -> UInt16 {
 }
 
 ///|
-fn CloseCode::from_uint(code : UInt) -> CloseCode {
+fn CloseCode::from_uint(code : UInt32) -> CloseCode {
   match code {
     1000 => Normal
     1001 => GoingAway
@@ -121,3 +130,6 @@ pub suberror WebSocketError {
   HandshakeRejected(String, @http.Response) // Server rejected handshake
   ProtocolError(String)
 } derive(Debug)
+
+///|
+pub extend WebSocketError with Debug::{to_repr}

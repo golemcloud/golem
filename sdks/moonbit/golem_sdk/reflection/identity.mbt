@@ -5,7 +5,7 @@
 pub fn ParsedAgentId::create(
   type_name : String,
   constructor_value : @model.SchemaValue,
-  phantom_id? : @schema.Uuid? = None,
+  phantom_id~ : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   let prepared = @identity.Constructor::from_value(
     type_name, constructor_value, phantom_id,

@@ -42,7 +42,7 @@ The [golem](https://github.com/golemcloud/golem/tree/main/cli/golem) executable 
 | `GOLEM__ROUTER__ADDRESS` | `::`, which accepts IPv6 and IPv4 |
 | `GOLEM__ROUTER__PORT` | `9881` |
 
-Set `GOLEM__ROUTER__MANAGEMENT_HOST` to the host name of the management API. Requests for that host reach the management API, requests for every other host reach the HTTP API and MCP deployments, and no environment can register the host as a domain. Behind a reverse proxy, add the proxy's address to `GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES`, so the router takes the host from `X-Forwarded-Host`.
+Set `GOLEM__ROUTER__MANAGEMENT_HOST` to the host name of the management API. Requests for that host reach the management API, requests for every other host reach the HTTP API and MCP deployments, and no environment can register the host as a domain. Behind a reverse proxy, add the address range of the proxy (`/32` for one address) to `GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES`, so the router takes the host from `X-Forwarded-Host`.
 
 The router listens on all interfaces, so the server refuses to start until the admin token (`GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`), the webhook keys (`GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` and `GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY`, the same value) and the invocation session token key (`GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY`) have secret values. The error lists the settings that still have their public default values.
 

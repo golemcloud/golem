@@ -15,7 +15,7 @@
 use super::*;
 
 pub(in crate::durable_host::p3::http) fn poison_p3_pooled_connection(
-    connection: &Option<P3PooledConnection>,
+    connection: &Option<PooledConnection>,
 ) {
     if let Some(connection) = connection {
         connection.poison();
@@ -29,11 +29,15 @@ impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
         (
             http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
             Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
-            Option<P3PooledConnection>,
+            Option<PooledConnection>,
         ),
         ErrorCode,
     > {
-        let body = self.body.replayer().boxed_unsync();
+        let body = self
+            .body
+            .replayer()
+            .map_err(wasmtime_wasi_http::Error::from)
+            .boxed_unsync();
         let mut request = http::Request::builder()
             .method(self.method.clone())
             .uri(self.uri.clone())
@@ -42,21 +46,35 @@ impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
             .map_err(|err| ErrorCode::InternalError(Some(err.to_string())))?;
         *request.headers_mut() = self.headers.clone();
 
-        match &self.pool {
+        let sent = match &self.pool {
             Some(pool) => pool
-                .pooled_send_request_p3(request, self.options)
+                .send_request(request, self.options)
                 .await
                 .map(|(response, io, connection)| (response, io, Some(connection))),
-            None => match wasmtime_wasi_http::p3::default_send_request(request, self.options).await
-            {
+            None => match wasmtime_wasi_http::default_send_request(request, self.options).await {
                 Ok((response, io)) => Ok((
                     response.map(http_body_util::BodyExt::boxed_unsync),
-                    Box::new(io) as Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
+                    Box::new(io)
+                        as Box<dyn Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send>,
                     None,
                 )),
                 Err(error) => Err(error),
             },
-        }
+        };
+        let (response, io, connection) =
+            sent.map_err(|error| self.hooks.clone().transport_error_to_p3(&error))?;
+        let mut body_hooks = self.hooks.clone();
+        let response = response.map(|body| {
+            body.map_err(move |error| body_hooks.transport_error_to_p3(&error))
+                .boxed_unsync()
+        });
+        let mut io_hooks = self.hooks.clone();
+        let io = Box::new(async move {
+            Box::into_pin(io)
+                .await
+                .map_err(|error| io_hooks.transport_error_to_p3(&error))
+        });
+        Ok((response, io, connection))
     }
 }
 
@@ -74,12 +92,9 @@ where
 {
     let (final_transmission_tx, final_transmission_rx) = oneshot::channel();
     let final_transmission_tx = restored_transmission.unwrap_or(final_transmission_tx);
-    let (pool, oplog) = store.with(|mut access| {
+    let (hooks, oplog) = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        (
-            ctx.wasi_http.connection_pool.clone(),
-            ctx.state.oplog.clone(),
-        )
+        (ctx.http_hooks.clone(), ctx.state.oplog.clone())
     });
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
     let converted = http_store.with(|mut access| {
@@ -92,7 +107,12 @@ where
             .map_err(HttpError::trap)?;
         let converted = request.into_http_with_getter(
             access.as_context_mut(),
-            async move { final_transmission_rx.await.unwrap_or(Ok(())) },
+            async move {
+                final_transmission_rx
+                    .await
+                    .unwrap_or(Ok(()))
+                    .map_err(Into::into)
+            },
             wasi_http_view::<Ctx, U>,
         )?;
         HttpResult::Ok(converted)
@@ -117,6 +137,10 @@ where
 
     let options = options.as_deref().copied();
     let (parts, body) = http_request.into_parts();
+    let mut body_hooks = hooks.clone();
+    let body = body
+        .map_err(move |error| body_hooks.transport_error_to_p3(&error))
+        .boxed_unsync();
     let structural_append_tasks = store.with(|mut access| {
         durable_worker_ctx::<Ctx, U>(access.data_mut())
             .public_state
@@ -124,7 +148,8 @@ where
             .runtime_append_tasks()
     });
     Ok(PhysicalSend::Replayable(PhysicalSendRequest {
-        pool,
+        pool: hooks.connection_pool.clone(),
+        hooks,
         method: parts.method,
         uri: parts.uri,
         version: parts.version,
@@ -182,12 +207,14 @@ where
         }
     };
     let response = http::Response::from_parts(parts, body);
-    let (response, response_io) = wasmtime_wasi_http::p3::Response::from_http(response);
+    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+    let (response, response_io) = http_store.with(|mut access| {
+        wasmtime_wasi_http::p3::Response::from_http(access.get().hooks, response)
+    });
     tokio::task::spawn(async move {
         let result = response_io.await;
         debug!(?result, "p3 HTTP response body I/O future finished");
     });
-    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
     http_store.with(|mut access| {
         access
             .get()

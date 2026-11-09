@@ -160,8 +160,8 @@ enum ValueRepr {
   Text(String)
   Integer(Int64)
   Boolean(Bool)
-  Int(Int)
-  UInt(UInt)
+  Int(Int32)
+  UInt(UInt32)
   UInt64(UInt64)
 } derive(Debug, Eq)
 
@@ -188,12 +188,12 @@ pub fn Value::boolean(value : Bool) -> Value {
 }
 
 ///|
-pub fn Value::int(value : Int) -> Value {
+pub fn Value::int(value : Int32) -> Value {
   { repr: ValueRepr::Int(value), }
 }
 
 ///|
-pub fn Value::uint(value : UInt) -> Value {
+pub fn Value::uint(value : UInt32) -> Value {
   { repr: ValueRepr::UInt(value), }
 }
 
@@ -345,7 +345,7 @@ enum PolicyRepr {
   Periodic(Duration)
   Exponential(base_delay~ : Duration, factor~ : Double)
   Fibonacci(first~ : Duration, second~ : Duration)
-  CountBox(max_retries~ : UInt, inner~ : Policy)
+  CountBox(max_retries~ : UInt32, inner~ : Policy)
   TimeBox(limit~ : Duration, inner~ : Policy)
   Clamp(min_delay~ : Duration, max_delay~ : Duration, inner~ : Policy)
   AddDelay(delay~ : Duration, inner~ : Policy)
@@ -388,7 +388,7 @@ pub fn Policy::fibonacci(first : Duration, second : Duration) -> Policy {
 }
 
 ///|
-pub fn Policy::max_retries(self : Policy, max_retries : UInt) -> Policy {
+pub fn Policy::max_retries(self : Policy, max_retries : UInt32) -> Policy {
   { repr: PolicyRepr::CountBox(max_retries~, inner=self), }
 }
 
@@ -451,7 +451,7 @@ pub fn Policy::to_raw(
 /// `Predicate::always()`.
 pub struct NamedPolicy {
   name : String
-  priority : UInt
+  priority : UInt32
   predicate : Predicate
   policy : Policy
 } derive(Debug, Eq)
@@ -464,7 +464,7 @@ pub fn NamedPolicy::named(name : String, policy : Policy) -> NamedPolicy {
 ///|
 pub fn NamedPolicy::priority(
   self : NamedPolicy,
-  priority : UInt,
+  priority : UInt32,
 ) -> NamedPolicy {
   { ..self, priority, }
 }
@@ -529,7 +529,7 @@ fn make_property_pattern(
 fn push_predicate_node(
   predicate : Predicate,
   nodes : Array[@retry.PredicateNode],
-) -> Int raise RetryBuilderError {
+) -> Int32 raise RetryBuilderError {
   let index = nodes.length()
   nodes.push(@retry.PredicateNode::PredFalse)
 
@@ -593,7 +593,7 @@ fn push_predicate_node(
 fn push_policy_node(
   policy : Policy,
   nodes : Array[@retry.PolicyNode],
-) -> Int raise RetryBuilderError {
+) -> Int32 raise RetryBuilderError {
   let index = nodes.length()
   nodes.push(@retry.PolicyNode::Never)
 

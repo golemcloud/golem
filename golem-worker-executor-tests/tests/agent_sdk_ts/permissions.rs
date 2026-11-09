@@ -533,7 +533,9 @@ async fn start_scenario(
     let caller = agent_id!(CALLER, caller_name);
     let caller_card = component
         .metadata
-        .agent_type_initial_permission_card(&caller.agent_type)
+        .agent_type_provision_configs
+        .get(&caller.agent_type)
+        .map(|config| &config.initial_permissions)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("missing {CALLER} initial permission card"))?;
     cards.register(StoredCard::Polymorphic(caller_card));

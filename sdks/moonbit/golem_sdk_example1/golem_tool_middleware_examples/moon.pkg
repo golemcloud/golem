@@ -16,7 +16,7 @@ import {
 
 supported_targets = "+wasm"
 
-pkgtype(kind: "executable")
+pkgtype(kind: "foreign_library")
 
 options(
   link: {

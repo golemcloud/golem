@@ -13,21 +13,32 @@
 // limitations under the License.
 
 use super::*;
+use wasmtime_wasi_http::{Error as HttpTransportError, WasiBody};
 
-impl wasmtime_wasi_http::p3::WasiHttpHooks for DurableHttpHooks {
+impl DurableHttpHooks {
+    /// Classifies errors after transport ownership has moved outside the Store.
+    pub(super) fn transport_error_to_p3(
+        &mut self,
+        error: &HttpTransportError,
+    ) -> wasmtime_wasi_http::p3::bindings::http::types::ErrorCode {
+        wasmtime_wasi_http::p3::error_to_p3(self, error)
+    }
+}
+
+impl wasmtime_wasi_http::WasiHttpHooks for DurableHttpHooks {
     fn send_request(
         &mut self,
-        request: ::http::Request<UnsyncBoxBody<Bytes, ErrorCode>>,
+        request: ::http::Request<WasiBody>,
         options: Option<RequestOptions>,
-        fut: Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
+        fut: Box<dyn Future<Output = Result<(), HttpTransportError>> + Send>,
     ) -> Box<
         dyn Future<
                 Output = Result<
                     (
-                        ::http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
-                        Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
+                        ::http::Response<WasiBody>,
+                        Box<dyn Future<Output = Result<(), HttpTransportError>> + Send>,
                     ),
-                    wasmtime_wasi::TrappableError<ErrorCode>,
+                    HttpTransportError,
                 >,
             > + Send,
     > {
@@ -37,13 +48,14 @@ impl wasmtime_wasi_http::p3::WasiHttpHooks for DurableHttpHooks {
             match connection_pool {
                 Some(pool) => {
                     let (response, io, _pooled_connection) =
-                        pool.pooled_send_request_p3(request, options).await?;
+                        pool.send_request(request, options).await?;
                     Ok((response, io))
                 }
                 None => {
                     let (res, io) =
-                        wasmtime_wasi_http::p3::default_send_request(request, options).await?;
-                    let io: Box<dyn Future<Output = Result<(), ErrorCode>> + Send> = Box::new(io);
+                        wasmtime_wasi_http::default_send_request(request, options).await?;
+                    let io: Box<dyn Future<Output = Result<(), HttpTransportError>> + Send> =
+                        Box::new(io);
                     Ok((res.map(BodyExt::boxed_unsync), io))
                 }
             }
@@ -56,7 +68,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiView(self)
     }
 
-    pub fn as_wasi_http_view_p3(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+    pub fn as_wasi_http_view_p3(&mut self) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
         let is_replay = self.state.is_replay();
         self.http_hooks
             .is_replay
@@ -66,7 +78,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
             .expect("ResourceTable mutex must never fail");
-        wasmtime_wasi_http::p3::WasiHttpCtxView {
+        wasmtime_wasi_http::WasiHttpCtxView {
             ctx: &mut inner.wasi_http,
             table,
             hooks: &mut inner.http_hooks,

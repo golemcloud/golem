@@ -25,7 +25,7 @@ use crate::model::agent_secret::{
     DeploymentAgentSecretCreation, DeploymentAgentSecretReplacement, DeploymentAgentSecretUpdate,
 };
 use crate::model::api_definition::UnboundCompiledRoute;
-use crate::repo::model::deployment::CompiledTools;
+use crate::repo::model::deployment::{CompiledTools, PreparedAgentType};
 use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use crate::services::agent_secret::schema_contains_host_managed_capability;
 use crate::services::deployment::route_compilation::validate_path_segments;
@@ -33,7 +33,7 @@ use crate::services::environment_tool_grant::ResolvedGrantedToolRelease;
 use crate::services::environment_tool_middleware_grant::ResolvedGrantedToolMiddlewareRelease;
 use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer,
+    AgentConfigSource, AgentTypeName, RegisteredAgentTypeImplementer,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
@@ -47,8 +47,8 @@ use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation,
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, RemoteToolDeployment, TOOL_METADATA_WIT_VERSION,
-    ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata, ToolName, ToolSource,
+    CompiledToolBinding, RemoteToolDeployment, TOOL_METADATA_WIT_VERSION, ToolBindingInput,
+    ToolBindingOwner, ToolDeploymentMetadata, ToolName, ToolRegistration, ToolSource,
 };
 use golem_common::model::tool_middleware::{
     RegisteredToolMiddleware, RemoteToolMiddlewareDeployment, TOOL_MIDDLEWARE_METADATA_WIT_VERSION,
@@ -80,7 +80,7 @@ pub struct InProgressDeployedRegisteredAgentType {
     pub webhook_domain_and_segments: Option<(Domain, Vec<String>)>,
 }
 
-impl From<InProgressDeployedRegisteredAgentType> for DeployedRegisteredAgentType {
+impl From<InProgressDeployedRegisteredAgentType> for PreparedAgentType {
     fn from(value: InProgressDeployedRegisteredAgentType) -> Self {
         Self {
             agent_type: value.agent_type,
@@ -532,7 +532,7 @@ impl DeploymentContext {
                     continue;
                 }
             };
-            registered_tools.push(RegisteredTool {
+            registered_tools.push(ToolRegistration {
                 deployment_revision,
                 release_id: None,
                 definition: metadata.definition.clone(),
@@ -708,7 +708,7 @@ impl DeploymentContext {
             if !valid || colliding_tools.contains(&deployment.name) {
                 continue;
             }
-            registered_tools.push(RegisteredTool {
+            registered_tools.push(ToolRegistration {
                 deployment_revision,
                 release_id: Some(release.id),
                 definition: release.definition.clone(),

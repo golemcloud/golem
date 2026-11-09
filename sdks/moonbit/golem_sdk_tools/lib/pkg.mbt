@@ -83,7 +83,7 @@ priv struct PkgImportEntry {
   path : String
   effective_alias : String
   indent : String
-  code_end : Int
+  code_end : Int32
   has_comma : Bool
 }
 
@@ -97,7 +97,7 @@ fn pkg_line_code(line : String) -> String {
 }
 
 ///|
-fn find_regular_import_block(lines : Array[String]) -> (Int, Int)? {
+fn find_regular_import_block(lines : Array[String]) -> (Int32, Int32)? {
   let mut import_start = -1
   for i, line in lines {
     let code = pkg_line_code(line)
@@ -193,7 +193,7 @@ pub fn ensure_pkg_import(
     return result.join("\n")
   }
   let mut first_indent : String? = None
-  let mut last_entry : (Int, PkgImportEntry)? = None
+  let mut last_entry : (Int32, PkgImportEntry)? = None
   for i in (import_start + 1)..<import_end {
     if parse_pkg_import_entry(lines[i]) is Some(entry) {
       if first_indent is None {

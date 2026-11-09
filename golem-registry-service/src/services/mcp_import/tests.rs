@@ -13,7 +13,7 @@ use golem_common::model::card::{
 };
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::model::mcp_import::{McpImportAuthInput, McpImportDeployment};
-use golem_common::model::tool::ToolBindingInput;
+use golem_common::model::tool::{ToolBindingInput, ToolRegistration};
 use golem_common::model::tool_middleware::{CompiledToolMiddlewareChain, RegisteredToolMiddleware};
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
@@ -2273,20 +2273,23 @@ async fn native_wins_without_fetch_and_distinct_effective_surfaces_do_not_share_
     };
     let name = ToolName::try_from("fixed".to_owned()).unwrap();
     let registered = RegisteredTool {
-        deployment_revision: state.deployment_revision,
-        release_id: None,
-        definition: serde_json::from_value(serde_json::to_value(projected.definition).unwrap())
-            .unwrap(),
-        provision: Default::default(),
-        source: golem_common::model::tool::ToolSource::Host {
-            host_tool_id: "fixture".to_owned().try_into().unwrap(),
-            implementation_version: "1".into(),
+        type_id: golem_common::model::type_id::TypeId::try_from(73_i64).unwrap(),
+        registration: ToolRegistration {
+            deployment_revision: state.deployment_revision,
+            release_id: None,
+            definition: serde_json::from_value(serde_json::to_value(projected.definition).unwrap())
+                .unwrap(),
+            provision: Default::default(),
+            source: golem_common::model::tool::ToolSource::Host {
+                host_tool_id: "fixture".to_owned().try_into().unwrap(),
+                implementation_version: "1".into(),
+            },
+            owner_account_id: agent.account_id,
+            owner_account_email: agent.account_email.clone(),
+            metadata_version: "1".into(),
+            metadata_digest: golem_common::model::diff::Hash::empty(),
+            component_bindings: Default::default(),
         },
-        owner_account_id: agent.account_id,
-        owner_account_email: agent.account_email.clone(),
-        metadata_version: "1".into(),
-        metadata_digest: golem_common::model::diff::Hash::empty(),
-        component_bindings: Default::default(),
     };
     state
         .registered_tools
@@ -2308,6 +2311,7 @@ async fn native_wins_without_fetch_and_distinct_effective_surfaces_do_not_share_
         .await
         .unwrap();
     assert_eq!(all.imported.len(), 1);
+    assert_eq!(all.native, vec![registered]);
     assert_eq!(all.imported[0].tool.definition.name(), Some("narrow"));
     assert_eq!(all.diagnostics.len(), 1);
     let recipient = RecipientPattern::Account {

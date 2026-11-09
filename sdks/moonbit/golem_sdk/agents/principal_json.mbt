@@ -5,6 +5,9 @@ pub suberror JsonCodecError {
 } derive(Debug)
 
 ///|
+pub extend JsonCodecError with Debug::{to_repr}
+
+///|
 fn uuid_to_json_string(uuid : @types.Uuid) -> String {
   @schema.Uuid::from_wit(uuid).to_string()
 }

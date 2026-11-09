@@ -15,10 +15,8 @@
 use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
 use crate::services::oplog::{ArchiveWait, OplogService};
-use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
-use crate::services::worker::WorkerService;
-use crate::services::worker_activator::WorkerActivator;
+use crate::services::worker_activator::{ExactExistingDelivery, WorkerActivator};
 use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError};
 use crate::worker::{INACTIVE_EPHEMERAL_AGENT_ERROR, Worker};
 use crate::workerctx::WorkerCtx;
@@ -46,7 +44,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, debug, debug_span, error, info, info_span, span, warn};
+use tracing::{Instrument, debug, debug_span, error, info, info_span, warn};
 
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
@@ -110,7 +108,7 @@ pub trait SchedulerWorkerAccess {
         &self,
         owned_agent_id: &OwnedAgentId,
         target_worker_fingerprint: AgentFingerprint,
-        invocation: AgentInvocation,
+        delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError>;
 
     async fn enqueue_ephemeral_external_tool(
@@ -204,10 +202,10 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         &self,
         owned_agent_id: &OwnedAgentId,
         target_worker_fingerprint: AgentFingerprint,
-        invocation: AgentInvocation,
+        delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
         self.deref()
-            .enqueue_exact_existing(owned_agent_id, target_worker_fingerprint, invocation)
+            .enqueue_exact_existing(owned_agent_id, target_worker_fingerprint, delivery)
             .await
     }
 
@@ -228,10 +226,8 @@ pub struct SchedulerServiceDefault {
     scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     shard_service: Arc<dyn ShardService>,
-    promise_service: Arc<dyn PromiseService>,
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     oplog_service: Arc<dyn OplogService>,
-    worker_service: Arc<dyn WorkerService>,
     claim_batch_size: u32,
     lease_ttl: Duration,
     max_batches_per_tick: u32,
@@ -243,10 +239,8 @@ impl SchedulerServiceDefault {
     pub fn new(
         scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService>,
-        promise_service: Arc<dyn PromiseService>,
         worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
         oplog_service: Arc<dyn OplogService>,
-        worker_service: Arc<dyn WorkerService>,
         process_interval: Duration,
         claim_batch_size: u32,
         lease_ttl: Duration,
@@ -259,9 +253,7 @@ impl SchedulerServiceDefault {
             scheduler_storage,
             background_handle: Arc::new(Mutex::new(None)),
             shard_service,
-            promise_service,
             oplog_service,
-            worker_service,
             worker_access,
             claim_batch_size,
             lease_ttl,
@@ -529,54 +521,28 @@ impl SchedulerServiceDefault {
                 account_id: _,
                 promise_id,
                 environment_id,
+                target_worker_fingerprint,
             } => {
                 let owned_agent_id = OwnedAgentId::new(environment_id, &promise_id.agent_id);
-
                 let result = self
-                    .promise_service
-                    .complete(promise_id.clone(), vec![])
+                    .worker_access
+                    .enqueue_exact_existing(
+                        &owned_agent_id,
+                        target_worker_fingerprint,
+                        ExactExistingDelivery::CompletePromise(promise_id),
+                    )
                     .await;
-
-                // TODO: We probably need more error handling here as not completing a promise that is expected to complete can lead to deadlocks.
                 match result {
-                    Ok(_) => {
-                        // activate worker so it starts processing the newly completed promises
-                        // TODO: this is probably redundant with the wakeup in PromiseService. check and fix
-                        {
-                            let span = span!(
-                                Level::DEBUG,
-                                "scheduler_activate_worker",
-                                agent_id = %owned_agent_id.agent_id
-                            );
-
-                            // The promise is completed either way, but a worker that was not woken
-                            // stays suspended on it. Fail the action so it is claimed again rather
-                            // than acknowledging a wakeup that did not happen; completing an
-                            // already-completed promise on the retry is a no-op.
-                            if let Err(error) = self
-                                .worker_access
-                                .activate_worker(&owned_agent_id)
-                                .instrument(span)
-                                .await
-                            {
-                                error!(
-                                    agent_id = owned_agent_id.to_string(),
-                                    promise_id = promise_id.to_string(),
-                                    "Failed to activate worker after completing its promise: {error}"
-                                );
-                                return false;
-                            }
-                        }
-
+                    Ok(true) => {
                         record_scheduled_promise_completed();
                         true
                     }
-                    Err(e) => {
-                        error!(
-                            agent_id = owned_agent_id.to_string(),
-                            promise_id = promise_id.to_string(),
-                            "Failed to complete promise: {e}"
-                        );
+                    Ok(false) => {
+                        info!(agent_id = %owned_agent_id, "Dropping stale scheduled promise completion");
+                        true
+                    }
+                    Err(error) => {
+                        error!(agent_id = %owned_agent_id, error = %error, "Failed to deliver scheduled promise completion");
                         false
                     }
                 }
@@ -654,87 +620,30 @@ impl SchedulerServiceDefault {
                 invocation,
                 target_worker_fingerprint,
             } => {
-                if matches!(&*invocation, AgentInvocation::ExternalTool { .. }) {
-                    return match self
-                        .worker_access
-                        .enqueue_exact_existing(
-                            &owned_agent_id,
-                            target_worker_fingerprint,
-                            *invocation,
-                        )
-                        .await
-                    {
-                        Ok(true) => true,
-                        Ok(false) => {
-                            info!(
-                                agent_id = owned_agent_id.to_string(),
-                                "Dropping stale scheduled external-tool invocation"
-                            );
-                            true
-                        }
-                        Err(error) => {
-                            error!(
-                                agent_id = owned_agent_id.to_string(),
-                                "Failed to enqueue scheduled external-tool invocation: {error}"
-                            );
-                            false
-                        }
-                    };
-                }
-                // A mismatch means the original worker was deleted and recreated — drop the stale
-                // invocation silently.
-                let stale = match self
+                match self
                     .worker_access
-                    .active_worker_fingerprint(&owned_agent_id)
+                    .enqueue_exact_existing(
+                        &owned_agent_id,
+                        target_worker_fingerprint,
+                        ExactExistingDelivery::Invoke(invocation),
+                    )
                     .await
                 {
-                    Some(fingerprint) => fingerprint != target_worker_fingerprint,
-                    None => match self.worker_service.get(&owned_agent_id).await {
-                        Ok(Some(meta)) => {
-                            meta.initial_worker_metadata.fingerprint != target_worker_fingerprint
-                        }
-                        Ok(None) => true,
-                        // A storage failure is not evidence that the worker was deleted, so the
-                        // invocation must not be dropped. Fail the action so it is retried.
-                        Err(error) => {
-                            error!(
-                                agent_id = owned_agent_id.to_string(),
-                                "Failed to read worker metadata for a scheduled invocation: {error}"
-                            );
-                            return false;
-                        }
-                    },
-                };
-
-                if stale {
-                    info!(
-                        agent_id = owned_agent_id.to_string(),
-                        "Dropping stale scheduled invocation: target worker was deleted and recreated"
-                    );
-                    true
-                } else {
-                    // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
-                    let result = self
-                        .worker_access
-                        .enqueue_invocation(
-                            &owned_agent_id,
-                            *invocation,
-                            None,
-                            Vec::new(),
-                            None,
-                            None,
-                            Principal::anonymous(),
-                        )
-                        .await;
-
-                    if let Err(e) = result {
+                    Ok(true) => true,
+                    Ok(false) => {
+                        info!(
+                            agent_id = %owned_agent_id,
+                            "Dropping stale scheduled invocation"
+                        );
+                        true
+                    }
+                    Err(error) => {
                         error!(
-                            agent_id = owned_agent_id.to_string(),
-                            "Failed to invoke worker with scheduled invocation: {e}"
+                            agent_id = %owned_agent_id,
+                            error = %error,
+                            "Failed to enqueue scheduled invocation"
                         );
                         false
-                    } else {
-                        true
                     }
                 }
             }
@@ -824,18 +733,27 @@ impl SchedulerServiceDefault {
             ScheduledAction::Resume {
                 agent_created_by: _,
                 owned_agent_id,
+                target_worker_fingerprint,
             } => {
-                // Acknowledging a resume that did not happen deletes the only thing left that
-                // would have woken the agent, leaving it suspended indefinitely. Fail the action
-                // instead, so the lease expires and it is claimed again.
-                if let Err(error) = self.worker_access.activate_worker(&owned_agent_id).await {
-                    error!(
-                        agent_id = owned_agent_id.to_string(),
-                        "Failed to resume worker: {error}"
-                    );
-                    return false;
+                match self
+                    .worker_access
+                    .enqueue_exact_existing(
+                        &owned_agent_id,
+                        target_worker_fingerprint,
+                        ExactExistingDelivery::Resume,
+                    )
+                    .await
+                {
+                    Ok(true) => true,
+                    Ok(false) => {
+                        info!(agent_id = %owned_agent_id, "Dropping stale scheduled resume");
+                        true
+                    }
+                    Err(error) => {
+                        error!(agent_id = %owned_agent_id, error = %error, "Failed to resume worker");
+                        false
+                    }
                 }
-                true
             }
         }
     }

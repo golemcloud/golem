@@ -22,8 +22,8 @@ use crate::model::component::ComponentRevision;
 use crate::model::deployment::DeploymentRevision;
 use crate::model::json::NormalizedJsonValue;
 use crate::model::tool::{
-    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
-    ToolName, ToolSource,
+    CompiledToolBinding, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess, ToolName,
+    ToolRegistration, ToolSource,
 };
 use crate::model::tool_middleware::{
     RegisteredToolMiddleware, ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
@@ -181,7 +181,7 @@ fn registered_middleware(name: &str, scope: ToolMiddlewareScope) -> RegisteredTo
 }
 
 struct CompilerFixture {
-    tool: RegisteredTool,
+    tool: ToolRegistration,
     binding: CompiledToolBinding,
     agent: AgentTypeName,
     tool_name: ToolName,
@@ -198,7 +198,7 @@ impl CompilerFixture {
         let agent: AgentTypeName = "agent".parse().unwrap();
         let tool_name = ToolName::try_from("leaf").unwrap();
         Self {
-            tool: RegisteredTool {
+            tool: ToolRegistration {
                 deployment_revision: DeploymentRevision::INITIAL,
                 release_id: None,
                 definition,
@@ -404,7 +404,7 @@ fn registry_is_validated_without_bindings() {
         commands: CommandTree { nodes: Vec::new() },
         schema: SchemaGraph::empty(),
     };
-    let registered = RegisteredTool {
+    let registered = ToolRegistration {
         deployment_revision: DeploymentRevision::INITIAL,
         release_id: None,
         definition: invalid,

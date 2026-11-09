@@ -150,14 +150,15 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
         let ctx = access.data_mut().durable_ctx_mut();
         let activity = ctx.tail_work_tracker().activity();
         let revision = ctx.component_metadata().revision;
-        access.spawn(streams::MaterializeResponse {
+        let task = streams::MaterializeResponse {
             streams: result_streams.clone(),
             revision,
             response,
             completed,
             activity,
-        });
-    });
+        };
+        access.spawn(async move |access| task.run(access).await)
+    })?;
     completion
         .await
         .map_err(|_| wasmtime::Error::msg("tool result materialization task stopped"))?

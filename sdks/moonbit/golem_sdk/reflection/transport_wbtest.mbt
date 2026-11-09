@@ -6,7 +6,7 @@ test "a failed awaited input encode keeps argument permission cards" {
     @test_support.failing_card_input(card_a, 622),
   )
   @test_support.run_async(async fn() {
-    let result = try? encode_awaited_input(input)
+    let result = Ok(encode_awaited_input(input)) catch { error => Err(error) }
     assert_true(result is Err(Schema(_)))
   })
   assert_true(card_a.is_present())
