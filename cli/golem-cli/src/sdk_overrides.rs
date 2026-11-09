@@ -30,12 +30,13 @@ const GOLEM_TS_VERSION: &str = "GOLEM_TS_VERSION";
 const GOLEM_EFFECT_GOLEM_PATH: &str = "GOLEM_EFFECT_GOLEM_PATH";
 const GOLEM_EFFECT_GOLEM_VERSION: &str = "GOLEM_EFFECT_GOLEM_VERSION";
 const GOLEM_SCALA_SDK_VERSION: &str = "GOLEM_SCALA_SDK_VERSION";
+const GOLEM_KOTLIN_SDK_VERSION: &str = "GOLEM_KOTLIN_SDK_VERSION";
 const GOLEM_MOONBIT_SDK_PATH: &str = "GOLEM_MOONBIT_SDK_PATH";
 const GOLEM_MOONBIT_SDK_VERSION: &str = "GOLEM_MOONBIT_SDK_VERSION";
 const GOLEM_GO_PATH: &str = "GOLEM_GO_PATH";
 const GOLEM_GO_VERSION: &str = "GOLEM_GO_VERSION";
 
-const SDK_OVERRIDE_KEYS: [&str; 12] = [
+const SDK_OVERRIDE_KEYS: [&str; 13] = [
     GOLEM_PATH,
     GOLEM_RUST_PATH,
     GOLEM_RUST_VERSION,
@@ -44,6 +45,7 @@ const SDK_OVERRIDE_KEYS: [&str; 12] = [
     GOLEM_EFFECT_GOLEM_PATH,
     GOLEM_EFFECT_GOLEM_VERSION,
     GOLEM_SCALA_SDK_VERSION,
+    GOLEM_KOTLIN_SDK_VERSION,
     GOLEM_MOONBIT_SDK_PATH,
     GOLEM_MOONBIT_SDK_VERSION,
     GOLEM_GO_PATH,
@@ -87,6 +89,7 @@ pub struct SdkOverrides {
     pub effect_golem_path: Option<String>,
     pub effect_golem_version: Option<String>,
     pub scala_sdk_version: Option<String>,
+    pub kotlin_sdk_version: Option<String>,
     pub moonbit_sdk_path: Option<String>,
     pub moonbit_sdk_version: Option<String>,
     pub go_sdk_path: Option<String>,
@@ -122,6 +125,7 @@ impl SdkOverrides {
             ),
             effect_golem_version: None,
             scala_sdk_version: Some("0.0.0-SNAPSHOT".to_string()),
+            kotlin_sdk_version: Some("0.0.0-SNAPSHOT".to_string()),
             moonbit_sdk_path: Some(
                 fs::path_to_str(&workspace_dir.join("sdks/moonbit/golem_sdk"))?.to_string(),
             ),
@@ -162,6 +166,15 @@ impl SdkOverrides {
         self.scala_sdk_version
             .as_deref()
             .unwrap_or(versions::sdk::SCALA)
+            .to_string()
+    }
+
+    /// Version of the Kotlin SDK artifacts (`golem-kotlin-sdk`, `golem-kotlin-ksp` and the
+    /// `cloud.golem.wasm-component` Gradle plugin), which are released together.
+    pub fn kotlin_sdk_dep(&self) -> String {
+        self.kotlin_sdk_version
+            .as_deref()
+            .unwrap_or(versions::sdk::KOTLIN)
             .to_string()
     }
 
@@ -451,6 +464,7 @@ impl SdkOverrides {
             )?,
             effect_golem_version: get_normalized_value_by_key(&values, GOLEM_EFFECT_GOLEM_VERSION),
             scala_sdk_version: get_normalized_value_by_key(&values, GOLEM_SCALA_SDK_VERSION),
+            kotlin_sdk_version: get_normalized_value_by_key(&values, GOLEM_KOTLIN_SDK_VERSION),
             moonbit_sdk_path: resolved_path_override(
                 &values,
                 GOLEM_MOONBIT_SDK_PATH,
@@ -490,6 +504,9 @@ impl SdkOverrides {
         }
         if let Some(value) = &self.scala_sdk_version {
             values.insert(GOLEM_SCALA_SDK_VERSION.to_string(), value.clone());
+        }
+        if let Some(value) = &self.kotlin_sdk_version {
+            values.insert(GOLEM_KOTLIN_SDK_VERSION.to_string(), value.clone());
         }
         if let Some(value) = &self.moonbit_sdk_path {
             values.insert(GOLEM_MOONBIT_SDK_PATH.to_string(), value.clone());
@@ -846,6 +863,7 @@ mod tests {
             effect_golem_path: None,
             effect_golem_version: None,
             scala_sdk_version: None,
+            kotlin_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,
             go_sdk_path: None,
@@ -882,6 +900,7 @@ mod tests {
             effect_golem_path: Some("/repo/sdks/effect".to_string()),
             effect_golem_version: None,
             scala_sdk_version: None,
+            kotlin_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,
             go_sdk_path: None,

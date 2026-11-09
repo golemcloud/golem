@@ -15,6 +15,12 @@ runtime's stream sessions, tokens, or registration contexts.
   references, and other streams. Their number and position are determined by the value;
   there is no fixed list of stream slots.
 - An untyped stream (`Stream(None)`) cannot supply a native item codec and is rejected.
+- Kotlin generates no stream surface at all. A schema stream anywhere in an agent type, a method
+  or a tool fails generation with "Streams are not supported by the Kotlin bridge generator", in
+  both guest and external mode. The Kotlin SDK has a native `AgentStream<T>`, but driving one from
+  generated code needs the producer-and-ownership rules below, so the generator rejects streams
+  rather than emit code that cannot honour them. Everything in this document applies to the other
+  languages.
 - Non-streaming methods retain their existing invocation variants.
 
 ## Item codecs and producers

@@ -23,7 +23,12 @@ use std::process::Command;
 static SKIP_ENV_VAR_NAME: &str = "GOLEM_BUILD_SKIP_SHADOW";
 const GENERATED_TEMPLATES_DIR_NAME: &str = "templates";
 const SKILL_DESTINATION: &str = ".agents/skills";
-const SUPPORTED_LANGUAGES: &[&str] = &["ts", "effect", "rust", "scala", "moonbit", "go"];
+const BRIDGE_RUNTIME_DIRS: &[&str] = &[
+    "src/bridge_gen/kotlin/runtime",
+    "src/bridge_gen/moonbit/runtime",
+    "src/bridge_gen/scala/runtime",
+];
+const SUPPORTED_LANGUAGES: &[&str] = &["ts", "effect", "rust", "scala", "kotlin", "moonbit", "go"];
 
 fn main() {
     export_effect_version().unwrap();
@@ -62,6 +67,12 @@ fn generate_embedded_templates() -> std::io::Result<()> {
 
     println!("cargo::rerun-if-changed={}", templates_src.display());
     println!("cargo::rerun-if-changed={}", skills_src.display());
+    for runtime in BRIDGE_RUNTIME_DIRS {
+        println!(
+            "cargo::rerun-if-changed={}",
+            manifest_dir.join(runtime).display()
+        );
+    }
 
     if templates_dest.exists() {
         fs::remove_dir_all(&templates_dest)?;

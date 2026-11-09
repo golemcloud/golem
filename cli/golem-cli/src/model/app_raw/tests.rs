@@ -1369,15 +1369,19 @@ fn arb_bridge_sdks_model() -> BoxedStrategy<BridgeSdks> {
         arb_opt(arb_bridge_sdk_language_targets()),
         arb_opt(arb_bridge_sdk_language_targets()),
         arb_opt(arb_bridge_sdk_language_targets()),
+        arb_opt(arb_bridge_sdk_language_targets()),
     )
-        .prop_map(|(ts, effect, rust, scala, moonbit, go)| BridgeSdks {
-            ts,
-            effect,
-            rust,
-            scala,
-            moonbit,
-            go,
-        })
+        .prop_map(
+            |(ts, effect, rust, scala, kotlin, moonbit, go)| BridgeSdks {
+                ts,
+                effect,
+                rust,
+                scala,
+                kotlin,
+                moonbit,
+                go,
+            },
+        )
         .boxed()
 }
 

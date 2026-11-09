@@ -7,6 +7,8 @@ use crate::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
 use crate::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
 use crate::bridge_gen::go::tool::GoToolBridgeGenerator;
 use crate::bridge_gen::go::{GoBridgeGenerator, GoBridgeMode};
+use crate::bridge_gen::kotlin::tool::KotlinToolBridgeGenerator;
+use crate::bridge_gen::kotlin::{KotlinBridgeGenerator, KotlinBridgeMode};
 use crate::bridge_gen::moonbit::tool::MoonBitToolBridgeGenerator;
 use crate::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode};
 use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
@@ -1885,6 +1887,22 @@ async fn gen_bridge_sdk_target(
                                 MoonBitBridgeMode::GuestWasmRpc,
                             )?)
                         }
+                        (GuestLanguage::Kotlin, BridgeMode::Guest) => {
+                            Box::new(KotlinBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                false,
+                                KotlinBridgeMode::GuestWasmRpc,
+                            )?)
+                        }
+                        (GuestLanguage::Kotlin, BridgeMode::External) => {
+                            Box::new(KotlinBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                false,
+                                KotlinBridgeMode::ExternalRest,
+                            )?)
+                        }
                         (GuestLanguage::Go, BridgeMode::Guest) => {
                             Box::new(GoBridgeGenerator::new_with_mode(
                                 agent_type,
@@ -1937,7 +1955,11 @@ async fn gen_bridge_sdk_target(
                             fs::remove(&output_dir)?;
                             GoToolBridgeGenerator::new_with_rpc_tool_name(tool, rpc_name, &output_dir, false)?.generate()
                         }
-                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Effect, Scala, MoonBit and Go guest bridges"),
+                        (GuestLanguage::Kotlin, BridgeMode::Guest) => {
+                            fs::remove(&output_dir)?;
+                            KotlinToolBridgeGenerator::new_with_rpc_tool_name(tool, rpc_name, &output_dir, false)?.generate()
+                        }
+                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Effect, Scala, MoonBit, Go and Kotlin guest bridges"),
                     },
                 }
             },
@@ -2849,7 +2871,7 @@ components:
     #[test]
     fn bridge_sdk_support_matrix_matches_current_capabilities() {
         use GuestLanguage::*;
-        let full = [TypeScript, Effect, Rust, Scala, MoonBit, Go];
+        let full = [TypeScript, Effect, Rust, Scala, Kotlin, MoonBit, Go];
         let capabilities: [(BridgeSdkTargetKind, BridgeMode, &[GuestLanguage]); 4] = [
             (BridgeSdkTargetKind::Agent, BridgeMode::External, &full),
             (BridgeSdkTargetKind::Agent, BridgeMode::Guest, &full),

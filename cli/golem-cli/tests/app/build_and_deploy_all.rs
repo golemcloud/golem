@@ -39,6 +39,11 @@ async fn build_and_deploy_all_templates_for_moonbit() {
 }
 
 #[test]
+async fn build_and_deploy_all_templates_for_kotlin() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Kotlin).await;
+}
+
+#[test]
 async fn build_and_deploy_all_templates_for_go() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::Go).await;
 }
@@ -66,6 +71,11 @@ async fn effect_streaming_template_builds() {
 #[test]
 async fn scala_streaming_template_builds() {
     streaming_template_builds_for_lang(GuestLanguage::Scala).await;
+}
+
+#[test]
+async fn kotlin_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Kotlin).await;
 }
 
 #[test]
@@ -289,6 +299,13 @@ async fn moonbit_single_to_multi_component_upgrade_builds() {
     single_to_multi_component_upgrade_builds_for_lang(GuestLanguage::MoonBit).await;
 }
 
+// Same for Kotlin: the flat Gradle project is promoted into a per-component directory while the
+// shared settings.gradle.kts / gradle.properties stay at the application root.
+#[test]
+async fn kotlin_single_to_multi_component_upgrade_builds() {
+    single_to_multi_component_upgrade_builds_for_lang(GuestLanguage::Kotlin).await;
+}
+
 async fn single_to_multi_component_upgrade_builds_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
 
@@ -346,6 +363,16 @@ fn assert_flat_layout(app_root: &std::path::Path, language: GuestLanguage) {
                 "expected flat Scala layout: build.sbt should exist at the app root"
             );
         }
+        GuestLanguage::Kotlin => {
+            assert!(
+                app_root.join("build.gradle.kts").exists(),
+                "expected flat Kotlin layout: build.gradle.kts should exist at the app root"
+            );
+            assert!(
+                app_root.join("src").join("wasmWasiMain").exists(),
+                "expected flat Kotlin layout: src/wasmWasiMain/ should exist at the app root"
+            );
+        }
         GuestLanguage::MoonBit => {
             assert!(
                 app_root.join("moon.pkg").exists(),
@@ -381,6 +408,24 @@ fn assert_multi_component_layout(app_root: &std::path::Path, language: GuestLang
                 app_root.join("project").join("build.properties").exists(),
                 "expected multi-component Scala layout: project/build.properties should remain at the app root"
             );
+        }
+        GuestLanguage::Kotlin => {
+            assert!(
+                !app_root.join("build.gradle.kts").exists(),
+                "expected multi-component Kotlin layout: build.gradle.kts should no longer be at the app root"
+            );
+            assert!(
+                !app_root.join("src").exists(),
+                "expected multi-component Kotlin layout: src/ should no longer be at the app root"
+            );
+            // The shared Gradle settings stay at the root: they pin the plugin versions and include
+            // every component directory.
+            for shared in ["settings.gradle.kts", "gradle.properties"] {
+                assert!(
+                    app_root.join(shared).exists(),
+                    "expected multi-component Kotlin layout: {shared} should remain at the app root"
+                );
+            }
         }
         GuestLanguage::MoonBit => {
             assert!(

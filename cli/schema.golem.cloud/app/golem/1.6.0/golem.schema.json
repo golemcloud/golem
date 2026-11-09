@@ -253,7 +253,7 @@
         "guestLanguage": {
           "description": "The guest language of the components built with this template. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. Components get it from their applied templates, and applied templates must not declare different languages.",
           "type": "string",
-          "enum": ["ts", "effect", "rust", "scala", "moonbit", "go"]
+          "enum": ["ts", "effect", "rust", "scala", "kotlin", "moonbit", "go"]
         },
         "toolsMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
@@ -1856,6 +1856,10 @@
         },
         "scala": {
           "description": "Scala SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
+        },
+        "kotlin": {
+          "description": "Kotlin SDK configuration",
           "$ref": "#/definitions/bridgeSdkLanguageTargets"
         },
         "moonbit": {

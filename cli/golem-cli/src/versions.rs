@@ -17,6 +17,7 @@ pub mod sdk {
     pub const TS: &str = "2.0.0";
     pub const EFFECT_GOLEM: &str = "2.0.0";
     pub const SCALA: &str = "2.0.0";
+    pub const KOTLIN: &str = "0.1.0";
     pub const MOONBIT: &str = "0.6.0";
     pub const GO: &str = "0.1.0";
     pub const MANIFEST: &str = "1.6.0";
@@ -27,6 +28,11 @@ pub mod sdk {
             "1.6.0"
         };
     }
+}
+
+/// Versions of the Kotlin toolchain the generated Kotlin projects build with.
+pub mod kotlin_dep {
+    pub const KOTLIN_PLUGIN_VERSION: &str = "2.4.0";
 }
 
 pub mod build_tool {

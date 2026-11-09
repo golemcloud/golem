@@ -16,16 +16,19 @@ mod highlight;
 mod lexer;
 mod parse_common;
 mod parse_go;
+mod parse_kotlin;
 mod parse_moonbit;
 mod parse_rust;
 mod parse_scala;
 mod parse_ts;
 mod parse_type_go;
+mod parse_type_kotlin;
 mod parse_type_moonbit;
 mod parse_type_rust;
 mod parse_type_scala;
 mod parse_type_ts;
 mod render_go;
+mod render_kotlin;
 mod render_moonbit;
 mod render_rust;
 mod render_scala;
@@ -50,6 +53,7 @@ pub enum SourceLanguage {
     Rust,
     TypeScript,
     Scala,
+    Kotlin,
     MoonBit,
     Go,
     Other(String),
@@ -69,6 +73,7 @@ impl SourceLanguage {
             SourceLanguage::Rust
                 | SourceLanguage::TypeScript
                 | SourceLanguage::Scala
+                | SourceLanguage::Kotlin
                 | SourceLanguage::MoonBit
                 | SourceLanguage::Go
         )
@@ -84,6 +89,8 @@ impl From<&str> for SourceLanguage {
             SourceLanguage::TypeScript
         } else if trimmed.eq_ignore_ascii_case("scala") {
             SourceLanguage::Scala
+        } else if trimmed.eq_ignore_ascii_case("kotlin") {
+            SourceLanguage::Kotlin
         } else if trimmed.eq_ignore_ascii_case("moonbit") {
             SourceLanguage::MoonBit
         } else if trimmed.eq_ignore_ascii_case("go") || trimmed.eq_ignore_ascii_case("golang") {
@@ -106,6 +113,7 @@ impl std::fmt::Display for SourceLanguage {
             SourceLanguage::Rust => write!(f, "rust"),
             SourceLanguage::TypeScript => write!(f, "typescript"),
             SourceLanguage::Scala => write!(f, "scala"),
+            SourceLanguage::Kotlin => write!(f, "kotlin"),
             SourceLanguage::MoonBit => write!(f, "moonbit"),
             SourceLanguage::Go => write!(f, "go"),
             SourceLanguage::Other(s) => write!(f, "{s}"),
@@ -138,6 +146,7 @@ pub fn render_schema_value(
     match source_language {
         SourceLanguage::Rust => render_rust::render_value_rust(graph, ty, value),
         SourceLanguage::Scala => render_scala::render_value_scala(graph, ty, value),
+        SourceLanguage::Kotlin => render_kotlin::render_value_kotlin(graph, ty, value),
         SourceLanguage::MoonBit => render_moonbit::render_value_moonbit(graph, ty, value),
         SourceLanguage::Go => render_go::render_value_go(graph, ty, value),
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
@@ -203,6 +212,7 @@ pub fn render_type_for_language(
     match lang {
         SourceLanguage::Rust => render_rust::render_type_rust(graph, ty, prefer_name),
         SourceLanguage::Scala => render_scala::render_type_scala(graph, ty, prefer_name),
+        SourceLanguage::Kotlin => render_kotlin::render_type_kotlin(graph, ty, prefer_name),
         SourceLanguage::MoonBit => render_moonbit::render_type_moonbit(graph, ty, prefer_name),
         SourceLanguage::Go => render_go::render_type_go(graph, ty, prefer_name),
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
@@ -224,11 +234,13 @@ pub fn parse_type_for_language(
         SourceLanguage::Rust => parse_type_rust::parse_type_rust(input),
         SourceLanguage::TypeScript => parse_type_ts::parse_type_ts(input),
         SourceLanguage::Scala => parse_type_scala::parse_type_scala(input),
+        SourceLanguage::Kotlin => parse_type_kotlin::parse_type_kotlin(input),
         SourceLanguage::MoonBit => parse_type_moonbit::parse_type_moonbit(input),
         SourceLanguage::Go => parse_type_go::parse_type_go(input),
         SourceLanguage::Other(_) => parse_type_ts::parse_type_ts(input)
             .or_else(|_| parse_type_rust::parse_type_rust(input))
             .or_else(|_| parse_type_scala::parse_type_scala(input))
+            .or_else(|_| parse_type_kotlin::parse_type_kotlin(input))
             .or_else(|_| parse_type_moonbit::parse_type_moonbit(input))
             .map_err(|_| ParseError {
                 position: 0,
@@ -266,11 +278,13 @@ pub fn parse_value_for_language(
         SourceLanguage::Rust => try_parse::<parse_rust::RustDialect>(input, graph, ty),
         SourceLanguage::TypeScript => try_parse::<parse_ts::TsDialect>(input, graph, ty),
         SourceLanguage::Scala => try_parse::<parse_scala::ScalaDialect>(input, graph, ty),
+        SourceLanguage::Kotlin => try_parse::<parse_kotlin::KotlinDialect>(input, graph, ty),
         SourceLanguage::MoonBit => try_parse::<parse_moonbit::MoonBitDialect>(input, graph, ty),
         SourceLanguage::Go => try_parse::<parse_go::GoDialect>(input, graph, ty),
         SourceLanguage::Other(_) => try_parse::<parse_ts::TsDialect>(input, graph, ty)
             .or_else(|_| try_parse::<parse_rust::RustDialect>(input, graph, ty))
             .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, graph, ty))
+            .or_else(|_| try_parse::<parse_kotlin::KotlinDialect>(input, graph, ty))
             .or_else(|_| try_parse::<parse_moonbit::MoonBitDialect>(input, graph, ty))
             .map_err(|_| ParseError {
                 position: 0,
@@ -300,6 +314,9 @@ pub fn parse_agent_id_params(
                 input, graph, fields,
             )
         }
+        SourceLanguage::Kotlin => parse_common::parse_input_schema_params::<
+            parse_kotlin::KotlinDialect,
+        >(input, graph, fields),
         SourceLanguage::MoonBit => parse_common::parse_input_schema_params::<
             parse_moonbit::MoonBitDialect,
         >(input, graph, fields),
@@ -315,6 +332,11 @@ pub fn parse_agent_id_params(
                 })
                 .or_else(|_| {
                     parse_common::parse_input_schema_params::<parse_scala::ScalaDialect>(
+                        input, graph, fields,
+                    )
+                })
+                .or_else(|_| {
+                    parse_common::parse_input_schema_params::<parse_kotlin::KotlinDialect>(
                         input, graph, fields,
                     )
                 })

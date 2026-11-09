@@ -629,6 +629,7 @@ fn render_param_name(name: &str, lang: &SourceLanguage) -> String {
         SourceLanguage::Go => name.to_string(),
         SourceLanguage::TypeScript
         | SourceLanguage::Scala
+        | SourceLanguage::Kotlin
         | SourceLanguage::MoonBit
         | SourceLanguage::Other(_) => name.to_lower_camel_case(),
     }

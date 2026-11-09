@@ -103,6 +103,7 @@ enum Transform {
     EffectSdk,
     RustSdk,
     ScalaSdk,
+    KotlinSdk,
     MoonBitSdk,
     GoSdk,
     ApplicationName,
@@ -313,6 +314,8 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                     (true, "build.sbt") => vec![Transform::ScalaSdk, Transform::ApplicationName],
                     (true, "plugins.sbt") => vec![Transform::ScalaSdk],
                     (true, "build.properties") => vec![Transform::ScalaSdk],
+                    (true, "settings.gradle.kts") => vec![Transform::KotlinSdk],
+                    (true, "gradle.properties") => vec![Transform::KotlinSdk],
                     (true, "moon.mod.json") => {
                         vec![Transform::MoonBitSdk, Transform::ApplicationName]
                     }
@@ -462,6 +465,9 @@ fn transform(
                     "GOLEM_SCALA_SBT_VERSION",
                     versions::scala_dep::SBT_VERSION.to_string(),
                 );
+            }
+            Transform::KotlinSdk => {
+                replacements.insert("GOLEM_KOTLIN_SDK_VERSION", sdk_overrides.kotlin_sdk_dep());
             }
             Transform::MoonBitSdk => {
                 replacements.insert("GOLEM_MOONBIT_DEP_SDK_DEP", sdk_overrides.moonbit_sdk_dep());

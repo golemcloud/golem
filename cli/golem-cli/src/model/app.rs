@@ -427,8 +427,8 @@ impl BridgeSdkTargetKind {
         }
     }
 
-    /// Every guest language generates agent clients in both modes and guest tool
-    /// clients; no language generates external tool clients.
+    /// Every guest language generates agent clients in both modes and guest tool clients; no
+    /// language generates external tool clients.
     pub fn supports(self, bridge_mode: BridgeMode, _language: GuestLanguage) -> bool {
         match (self, bridge_mode) {
             (Self::Agent, _) | (Self::Tool, BridgeMode::Guest) => true,
@@ -544,6 +544,7 @@ impl BridgeSdks {
             (GuestLanguage::TypeScript, raw.ts),
             (GuestLanguage::Effect, raw.effect),
             (GuestLanguage::Scala, raw.scala),
+            (GuestLanguage::Kotlin, raw.kotlin),
             (GuestLanguage::MoonBit, raw.moonbit),
             (GuestLanguage::Go, raw.go),
         ] {

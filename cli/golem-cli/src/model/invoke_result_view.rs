@@ -94,6 +94,7 @@ impl InvokeResultView {
             SourceLanguage::Rust => "Rust syntax",
             SourceLanguage::TypeScript => "TypeScript syntax",
             SourceLanguage::Scala => "Scala syntax",
+            SourceLanguage::Kotlin => "Kotlin syntax",
             SourceLanguage::MoonBit => "MoonBit syntax",
             SourceLanguage::Go => "Go syntax",
             SourceLanguage::Other(_) => "fallback TypeScript syntax",

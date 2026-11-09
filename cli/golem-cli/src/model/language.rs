@@ -41,6 +41,7 @@ pub enum GuestLanguage {
     Effect,
     Rust,
     Scala,
+    Kotlin,
     MoonBit,
     #[value(alias = "golang")]
     Go,
@@ -53,6 +54,7 @@ impl GuestLanguage {
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
             "effect" => Some(GuestLanguage::Effect),
             "scala" => Some(GuestLanguage::Scala),
+            "kotlin" => Some(GuestLanguage::Kotlin),
             "moonbit" => Some(GuestLanguage::MoonBit),
             "go" | "golang" => Some(GuestLanguage::Go),
             _ => None,
@@ -65,6 +67,7 @@ impl GuestLanguage {
             "ts" => Some(GuestLanguage::TypeScript),
             "effect" => Some(GuestLanguage::Effect),
             "scala" => Some(GuestLanguage::Scala),
+            "kotlin" => Some(GuestLanguage::Kotlin),
             "moonbit" => Some(GuestLanguage::MoonBit),
             "go" => Some(GuestLanguage::Go),
             _ => None,
@@ -77,6 +80,7 @@ impl GuestLanguage {
             GuestLanguage::TypeScript => "ts",
             GuestLanguage::Effect => "effect",
             GuestLanguage::Scala => "scala",
+            GuestLanguage::Kotlin => "kotlin",
             GuestLanguage::MoonBit => "moonbit",
             GuestLanguage::Go => "go",
         }
@@ -88,6 +92,7 @@ impl GuestLanguage {
             GuestLanguage::TypeScript => "TypeScript",
             GuestLanguage::Effect => "Effect",
             GuestLanguage::Scala => "Scala",
+            GuestLanguage::Kotlin => "Kotlin",
             GuestLanguage::MoonBit => "MoonBit",
             GuestLanguage::Go => "Go",
         }

@@ -1743,7 +1743,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
       noSpecialization: true,
     }}
   >
-    ***Optional guest language*** of the components built with the template: `ts`, `effect`, `rust`, `scala`, `moonbit` or `go`.
+    ***Optional guest language*** of the components built with the template: `ts`, `effect`, `rust`, `scala`, `kotlin`, `moonbit` or `go`.
 
     A component's guest language comes from the templates applied to it, directly or through template inheritance. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. The built-in templates (e.g. `ts`, `rust`, `scala`) declare their language, so custom templates inheriting them don't need to declare it; custom templates that don't inherit a built-in template can declare it to enable these features. The templates applied to a component must not declare different languages.
 
@@ -2190,7 +2190,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "bridge.<language>",
   }}>
-    ***Optional language configuration*** for `ts`, `effect`, `rust`, `scala`, `moonbit`, or `go`. Each language has separate `external` and `internal` target objects. An empty object selects nothing; configure `agents` or `internal.tools` explicitly. Component dependencies also generate internal clients automatically.
+    ***Optional language configuration*** for `ts`, `effect`, `rust`, `scala`, `kotlin`, `moonbit`, or `go`. Each language has separate `external` and `internal` target objects. An empty object selects nothing; configure `agents` or `internal.tools` explicitly. Component dependencies also generate internal clients automatically.
 
     ```yaml
     bridge:

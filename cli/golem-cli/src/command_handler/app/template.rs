@@ -912,6 +912,29 @@ impl TemplateHandler {
                     },
                 });
             }
+            GuestLanguage::Kotlin => {
+                let target_root = application_path.join(new_component_dir);
+
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                    application_path.join("build.gradle.kts"),
+                    target_root.join("build.gradle.kts"),
+                ));
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    application_path.join("src"),
+                    target_root.join("src"),
+                ));
+
+                // settings.gradle.kts and gradle.properties stay at the application root (shared
+                // plugin pins and SDK version); settings.gradle.kts picks the component directory
+                // up on its own. The component's previous build output moves with it.
+                let build_dir = application_path.join("build");
+                if build_dir.is_dir() {
+                    upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                        build_dir,
+                        target_root.join("build"),
+                    ));
+                }
+            }
             GuestLanguage::Go => {
                 // A Go component is its whole module sealed in one directory (the
                 // `module/` wrapper for a single component). Promotion is a single

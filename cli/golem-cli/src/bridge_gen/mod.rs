@@ -28,6 +28,7 @@
 
 pub mod effect;
 pub mod go;
+pub mod kotlin;
 pub mod moonbit;
 pub mod parameter_naming;
 pub mod rust;

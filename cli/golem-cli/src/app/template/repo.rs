@@ -467,6 +467,7 @@ mod tests {
                 ("moonbit", GuestLanguage::MoonBit),
                 ("rust", GuestLanguage::Rust),
                 ("scala", GuestLanguage::Scala),
+                ("kotlin", GuestLanguage::Kotlin),
                 ("ts", GuestLanguage::TypeScript),
             ])
         );

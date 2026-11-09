@@ -1,0 +1,135 @@
+{{EXCEPTION_DECL}}
+
+/** Typed accessors the generated codecs use to take a [{{SV}}] apart. Each throws on a wire-shape mismatch. */
+internal object BridgeCodec {
+    private fun mismatch(expected: kotlin.String, actual: kotlin.Any?): kotlin.Nothing =
+        throw {{EXCEPTION}}("Expected $expected value, got $actual")
+
+    fun asBool(v: {{SV}}): kotlin.Boolean = (v as? {{SV}}.Bool)?.v ?: mismatch("bool", v)
+    fun asByte(v: {{SV}}): kotlin.Byte = (v as? {{SV}}.S8)?.v ?: mismatch("s8", v)
+    fun asShort(v: {{SV}}): kotlin.Short = (v as? {{SV}}.S16)?.v ?: mismatch("s16", v)
+    fun asInt(v: {{SV}}): kotlin.Int = (v as? {{SV}}.S32)?.v ?: mismatch("s32", v)
+    fun asLong(v: {{SV}}): kotlin.Long = (v as? {{SV}}.S64)?.v ?: mismatch("s64", v)
+    fun asUByte(v: {{SV}}): kotlin.UByte = (v as? {{SV}}.U8)?.v ?: mismatch("u8", v)
+    fun asUShort(v: {{SV}}): kotlin.UShort = (v as? {{SV}}.U16)?.v ?: mismatch("u16", v)
+    fun asUInt(v: {{SV}}): kotlin.UInt = (v as? {{SV}}.U32)?.v ?: mismatch("u32", v)
+    fun asULong(v: {{SV}}): kotlin.ULong = (v as? {{SV}}.U64)?.v ?: mismatch("u64", v)
+    fun asFloat(v: {{SV}}): kotlin.Float = (v as? {{SV}}.F32)?.v ?: mismatch("f32", v)
+    fun asDouble(v: {{SV}}): kotlin.Double = (v as? {{SV}}.F64)?.v ?: mismatch("f64", v)
+    fun asChar(v: {{SV}}): kotlin.Char = (v as? {{SV}}.Chr)?.v ?: mismatch("char", v)
+    fun asString(v: {{SV}}): kotlin.String = (v as? {{SV}}.Str)?.v ?: mismatch("string", v)
+    fun asPath(v: {{SV}}): kotlin.String = (v as? {{SV}}.PathVal)?.v ?: mismatch("path", v)
+    fun asUrl(v: {{SV}}): kotlin.String = (v as? {{SV}}.UrlVal)?.v ?: mismatch("url", v)
+
+    /** A quantity whose unit must be one the schema allows (see [requiredUnit]). */
+    fun asQuantity(v: {{SV}}, baseUnit: kotlin.String, allowedSuffixes: kotlin.collections.List<kotlin.String>): {{QUANTITY}} {
+        val q = (v as? {{SV}}.QuantityVal) ?: mismatch("quantity", v)
+        return {{QUANTITY}}(q.mantissa, q.scale, requiredUnit(q.unit, baseUnit, allowedSuffixes))
+    }
+
+    /** A quantity value in the unit it names, or in the base unit when it names none. */
+    fun quantityValue(q: {{QUANTITY}}, baseUnit: kotlin.String, allowedSuffixes: kotlin.collections.List<kotlin.String>): {{SV}} =
+        {{SV}}.QuantityVal(q.mantissa, q.scale, requiredUnit(q.unit.ifEmpty { baseUnit }, baseUnit, allowedSuffixes))
+
+    // The host's rule: with no allowed suffix the unit must be the base unit, and with suffixes it
+    // must be one of them -- the base unit is not implicitly allowed beside them.
+    private fun requiredUnit(unit: kotlin.String, baseUnit: kotlin.String, allowedSuffixes: kotlin.collections.List<kotlin.String>): kotlin.String {
+        val allowed = if (allowedSuffixes.isEmpty()) listOf(baseUnit) else allowedSuffixes
+        if (!allowed.contains(unit)) {
+            throw {{EXCEPTION}}("Unit '$unit' is not allowed for a quantity in '$baseUnit'; allowed: $allowed")
+        }
+        return unit
+    }
+
+    fun asUuid(v: {{SV}}): {{UUID}} =
+        (v as? {{SV}}.UuidVal)?.let { {{UUID}}(it.high, it.low) } ?: mismatch("uuid", v)
+
+    fun asUuidRecord(v: {{SV}}): {{UUID}} {
+        val fields = recordFields(v)
+        if (fields.size != 2) throw {{EXCEPTION}}("Expected a uuid record of two u64 halves, got ${fields.size} fields")
+        return {{UUID}}(asULong(fields[0]).toLong(), asULong(fields[1]).toLong())
+    }
+
+    fun asDatetime(v: {{SV}}): {{DATETIME}} =
+        (v as? {{SV}}.DatetimeVal)?.let { {{DATETIME}}(it.seconds, it.nanoseconds) } ?: mismatch("datetime", v)
+
+    fun asDuration(v: {{SV}}): kotlin.time.Duration =
+        (v as? {{SV}}.DurationVal)?.let { it.nanoseconds.toDuration(kotlin.time.DurationUnit.NANOSECONDS) } ?: mismatch("duration", v)
+
+    fun encodeChar(c: kotlin.Char): {{SV}} {
+        if (c.isSurrogate()) throw {{EXCEPTION}}("A lone surrogate is not a Unicode scalar value")
+        return {{SV}}.Chr(c)
+    }
+
+    /**
+     * The wire carries a duration as signed nanoseconds, so an infinite one has no
+     * representation: `inWholeNanoseconds` saturates to `Long.MAX_VALUE`, which the
+     * peer would read back as a finite ~292 years. Refuse it rather than corrupt it.
+     */
+    fun encodeDuration(d: kotlin.time.Duration): {{SV}} {
+        if (d.isInfinite()) throw {{EXCEPTION}}("An infinite duration cannot be sent: the wire carries signed nanoseconds")
+        return {{SV}}.DurationVal(d.inWholeNanoseconds)
+    }
+
+    fun recordFields(v: {{SV}}): kotlin.collections.List<{{SV}}> = (v as? {{SV}}.Record)?.fields ?: mismatch("record", v)
+    fun optionValue(v: {{SV}}): {{SV}}? = (v as? {{SV}}.OptionVal ?: mismatch("option", v)).inner
+    fun listElements(v: {{SV}}): kotlin.collections.List<{{SV}}> = when (v) {
+        is {{SV}}.ListVal -> v.items
+        is {{SV}}.FixedListVal -> v.items
+        else -> mismatch("list", v)
+    }
+    fun tupleElements(v: {{SV}}): kotlin.collections.List<{{SV}}> = (v as? {{SV}}.TupleVal)?.items ?: mismatch("tuple", v)
+    fun mapEntries(v: {{SV}}): kotlin.collections.List<kotlin.Pair<{{SV}}, {{SV}}>> = (v as? {{SV}}.MapVal)?.entries ?: mismatch("map", v)
+    fun resultValue(v: {{SV}}): {{SV}}.ResultVal = v as? {{SV}}.ResultVal ?: mismatch("result", v)
+    fun enumCase(v: {{SV}}): kotlin.Int = (v as? {{SV}}.EnumVal)?.caseIndex ?: mismatch("enum", v)
+    fun flagBits(v: {{SV}}): kotlin.collections.List<kotlin.Boolean> = (v as? {{SV}}.FlagsVal)?.flags ?: mismatch("flags", v)
+
+    fun variantCase(v: {{SV}}): kotlin.Pair<kotlin.Int, {{SV}}?> =
+        (v as? {{SV}}.VariantVal)?.let { it.caseIndex to it.payload } ?: mismatch("variant", v)
+
+    fun unionBody(v: {{SV}}): kotlin.Pair<kotlin.String, {{SV}}> =
+        (v as? {{SV}}.UnionVal)?.let { it.tag to it.body } ?: mismatch("union", v)
+
+    fun requiredPayload(payload: {{SV}}?, context: kotlin.String): {{SV}} =
+        payload ?: throw {{EXCEPTION}}("Missing payload for $context")
+
+    fun unstructuredText(v: {{SV}}, languages: kotlin.collections.List<kotlin.String>): {{UNSTRUCTURED_TEXT}} {
+        val (index, payload) = variantCase(v)
+        return when (index) {
+            0 -> {
+                val text = payload as? {{SV}}.TextVal ?: mismatch("inline unstructured text", payload)
+                if (languages.isNotEmpty() && text.language !in languages) {
+                    throw {{EXCEPTION}}("Language code '${text.language}' is not allowed for unstructured text; allowed: $languages")
+                }
+                {{UNSTRUCTURED_TEXT}}.Inline(text.text, text.language)
+            }
+            1 -> {{UNSTRUCTURED_TEXT}}.Url(asUrl(requiredPayload(payload, "unstructured text url")))
+            else -> throw {{EXCEPTION}}("Invalid unstructured text case index $index")
+        }
+    }
+
+    fun encodeUnstructuredText(value: {{UNSTRUCTURED_TEXT}}): {{SV}} = when (value) {
+        is {{UNSTRUCTURED_TEXT}}.Inline -> {{SV}}.VariantVal(0, {{SV}}.TextVal(value.text, value.languageCode))
+        is {{UNSTRUCTURED_TEXT}}.Url -> {{SV}}.VariantVal(1, {{SV}}.UrlVal(value.url))
+    }
+
+    fun unstructuredBinary(v: {{SV}}, mimeTypes: kotlin.collections.List<kotlin.String>): {{UNSTRUCTURED_BINARY}} {
+        val (index, payload) = variantCase(v)
+        return when (index) {
+            0 -> {
+                val binary = payload as? {{SV}}.BinaryVal ?: mismatch("inline unstructured binary", payload)
+                if (mimeTypes.isNotEmpty() && binary.mimeType !in mimeTypes) {
+                    throw {{EXCEPTION}}("Mime type '${binary.mimeType}' is not allowed; allowed: $mimeTypes")
+                }
+                {{UNSTRUCTURED_BINARY}}.Inline(kotlin.ByteArray(binary.bytes.size) { binary.bytes[it].toByte() }, binary.mimeType)
+            }
+            1 -> {{UNSTRUCTURED_BINARY}}.Url(asUrl(requiredPayload(payload, "unstructured binary url")))
+            else -> throw {{EXCEPTION}}("Invalid unstructured binary case index $index")
+        }
+    }
+
+    fun encodeUnstructuredBinary(value: {{UNSTRUCTURED_BINARY}}): {{SV}} = when (value) {
+        is {{UNSTRUCTURED_BINARY}}.Inline -> {{SV}}.VariantVal(0, {{SV}}.BinaryVal(value.bytes.map { it.toUByte() }, value.mimeType))
+        is {{UNSTRUCTURED_BINARY}}.Url -> {{SV}}.VariantVal(1, {{SV}}.UrlVal(value.url))
+    }
+}
