@@ -820,7 +820,9 @@ for (const mode of ['synchronous', 'delayed', 'combined']) {
                   mode === 'combined' ? 'é'.repeat((9 * MiB) / 2) : '\0'.repeat(3 * MiB),
                 );
                 if (mode === 'synchronous') throw error;
-                return new Promise((_, reject) => setTimeout(() => reject(error), 20));
+                return waitFor(() => prefixes.length === count).then(() => {
+                  throw error;
+                });
               },
             };
           },
