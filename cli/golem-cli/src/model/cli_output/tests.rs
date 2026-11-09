@@ -882,7 +882,8 @@ fn component_metadata_displays_tools_middlewares_and_files() {
                 files: sample.files.clone(),
                 ..Default::default()
             },
-        ),
+        )
+        .into(),
     });
     assert_eq!(component.tools, sample.tools);
     assert_eq!(component.tool_middlewares, sample.tool_middlewares);

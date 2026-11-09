@@ -97,8 +97,10 @@ async fn permission_cards_work_across_services_and_replay(
 
     let initial_card_id = component
         .metadata
-        .agent_type_initial_permission_card(&AgentTypeName("ScopeCardAgent".to_string()))
+        .agent_type_provision_configs
+        .get(&AgentTypeName("ScopeCardAgent".to_string()))
         .expect("ScopeCardAgent initial card is missing")
+        .initial_permissions
         .card_id
         .0;
     let worker_client = user

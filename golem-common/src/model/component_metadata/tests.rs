@@ -398,6 +398,119 @@ fn component_metadata_serializes_tools_under_tools_field() {
 }
 
 #[test]
+fn component_metadata_response_pairs_declarations_with_optional_type_ids() {
+    use crate::model::agent::{AgentMode, Snapshotting};
+    use crate::schema::InputSchema;
+    use crate::schema::agent::{AgentConstructorSchema, AgentTypeKind};
+    use poem_openapi::types::{ParseFromJSON, ToJSON};
+
+    let agent = |name: &str| AgentTypeSchema {
+        type_name: AgentTypeName(name.to_string()),
+        kind: AgentTypeKind::Regular,
+        description: format!("Declaration of {name}"),
+        source_language: "rust".to_string(),
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
+            name: None,
+            description: "Create the agent".to_string(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([]),
+        },
+        methods: vec![],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(crate::model::Empty {}),
+        config: vec![],
+    };
+    let allocated_agent = agent("grep");
+    let unallocated_agent = agent("unallocated");
+    let tool = ToolDeploymentMetadata {
+        definition: sample_tool(),
+        provision: ToolProvisionConfig::default(),
+        environment_binding: None,
+        component_bindings: BTreeMap::new(),
+        agent_bindings: BTreeMap::new(),
+    };
+    let tools = BTreeMap::from([
+        (ToolName::try_from("grep").unwrap(), tool.clone()),
+        (ToolName::try_from("unallocated").unwrap(), tool),
+    ]);
+    let metadata = ComponentMetadata::from_parts_with_tools(
+        KnownExports::default(),
+        vec![],
+        Some("example".to_string()),
+        None,
+        vec![unallocated_agent.clone(), allocated_agent.clone()],
+        BTreeMap::new(),
+        tools,
+    )
+    .with_type_ids(
+        BTreeMap::from([(
+            allocated_agent.type_name.clone(),
+            TypeId::try_from(73_u32).unwrap(),
+        )]),
+        BTreeMap::from([(
+            ToolName::try_from("grep").unwrap(),
+            TypeId::try_from(211_u32).unwrap(),
+        )]),
+    );
+    let response = ComponentMetadataDto::from(metadata.clone());
+    assert_eq!(response.agent_types[0].declaration, unallocated_agent);
+    assert_eq!(response.agent_types[0].type_id, None);
+    assert_eq!(response.agent_types[1].declaration, allocated_agent);
+    assert_eq!(response.agent_types[1].type_id.unwrap().get(), 73);
+    assert_eq!(
+        response.tools[&ToolName::try_from("grep").unwrap()]
+            .type_id
+            .unwrap()
+            .get(),
+        211
+    );
+    assert_eq!(
+        response.tools[&ToolName::try_from("unallocated").unwrap()].type_id,
+        None
+    );
+
+    let json = serde_json::to_value(&response).unwrap();
+    assert_eq!(json["agentTypes"][0]["typeId"], serde_json::Value::Null);
+    assert_eq!(json["agentTypes"][1]["typeId"], 73);
+    assert_eq!(
+        json["agentTypes"][1]["declaration"],
+        serde_json::to_value(&allocated_agent).unwrap()
+    );
+    assert_eq!(json["tools"]["grep"]["typeId"], 211);
+    assert_eq!(
+        json["tools"]["unallocated"]["typeId"],
+        serde_json::Value::Null
+    );
+    assert!(json.get("agentTypeIds").is_none());
+    assert!(json.get("toolTypeIds").is_none());
+    let poem_json = response.to_json().unwrap();
+    assert_eq!(poem_json["agentTypes"], json["agentTypes"]);
+    assert_eq!(poem_json["tools"]["grep"]["typeId"], 211);
+    assert_eq!(
+        poem_json["tools"]["unallocated"]["typeId"],
+        serde_json::Value::Null
+    );
+    assert!(poem_json.get("agentTypeIds").is_none());
+    assert!(poem_json.get("toolTypeIds").is_none());
+    let decoded: ComponentMetadataDto = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(ComponentMetadata::from(decoded), metadata);
+    let decoded = ComponentMetadataDto::parse_from_json(Some(poem_json)).unwrap();
+    assert_eq!(ComponentMetadata::from(decoded), metadata);
+
+    let mut invalid = json;
+    invalid["tools"]["grep"]["typeId"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<ComponentMetadataDto>(invalid.clone()).is_err());
+    assert!(ComponentMetadataDto::parse_from_json(Some(invalid)).is_err());
+    let internal_json = serde_json::to_value(&metadata).unwrap();
+    assert_eq!(internal_json["agentTypeIds"]["grep"], 73);
+    assert_eq!(internal_json["toolTypeIds"]["grep"], 211);
+    assert!(internal_json["agentTypes"][1].get("declaration").is_none());
+}
+
+#[test]
 fn component_metadata_binary_roundtrip_preserves_tool_envelope() {
     let metadata = metadata_with_tool();
     let bytes = crate::serialization::serialize(&metadata).unwrap();
