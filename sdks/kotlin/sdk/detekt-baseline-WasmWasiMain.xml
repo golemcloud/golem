@@ -1,0 +1,36 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>LongMethod:AgentTypeModel.kt$private fun lowerPlainSchemaTypeBodyInto(base: Int, offset: Int, witType: String, typeIndex: Map&lt;String, Int&gt;)</ID>
+    <ID>LongMethod:IgniteRdbms.kt$private fun lowerIgniteDbValue(base: Int, value: IgniteDbValue)</ID>
+    <ID>LongMethod:Lift.kt$private fun liftNode(valueNodesPtr: Int, index: Int, witType: String, lazy: Boolean): SchemaValue</ID>
+    <ID>LongMethod:MysqlRdbms.kt$private fun lowerMysqlDbValue(base: Int, value: MysqlDbValue)</ID>
+    <ID>LongMethod:PostgresRdbms.kt$private fun lowerDbValue(base: Int, value: PostgresDbValue)</ID>
+    <ID>LongMethod:SchemaValueBytes.kt$SchemaValueBytes$private fun put(w: Writer, v: SchemaValue)</ID>
+    <ID>LongMethod:TypedSchemaValue.kt$internal fun schemaNodeToWitType(typeNodesPtr: Int, defsPtr: Int, nodeIndex: Int, visitingDefs: Set&lt;Int&gt; = emptySet()): String</ID>
+    <ID>ReturnCount:Blobstore.kt$Container$fun listObjects(maxNames: Int = LIST_NAMES_MAX): Either&lt;String, List&lt;String&gt;&gt;</ID>
+    <ID>ReturnCount:Blobstore.kt$Container$fun writeData(objectName: String, data: ByteArray): Either&lt;String, Unit&gt;</ID>
+    <ID>ReturnCount:DurableStreams.kt$internal fun splitJsonMessages(payload: ByteArray): List&lt;String&gt;</ID>
+    <ID>ReturnCount:Guest.kt$fun initialize(argsPtr: Int): Int</ID>
+    <ID>ReturnCount:Guest.kt$fun invoke(argsPtr: Int): Int</ID>
+    <ID>ReturnCount:Rpc.kt$WasmRpc$fun invokeAndAwait(methodName: String, input: SchemaValue, resultWitType: String, scopeCard: Card? = null): RpcResult</ID>
+    <ID>ReturnCount:ToolGuest.kt$private fun invokeToolBody(argsPtr: Int, streams: ToolStreams): Int</ID>
+    <ID>ReturnCount:ToolGuest.kt$private fun lowerCustomErrorResult(descriptor: NativeToolDescriptor, e: ToolCustomError): Int</ID>
+    <ID>ReturnCount:ToolIo.kt$OutputReader$private fun readItem(item: Int)</ID>
+    <ID>ReturnCount:ToolMiddleware.kt$ToolUnderlying$private fun collect(resultHandle: Int, stdout: OutputReader?, stderr: OutputReader?, forwardedStdout: Boolean, forwardedStderr: Boolean): UnderlyingOutcome</ID>
+    <ID>ReturnCount:ToolMiddleware.kt$fun invokeToolMiddleware(argsPtr: Int): Int</ID>
+    <ID>ReturnCount:ToolRefinement.kt$internal fun liftRefinement(body: Int): NumericBounds?</ID>
+    <ID>ReturnCount:Transactions.kt$internal fun &lt;A, Err&gt; runInfallibleTransaction( host: SagaHost, attemptsMax: Long, body: (FallibleTransaction&lt;Err&gt;) -&gt; Either&lt;Err, A&gt;, ): Either&lt;TransactionFailure&lt;Err&gt;, A&gt;</ID>
+    <ID>ReturnCount:Transactions.kt$private fun nextDecision(host: SagaHost, state: ByteArray, elapsedNanos: Long, attempt: Long): Either&lt;String, RetryDecision&gt;</ID>
+    <ID>ReturnCount:TypedToolMiddleware.kt$fun &lt;E, T&gt; dispatchTyped( input: TypedSchemaValue, arity: Int, outputWitType: String, encodeError: (E) -&gt; ToolError.CustomError, encodeResult: (T) -&gt; SchemaValue, call: (List&lt;SchemaValue&gt;) -&gt; () -&gt; Either&lt;ToolInvokeError&lt;E&gt;, T&gt;, ): ToolMiddlewareOutcome</ID>
+    <ID>ReturnCount:TypedToolMiddleware.kt$fun &lt;E, T&gt; dispatchTypedWithOutputs( input: TypedSchemaValue, arity: Int, outputWitType: String, encodeError: (E) -&gt; ToolError.CustomError, encodeResult: (T) -&gt; SchemaValue, call: (List&lt;SchemaValue&gt;) -&gt; () -&gt; Either&lt;ToolInvokeError&lt;E&gt;, WithOutputs&lt;T&gt;&gt;, ): ToolMiddlewareOutcome</ID>
+    <ID>TooGenericExceptionCaught:DurabilityApi.kt$DurabilityApi$t: Throwable</ID>
+    <ID>TooGenericExceptionCaught:DurableStreams.kt$DurableStreamIterator$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:Http.kt$HttpHandlers$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:QuotaApi.kt$QuotaApi$commitFailure: Throwable</ID>
+    <ID>TooGenericExceptionCaught:QuotaApi.kt$QuotaApi$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:SchemaStreams.kt$SchemaStreamReader$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:ToolInvocationHandle.kt$StartedInvocation$e: Throwable</ID>
+  </CurrentIssues>
+</SmellBaseline>

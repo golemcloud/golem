@@ -1,0 +1,8 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>LongMethod:ReferenceTreeBuilder.kt$private fun referenceFlattenNode(value: SchemaValue, nodes: ReferenceNodeList): Int</ID>
+    <ID>ReturnCount:TransactionsTest.kt$TransactionsTest.FakeSagaHost$override fun next( policy: RetryPolicy?, state: ByteArray, elapsedNanos: Long, verb: String, noun: String, properties: List&lt;Pair&lt;String, PredicateValue&gt;&gt;, ): Either&lt;String, RetryDecision&gt;</ID>
+  </CurrentIssues>
+</SmellBaseline>
