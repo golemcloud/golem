@@ -329,6 +329,20 @@ def campaign(args):
                     "rev-parse", f"HEAD:{path}"
                 ):
                     raise ValueError(f"Driver/workload contract mismatch: {path}")
+        if git("rev-parse", "--is-shallow-repository") == "true":
+            subprocess.run(
+                [
+                    "git",
+                    "fetch",
+                    "--no-tags",
+                    "--unshallow",
+                    "origin",
+                    sources[0],
+                    sources[2],
+                ],
+                cwd=ROOT,
+                check=True,
+            )
         for name, path in workspaces.items():
             # sbt's JGit needs a standalone repository, not a linked worktree.
             subprocess.run(
