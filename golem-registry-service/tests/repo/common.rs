@@ -1700,6 +1700,101 @@ pub async fn test_oauth2_login_after_account_delete_creates_new_account(deps: &D
     check!(login().await.unwrap().account_id == after_delete.account_id);
 }
 
+/// The auth of a regular user: every account verb on the own account, and nothing else.
+fn own_account_auth(account: &AccountExtRevisionRecord) -> AuthCtx {
+    use golem_common::model::card::owner::AccountOwnerPattern;
+    use golem_common::model::card::recipient::RecipientPattern;
+    use golem_common::model::card::{
+        AccountResourcePattern, ClassPermissionPattern, EffectiveSurface, PermissionPattern,
+    };
+    use golem_service_base::model::auth::UserAuthCtx;
+
+    let account_email = AccountEmail::new(account.revision.email.clone());
+    let recipient = RecipientPattern::Account {
+        account: account_email.clone(),
+    };
+    let effective_surface = EffectiveSurface::from_grants(
+        &[PermissionPattern::Account(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Account {
+                account: account_email.clone(),
+            },
+            recipient: recipient.clone(),
+            resource: AccountResourcePattern,
+        })],
+        &[],
+        &[],
+        &[],
+        &recipient,
+    )
+    .unwrap();
+    AuthCtx::User(UserAuthCtx {
+        account_id: AccountId(account.revision.account_id),
+        account_email,
+        account_plan_id: PlanId(account.revision.plan_id),
+        account_roles: BTreeSet::new(),
+        effective_surface,
+        delegation_surface: None,
+    })
+}
+
+pub async fn test_account_deletion_holds_are_hidden_from_other_users(deps: &Deps) {
+    use golem_common::model::account::AccountDeletionHoldCreation;
+    use golem_registry_service::services::account::AccountError;
+
+    let owner = deps.create_account().await;
+    let holder = deps.create_account().await;
+    let other = deps.create_account().await;
+    let owner_id = AccountId(owner.revision.account_id);
+    let other_id = AccountId(other.revision.account_id);
+    deps.account_repo
+        .place_deletion_hold(AccountDeletionHoldRecord::new(
+            owner_id,
+            AccountId(holder.revision.account_id),
+            "unpaid overage".to_string(),
+        ))
+        .await
+        .unwrap();
+    let account_service = deps.account_service();
+    let other_auth = own_account_auth(&other);
+
+    let owner_holds = account_service
+        .list_deletion_holds(owner_id, &own_account_auth(&owner))
+        .await
+        .unwrap();
+    check!(owner_holds.len() == 1);
+
+    let listed = account_service
+        .list_deletion_holds(owner_id, &other_auth)
+        .await;
+    let_assert!(Err(AccountError::AccountNotFound(listed_id)) = listed);
+    check!(listed_id == owner_id);
+
+    let placed = account_service
+        .place_deletion_hold(
+            owner_id,
+            other_id,
+            AccountDeletionHoldCreation {
+                reason: "block the delete".to_string(),
+            },
+            &other_auth,
+        )
+        .await;
+    let_assert!(Err(AccountError::AccountNotFound(_)) = placed);
+
+    let removed = account_service
+        .remove_deletion_hold(owner_id, other_id, &other_auth)
+        .await;
+    let_assert!(Err(AccountError::AccountNotFound(_)) = removed);
+
+    let holds = deps
+        .account_repo
+        .list_deletion_holds(owner_id.0)
+        .await
+        .unwrap();
+    check!(holds.len() == 1);
+}
+
 pub async fn test_create_and_get_account(deps: &Deps) {
     let account = AccountRevisionRecord {
         account_id: new_repo_uuid(),

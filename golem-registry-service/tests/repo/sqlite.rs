@@ -178,6 +178,11 @@ async fn test_account_deletion_holds(deps: &Deps) {
 }
 
 #[test]
+async fn test_account_deletion_holds_are_hidden_from_other_users(deps: &Deps) {
+    crate::repo::common::test_account_deletion_holds_are_hidden_from_other_users(deps).await;
+}
+
+#[test]
 async fn test_oauth2_login_after_account_delete_creates_new_account(deps: &Deps) {
     crate::repo::common::test_oauth2_login_after_account_delete_creates_new_account(deps).await;
 }
