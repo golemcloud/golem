@@ -1,0 +1,29 @@
+package golem:permissions@0.1.0;
+
+/// Wallet operations: enumerate the caller's installed cards, query the
+/// wallet's version token, and install a card onto a target holder.
+interface wallet {
+    use golem:core/types@2.0.0.{permission-card};
+    use types.{permission-error, wallet-version-token, holder, wallet-card};
+
+    /// All permission cards currently installed in the caller's wallet, each
+    /// labelled with its kind.
+    ///
+    /// During an invocation that received a scope card, the list also
+    /// contains that scope card, as a `scope` entry, if the caller holds
+    /// `card:inspect`. Without `card:inspect` the scope card is sealed: it
+    /// still authorizes the invocation but is not listed.
+    self-wallet: func() -> list<wallet-card>;
+
+    /// Version token for the caller's wallet, changed whenever the set of
+    /// installed cards changes.
+    self-version: func() -> wallet-version-token;
+
+    /// Install `card` onto `target`. Returns unit on success.
+    ///
+    /// Only agent targets are currently supported. Account and application
+    /// targets return `not-permitted("install-card currently supports only
+    /// agent targets")` before any wallet or oplog mutation.
+    install-card: func(card: permission-card, target: holder)
+        -> result<_, permission-error>;
+}

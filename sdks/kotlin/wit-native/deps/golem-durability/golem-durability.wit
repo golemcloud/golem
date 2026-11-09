@@ -1,0 +1,111 @@
+package golem:durability@1.6.0;
+
+interface durability {
+    use golem:api/oplog@1.5.0.{wrapped-function-type};
+    use wasi:clocks/system-clock@0.3.0.{instant as datetime};
+    use golem:core/types@2.0.0.{typed-schema-value};
+
+    type durable-function-type = wrapped-function-type;
+
+    /// A resident snapshot of custom invocation attribution for the current invocation.
+    /// Dropping a snapshot does not close any live custom invocation.
+    resource custom-invocation-context;
+
+    /// With no argument, captures the current context without changing it. With a snapshot,
+    /// consumes and installs it and returns the previous context. A snapshot can contain an
+    /// empty context. Snapshots cannot be installed in another invocation or after their
+    /// enclosing custom invocations have closed. This operation neither yields nor journals.
+    exchange-custom-invocation-context: func(
+        next: option<custom-invocation-context>,
+    ) -> custom-invocation-context;
+
+    /// A live custom durable invocation.
+    ///
+    /// Attribution follows the guest-installed execution scope, not the resource's lifetime.
+    /// Synchronous begin and enter install the scope on the current task; exchange switches it.
+    /// Host effects initiated in that scope are replay-inert observational entries owned by
+    /// the invocation. Detached work and concurrent SDK continuations do not acquire the scope
+    /// automatically; the guest runtime must install it around execution and destruction.
+    /// Nested operations must finish or be dropped before their parent finishes.
+    /// Synchronous finish consumes the resource; asynchronous finish borrows it while persisting
+    /// the response. Dropping it without finishing leaves the invocation incomplete so normal
+    /// recovery re-executes it.
+    resource live-custom-durable-invocation {
+        /// Installs a live invocation returned by asynchronous admission on the current task.
+        enter: func();
+
+        /// Completes the invocation with its schema-carrying response.
+        finish: static func(
+            this: live-custom-durable-invocation,
+            response: typed-schema-value,
+            forced-commit: bool,
+        );
+
+        /// Completes an asynchronous invocation at a recorded guest result-delivery boundary.
+        /// The caller retains the resource until completion or cancellation, then drops it.
+        finish-async: static async func(
+            this: borrow<live-custom-durable-invocation>,
+            response: typed-schema-value,
+            forced-commit: bool,
+        );
+    }
+
+    /// Represents the oplog entry version; this is for backward compatibility and most use cases should always use
+    /// (and expect) the latest version.
+    enum oplog-entry-version {
+        v1,
+        v2
+    }
+
+    /// Represents a persisted durable function invocation. The `response` field
+    /// contains a value and its schema graph together, making the user-defined payload observable by external tools.
+    record persisted-durable-function-invocation {
+        /// The timestamp of the invocation.
+        timestamp: datetime,
+        /// The invoked function's unique name
+        function-name: string,
+        /// Arbitrary structured value and schema graph describing the invocation's result
+        response: typed-schema-value,
+        /// Type of the durable function invocation
+        function-type: durable-function-type,
+        /// Oplog entry version
+        entry-version: oplog-entry-version
+    }
+
+    /// The result of opening a custom durable invocation.
+    variant custom-durable-invocation {
+        /// Execute the operation body and finish the returned live invocation.
+        live(live-custom-durable-invocation),
+        /// Return the recorded response without executing the operation body.
+        replayed(persisted-durable-function-invocation),
+    }
+
+    /// Observes a function call (produces logs and metrics)
+    observe-function-call: func(iface: string, function: string);
+
+    /// Opens a custom durable invocation.
+    ///
+    /// The executor allocates a deterministic identity synchronously when the call begins. A fresh
+    /// or incomplete invocation returns an owned `live-custom-durable-invocation`. A completed
+    /// invocation returns `replayed` with its recorded response.
+    begin-custom-durable-invocation: func(
+        function-name: string,
+        request: typed-schema-value,
+        function-type: durable-function-type,
+    ) -> custom-durable-invocation;
+
+    /// Admits an asynchronous operation without blocking sibling guest futures. Live admission
+    /// requires enter before executing the body. Completed replay waits for recorded delivery.
+    begin-custom-durable-invocation-async: async func(
+        function-name: string,
+        request: typed-schema-value,
+        function-type: durable-function-type,
+    ) -> custom-durable-invocation;
+
+    // The p2 version of this interface had a `lazy-initialized-pollable` resource: a
+    // host-owned pollable that was ready while unattached (during replay) and could later
+    // be re-bound to a real pollable when execution went live. It has no p3 equivalent
+    // and none is needed: p3 `future`/`stream` handles are one-shot and guest-creatable,
+    // so durable stream wrappers express the replay-to-live transition by resolving
+    // replayed results immediately and directly awaiting the live source afterwards.
+}

@@ -1,0 +1,20 @@
+package golem:permissions@0.1.0;
+
+/// Introspection of the permission kernel's registered resource classes and
+/// verbs, and validation of individual grants against the kernel's schema.
+interface kernel-introspection {
+    use types.{pattern-grant, permission-error};
+
+    record kernel-module {
+        class-name: string,
+        verbs:      list<string>,
+    }
+
+    /// List every resource class the kernel knows about, with their
+    /// permitted verbs.
+    list-modules: func() -> list<kernel-module>;
+
+    /// Validate that `g` references a known class, owner, recipient, verb,
+    /// and resource-id pattern accepted by the kernel.
+    validate-grant: func(g: pattern-grant) -> result<_, permission-error>;
+}

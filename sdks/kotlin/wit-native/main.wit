@@ -1,0 +1,68 @@
+package kotlin:agent-native@0.1.0;
+
+// The world a native Kotlin/Wasm agent component is embedded against. It mirrors the Scala SDK's
+// `agent-guest` world (sdks/scala/wit/main.wit) for Golem 1.6.0 -- keep the two in step.
+// wit-native/deps is a verbatim mirror of <repo>/wit/deps (scripts/sync-wit.sh).
+world kotlin-agent {
+  // Core agent surface: guest exports (initialize/invoke/get-definition/discover-agent-types)
+  // plus the golem:api/host import every guest world carries.
+  include golem:agent/agent-guest@2.0.0;
+
+  import golem:agent/host@2.0.0;
+  import golem:agent/durable-streams@2.0.0;
+  import golem:tool/host@0.1.0;
+
+  import golem:api/context@1.5.0;
+  import golem:api/oplog@1.5.0;
+  import golem:api/retry@1.5.0;
+  import golem:durability/durability@1.6.0;
+
+  import golem:quota/types@1.5.0;
+  import golem:secrets/types@0.1.0;
+  import golem:secrets/reveal@0.1.0;
+
+  import golem:permissions/types@0.1.0;
+  import golem:permissions/inspect@0.1.0;
+  import golem:permissions/derive@0.1.0;
+  import golem:permissions/revoke@0.1.0;
+  import golem:permissions/wallet@0.1.0;
+  import golem:permissions/kernel-introspection@0.1.0;
+
+  import golem:rdbms/postgres@1.5.0;
+  import golem:rdbms/mysql@1.5.0;
+  import golem:rdbms/ignite2@1.5.0;
+  import golem:rdbms/types@1.5.0;
+
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:cli/environment@0.2.6;
+
+  import wasi:blobstore/blobstore;
+  import wasi:blobstore/container;
+  import wasi:blobstore/types;
+
+  import wasi:keyvalue/eventual@0.1.0;
+  import wasi:keyvalue/eventual-batch@0.1.0;
+  import wasi:keyvalue/types@0.1.0;
+  import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
+
+  import golem:websocket/client@1.5.0;
+
+  import wasi:http/client@0.3.0;
+  import wasi:http/types@0.3.0;
+
+  import wasi:filesystem/types@0.3.0;
+  import wasi:filesystem/preopens@0.3.0;
+
+  import wasi:config/store@0.2.0-draft;
+  import wasi:logging/logging;
+
+  // Tool middleware this component provides.
+  export golem:tool/tool-middleware-guest@0.1.0;
+
+  // Tools this component provides. (`golem:tool/tool-middleware-guest` is not exported yet: phase 4.)
+  export golem:tool/guest@0.1.0;
+
+  // The host calls these back during a manual snapshot-based update.
+  export golem:api/save-snapshot@1.5.0;
+  export golem:api/load-snapshot@1.5.0;
+}
