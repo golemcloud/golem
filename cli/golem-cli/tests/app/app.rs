@@ -8278,6 +8278,131 @@ async fn rust_guest_bridge_component_matcher_without_non_rust_component_is_rejec
 }
 
 #[test]
+async fn rust_artifact_exports_resolve_cargo_target_in_templates(_tracing: &Tracing) {
+    for (manifest, crate_name, export_name, presets) in [
+        (
+            "builtin-tools/filesystem-tools/golem.yaml",
+            "golem_filesystem_tools",
+            "filesystem-tools",
+            &["release"][..],
+        ),
+        (
+            "builtin-tools/web-fetch/golem.yaml",
+            "golem_web_fetch",
+            "web-fetch",
+            &["release"][..],
+        ),
+        (
+            "plugins/otlp-exporter/components-rust/otlp-exporter/golem.yaml",
+            "otlp_exporter",
+            "otlp-exporter",
+            &["release"][..],
+        ),
+        (
+            "test-components/audit-middleware/golem.yaml",
+            "golem_audit_middleware",
+            "golem_audit_middleware_release",
+            &["release"][..],
+        ),
+        (
+            "test-components/output-redaction/golem.yaml",
+            "golem_output_redaction",
+            "golem_output_redaction_release",
+            &["release"][..],
+        ),
+        (
+            "test-components/agent-counters-v2/golem.yaml",
+            "it_agent_counters",
+            "it_agent_counters_v2",
+            &["debug", "release"][..],
+        ),
+        (
+            "test-components/agent-updates-v1/golem.yaml",
+            "it_agent_update",
+            "it_agent_update_v1",
+            &["debug", "release"][..],
+        ),
+        (
+            "test-components/agent-updates-v2/golem.yaml",
+            "it_agent_update",
+            "it_agent_update_v2",
+            &["debug", "release"][..],
+        ),
+        (
+            "test-components/agent-updates-v3/golem.yaml",
+            "it_agent_update",
+            "it_agent_update_v3",
+            &["debug", "release"][..],
+        ),
+        (
+            "test-components/agent-updates-v4/golem.yaml",
+            "it_agent_update",
+            "it_agent_update_v4",
+            &["debug", "release"][..],
+        ),
+    ] {
+        let mut ctx = TestContext::new();
+        let target_dir = ctx.cwd_path_join("redirected cargo target");
+        let export_dir = ctx.cwd_path().to_path_buf();
+        fs::copy(
+            workspace_path().join("test-components/golem-test-components-common.yaml"),
+            ctx.cwd_path_join("golem-test-components-common.yaml"),
+        )
+        .unwrap();
+        fs::create_dir_all(ctx.cwd_path_join("app/src")).unwrap();
+        ctx.cd("app");
+        let mut document = fs::read_to_string(workspace_path().join(manifest)).unwrap();
+        if manifest.starts_with("plugins/") {
+            document.push_str(indoc! {"
+
+                app: artifact-export
+                environments:
+                  local:
+                    server: local
+            "});
+        }
+        fs::write_str(ctx.cwd_path_join("golem.yaml"), document).unwrap();
+        fs::write_str(
+            ctx.cwd_path_join("Cargo.toml"),
+            formatdoc! {r#"
+                [package]
+                name = "{crate_name}"
+                version = "0.0.0"
+                edition = "2024"
+                [lib]
+                crate-type = ["cdylib"]
+            "#},
+        )
+        .unwrap();
+        fs::write_str(ctx.cwd_path_join("src/lib.rs"), "").unwrap();
+        ctx.add_env_var("CARGO_TARGET_DIR", target_dir.to_string_lossy());
+        for preset in ["debug", "release"] {
+            let source = target_dir.join(format!("wasm32-wasip2/{preset}/{crate_name}.wasm"));
+            fs::create_dir_all(source.parent().unwrap()).unwrap();
+            fs::write(
+                &source,
+                wat::parse_str(format!("(component ${preset})")).unwrap(),
+            )
+            .unwrap();
+        }
+        for preset in presets {
+            let result = ctx.cli(["exec", "-P", preset, "copy"]).await;
+            assert!(result.success_or_dump(), "{manifest}: {preset}");
+            let export = if presets.len() == 1 {
+                format!("{export_name}.wasm")
+            } else {
+                format!("{export_name}_{preset}.wasm")
+            };
+            assert_eq!(
+                fs::read(export_dir.join(export)).unwrap(),
+                wat::parse_str(format!("(component ${preset})")).unwrap(),
+                "{manifest}: {preset}"
+            );
+        }
+    }
+}
+
+#[test]
 async fn build_preserves_wasm_bytes(_tracing: &Tracing) {
     let ctx = TestContext::new();
     fs::write_str(

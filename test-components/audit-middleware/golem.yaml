@@ -3,13 +3,17 @@
 manifestVersion: 1.6.0
 app: audit-middleware
 
-components:
-  golem:audit-middleware:
-    dir: "."
+componentTemplates:
+  audit-middleware-rust:
     templates: rust
     customCommands:
       copy:
         - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/golem_audit_middleware.wasm" ../golem_audit_middleware_release.wasm
+
+components:
+  golem:audit-middleware:
+    dir: "."
+    templates: audit-middleware-rust
 
 tools:
   middleware:

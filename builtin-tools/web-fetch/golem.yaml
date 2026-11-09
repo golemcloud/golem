@@ -3,13 +3,17 @@
 manifestVersion: 1.6.0
 app: web-fetch
 
-components:
-  golem:web-fetch:
-    dir: "."
+componentTemplates:
+  web-fetch-rust:
     templates: rust
     customCommands:
       copy:
         - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/golem_web_fetch.wasm" "{{ appRootDir }}/../web-fetch.wasm"
+
+components:
+  golem:web-fetch:
+    dir: "."
+    templates: web-fetch-rust
 
 environments:
   local:

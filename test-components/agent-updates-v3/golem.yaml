@@ -13,9 +13,8 @@ app: agent-updates
 includes:
 - ../golem-test-components-common.yaml
 
-components:
-  it:agent-update:
-    dir: "."
+componentTemplates:
+  versioned-rust-test-component:
     templates: rust, rust-test-component
     presets:
       debug:
@@ -26,6 +25,11 @@ components:
         customCommands:
           copy:
           - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/it_agent_update.wasm" ../it_agent_update_v3_release.wasm
+
+components:
+  it:agent-update:
+    dir: "."
+    templates: versioned-rust-test-component
 
 environments:
   local:

@@ -3,13 +3,17 @@
 manifestVersion: 1.6.0
 app: filesystem-tools
 
-components:
-  golem:filesystem-tools:
-    dir: "."
+componentTemplates:
+  filesystem-tools-rust:
     templates: rust
     customCommands:
       copy:
         - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/golem_filesystem_tools.wasm" ../filesystem-tools.wasm
+
+components:
+  golem:filesystem-tools:
+    dir: "."
+    templates: filesystem-tools-rust
 
 environments:
   local:
