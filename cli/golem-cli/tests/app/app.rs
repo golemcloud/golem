@@ -929,104 +929,6 @@ fn snapshot_dir(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8
 }
 
 #[test]
-async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Tracing) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-    let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let producer_final_wasm_hash =
-        extracted_component_metadata_path_hash(&ctx, "app:producer", &producer_final_wasm);
-    let producer_extracted_component_metadata = format!(
-        "golem-temp/extracted-component-metadata/app:producer-{producer_final_wasm_hash}.json"
-    );
-    fs::write_str(
-        ctx.cwd_path_join(&producer_extracted_component_metadata),
-        extracted_metadata_json(
-            &fs::read_to_string(
-                crate::crate_path().join(
-                    "test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json",
-                ),
-            )
-            .unwrap(),
-        ),
-    )
-    .unwrap();
-    let consumer_final_wasm_hash =
-        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
-    let consumer_extracted_component_metadata =
-        format!("app:consumer-{consumer_final_wasm_hash}.json");
-    for component_name in ["app:producer", "app:consumer"] {
-        seed_extraction_marker(&ctx, component_name);
-    }
-
-    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("empty-metadata.json"),
-        extracted_metadata_json("[]"),
-    )
-    .unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: custom-rust-guest-bridge-order
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
-                  - command: cp -p {producer_wasm} consumer.wasm
-                  - command: cp -p {producer_wasm} consumer-final.wasm
-                  - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge/rust-guest
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
-            .exists()
-    );
-    assert!(
-        ctx.cwd_path_join("bridge/rust-guest/bar-agent-guest-client/Cargo.toml")
-            .exists()
-    );
-}
-
-#[test]
 async fn moonbit_component_build_waits_for_independently_buildable_agent_provider(
     _tracing: &Tracing,
 ) {
@@ -2121,6 +2023,9 @@ async fn explicit_guest_component_matcher_with_missing_wasm_is_not_silently_skip
 
     let outputs = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
     assert!(!outputs.success());
+    assert!(outputs.stdout_contains(
+        "The following agent matchers were not found during Rust guest bridge SDK generation: app:missing"
+    ));
     assert!(
         !ctx.cwd_path_join("bridge/rust-guest/bar-agent-guest-client/Cargo.toml")
             .exists()
@@ -2160,6 +2065,9 @@ async fn explicit_guest_wildcard_matcher_with_missing_wasm_is_not_silently_skipp
 
     let outputs = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
     assert!(!outputs.success());
+    assert!(outputs.stdout_contains(
+        "The following selected components could not be inspected during Rust guest bridge SDK generation: app:missing"
+    ));
 }
 
 #[test]
@@ -2237,81 +2145,6 @@ async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
                 outputWasm: consumer-final.wasm
                 build:
                   - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
-                  - command: cp -p {producer_wasm} consumer.wasm
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
-            .exists()
-    );
-}
-
-#[test]
-async fn dependency_guest_bridge_generates_for_rust_manifest_dependency(_tracing: &Tracing) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-    )
-    .unwrap();
-    let producer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &producer_agent_types,
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: dependency-rust-guest-bridge-mixed-language-without-build-dependency
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
                   - command: cp -p {producer_wasm} consumer.wasm
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
@@ -2453,82 +2286,6 @@ async fn gen_bridge_step_without_dependencies_does_not_extract_component_metadat
     .unwrap();
 
     let outputs = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
-    assert!(outputs.success_or_dump());
-}
-
-#[test]
-async fn dependency_guest_bridge_generates_for_rust_producer_used_by_rust_consumer(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_rust.json"),
-    )
-    .unwrap();
-    let producer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &producer_agent_types,
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: dependency-rust-guest-bridge-rust-producer
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                templates: rust
-                buildMergeMode: replace
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
-                  - command: cp -p {producer_wasm} consumer.wasm
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
     assert!(outputs.success_or_dump());
 }
 
@@ -4906,6 +4663,9 @@ async fn selected_dependency_provider_agent_type_does_not_satisfy_explicit_guest
         ])
         .await;
     assert!(!outputs.success_or_dump());
+    assert!(outputs.stdout_contains(
+        "The following agent matchers were not found during Rust guest bridge SDK generation: FooAgent"
+    ));
 }
 
 #[test]
@@ -5647,160 +5407,6 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
 }
 
 #[test]
-async fn custom_build_env_guest_bridge_path_waits_for_guest_bridge_sdks(_tracing: &Tracing) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let producer_final_wasm_hash =
-        extracted_component_metadata_path_hash(&ctx, "app:producer", &producer_final_wasm);
-    let producer_extracted_component_metadata = format!(
-        "golem-temp/extracted-component-metadata/app:producer-{producer_final_wasm_hash}.json"
-    );
-    write_extracted_agent_types(
-        ctx.cwd_path_join(&producer_extracted_component_metadata),
-        fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: custom-env-guest-bridge-order
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: sh -c 'test -f "$SDK_PATH"'
-                    env:
-                      SDK_PATH: ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
-                  - command: cp -p {producer_wasm} consumer.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge/rust-guest
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        ctx.cwd_path_join("bridge/rust-guest/bar-agent-guest-client/Cargo.toml")
-            .exists()
-    );
-}
-
-#[test]
-async fn dependency_guest_bridge_shell_command_literal_guest_bridge_path_waits_for_guest_bridge_sdks(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: shell-literal-guest-bridge-order
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: sh -c 'test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml'
-                  - command: cp -p {producer_wasm} consumer.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge/rust-guest
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        ctx.cwd_path_join("bridge/rust-guest/bar-agent-guest-client/Cargo.toml")
-            .exists()
-    );
-}
-
-#[test]
 async fn dependency_guest_bridge_build_targets_do_not_make_component_require_guest_bridge(
     _tracing: &Tracing,
 ) {
@@ -5952,604 +5558,14 @@ async fn rust_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(_tr
         .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
         .await;
     assert!(outputs.success_or_dump());
-}
-
-#[test]
-async fn rust_manifest_path_cargo_guest_bridge_dependency_waits_for_guest_bridge_sdks(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
+            .exists()
     );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::create_dir_all(ctx.cwd_path_join("consumer/src")).unwrap();
-    fs::create_dir_all(ctx.cwd_path_join("src")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("Cargo.toml"),
-        indoc! {r#"
-            [package]
-            name = "consumer"
-            version = "0.1.0"
-            edition = "2021"
-
-            [dependencies]
-            bar-agent-guest-client = { path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
-        "#},
-    )
-    .unwrap();
-    fs::write_str(ctx.cwd_path_join("src/lib.rs"), "").unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("consumer/Cargo.toml"),
-        indoc! {r#"
-            [package]
-            name = "consumer-component"
-            version = "0.1.0"
-            edition = "2021"
-        "#},
-    )
-    .unwrap();
-    fs::write_str(ctx.cwd_path_join("consumer/src/lib.rs"), "").unwrap();
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: rust-manifest-path-guest-bridge-dependency
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: cargo metadata --manifest-path ../Cargo.toml --format-version=1
-                    sources:
-                      - ../Cargo.toml
-                      - src
-                    targets:
-                      - consumer.wasm
-                  - command: cp -p {producer_wasm} consumer.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-}
-
-#[test]
-async fn rust_target_specific_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
+    assert!(
+        ctx.cwd_path_join("bridge/bar-agent-guest-client/Cargo.toml")
+            .exists()
     );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::create_dir_all(ctx.cwd_path_join("consumer/src")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("consumer/Cargo.toml"),
-        indoc! {r#"
-            [package]
-            name = "consumer"
-            version = "0.1.0"
-            edition = "2021"
-
-            [target.wasm32-wasip2.dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
-        "#},
-    )
-    .unwrap();
-    fs::write_str(ctx.cwd_path_join("consumer/src/lib.rs"), "").unwrap();
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: rust-target-specific-cargo-path-guest-bridge-dependency
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: cargo metadata --format-version=1
-                    sources:
-                      - Cargo.toml
-                      - src
-                    targets:
-                      - consumer.wasm
-                  - command: cp -p {producer_wasm} consumer.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-}
-
-#[test]
-async fn rust_workspace_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::write_str(
-        ctx.cwd_path_join("Cargo.toml"),
-        indoc! {r#"
-            [workspace]
-            members = ["consumer"]
-            resolver = "2"
-
-            [workspace.dependencies]
-            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
-        "#},
-    )
-    .unwrap();
-    fs::create_dir_all(ctx.cwd_path_join("consumer/src")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("consumer/Cargo.toml"),
-        indoc! {r#"
-            [package]
-            name = "consumer"
-            version = "0.1.0"
-            edition = "2021"
-
-            [dependencies]
-            bar = { workspace = true }
-        "#},
-    )
-    .unwrap();
-    fs::write_str(ctx.cwd_path_join("consumer/src/lib.rs"), "").unwrap();
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: rust-workspace-cargo-path-guest-bridge-dependency
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: cargo metadata --format-version=1
-                    sources:
-                      - Cargo.toml
-                      - src
-                    targets:
-                      - consumer.wasm
-                  - command: cp -p {producer_wasm} consumer.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-}
-
-#[test]
-async fn rust_workspace_multiline_guest_bridge_dependency_waits_for_guest_bridge_sdks(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::write_str(
-        ctx.cwd_path_join("Cargo.toml"),
-        indoc! {r#"
-            [workspace]
-            members = ["consumer"]
-            resolver = "2"
-
-            [workspace.dependencies]
-            bar = {
-                package = "bar-agent-guest-client",
-                path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client",
-            }
-        "#},
-    )
-    .unwrap();
-    fs::create_dir_all(ctx.cwd_path_join("consumer/src")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("consumer/Cargo.toml"),
-        indoc! {r#"
-            [package]
-            name = "consumer"
-            version = "0.1.0"
-            edition = "2021"
-
-            [dependencies]
-            bar = { workspace = true }
-        "#},
-    )
-    .unwrap();
-    fs::write_str(ctx.cwd_path_join("consumer/src/lib.rs"), "").unwrap();
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: rust-workspace-multiline-guest-bridge-dependency
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: cargo metadata --format-version=1
-                    sources:
-                      - Cargo.toml
-                      - src
-                    targets:
-                      - consumer.wasm
-                  - command: cp -p {producer_wasm} consumer.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-}
-
-#[test]
-async fn rust_workspace_multiline_dependency_use_waits_for_guest_bridge_sdks(_tracing: &Tracing) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::write_str(
-        ctx.cwd_path_join("Cargo.toml"),
-        indoc! {r#"
-            [workspace]
-            members = ["consumer"]
-            resolver = "2"
-
-            [workspace.dependencies]
-            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
-        "#},
-    )
-    .unwrap();
-    fs::create_dir_all(ctx.cwd_path_join("consumer/src")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("consumer/Cargo.toml"),
-        indoc! {r#"
-            [package]
-            name = "consumer"
-            version = "0.1.0"
-            edition = "2021"
-
-            [dependencies]
-            bar = {
-                workspace = true,
-            }
-        "#},
-    )
-    .unwrap();
-    fs::write_str(ctx.cwd_path_join("consumer/src/lib.rs"), "").unwrap();
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: rust-workspace-multiline-dependency-use
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                dir: consumer
-                dependencies:
-                  agents:
-                    - app:producer/BarAgent
-                buildMergeMode: replace
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: cargo metadata --format-version=1
-                    sources:
-                      - Cargo.toml
-                      - src
-                    targets:
-                      - consumer.wasm
-                  - command: cp -p {producer_wasm} consumer.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-}
-
-#[test]
-async fn rust_workspace_dependency_name_prefix_does_not_make_guest_bridge_consumer(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer/producer-final.wasm");
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let producer_final_wasm_hash =
-        extracted_component_metadata_path_hash(&ctx, "app:producer", &producer_final_wasm);
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::write_str(
-        ctx.cwd_path_join("Cargo.toml"),
-        indoc! {r#"
-            [workspace]
-            members = ["producer"]
-            resolver = "2"
-
-            [workspace.dependencies]
-            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
-            barista = "0.0.1"
-        "#},
-    )
-    .unwrap();
-    fs::create_dir_all(ctx.cwd_path_join("producer/src")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("producer/Cargo.toml"),
-        indoc! {r#"
-            [package]
-            name = "producer"
-            version = "0.1.0"
-            edition = "2021"
-
-            [dependencies]
-            barista = { workspace = true }
-        "#},
-    )
-    .unwrap();
-    fs::write_str(ctx.cwd_path_join("producer/src/lib.rs"), "").unwrap();
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: rust-workspace-dependency-prefix
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                dir: producer
-                templates: rust
-                buildMergeMode: replace
-                componentWasm: producer-final.wasm
-                outputWasm: producer-final.wasm
-                build:
-                  - command: cp -p {producer_wasm} producer-final.wasm
-                  - command: touch ../golem-temp/extracted-component-metadata/app:producer-{producer_final_wasm_hash}.json
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge/rust-guest
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
 }
 
 #[test]
@@ -6989,243 +6005,212 @@ async fn rust_build_that_does_not_use_guest_bridge_can_generate_own_guest_bridge
 }
 
 #[test]
-async fn rust_dev_dependency_on_guest_bridge_does_not_make_build_a_guest_bridge_consumer(
+async fn guest_bridge_output_dir_overlapping_other_bridge_output_dir_is_rejected_before_generation(
     _tracing: &Tracing,
 ) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::write_str(
-        ctx.cwd_path_join("Cargo.toml"),
-        indoc! {r#"
-            [package]
-            name = "producer"
-            version = "0.1.0"
-            edition = "2021"
-
-            [dev-dependencies]
-            bar-agent-guest-client = { path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
-        "#},
-    )
-    .unwrap();
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: rust-dev-dependency-is-not-build-input
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                templates: rust
-                buildMergeMode: replace
-                componentWasm: producer-final.wasm
-                outputWasm: producer-final.wasm
-                build:
-                  - command: cp -p {producer_wasm} producer-final.wasm
-                  - command: touch -t 200001010000 producer-final.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(outputs.success_or_dump());
-}
-
-#[test]
-async fn guest_and_external_bridge_output_dir_overlap_is_rejected(_tracing: &Tracing) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: overlapping-bridge-output-dirs
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-            bridge:
-              rust:
-                external:
-                  agents: BarAgent
-                  outputDir: bridge
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge/bar-agent-client
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
-    assert!(!outputs.success_or_dump());
-    assert!(
-        !ctx.cwd_path_join("bridge/bar-agent-client/bar-agent-guest-client/Cargo.toml")
-            .exists()
-    );
-}
-
-#[test]
-async fn guest_bridge_output_dir_overlap_with_default_external_dir_is_rejected_before_generation(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-    let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-    )
-    .unwrap();
-    let producer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &producer_agent_types,
-    );
-
-    let consumer_final_wasm_hash =
-        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
-    let consumer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "FooAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    let consumer_extracted_component_metadata = format!(
-        "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
-    );
-    write_extracted_agent_types(
-        ctx.cwd_path_join(&consumer_extracted_component_metadata),
-        &consumer_agent_types,
-    )
-    .unwrap();
-    for component_name in ["app:producer", "app:consumer"] {
-        seed_extraction_marker(&ctx, component_name);
+    struct Case {
+        name: &'static str,
+        external: Option<(&'static str, Option<&'static str>)>,
+        repl: bool,
+        guest_output_dir: &'static str,
+        consumer_is_built: bool,
+        expected_error: &'static str,
     }
+    const EXTERNAL_BAR_AGENT_OVERLAP: &str =
+        "Bridge SDK target output directories overlap: Rust for BarAgent resolves to";
+    const EXTERNAL_FOO_AGENT_OVERLAP: &str =
+        "Bridge SDK target output directories overlap: Rust for FooAgent resolves to";
+    const REPL_OVERLAP: &str = "for BarAgent may overlap unresolved REPL bridge target at";
 
-    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
+    let cases = [
+        Case {
+            name: "external bridge output dir",
+            external: Some(("BarAgent", Some("bridge"))),
+            repl: false,
+            guest_output_dir: "bridge/bar-agent-client",
+            consumer_is_built: false,
+            expected_error: EXTERNAL_BAR_AGENT_OVERLAP,
+        },
+        Case {
+            name: "default external bridge output dir",
+            external: Some(("BarAgent", None)),
+            repl: false,
+            guest_output_dir: "golem-temp/bridge-sdk/rust/bar-agent-client",
+            consumer_is_built: false,
+            expected_error: EXTERNAL_BAR_AGENT_OVERLAP,
+        },
+        Case {
+            name: "REPL bridge output dir",
+            external: None,
+            repl: true,
+            guest_output_dir: "golem-temp/repl/rust/bridge-sdk/bar-agent-client",
+            consumer_is_built: false,
+            expected_error: REPL_OVERLAP,
+        },
+        Case {
+            name: "REPL bridge output dir of a different agent",
+            external: None,
+            repl: true,
+            guest_output_dir: "golem-temp/repl/rust/bridge-sdk/foo-agent-client",
+            consumer_is_built: false,
+            expected_error: REPL_OVERLAP,
+        },
+        Case {
+            name: "REPL bridge output dir of a different build-produced agent",
+            external: None,
+            repl: true,
+            guest_output_dir: "golem-temp/repl/rust/bridge-sdk/foo-agent-client",
+            consumer_is_built: true,
+            expected_error: REPL_OVERLAP,
+        },
+        Case {
+            name: "external bridge output dir of a Rust consumer",
+            external: Some((
+                "app:consumer",
+                Some("bridge/bar-agent-client/bar-agent-guest-client"),
+            )),
+            repl: false,
+            guest_output_dir: "bridge/bar-agent-client",
+            consumer_is_built: false,
+            expected_error: EXTERNAL_FOO_AGENT_OVERLAP,
+        },
+        Case {
+            name: "external bridge output dir of a build-produced Rust consumer",
+            external: Some((
+                "app:consumer",
+                Some("bridge/bar-agent-client/bar-agent-guest-client"),
+            )),
+            repl: false,
+            guest_output_dir: "bridge/bar-agent-client",
+            consumer_is_built: true,
+            expected_error: EXTERNAL_FOO_AGENT_OVERLAP,
+        },
+    ];
 
-            app: default-external-overlaps-guest-output-dir
+    for case in cases {
+        let ctx = TestContext::new();
+        let producer_wasm = placeholder_component_wasm(&ctx);
+        let producer_wasm = producer_wasm.to_str().unwrap();
+        let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
+        let consumer_final_wasm = ctx.cwd_path_join("consumer-final.wasm");
 
-            environments:
-              local:
-                server: local
+        copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
 
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                dir: consumer
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/bar-agent-client/bar-agent-guest-client/Cargo.toml
-                  - command: cp -p {producer_wasm} consumer-final.wasm
-                  - command: touch ../{consumer_extracted_component_metadata}
-
-            bridge:
-              rust:
-                external:
-                  agents: BarAgent
-                internal:
-                  agents: BarAgent
-                  outputDir: golem-temp/bridge-sdk/rust/bar-agent-client
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(!outputs.success_or_dump());
-    assert!(
-        !ctx.cwd_path_join(
-            "golem-temp/bridge-sdk/rust/bar-agent-client/bar-agent-guest-client/Cargo.toml"
+        let extracted_component_metadata_dir =
+            ctx.cwd_path_join("golem-temp/extracted-component-metadata");
+        fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
+        let extracted_agent_types = fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
         )
-        .exists()
-    );
+        .unwrap();
+        let agent_types = |type_name: &str| {
+            serde_json::to_string(
+                &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|agent_type| agent_type["type_name"] == type_name)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+        };
+        seed_extracted_metadata(
+            &ctx,
+            "app:producer",
+            &producer_final_wasm,
+            &agent_types("BarAgent"),
+        );
+
+        let consumer_final_wasm_hash =
+            extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
+        let consumer_extracted_component_metadata = format!(
+            "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
+        );
+        let write_consumer_metadata = if case.consumer_is_built {
+            write_extracted_agent_types(
+                ctx.cwd_path_join("consumer-agent-types.json"),
+                agent_types("FooAgent"),
+            )
+            .unwrap();
+            format!("cp consumer-agent-types.json {consumer_extracted_component_metadata}")
+        } else {
+            copy_placeholder_wasm(producer_wasm, &consumer_final_wasm);
+            seed_extracted_metadata(
+                &ctx,
+                "app:consumer",
+                &consumer_final_wasm,
+                &agent_types("FooAgent"),
+            );
+            format!("touch {consumer_extracted_component_metadata}")
+        };
+        for component_name in ["app:producer", "app:consumer"] {
+            seed_extraction_marker(&ctx, component_name);
+        }
+
+        let guest_output_dir = case.guest_output_dir;
+        let external = case
+            .external
+            .map(|(agents, output_dir)| {
+                let output_dir = output_dir
+                    .map(|output_dir| format!("\n      outputDir: {output_dir}"))
+                    .unwrap_or_default();
+                format!("\n    external:\n      agents: {agents}{output_dir}")
+            })
+            .unwrap_or_default();
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            formatdoc! {r#"
+                manifestVersion: {MANIFEST_VERSION}
+
+                app: overlapping-bridge-output-dirs
+
+                environments:
+                  local:
+                    server: local
+
+                components:
+                  app:producer:
+                    componentWasm: {producer_wasm}
+                    outputWasm: producer-final.wasm
+
+                  app:consumer:
+                    templates: rust
+                    buildMergeMode: replace
+                    componentWasm: consumer-final.wasm
+                    outputWasm: consumer-final.wasm
+                    build:
+                      - command: cp -p {producer_wasm} consumer-final.wasm
+                      - command: {write_consumer_metadata}
+
+                bridge:
+                  rust:
+                    internal:
+                      agents: BarAgent
+                      outputDir: {guest_output_dir}{external}
+            "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+        )
+        .unwrap();
+
+        let mut args = vec![cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"];
+        if case.repl {
+            args.extend(["--repl-bridge-sdk-target", "rust"]);
+        }
+        let outputs = ctx.cli(args).await;
+        assert!(!outputs.success_or_dump(), "{}", case.name);
+        assert!(
+            outputs.stdout_contains(case.expected_error),
+            "{}",
+            case.name
+        );
+        assert!(
+            !ctx.cwd_path_join(format!(
+                "{guest_output_dir}/bar-agent-guest-client/Cargo.toml"
+            ))
+            .exists(),
+            "{}",
+            case.name
+        );
+    }
 }
 
 #[test]
@@ -7466,154 +6451,102 @@ async fn component_matcher_same_output_dir_base_with_guest_consumer_generates_si
 }
 
 #[test]
-async fn post_build_guest_bridge_scan_rejects_duplicate_agent_output_dir(_tracing: &Tracing) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-    let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
+async fn post_build_guest_bridge_scan_rejects_duplicate_agent(_tracing: &Tracing) {
+    for consumer_metadata_is_built in [false, true] {
+        let ctx = TestContext::new();
+        let producer_wasm = placeholder_component_wasm(&ctx);
+        let producer_wasm = producer_wasm.to_str().unwrap();
+        let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
+        let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
 
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
+        copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
 
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-    )
-    .unwrap();
-    let bar_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(&ctx, "app:producer", &producer_final_wasm, &bar_agent_types);
+        let extracted_component_metadata_dir =
+            ctx.cwd_path_join("golem-temp/extracted-component-metadata");
+        fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
+        let extracted_agent_types = fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap();
+        let bar_agent_types = serde_json::to_string(
+            &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
+                .unwrap()
+                .into_iter()
+                .filter(|agent_type| agent_type["type_name"] == "BarAgent")
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        seed_extracted_metadata(&ctx, "app:producer", &producer_final_wasm, &bar_agent_types);
 
-    let consumer_final_wasm_hash =
-        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
-    let consumer_extracted_component_metadata = format!(
-        "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
-    );
-    write_extracted_agent_types(
-        ctx.cwd_path_join(&consumer_extracted_component_metadata),
-        &bar_agent_types,
-    )
-    .unwrap();
-    for component_name in ["app:producer", "app:consumer"] {
-        seed_extraction_marker(&ctx, component_name);
+        let consumer_final_wasm_hash =
+            extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
+        let consumer_extracted_component_metadata = format!(
+            "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
+        );
+        let write_consumer_metadata = if consumer_metadata_is_built {
+            write_extracted_agent_types(
+                ctx.cwd_path_join("consumer-agent-types.json"),
+                &bar_agent_types,
+            )
+            .unwrap();
+            format!("cp ../consumer-agent-types.json ../{consumer_extracted_component_metadata}")
+        } else {
+            write_extracted_agent_types(
+                ctx.cwd_path_join(&consumer_extracted_component_metadata),
+                &bar_agent_types,
+            )
+            .unwrap();
+            format!("touch ../{consumer_extracted_component_metadata}")
+        };
+        for component_name in ["app:producer", "app:consumer"] {
+            seed_extraction_marker(&ctx, component_name);
+        }
+
+        fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            formatdoc! {r#"
+                manifestVersion: {MANIFEST_VERSION}
+
+                app: duplicate-post-build-guest-agent
+                environments:
+                  local:
+                    server: local
+
+                components:
+                  app:producer:
+                    componentWasm: {producer_wasm}
+                    outputWasm: producer-final.wasm
+
+                  app:consumer:
+                    dir: consumer
+                    componentWasm: consumer.wasm
+                    outputWasm: consumer-final.wasm
+                    build:
+                      - command: cp -p {producer_wasm} consumer-final.wasm
+                      - command: {write_consumer_metadata}
+
+                bridge:
+                  rust:
+                    internal:
+                      agents: BarAgent
+                      outputDir: bridge
+            "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+        )
+        .unwrap();
+
+        let outputs = ctx
+            .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+            .await;
+        assert!(!outputs.success_or_dump());
+        assert!(
+            outputs.stdout_contains(
+                "BarAgent is defined by multiple components: app:consumer, app:producer"
+            ),
+            "consumer metadata is built: {consumer_metadata_is_built}"
+        );
     }
-
-    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: duplicate-post-build-guest-agent
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                dir: consumer
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: test -f ../bridge/bar-agent-guest-client/Cargo.toml
-                  - command: cp -p {producer_wasm} consumer-final.wasm
-                  - command: touch ../{consumer_extracted_component_metadata}
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(!outputs.success_or_dump());
-}
-
-#[test]
-async fn post_build_guest_bridge_scan_rejects_newly_built_duplicate_agent_output_dir(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-    )
-    .unwrap();
-    let bar_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(&ctx, "app:producer", &producer_final_wasm, &bar_agent_types);
-    seed_extraction_marker(&ctx, "app:producer");
-
-    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: newly-built-duplicate-post-build-guest-agent
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                dir: consumer
-                componentWasm: consumer.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: test -f ../bridge/bar-agent-guest-client/Cargo.toml
-                  - command: cp -p {producer_wasm} consumer-final.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(!outputs.success_or_dump());
 }
 
 #[test]
@@ -7767,6 +6700,9 @@ async fn external_bridge_missing_agent_matcher_is_rejected_with_guest_build_plan
         .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
         .await;
     assert!(!outputs.success_or_dump());
+    assert!(outputs.stdout_contains(
+        "The following agent matchers were not found during Rust bridge SDK generation: MissingAgent"
+    ));
 }
 
 #[test]
@@ -7825,504 +6761,22 @@ async fn unselected_guest_component_matcher_does_not_create_selected_build_cycle
 }
 
 #[test]
-async fn guest_and_repl_bridge_output_dir_overlap_is_rejected_before_generation(
-    _tracing: &Tracing,
-) {
+async fn rust_guest_bridge_unknown_agent_matcher_is_rejected(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
     let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-
     copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-    )
-    .unwrap();
-    let producer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
     seed_extracted_metadata(
         &ctx,
         "app:producer",
         &producer_final_wasm,
-        &producer_agent_types,
+        &fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap(),
     );
     seed_extraction_marker(&ctx, "app:producer");
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: overlapping-repl-bridge-output-dirs
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: golem-temp/repl/rust/bridge-sdk/bar-agent-client
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([
-            cmd::BUILD,
-            flag::STEP,
-            "gen-bridge",
-            "--repl-bridge-sdk-target",
-            "rust",
-        ])
-        .await;
-    assert!(!outputs.success_or_dump());
-    assert!(
-        !ctx.cwd_path_join(
-            "golem-temp/repl/rust/bridge-sdk/bar-agent-client/bar-agent-guest-client/Cargo.toml"
-        )
-        .exists()
-    );
-}
-
-#[test]
-async fn guest_and_repl_bridge_output_dir_overlap_with_different_agent_is_rejected_before_generation(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-    let repl_source_final_wasm = ctx.cwd_path_join("repl-source-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-    copy_placeholder_wasm(producer_wasm, &repl_source_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-    )
-    .unwrap();
-    let producer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &producer_agent_types,
-    );
-    let repl_source_final_wasm_hash =
-        extracted_component_metadata_path_hash(&ctx, "app:repl-source", &repl_source_final_wasm);
-    let repl_source_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "FooAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    write_extracted_agent_types(
-        extracted_component_metadata_dir.join(format!(
-            "app:repl-source-{repl_source_final_wasm_hash}.json"
-        )),
-        &repl_source_agent_types,
-    )
-    .unwrap();
-    for component_name in ["app:producer", "app:repl-source"] {
-        seed_extraction_marker(&ctx, component_name);
-    }
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: overlapping-repl-bridge-output-dirs-different-agent
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:repl-source:
-                componentWasm: {producer_wasm}
-                outputWasm: repl-source-final.wasm
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: golem-temp/repl/rust/bridge-sdk/foo-agent-client
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([
-            cmd::BUILD,
-            flag::STEP,
-            "gen-bridge",
-            "--repl-bridge-sdk-target",
-            "rust",
-        ])
-        .await;
-    assert!(!outputs.success_or_dump());
-    assert!(
-        !ctx.cwd_path_join(
-            "golem-temp/repl/rust/bridge-sdk/foo-agent-client/bar-agent-guest-client/Cargo.toml"
-        )
-        .exists()
-    );
-}
-
-#[test]
-async fn guest_and_build_produced_repl_bridge_output_dir_overlap_with_different_agent_is_rejected_before_generation(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-    let consumer_final_wasm = ctx.cwd_path_join("consumer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-    )
-    .unwrap();
-    let producer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &producer_agent_types,
-    );
-    let consumer_final_wasm_hash =
-        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
-    let consumer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "FooAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    let consumer_extracted_component_metadata = format!(
-        "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
-    );
-    write_extracted_agent_types(
-        ctx.cwd_path_join(&consumer_extracted_component_metadata),
-        &consumer_agent_types,
-    )
-    .unwrap();
-    for component_name in ["app:producer", "app:consumer"] {
-        seed_extraction_marker(&ctx, component_name);
-    }
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: overlapping-build-produced-repl-bridge-output-dirs-different-agent
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                buildMergeMode: replace
-                componentWasm: consumer-final.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: test -f golem-temp/repl/rust/bridge-sdk/foo-agent-client/bar-agent-guest-client/Cargo.toml
-                  - command: cp -p {producer_wasm} consumer-final.wasm
-                  - command: touch {consumer_extracted_component_metadata}
-
-            bridge:
-              rust:
-                internal:
-                  agents: BarAgent
-                  outputDir: golem-temp/repl/rust/bridge-sdk/foo-agent-client
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([
-            cmd::BUILD,
-            flag::STEP,
-            "build",
-            flag::STEP,
-            "gen-bridge",
-            "--repl-bridge-sdk-target",
-            "rust",
-        ])
-        .await;
-    assert!(!outputs.success_or_dump());
-    assert!(
-        !ctx.cwd_path_join(
-            "golem-temp/repl/rust/bridge-sdk/foo-agent-client/bar-agent-guest-client/Cargo.toml"
-        )
-        .exists()
-    );
-}
-
-#[test]
-async fn guest_and_rust_consumer_external_bridge_output_dir_overlap_is_rejected_before_generation(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-    let consumer_final_wasm = ctx.cwd_path_join("consumer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-    copy_placeholder_wasm(producer_wasm, &consumer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-    )
-    .unwrap();
-    let producer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &producer_agent_types,
-    );
-    let consumer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "FooAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:consumer",
-        &consumer_final_wasm,
-        &consumer_agent_types,
-    );
-    seed_extraction_marker(&ctx, "app:producer");
-    seed_extraction_marker(&ctx, "app:consumer");
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: overlapping-bridge-output-dirs-rust-consumer
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                buildMergeMode: replace
-                componentWasm: consumer-final.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: test -f bridge/bar-agent-client/bar-agent-guest-client/Cargo.toml
-
-            bridge:
-              rust:
-                external:
-                  agents: app:consumer
-                  outputDir: bridge/bar-agent-client/bar-agent-guest-client
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge/bar-agent-client
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(!outputs.success_or_dump());
-    assert!(
-        !ctx.cwd_path_join("bridge/bar-agent-client/bar-agent-guest-client/Cargo.toml")
-            .exists()
-    );
-}
-
-#[test]
-async fn guest_and_build_produced_external_bridge_output_dir_overlap_is_rejected_before_generation(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    let producer_wasm = producer_wasm.to_str().unwrap();
-    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
-    let consumer_final_wasm = ctx.cwd_path_join("consumer-final.wasm");
-
-    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
-
-    let extracted_component_metadata_dir =
-        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
-    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    let extracted_agent_types = fs::read_to_string(
-        crate::crate_path()
-            .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-    )
-    .unwrap();
-    let producer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "BarAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    seed_extracted_metadata(
-        &ctx,
-        "app:producer",
-        &producer_final_wasm,
-        &producer_agent_types,
-    );
-    let consumer_final_wasm_hash =
-        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
-    let consumer_agent_types = serde_json::to_string(
-        &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
-            .unwrap()
-            .into_iter()
-            .filter(|agent_type| agent_type["type_name"] == "FooAgent")
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    let consumer_extracted_component_metadata = format!(
-        "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
-    );
-    write_extracted_agent_types(
-        ctx.cwd_path_join(&consumer_extracted_component_metadata),
-        &consumer_agent_types,
-    )
-    .unwrap();
-    for component_name in ["app:producer", "app:consumer"] {
-        seed_extraction_marker(&ctx, component_name);
-    }
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: overlapping-build-produced-bridge-output-dirs
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                componentWasm: {producer_wasm}
-                outputWasm: producer-final.wasm
-
-              app:consumer:
-                templates: rust
-                buildMergeMode: replace
-                componentWasm: consumer-final.wasm
-                outputWasm: consumer-final.wasm
-                build:
-                  - command: test -f bridge/bar-agent-client/bar-agent-guest-client/Cargo.toml
-                  - command: cp -p {producer_wasm} consumer-final.wasm
-                  - command: touch {consumer_extracted_component_metadata}
-
-            bridge:
-              rust:
-                external:
-                  agents: app:consumer
-                  outputDir: bridge/bar-agent-client/bar-agent-guest-client
-                internal:
-                  agents: BarAgent
-                  outputDir: bridge/bar-agent-client
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx
-        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
-        .await;
-    assert!(!outputs.success_or_dump());
-    assert!(
-        !ctx.cwd_path_join("bridge/bar-agent-client/bar-agent-guest-client/Cargo.toml")
-            .exists()
-    );
-}
-
-#[test]
-async fn rust_guest_bridge_matcher_without_non_rust_component_is_rejected(_tracing: &Tracing) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    copy_placeholder_wasm(producer_wasm, ctx.cwd_path_join("producer-final.wasm"));
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
@@ -8354,46 +6808,9 @@ async fn rust_guest_bridge_matcher_without_non_rust_component_is_rejected(_traci
 
     let outputs = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
     assert!(!outputs.success_or_dump());
-}
-
-#[test]
-async fn rust_guest_bridge_component_matcher_without_non_rust_component_is_rejected(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let producer_wasm = placeholder_component_wasm(&ctx);
-    copy_placeholder_wasm(producer_wasm, ctx.cwd_path_join("producer-final.wasm"));
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: rust-guest-unmatched-component
-
-            environments:
-              local:
-                server: local
-
-            components:
-              app:producer:
-                templates: rust
-                buildMergeMode: replace
-                componentWasm: producer.wasm
-                outputWasm: producer-final.wasm
-                build:
-                  - command: "true"
-
-            bridge:
-              rust:
-                internal:
-                  agents: app:producer
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    let outputs = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
-    assert!(!outputs.success_or_dump());
+    assert!(outputs.stdout_contains(
+        "The following agent matchers were not found during Rust guest bridge SDK generation: MissingAgent"
+    ));
 }
 
 #[test]
