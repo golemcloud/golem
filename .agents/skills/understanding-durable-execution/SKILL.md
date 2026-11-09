@@ -1744,6 +1744,40 @@ failure. External peers must deduplicate ambiguous writes. Preview 2 HTTP is not
 Rust uses `golem_rust::http`.
 Tests: `tests/http/concurrent_recovery.rs`.
 
+The outgoing request's `body-transmission` result is also a guest input. Its Store task uses
+deferred completion and the transmission `FutureReader` retains the delivery token until its
+terminal observer confirms consumption or discard. Live and replay both use the fresh-block
+delivery gate; replay waits for the recorded marker before resolving the future. Completing the
+host channel without this boundary can wake the POST continuation early and exchange the import
+ordinals of concurrent response-body consumers. Response trailers share the same
+`HttpFutureDelivery` observer state. Transmission readers returned by request and response
+constructors retain weak identity witnesses in the resident `HttpTransmissionRegistry`.
+Passing one back to either `consume-body` changes its destination to a host consumer before
+Wasmtime pipes it. Host consumption has no guest terminal observer: its markerless recorded
+result settles immediately on replay, without waiting for the recipient's later history.
+Transfer notification also interrupts an already pending guest-delivery wait. Actual recorded
+guest delivery or discard markers cannot be bypassed by transfer.
+
+A request or constructed response consumed with host-created input records its recipient
+transmission after demand and input resolution; guest-written input and resource drop retain
+deterministic passthrough. The recipient parks on its input before opening a durable call.
+Its source may still be an unconsumed resource retained by the guest, even after the recipient
+is consumed. Cancelling and dropping or retaining the recipient reader must not prevent the
+invocation from finishing so a later invocation can release that source. An underlying outgoing
+transmission keeps its own network I/O active; the recipient does not duplicate that ownership.
+Both constructors keep pending wiring in the resident registry until the resource
+is consumed or dropped. Polling and cancelling a response's transmission read cannot start
+active tail work while the unconsumed response remains guest-owned, even when the reader also
+survives into a later invocation. The consume boundary captures the current custom invocation's
+observational owner before spawning; spawned Store tasks do not inherit the guest-task context.
+Transfers can chain: each host-consumed source settles internally and the final guest-facing
+recipient owns the observation marker. An incoming client response has no constructor
+transmission future; its existing body/trailers path owns any guest observation. The shared
+recorder uses the `request::body-transmission` call contract for constructor transmission
+results. The executor invokes Golem exports, not a WASI HTTP handler. A future handler-to-network
+entry point must activate pending response wiring at its ownership-transfer boundary, like
+the existing request-send path, rather than starting recording in the constructor.
+
 Host completion time and guest observation time are different facts. Only the second is a guest
 input, and only the second must recur exactly; the first may vary between runs.
 

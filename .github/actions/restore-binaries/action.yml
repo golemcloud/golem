@@ -22,7 +22,7 @@ runs:
         file: golem-binaries.tar.zst
     - name: Install cargo-test-r
       shell: bash
-      run: cargo binstall --force --locked cargo-test-r@2.2.5
+      run: cargo binstall --force --locked cargo-test-r@2.2.10
     - name: Apply binary archive
       shell: bash
       run: cargo-test-r reuse-nextest-archive --archive-file tmp/native-binaries/golem-binaries.tar.zst
