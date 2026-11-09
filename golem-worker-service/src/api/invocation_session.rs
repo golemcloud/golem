@@ -2689,16 +2689,6 @@ fn translate_stream_end(
             "stream terminal outcome is invalid for client direction",
         ));
     }
-    if matches!(
-        &outcome,
-        PublicStreamOutcome::Failed {
-            error: golem_common::model::invocation_session_public::PublicStreamError::Cancelled
-        }
-    ) {
-        return Err(AdapterError::protocol(
-            "invocation cancellation requires a recorded invocation cancellation",
-        ));
-    }
     let terminal: golem_common::model::durable_stream::StreamTerminal = outcome
         .try_into()
         .map_err(|_| AdapterError::protocol("invalid stream terminal outcome"))?;
@@ -3849,6 +3839,7 @@ mod tests {
     async fn input_failures_use_sequential_terminal_acknowledgements() {
         use golem_common::model::durable_stream::{StreamError, StreamTerminal};
         for terminal in [
+            StreamTerminal::Failed(StreamError::Cancelled),
             StreamTerminal::Failed(StreamError::Trapped("input trap".into())),
             StreamTerminal::Failed(StreamError::Abandoned),
             StreamTerminal::Failed(StreamError::Interrupted("input interrupted".into())),
@@ -3911,17 +3902,10 @@ mod tests {
 
     #[test]
     async fn invalid_client_terminal_roles_and_unknown_outcomes_are_rejected() {
-        use golem_common::model::invocation_session_public::PublicStreamError;
         for (direction, outcome) in [
             (
                 PublicStreamDirection::Input,
                 PublicStreamOutcome::ConsumerCancelled { details: None },
-            ),
-            (
-                PublicStreamDirection::Input,
-                PublicStreamOutcome::Failed {
-                    error: PublicStreamError::Cancelled,
-                },
             ),
             (PublicStreamDirection::Output, PublicStreamOutcome::Finished),
         ] {

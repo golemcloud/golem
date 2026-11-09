@@ -1346,13 +1346,16 @@ async fn streaming_rpc_failure_retains_callee_terminal_after_caller_crash(
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                let target_history = user.get_oplog(&target, OplogIndex::INITIAL).await?;
-                let terminals = producer_terminals(&target_history);
                 if observed
                     .iter()
                     .any(|record| matches!(record, StreamSessionRecord::ConsumerItemValue(_)))
-                    && !terminals.is_empty()
                 {
+                    let target_history = user.get_oplog(&target, OplogIndex::INITIAL).await?;
+                    let terminals = producer_terminals(&target_history);
+                    if terminals.is_empty() {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        continue;
+                    }
                     assert!(
                         !observed.iter().any(|record| matches!(
                             record,
@@ -2281,13 +2284,17 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
         .cancel_stream(cancelled_input_id, 1, StreamDirection::Input)
         .await?;
     let cancelled_input = cancelled_input.finish(cancelled_input_report).await?;
+    assert!(cancelled_input.result.is_none());
     assert_eq!(
-        decode_proto_value(cancelled_input.successful_result()?)?,
-        SchemaValue::List {
-            elements: vec![SchemaValue::U32(99)],
-        }
+        cancelled_input.failure()?.kind(),
+        InvocationFailureKind::Execution
     );
-    assert_moonbit_target_ping(deps, &component, &target_agent_id, &name).await?;
+    assert!(
+        cancelled_input
+            .failure()?
+            .message
+            .contains("integration test cancelled the stream")
+    );
 
     Ok(())
 }

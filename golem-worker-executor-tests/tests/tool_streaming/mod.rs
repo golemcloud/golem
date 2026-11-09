@@ -23845,15 +23845,12 @@ async fn external_tool_stdout_attachment_limit_is_replayed_after_a_restart(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let mut matching = Vec::new();
     for entry in &oplog {
-        match &entry.entry {
-            PublicOplogEntry::StreamTerminal(params) => {
-                let record = StreamTerminalRecord::from_value(params.record.value())
-                    .map_err(anyhow::Error::msg)?;
-                if record.stream_id == durable_stdout_id {
-                    matching.push(record);
-                }
+        if let PublicOplogEntry::StreamTerminal(params) = &entry.entry {
+            let record = StreamTerminalRecord::from_value(params.record.value())
+                .map_err(anyhow::Error::msg)?;
+            if record.stream_id == durable_stdout_id {
+                matching.push(record);
             }
-            _ => {}
         }
     }
     assert_eq!(

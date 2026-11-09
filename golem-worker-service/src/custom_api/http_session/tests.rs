@@ -316,7 +316,6 @@ fn producer_cancel(sequence: u64) -> InvocationResponse {
         durable_stream_id: Some(uuid(109)),
         durable_offset: offset(sequence),
         epoch: 1,
-        ..Default::default()
     }))
 }
 
@@ -1841,7 +1840,6 @@ async fn lifecycle_reattach_deduplicates_replayed_public_output() {
             durable_stream_id: Some(uuid(101)),
             durable_offset: offset(0),
             epoch: 8,
-            ..Default::default()
         })),
     )
     .await;

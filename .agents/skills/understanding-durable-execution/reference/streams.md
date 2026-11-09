@@ -31,6 +31,13 @@ principal, input bindings, and enough topology evidence for `recover_durable_str
 to finish attaching before guest reconstruction. An arriving retry cannot substitute its own
 invocation in that crash window.
 
+Cancelling an asynchronous streaming RPC also terminalizes its open caller-owned
+`AgentHostedInput` streams, including cancellation before target acceptance. The producer checks
+both handle ownership and the RPC session key; forwarded foreign inputs are not cancelled.
+An existing terminal is preserved. This lets input producer tasks settle even when the remote
+invocation was never accepted, so best-effort remote cancellation cannot leave local tail work
+waiting on an orphaned input (`durable_host/rpc/future.rs`).
+
 An exact-prefix fork retains the remote invocation key and the original logical streaming origin.
 The original caller and fork therefore join one target invocation, keeping the first accepted
 input bindings. Transport slot IDs, schemas, execution configuration and authority must still

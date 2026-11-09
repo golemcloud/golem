@@ -1351,8 +1351,9 @@ async fn test_streaming_invocation_cli_end_to_end() {
             "increment_scalar",
         ])
         .await;
-    assert!(after_interrupt.success_or_dump());
-    assert!(after_interrupt.stdout_contains("1"));
+    assert!(!after_interrupt.success());
+    assert!(after_interrupt.stderr_contains("INTERNAL_PREVIOUS_INVOCATION_FAILED"));
+    assert!(after_interrupt.stderr_contains("invocation interrupted"));
 }
 
 /// The Go external bridge against the same streaming agent: inputs, outputs,

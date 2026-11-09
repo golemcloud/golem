@@ -2513,7 +2513,9 @@ where
                         channel: binding.as_ref().unwrap().0,
                         direction: PublicStreamDirection::Input,
                         sequence: DecimalU64(buffer.next_sequence()?),
-                        outcome: PublicStreamOutcome::Finished,
+                        outcome: PublicStreamOutcome::Failed {
+                            error: PublicStreamError::Cancelled,
+                        },
                         version: INVOCATION_SESSION_VERSION,
                     }).await
                 }, if stop_requested && !stop_done && result.is_none() && !finished && pending_recovery.is_none() && binding.is_some() => {
@@ -5483,7 +5485,9 @@ mod tests {
             PublicClientMessage::StreamEnd {
                 channel: 11,
                 direction: PublicStreamDirection::Input,
-                outcome: PublicStreamOutcome::Finished,
+                outcome: PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Cancelled,
+                },
                 sequence: DecimalU64(0),
                 ..
             }
@@ -5679,7 +5683,9 @@ mod tests {
                 PublicClientMessage::StreamEnd {
                     channel: 11,
                     direction: PublicStreamDirection::Input,
-                    outcome: PublicStreamOutcome::Finished,
+                    outcome: PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Cancelled,
+                    },
                     ..
                 }
             ));
@@ -5962,7 +5968,9 @@ mod tests {
                 PublicClientMessage::StreamEnd {
                     channel: 11,
                     direction: PublicStreamDirection::Input,
-                    outcome: PublicStreamOutcome::Finished,
+                    outcome: PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Cancelled,
+                    },
                     ..
                 }
             ));
@@ -5978,7 +5986,9 @@ mod tests {
                     PublicClientMessage::StreamEnd {
                         channel: 21,
                         direction: PublicStreamDirection::Input,
-                        outcome: PublicStreamOutcome::Finished,
+                        outcome: PublicStreamOutcome::Failed {
+                            error: PublicStreamError::Cancelled,
+                        },
                         ..
                     }
                 ));

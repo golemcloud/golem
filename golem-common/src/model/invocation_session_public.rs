@@ -1226,19 +1226,10 @@ fn validate_server_message(message: &PublicServerMessage) -> Result<(), PublicPr
         PublicServerMessage::StreamEnd {
             channel,
             cursor_token,
-            direction,
             outcome,
             ..
         } => {
             validate_channel(*channel)?;
-            if *direction == PublicStreamDirection::Input
-                && !matches!(outcome, PublicStreamOutcome::ConsumerCancelled { .. })
-            {
-                return Err(PublicProtocolError::new(
-                    PublicErrorCode::ProtocolError,
-                    "server input stream ends must be consumer cancellations",
-                ));
-            }
             validate_public_terminal(outcome)?;
             if let Some(cursor) = cursor_token {
                 validate_token_text(cursor)?;
@@ -1705,10 +1696,11 @@ mod tests {
 
     #[test]
     fn public_message_enums_are_directional() {
-        let client = br#"{"channel":1,"direction":"input","outcome":{"kind":"finished"},"sequence":"0","type":"stream-end","version":1}"#;
+        let client =
+            br#"{"channel":1,"value":17,"sequence":"0","type":"inputStreamItem","version":1}"#;
         assert!(matches!(
             decode_client_text(client).unwrap(),
-            PublicClientMessage::StreamEnd { .. }
+            PublicClientMessage::InputStreamItem { .. }
         ));
         assert!(decode_server_text(client).is_err());
 
@@ -1743,10 +1735,7 @@ mod tests {
                     decode_client_text(&text).is_ok(),
                     consumer == (direction == "output")
                 );
-                assert_eq!(
-                    decode_server_text(&text).is_ok(),
-                    direction == "output" || consumer
-                );
+                assert!(decode_server_text(&text).is_ok());
             }
         }
         for outcome in [
@@ -1783,13 +1772,27 @@ mod tests {
 
     #[test]
     fn typed_stream_terminal_public_round_trips_use_canonical_schema_values() {
-        use super::PublicStreamOutcome;
+        use super::{
+            DecimalU64, INVOCATION_SESSION_VERSION, PublicStreamDirection, PublicStreamOutcome,
+        };
         use crate::model::durable_stream::StreamTerminal;
         for terminal in terminal_values() {
             let public = PublicStreamOutcome::try_from(terminal.clone()).unwrap();
             let json = serde_json::to_vec(&public).unwrap();
             let decoded: PublicStreamOutcome = serde_json::from_slice(&json).unwrap();
             assert_eq!(StreamTerminal::try_from(decoded).unwrap(), terminal);
+            for direction in [PublicStreamDirection::Input, PublicStreamDirection::Output] {
+                let message = PublicServerMessage::StreamEnd {
+                    channel: 7,
+                    direction,
+                    cursor_token: None,
+                    outcome: public.clone(),
+                    sequence: DecimalU64(13),
+                    version: INVOCATION_SESSION_VERSION,
+                };
+                let json = encode_text(&message).unwrap();
+                assert_eq!(decode_server_text(json.as_bytes()).unwrap(), message);
+            }
         }
         use crate::schema::IntoTypedSchemaValue;
         let mut typed =

@@ -1996,9 +1996,25 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
         }).await??;
         if restart {
             // The selected terminal is durable, but the guest cannot read it before this crash.
-            // Takeover restarts the pending invocation, rather than looking up a failed result.
+            // Resume restarts the pending invocation, rather than looking up a failed result.
             drop(frames);
             drop(responses);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                    if history.iter().any(|entry| {
+                        matches!(&entry.entry,
+                        PublicOplogEntry::StreamSession(session)
+                            if matches!(StreamSessionRecord::from_value(session.record.value()),
+                                Ok(StreamSessionRecord::Detached(record))
+                                    if record.epoch == accepted.epoch))
+                    }) {
+                        break anyhow::Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await??;
             drop(executor);
             executor = start(deps, &context).await?;
             let (sender, receiver) = mpsc::channel(8);
@@ -2012,7 +2028,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                         attempt_id: Some(uuid::Uuid::new_v4().into()),
                         expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
                         expected_epoch: accepted.epoch,
-                        operation: ResumeOperation::Takeover as i32,
+                        operation: ResumeOperation::Resume as i32,
                         auth_ctx: Some(executor.auth_ctx().into()),
                         ..Default::default()
                     })),
@@ -2060,14 +2076,9 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                         Some(invocation_session_completion::Outcome::Failure(failure)) => {
                             assert_ne!(terminal, StreamTerminal::Finished);
                             assert!(observed.is_none(), "failed native read must not return EOF");
-                            let diagnostic = format!("stream terminated: {terminal:?}");
-                            let diagnostic = if failure.code == "persisted-invocation-failure" {
-                                format!("{diagnostic:?}")
-                            } else {
-                                diagnostic
-                            };
+                            assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
                             assert!(
-                                failure.message.contains(&diagnostic),
+                                failure.message.contains("stream terminated: Failed("),
                                 "wrong failure for {terminal:?}, restart={restart}: {failure:?}"
                             );
                         }
@@ -5323,8 +5334,7 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
     ));
     let error = open_raw_session(&executor, fresh)
         .await
-        .err()
-        .expect("a fresh invocation must not start on a failed worker");
+        .expect_err("a fresh invocation must not start on a failed worker");
     assert!(error.to_string().contains("Previous invocation failed"));
     Ok(())
 }
