@@ -57,13 +57,17 @@ pub fn Constructor::connect(
 pub fn Constructor::try_connect(
   self : Constructor,
   config : Array[@common.TypedAgentConfigValue],
-) -> Result[@agentHost.WasmRpc, @agentHost.RpcError] {
-  @agentHost.WasmRpc::create(
-    self.type_name,
-    self.input,
-    self.phantom_id,
-    config,
-  )
+) -> @agentHost.WasmRpc raise @agentHost.RpcError {
+  match
+    @agentHost.WasmRpc::create(
+      self.type_name,
+      self.input,
+      self.phantom_id,
+      config,
+    ) {
+    Ok(raw) => raw
+    Err(error) => raise error
+  }
 }
 
 ///|

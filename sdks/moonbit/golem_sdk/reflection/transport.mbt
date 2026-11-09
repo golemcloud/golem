@@ -25,10 +25,10 @@ fn Transport::create_with_config(
   ) catch {
     error => raise Schema("failed to encode constructor value: \{repr(error)}")
   }
-  match prepared.try_connect(agent_config) {
-    Ok(raw) => { raw, default_scope_card: None, }
-    Err(error) => raise rpc_error(error)
+  let raw = prepared.try_connect(agent_config) catch {
+    error => raise rpc_error(error)
   }
+  { raw, default_scope_card: None, }
 }
 
 ///|

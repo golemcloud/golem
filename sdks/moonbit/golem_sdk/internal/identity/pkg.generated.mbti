@@ -26,7 +26,7 @@ pub fn Constructor::agent_id(Self) -> String raise @common.AgentError
 pub fn Constructor::connect(Self, Array[@common.TypedAgentConfigValue]) -> @host.WasmRpc
 pub fn Constructor::from_value(String, @schema_model.SchemaValue, @schema.Uuid?) -> Self raise @schema_model.SchemaModelError
 pub fn Constructor::from_wire(String, @types.SchemaValueTree, @schema.Uuid?) -> Self
-pub fn Constructor::try_connect(Self, Array[@common.TypedAgentConfigValue]) -> Result[@host.WasmRpc, @host.RpcError]
+pub fn Constructor::try_connect(Self, Array[@common.TypedAgentConfigValue]) -> @host.WasmRpc raise @host.RpcError
 
 pub struct Parsed {
   type_name : String
