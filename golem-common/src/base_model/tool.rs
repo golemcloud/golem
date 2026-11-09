@@ -379,6 +379,22 @@ pub enum ToolSource {
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct RegisteredTool {
+    pub type_id: crate::model::type_id::TypeId,
+    #[serde(flatten)]
+    #[cfg_attr(feature = "full", oai(flatten))]
+    pub registration: ToolRegistration,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::derive_partial_eq_without_eq)]
+pub struct ToolRegistration {
     pub deployment_revision: DeploymentRevision,
     #[serde(default)]
     #[cfg_attr(feature = "full", desert(default))]
@@ -435,7 +451,7 @@ pub struct CompiledToolBinding {
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 pub struct ToolActivationSnapshot {
-    pub registered_tool: RegisteredTool,
+    pub registered_tool: ToolRegistration,
     pub binding: CompiledToolBinding,
     pub filesystem: FilesystemCapability,
     pub middleware_chain: Option<crate::model::tool_middleware::CompiledToolMiddlewareChain>,
@@ -459,7 +475,7 @@ pub enum ToolDispatchTarget {
 
 #[cfg(feature = "full")]
 impl ToolActivationSnapshot {
-    pub fn registered_tool(&self) -> &RegisteredTool {
+    pub fn registered_tool(&self) -> &ToolRegistration {
         &self.registered_tool
     }
 
@@ -836,6 +852,7 @@ pub enum ToolBindingOwner {
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct DeployedRegisteredTool {
+    pub type_id: crate::model::type_id::TypeId,
     pub deployment_revision: DeploymentRevision,
     pub release_id: Option<ToolReleaseId>,
     pub definition: Tool,
@@ -848,7 +865,12 @@ pub struct DeployedRegisteredTool {
 
 impl From<RegisteredTool> for DeployedRegisteredTool {
     fn from(value: RegisteredTool) -> Self {
+        let RegisteredTool {
+            type_id,
+            registration: value,
+        } = value;
         Self {
+            type_id,
             deployment_revision: value.deployment_revision,
             release_id: value.release_id,
             definition: value.definition,

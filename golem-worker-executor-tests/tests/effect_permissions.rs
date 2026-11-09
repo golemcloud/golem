@@ -508,7 +508,9 @@ async fn effect_sdk_manages_permission_cards_end_to_end(
     for agent_type in ["EffectPermissionCaller", "EffectPermissionCallee"] {
         let card = component
             .metadata
-            .agent_type_initial_permission_card(&AgentTypeName(agent_type.to_string()))
+            .agent_type_provision_configs
+            .get(&AgentTypeName(agent_type.to_string()))
+            .map(|config| &config.initial_permissions)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("missing initial card for {agent_type}"))?;
         registry.add(StoredCard::Polymorphic(card));
