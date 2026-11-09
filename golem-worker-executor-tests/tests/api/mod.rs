@@ -5244,6 +5244,244 @@ async fn existing_only_hydration_repairs_initialization_after_create_only_crash(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn scheduled_timer_completion_resumes_its_existing_incarnation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.suspend_after = Duration::from_millis(50);
+                config.suspend.wait_suspend_grace = Duration::from_millis(20);
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(20);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "scheduled-timer");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let boundary = executor.oplog_max_index(&worker_id).await?;
+    let invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let counter_id = counter_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &counter_id,
+                    "sleep_and_increment",
+                    data_value!(3_000u32),
+                )
+                .await
+        }
+        .in_current_span()
+    });
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let result = tokio::time::timeout(Duration::from_secs(30), invocation).await???;
+    assert_eq!(result.into_typed::<u32>()?, 2);
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.fingerprint,
+        fingerprint
+    );
+    let oplog = executor.get_oplog(&worker_id, boundary).await?;
+    assert!(
+        oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_)))
+    );
+    let (started, finished) = count_agent_invocation_pair_since(&oplog, boundary);
+    assert_eq!((started, finished), (1, 1));
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        3
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::{
+        AgentInvocation, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
+    };
+    use golem_common::serialization::serialize;
+    use golem_worker_executor::services::{HasPromiseService, UsesAllDeps};
+    use golem_worker_executor::storage::scheduler::SchedulerStorage;
+    use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
+    use golem_worker_executor_test_utils::scheduler_sqlite_storage_config;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let storage =
+        SqliteSchedulerStorage::configured(&scheduler_sqlite_storage_config(deps, &context))
+            .await
+            .map_err(anyhow::Error::msg)?;
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    for kind in ["invoke", "resume", "complete-promise"] {
+        for recreate in [false, true] {
+            let counter_id = agent_id!("Counter", format!("stale-{kind}-{recreate}"));
+            let worker_id = executor
+                .start_agent(&component.id, counter_id.clone())
+                .await?;
+            let original = executor.get_worker_metadata(&worker_id).await?;
+            let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+            let promises = executor
+                .active_agent(&owned)
+                .await
+                .expect("started agent must be resident")
+                .primary()
+                .all()
+                .promise_service();
+            executor.delete_worker(&worker_id).await?;
+            let before = if recreate {
+                executor
+                    .start_agent(&component.id, counter_id.clone())
+                    .await?;
+                assert_ne!(
+                    executor.get_worker_metadata(&worker_id).await?.fingerprint,
+                    original.fingerprint
+                );
+                executor
+                    .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+                    .await?;
+                executor
+                    .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+                    .await?;
+                assert!(executor.stop_worker_if_idle(&owned).await?);
+                tokio::time::timeout(Duration::from_secs(30), async {
+                    while executor.worker_is_loaded(&owned).await {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await?;
+                executor.retire_unloaded_worker(&owned).await?;
+                assert!(!executor.worker_is_cached(&owned).await);
+                Some(executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?)
+            } else {
+                None
+            };
+            // Reuse the public promise identity deliberately: stale delivery must not
+            // complete a replacement's promise at the same oplog index.
+            let promise_id = promises
+                .create(&worker_id, OplogIndex::from_u64(42))
+                .await?;
+            let promise = promises.poll(promise_id.clone()).await?;
+            let action = match kind {
+                "invoke" => ScheduledAction::Invoke {
+                    account_id: component.account_id,
+                    owned_agent_id: owned.clone(),
+                    target_worker_fingerprint: original.fingerprint,
+                    invocation: Box::new(AgentInvocation::AgentMethod {
+                        idempotency_key: IdempotencyKey::fresh(),
+                        method_name: "increment".to_string(),
+                        input: SchemaValue::Record { fields: vec![] },
+                        invocation_context: InvocationContextStack::fresh(),
+                        principal: Principal::anonymous(),
+                        scope_card: None,
+                    }),
+                },
+                "resume" => ScheduledAction::Resume {
+                    agent_created_by: component.account_id,
+                    owned_agent_id: owned.clone(),
+                    target_worker_fingerprint: original.fingerprint,
+                },
+                _ => ScheduledAction::CompletePromise {
+                    account_id: component.account_id,
+                    environment_id: context.default_environment_id,
+                    promise_id: promise_id.clone(),
+                    target_worker_fingerprint: original.fingerprint,
+                },
+            };
+            storage
+                .insert(
+                    ScheduleId::fresh(),
+                    Utc::now(),
+                    ShardId::new(0),
+                    &serialize(&action).map_err(anyhow::Error::msg)?,
+                )
+                .await?;
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while storage.count_due(Utc::now(), &assignment).await.unwrap() != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+            assert!(
+                !promise.is_ready().await,
+                "{kind} completed a stale promise"
+            );
+            assert!(!promises.poll(promise_id).await?.is_ready().await);
+            assert!(
+                !executor.worker_is_cached(&owned).await,
+                "{kind} acquired a replacement"
+            );
+            if let Some(before) = before {
+                let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                assert_eq!(
+                    after.len(),
+                    before.len(),
+                    "{kind} changed the replacement's oplog"
+                );
+                let result = executor
+                    .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+                    .await?;
+                assert_eq!(result.into_typed::<u32>()?, 2);
+            } else {
+                assert!(
+                    executor
+                        .get_worker_metadata_opt(&worker_id)
+                        .await?
+                        .is_none(),
+                    "{kind} recreated a deleted agent"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn get_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

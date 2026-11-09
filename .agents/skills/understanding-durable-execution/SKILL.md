@@ -113,6 +113,19 @@ the member, and the next scan requests the delete again. A delete request that a
 queue refuses is counted as a leaked clean-up: the scan still removes the member, and no later
 scan asks again.
 
+Scheduled `Invoke`, `Resume` and `CompletePromise` actions carry the target's fingerprint and
+use `WorkerActivator::enqueue_exact_existing`. It checks identity before cold hydration and
+again on the returned worker, covering cached and shared acquisition. Missing or mismatched
+incarnations are logged and acknowledged without creation; acquisition, delivery and startup
+errors remain retryable. Timer and quota producers capture their resident worker's fingerprint.
+Scheduled promise completion acquires that worker, takes the local oplog lifecycle guard,
+rechecks the stored identity, and persists/notifies through `complete_without_wakeup`. It releases
+the guard before starting the pinned worker, and retries startup even when completion was already
+persisted. Duplicate completion notifies with the original stored payload. Ordinary promise
+completion still activates the worker. This guard serializes local deletion/recreation, not
+cross-executor promise writes: promise storage still uses agent ID and oplog index. Deferred
+`InvokeEphemeral` retains its separate creation path.
+
 Two persistence steps matter for every crash window: **append** puts an entry in the oplog
 buffer; **commit** makes it recoverable (`commit_oplog_and_update_state(CommitLevel)`). The
 buffer is a performance trade-off (no storage round trip per append). `CommitLevel`

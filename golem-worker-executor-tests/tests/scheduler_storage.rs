@@ -32,6 +32,52 @@ use url::Url;
 use uuid::Uuid;
 
 #[test]
+fn scheduled_action_fingerprints_roundtrip() {
+    use golem_common::model::AgentFingerprint;
+    use golem_common::serialization::deserialize;
+    use std::io::Write;
+
+    let account_id = AccountId(Uuid::from_u128(1));
+    let environment_id = EnvironmentId(Uuid::from_u128(2));
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::from_u128(3)),
+        agent_id: "Counter(\"scheduled\")".to_string(),
+    };
+    let fingerprint = AgentFingerprint(Uuid::from_u128(4));
+    let actions = [
+        (
+            "scheduled_action_complete_promise.bin",
+            ScheduledAction::CompletePromise {
+                account_id,
+                environment_id,
+                promise_id: PromiseId {
+                    agent_id: agent_id.clone(),
+                    oplog_idx: OplogIndex::from_u64(42),
+                },
+                target_worker_fingerprint: fingerprint,
+            },
+        ),
+        (
+            "scheduled_action_resume.bin",
+            ScheduledAction::Resume {
+                agent_created_by: account_id,
+                owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),
+                target_worker_fingerprint: fingerprint,
+            },
+        ),
+    ];
+    let mut mint = goldenfile::Mint::new("tests/goldenfiles");
+    for (name, action) in actions {
+        let encoded = serialize(&action).unwrap();
+        assert_eq!(deserialize::<ScheduledAction>(&encoded).unwrap(), action);
+        mint.new_goldenfile(name)
+            .unwrap()
+            .write_all(&encoded)
+            .unwrap();
+    }
+}
+
+#[test]
 async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency() {
     let postgres = DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await;
     let db_name = format!("scheduler_{}", Uuid::new_v4().simple());
@@ -71,6 +117,7 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
     let environment_id = EnvironmentId::new();
     let action = ScheduledAction::CompletePromise {
         account_id: AccountId::new(),
+        target_worker_fingerprint: golem_common::model::AgentFingerprint::new(),
         environment_id,
         promise_id: PromiseId {
             agent_id: agent_id.clone(),
@@ -79,6 +126,7 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
     };
     let conflicting_action = ScheduledAction::Resume {
         agent_created_by: AccountId::new(),
+        target_worker_fingerprint: golem_common::model::AgentFingerprint::new(),
         owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),
     };
     let schedule_id = ScheduleId::fresh();
