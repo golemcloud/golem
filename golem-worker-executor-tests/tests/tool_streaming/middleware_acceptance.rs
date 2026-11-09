@@ -2062,6 +2062,9 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
         entity_starts(&admitted, PublicAgentEntityKind::Tool, "middleware-probe");
     assert_eq!(cancelled_starts.len(), 1);
     let cancelled_start = cancelled_starts[0].oplog_index;
+    // All three leaves share one entity name, and cancellation does not join the loser, so a
+    // successful sibling could otherwise reach the completion gate first.
+    loser_completion.restrict_to_start(cancelled_start);
     executor
         .complete_promise(
             &PromiseId {
