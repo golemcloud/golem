@@ -1,0 +1,27 @@
+# Reference component build template for native Kotlin/Wasm agents. It mirrors the one `golem new` ships
+# (cli/golem-cli/templates/kotlin/common-on-demand/golem.yaml); nothing in the repo loads this copy.
+#
+# `golem build` runs the cloud.golem.wasm-component Gradle plugin task `nativeComponent` for the component's
+# directory (`gradle -p`): Kotlin/Wasm compile -> wasm-tools component embed -> wasm-tools component new --adapt
+# (WASI p1->p2) -> wasm-tools validate. No JS, no QuickJS, no bundling. The same command serves the flat
+# (single component) and the per-component-directory layouts: settings.gradle.kts at the app root pins the plugin
+# versions and includes every component directory.
+manifestVersion: 1.6.0
+componentTemplates:
+  kotlin:
+    guestLanguage: kotlin
+    presets:
+      default:
+        default: true
+        build:
+        - command: gradle -p "{{ componentDir }}" nativeComponent
+          dir: "{{ appRootDir }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/build.gradle.kts"
+          - "{{ appRootDir }}/settings.gradle.kts"
+          - "{{ appRootDir }}/gradle.properties"
+          targets:
+          - "{{ componentDir }}/build/golem/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ componentDir }}/build/golem/{{ component_name | to_snake_case }}.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

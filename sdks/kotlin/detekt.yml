@@ -1,0 +1,112 @@
+# Shared detekt configuration for the Kotlin SDK modules (sdk, ksp, gradle-plugin).
+#
+# Only the rules this project has decided to enforce are active; everything detekt ships with is
+# off by default here, so a detekt upgrade cannot introduce a finding nobody chose.
+#
+# MaxLineLength is deliberately absent. `.editorconfig` records the decision that line width is not
+# linted, because a linter cannot break a long string literal and would turn one into a forced
+# manual edit. Re-litigating that through detekt, and then baselining the result, would be worse
+# than leaving it to the author.
+build:
+  maxIssues: 0
+
+comments:
+  active: false
+
+complexity:
+  active: true
+  LongMethod:
+    active: true
+    threshold: 70
+  # Everything else in this ruleset stays off.
+  CognitiveComplexMethod: { active: false }
+  ComplexCondition: { active: false }
+  ComplexInterface: { active: false }
+  CyclomaticComplexMethod: { active: false }
+  LabeledExpression: { active: false }
+  LargeClass: { active: false }
+  LongParameterList: { active: false }
+  MethodOverloading: { active: false }
+  NamedArguments: { active: false }
+  NestedBlockDepth: { active: false }
+  NestedScopeFunctions: { active: false }
+  ReplaceSafeCallChainWithRun: { active: false }
+  StringLiteralDuplication: { active: false }
+  TooManyFunctions: { active: false }
+
+coroutines:
+  active: false
+
+empty-blocks:
+  active: false
+
+exceptions:
+  active: true
+  TooGenericExceptionCaught:
+    active: true
+  # Everything else in this ruleset stays off.
+  ExceptionRaisedInUnexpectedLocation: { active: false }
+  InstanceOfCheckForException: { active: false }
+  NotImplementedDeclaration: { active: false }
+  ObjectExtendsThrowable: { active: false }
+  PrintStackTrace: { active: false }
+  RethrowCaughtException: { active: false }
+  ReturnFromFinally: { active: false }
+  SwallowedException: { active: false }
+  ThrowingExceptionFromFinally: { active: false }
+  ThrowingExceptionInMain: { active: false }
+  ThrowingExceptionsWithoutMessageOrCause: { active: false }
+  ThrowingNewInstanceOfSameException: { active: false }
+  TooGenericExceptionThrown: { active: false }
+
+naming:
+  active: false
+
+performance:
+  active: false
+
+potential-bugs:
+  active: true
+  UnsafeCallOnNullableType:
+    active: true
+  # Everything else in this ruleset stays off.
+  AvoidReferentialEquality: { active: false }
+  CastNullableToNonNullableType: { active: false }
+  CastToNullableType: { active: false }
+  Deprecation: { active: false }
+  DontDowncastCollectionTypes: { active: false }
+  DoubleMutabilityForCollection: { active: false }
+  ElseCaseInsteadOfExhaustiveWhen: { active: false }
+  EqualsAlwaysReturnsTrueOrFalse: { active: false }
+  ExitOutsideMain: { active: false }
+  ExplicitGarbageCollectionCall: { active: false }
+  HasPlatformType: { active: false }
+  IgnoredReturnValue: { active: false }
+  ImplicitDefaultLocale: { active: false }
+  ImplicitUnitReturnType: { active: false }
+  InvalidRange: { active: false }
+  IteratorHasNextCallsNextMethod: { active: false }
+  IteratorNotThrowingNoSuchElementException: { active: false }
+  LateinitUsage: { active: false }
+  MapGetWithNotNullAssertionOperator: { active: false }
+  MissingPackageDeclaration: { active: false }
+  NullCheckOnMutableProperty: { active: false }
+  NullableToStringCall: { active: false }
+  PropertyUsedBeforeDeclaration: { active: false }
+  UnconditionalJumpStatementInLoop: { active: false }
+  UnnecessaryNotNullCheck: { active: false }
+  UnnecessaryNotNullOperator: { active: false }
+  UnnecessarySafeCall: { active: false }
+  UnreachableCatchBlock: { active: false }
+  UnreachableCode: { active: false }
+  UnsafeCast: { active: false }
+  UnusedUnaryOperator: { active: false }
+  UselessPostfixExpression: { active: false }
+  WrongEqualsTypeParameter: { active: false }
+
+style:
+  active: true
+  ReturnCount:
+    active: true
+    max: 2
+    excludeGuardClauses: true
