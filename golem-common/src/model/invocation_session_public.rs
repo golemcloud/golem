@@ -405,6 +405,7 @@ pub enum PublicInvocationResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PublicStreamOutcome {
     Finished,
@@ -413,6 +414,7 @@ pub enum PublicStreamOutcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PublicStreamError {
     Failed { value: PublicTypedValue },
@@ -666,6 +668,7 @@ pub enum PublicInvocationOutcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum PublicServerMessage {
     #[serde(rename = "invocationAccepted")]

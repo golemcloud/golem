@@ -634,6 +634,7 @@ pub struct StreamTerminalRecord {
 
 /// The first terminal wins, whether authored by the producer or its consumer.
 #[derive(Clone, Debug, IntoSchema, FromSchema)]
+#[allow(clippy::large_enum_variant)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamTerminal {
     Finished,
@@ -945,6 +946,7 @@ pub enum DurableStreamReadRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
+#[allow(clippy::large_enum_variant)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamAttachmentControlOperation {
     Prepare {
