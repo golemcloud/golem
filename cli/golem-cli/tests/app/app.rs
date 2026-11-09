@@ -6623,18 +6623,19 @@ async fn post_build_guest_bridge_scan_rejects_duplicate_agent(_tracing: &Tracing
                     outputWasm: producer-final.wasm
 
                   app:consumer:
+                    templates: rust
                     dir: consumer
+                    dependencies:
+                      agents:
+                        - app:producer/BarAgent
+                    buildMergeMode: replace
                     componentWasm: consumer.wasm
                     outputWasm: consumer-final.wasm
                     build:
+                      - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
+                      - command: cp -p {producer_wasm} consumer.wasm
                       - command: cp -p {producer_wasm} consumer-final.wasm
                       - command: {write_consumer_metadata}
-
-                bridge:
-                  rust:
-                    internal:
-                      agents: BarAgent
-                      outputDir: bridge
             "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
         )
         .unwrap();
@@ -6648,6 +6649,12 @@ async fn post_build_guest_bridge_scan_rejects_duplicate_agent(_tracing: &Tracing
                 "BarAgent is defined by multiple components: app:consumer, app:producer"
             ),
             "consumer metadata is built: {consumer_metadata_is_built}"
+        );
+        assert!(
+            ctx.cwd_path_join(
+                "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml"
+            )
+            .exists()
         );
     }
 }
