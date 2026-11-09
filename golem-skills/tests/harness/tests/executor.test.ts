@@ -5,6 +5,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   extractInvokeJsonResult,
+  invocationArguments,
+  resolveDeployedEnvironment,
   resolveGolemCommandEnv,
   ScenarioExecutor,
   type ScenarioExecutorOptions,
@@ -783,5 +785,65 @@ describe("prompt-session skill tracking", () => {
       ["prompt", "prompt"],
     );
     assert.equal(driver.resetCount, 2);
+  });
+});
+
+describe("invocationArguments", () => {
+  it("passes a single string through as one command-line argument", () => {
+    assert.deepEqual(invocationArguments('{ id = "item-1", name = "Hammer" }'), [
+      '{ id = "item-1", name = "Hammer" }',
+    ]);
+  });
+
+  it("gives a method with several parameters one argument each", () => {
+    assert.deepEqual(invocationArguments(['"order-1"', "true"]), ['"order-1"', "true"]);
+  });
+});
+
+describe("resolveDeployedEnvironment", () => {
+  const systemEnvironment = (name: string, id: string, revision: number) => ({
+    application: { name: "golem-system" },
+    environment: {
+      id,
+      name,
+      currentDeployment: { deploymentRevision: revision },
+    },
+  });
+
+  it("skips the server's built-in environments and takes the deployed application", () => {
+    const document = {
+      $type: "environment.list",
+      environments: [
+        systemEnvironment("builtin-plugins", "01a1b060-ea3c-7441-bfa5-4554fa765ba4", 0),
+        systemEnvironment("builtin-tools", "01a1b060-fd03-7ae1-88b5-ee111c54849d", 6),
+        {
+          application: { name: "test-app" },
+          environment: {
+            id: "01a1b061-038a-71b1-b4f0-6a37da7bd4b4",
+            name: "local",
+            currentDeployment: { deploymentRevision: 2 },
+          },
+        },
+      ],
+    };
+
+    assert.deepEqual(resolveDeployedEnvironment(document), {
+      environmentId: "01a1b061-038a-71b1-b4f0-6a37da7bd4b4",
+      deploymentRevision: 2,
+    });
+  });
+
+  it("resolves nothing when only the built-in environments exist", () => {
+    const document = {
+      $type: "environment.list",
+      environments: [systemEnvironment("builtin-plugins", "01a1b060-ea3c-7441-bfa5-4554fa765ba4", 0)],
+    };
+
+    assert.equal(resolveDeployedEnvironment(document), undefined);
+  });
+
+  it("resolves nothing from a document that is not an environment list", () => {
+    assert.equal(resolveDeployedEnvironment({ $type: "agent.invoke" }), undefined);
+    assert.equal(resolveDeployedEnvironment(undefined), undefined);
   });
 });

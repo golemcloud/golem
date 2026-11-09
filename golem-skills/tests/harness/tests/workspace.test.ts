@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { findGolemAppDir, golemServerArgs, resolveRunRouterPort } from "../src/workspace.js";
+import {
+  findGolemAppDir,
+  golemServerArgs,
+  resolveRunRouterPort,
+  resolveServerReadyTimeoutSeconds,
+} from "../src/workspace.js";
 
 describe("resolveRunRouterPort", () => {
   it("prefers a run override and otherwise uses the scenario port", () => {
@@ -15,6 +20,22 @@ describe("resolveRunRouterPort", () => {
   it("rejects invalid and conflicting ports", () => {
     assert.throws(() => resolveRunRouterPort("nope", []), /Invalid GOLEM_ROUTER_PORT/);
     assert.throws(() => resolveRunRouterPort(undefined, [9881, 9893]), /conflicting router ports/);
+  });
+});
+
+describe("resolveServerReadyTimeoutSeconds", () => {
+  it("waits a minute unless the environment asks for longer", () => {
+    assert.equal(resolveServerReadyTimeoutSeconds(undefined), 60);
+    assert.equal(resolveServerReadyTimeoutSeconds("300"), 300);
+  });
+
+  it("rejects a value that is not a positive number of seconds", () => {
+    for (const value of ["nope", "0", "-5", ""]) {
+      assert.throws(
+        () => resolveServerReadyTimeoutSeconds(value),
+        /Invalid GOLEM_SERVER_READY_TIMEOUT_SECONDS/,
+      );
+    }
   });
 });
 

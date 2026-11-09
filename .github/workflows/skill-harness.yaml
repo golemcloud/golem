@@ -161,6 +161,8 @@ jobs:
             language: scala
           - agent: claude-code
             language: moonbit
+          - agent: claude-code
+            language: kotlin
     steps:
       - uses: actions/checkout@v5
         with:
@@ -200,6 +202,8 @@ jobs:
             language: scala
           - agent: codex
             language: moonbit
+          - agent: codex
+            language: kotlin
     steps:
       - uses: actions/checkout@v5
         with:
@@ -239,6 +243,8 @@ jobs:
             language: scala
           - agent: gemini
             language: moonbit
+          - agent: gemini
+            language: kotlin
     steps:
       - uses: actions/checkout@v5
         with:

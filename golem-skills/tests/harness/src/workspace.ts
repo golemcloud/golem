@@ -130,6 +130,22 @@ export function golemServerArgs(
   return args;
 }
 
+/**
+ * How long [GolemServer.start] waits for the healthcheck to answer, in seconds. A debug build
+ * spends considerably longer than a release one inspecting its built-in tools before it serves,
+ * so the wait is adjustable through `GOLEM_SERVER_READY_TIMEOUT_SECONDS`.
+ */
+export function resolveServerReadyTimeoutSeconds(override?: string): number {
+  if (override === undefined) {
+    return 60;
+  }
+  const seconds = Number(override);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(`Invalid GOLEM_SERVER_READY_TIMEOUT_SECONDS: ${override}`);
+  }
+  return seconds;
+}
+
 export function resolveRunRouterPort(
   override: string | undefined,
   scenarioPorts: Array<number | undefined>,
@@ -178,7 +194,8 @@ export class GolemServer {
   /**
    * Start a Golem server. Fails if one is already running on the port.
    * Spawns `golem server run --data-dir <dataDir> --clean` and polls
-   * the healthcheck endpoint until it responds (up to ~60 s).
+   * the healthcheck endpoint until it responds, for as long as
+   * [resolveServerReadyTimeoutSeconds] allows.
    */
   async start(port: number, dataDir: string): Promise<void> {
     if (await this.isRunning(port)) {
@@ -237,8 +254,11 @@ export class GolemServer {
     });
 
     // Poll healthcheck
-    const maxAttempts = 30;
     const delayMs = 2000;
+    const maxAttempts = Math.ceil(
+      (resolveServerReadyTimeoutSeconds(process.env.GOLEM_SERVER_READY_TIMEOUT_SECONDS) * 1000) /
+        delayMs,
+    );
     for (let i = 1; i <= maxAttempts; i++) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       if (this.serverProcess === null) {

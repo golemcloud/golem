@@ -53,6 +53,25 @@ describe("shouldRunStep", () => {
     assert.equal(shouldRunStep(step, ctx), true);
   });
 
+  it("accepts a list of languages in skip_if and only_if", () => {
+    assert.equal(
+      shouldRunStep(makeConditions({ skip_if: { language: ["go", "ts"] } }), ctx),
+      false,
+    );
+    assert.equal(
+      shouldRunStep(makeConditions({ skip_if: { language: ["go", "kotlin"] } }), ctx),
+      true,
+    );
+    assert.equal(
+      shouldRunStep(makeConditions({ only_if: { language: ["rust", "ts"] } }), ctx),
+      true,
+    );
+    assert.equal(
+      shouldRunStep(makeConditions({ only_if: { language: ["rust", "go"] } }), ctx),
+      false,
+    );
+  });
+
   it("skips step when skip_if language matches", () => {
     const step = makeConditions({ skip_if: { language: "ts" } });
     assert.equal(shouldRunStep(step, ctx), false);

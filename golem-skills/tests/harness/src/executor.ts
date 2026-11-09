@@ -22,7 +22,47 @@ const WATCHER_SNAPSHOT_SETTLE_MS = 25;
 
 // --- Language-conditional resolution ---
 
-const SUPPORTED_LANG_KEYS = new Set(["ts", "effect", "rust", "scala", "moonbit", "go"]);
+const SUPPORTED_LANG_KEYS = new Set(["ts", "effect", "rust", "scala", "kotlin", "moonbit", "go"]);
+
+/** The application that holds the server's built-in plugin and tool environments. */
+const SYSTEM_APPLICATION_NAME = "golem-system";
+
+/**
+ * Picks the deployed application's environment out of a `golem environment list` document.
+ *
+ * The server's own environments carry the provisioned built-in plugins and tools, belong to the
+ * `golem-system` application and sort ahead of the deployed application, so taking the first entry
+ * reads an environment that never holds the application's agent types.
+ */
+export function resolveDeployedEnvironment(
+  parsed: unknown,
+): { environmentId: string; deploymentRevision: number } | undefined {
+  if (!parsed || typeof parsed !== "object") return undefined;
+
+  const document = parsed as Record<string, unknown>;
+  if (document.$type !== "environment.list" || !Array.isArray(document.environments)) {
+    return undefined;
+  }
+
+  const deployed = document.environments.filter((entry) => {
+    const application = (entry as Record<string, unknown>)["application"] as
+      | Record<string, unknown>
+      | undefined;
+    return application?.["name"] !== SYSTEM_APPLICATION_NAME;
+  });
+
+  const envSummary = (deployed[0] as Record<string, unknown> | undefined)?.["environment"] as
+    | Record<string, unknown>
+    | undefined;
+  if (!envSummary) return undefined;
+
+  const environmentId = envSummary["id"] as string | undefined;
+  const currentDeployment = envSummary["currentDeployment"] as Record<string, unknown> | undefined;
+  const deploymentRevision = currentDeployment?.["deploymentRevision"] as number | undefined;
+  if (!environmentId || deploymentRevision === undefined) return undefined;
+
+  return { environmentId, deploymentRevision };
+}
 
 /**
  * Checks if a value is a language-keyed map (e.g., { ts: "...", effect: "...", rust: "..." }).
@@ -32,6 +72,15 @@ function isLanguageMap(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const keys = Object.keys(value);
   return keys.length > 0 && keys.every((k) => SUPPORTED_LANG_KEYS.has(k));
+}
+
+/**
+ * `golem agent invoke` takes one command-line argument per method parameter, so a scenario
+ * writes a single argument as a string and several as a list. A string is never split: a record
+ * literal contains commas of its own.
+ */
+export function invocationArguments(args: string | string[]): string[] {
+  return Array.isArray(args) ? args : [args];
 }
 
 /**
@@ -345,7 +394,7 @@ const McpCallSchema = z.object({
 const InvokeSchema = z.object({
   agent: langConditional(z.string()),
   method: langConditional(z.string()),
-  args: langConditional(z.string()).optional(),
+  args: langConditional(z.union([z.string(), z.array(z.string())])).optional(),
 });
 
 const ShellSchema = z.object({
@@ -357,7 +406,7 @@ const ShellSchema = z.object({
 const TriggerSchema = z.object({
   agent: langConditional(z.string()),
   method: langConditional(z.string()),
-  args: langConditional(z.string()).optional(),
+  args: langConditional(z.union([z.string(), z.array(z.string())])).optional(),
 });
 
 const CreateAgentSchema = z.object({
@@ -372,7 +421,7 @@ const DeleteAgentSchema = z.object({
 
 const StepConditionSchema = z.object({
   agent: z.string().optional(),
-  language: z.string().optional(),
+  language: z.union([z.string(), z.array(z.string())]).optional(),
   os: z.string().optional(),
 });
 
@@ -394,8 +443,19 @@ const ACTION_FIELDS = [
 ] as const;
 
 // Language-conditional: accepts either T or { ts: T, effect: T, rust: T, ... }
+/**
+ * A field that is either a plain value or a language-keyed map. The language-map branch is tried
+ * first and accepts only known language codes, because an object `schema` whose fields are all
+ * optional also matches a language map: it would strip every language key and leave an empty
+ * value that asserts nothing.
+ */
 function langConditional<T extends z.ZodType>(schema: T) {
-  return z.union([schema, z.record(z.string(), schema)]);
+  return z.union([
+    z.record(z.string(), schema).refine((value) => isLanguageMap(value), {
+      message: "a language-keyed map must use only known language codes",
+    }),
+    schema,
+  ]);
 }
 
 const CreateProjectSchema = z.object({
@@ -512,17 +572,17 @@ interface StepCommon {
 type InvokeSpec = {
   agent: LangConditional<string>;
   method: LangConditional<string>;
-  args?: LangConditional<string>;
+  args?: LangConditional<string | string[]>;
 };
 type ShellSpec = { command: string; args?: LangConditional<string[]>; cwd?: string };
 type ResolvedShellSpec = { command: string; args?: string[]; cwd?: string };
 type TriggerSpec = {
   agent: LangConditional<string>;
   method: LangConditional<string>;
-  args?: LangConditional<string>;
+  args?: LangConditional<string | string[]>;
 };
-type ResolvedInvokeSpec = { agent: string; method: string; args?: string };
-type ResolvedTriggerSpec = { agent: string; method: string; args?: string };
+type ResolvedInvokeSpec = { agent: string; method: string; args?: string | string[] };
+type ResolvedTriggerSpec = { agent: string; method: string; args?: string | string[] };
 type CreateAgentSpec = {
   name: string;
   env?: Record<string, string>;
@@ -756,8 +816,12 @@ export function substituteVariables(text: string, variables: Record<string, stri
 
 export interface StepCondition {
   agent?: string;
-  language?: string;
+  language?: string | string[];
   os?: string;
+}
+
+function conditionLanguages(language: string | string[]): string[] {
+  return Array.isArray(language) ? language : [language];
 }
 
 function normalizePlatform(platform: string): string {
@@ -775,14 +839,16 @@ export function shouldRunStep(
   if (step.only_if) {
     const cond = step.only_if;
     if (cond.agent && cond.agent !== context.agent) return false;
-    if (cond.language && cond.language !== context.language) return false;
+    if (cond.language && !conditionLanguages(cond.language).includes(context.language ?? ""))
+      return false;
     if (cond.os && cond.os !== normalizedOs) return false;
   }
 
   if (step.skip_if) {
     const cond = step.skip_if;
     if (cond.agent && cond.agent === context.agent) return false;
-    if (cond.language && cond.language === context.language) return false;
+    if (cond.language && conditionLanguages(cond.language).includes(context.language ?? ""))
+      return false;
     if (cond.os && cond.os === normalizedOs) return false;
   }
 
@@ -852,6 +918,23 @@ export class ScenarioExecutor {
     const subLangArrOpt = (
       v: LangConditional<string[]> | undefined,
     ): LangConditional<string[]> | undefined => (v === undefined ? undefined : subLangArr(v));
+    // Invocation arguments are one string per CLI argument, so a method that takes more than
+    // one parameter writes them as a list.
+    const subLangStrOrArrOpt = (
+      v: LangConditional<string | string[]> | undefined,
+    ): LangConditional<string | string[]> | undefined => {
+      if (v === undefined) return undefined;
+      if (typeof v === "string") return substituteVariables(v, variables);
+      if (Array.isArray(v)) return v.map((s: string) => substituteVariables(s, variables));
+      return Object.fromEntries(
+        Object.entries(v).map(([k, entry]) => [
+          k,
+          typeof entry === "string"
+            ? substituteVariables(entry, variables)
+            : (entry as string[]).map((s) => substituteVariables(s, variables)),
+        ]),
+      );
+    };
 
     switch (step.tag) {
       case "prompt":
@@ -862,7 +945,7 @@ export class ScenarioExecutor {
           invoke: {
             agent: subLangStr(step.invoke.agent),
             method: subLangStr(step.invoke.method),
-            args: subLangStrOpt(step.invoke.args),
+            args: subLangStrOrArrOpt(step.invoke.args),
           },
         };
       case "invoke_json":
@@ -871,7 +954,7 @@ export class ScenarioExecutor {
           invoke_json: {
             agent: subLangStr(step.invoke_json.agent),
             method: subLangStr(step.invoke_json.method),
-            args: subLangStrOpt(step.invoke_json.args),
+            args: subLangStrOrArrOpt(step.invoke_json.args),
           },
         };
       case "shell":
@@ -889,7 +972,7 @@ export class ScenarioExecutor {
           trigger: {
             agent: subLangStr(step.trigger.agent),
             method: subLangStr(step.trigger.method),
-            args: subLangStrOpt(step.trigger.args),
+            args: subLangStrOrArrOpt(step.trigger.args),
           },
         };
       case "create_agent":
@@ -1046,15 +1129,19 @@ export class ScenarioExecutor {
     if (typeof invoke.method !== "string") {
       throw new Error("Invoke method must resolve to a string for the current language");
     }
-    if (invoke.args !== undefined && typeof invoke.args !== "string") {
-      throw new Error("Invoke args must resolve to a string for the current language");
+    if (
+      invoke.args !== undefined &&
+      typeof invoke.args !== "string" &&
+      !Array.isArray(invoke.args)
+    ) {
+      throw new Error("Invoke args must resolve to a string or a string array");
     }
 
     return {
       ...invoke,
       agent: invoke.agent,
       method: invoke.method,
-      args: invoke.args as string | undefined,
+      args: invoke.args as string | string[] | undefined,
     };
   }
 
@@ -1075,15 +1162,19 @@ export class ScenarioExecutor {
     if (typeof trigger.method !== "string") {
       throw new Error("Trigger method must resolve to a string for the current language");
     }
-    if (trigger.args !== undefined && typeof trigger.args !== "string") {
-      throw new Error("Trigger args must resolve to a string for the current language");
+    if (
+      trigger.args !== undefined &&
+      typeof trigger.args !== "string" &&
+      !Array.isArray(trigger.args)
+    ) {
+      throw new Error("Trigger args must resolve to a string or a string array");
     }
 
     return {
       ...trigger,
       agent: trigger.agent,
       method: trigger.method,
-      args: trigger.args as string | undefined,
+      args: trigger.args as string | string[] | undefined,
     };
   }
 
@@ -1808,7 +1899,7 @@ export class ScenarioExecutor {
     log.stepAction(stepLabel, `triggering ${trigger.agent}.${trigger.method}`);
     const projectDir = await this.findGolemProjectDir();
     const args = ["agent", "invoke", trigger.agent, trigger.method, "--trigger"];
-    if (trigger.args) args.push(trigger.args);
+    if (trigger.args) args.push(...invocationArguments(trigger.args));
     this.runLocalCommand("golem", args, timeout, projectDir, commandEnv).catch(() => {
       /* fire and forget */
     });
@@ -1867,7 +1958,7 @@ export class ScenarioExecutor {
     log.stepAction(stepLabel, `invoking ${invoke.agent}.${invoke.method}`);
     const projectDir = await this.findGolemProjectDir();
     const args = ["agent", "invoke", invoke.agent, invoke.method];
-    if (invoke.args) args.push(invoke.args);
+    if (invoke.args) args.push(...invocationArguments(invoke.args));
     const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
 
     log.invokeResult(stepLabel, `${invoke.agent}.${invoke.method}`, result.stdout);
@@ -1904,7 +1995,7 @@ export class ScenarioExecutor {
     log.stepAction(stepLabel, `invoking (json) ${invoke.agent}.${invoke.method}`);
     const projectDir = await this.findGolemProjectDir();
     const args = ["--format", "json", "agent", "invoke", invoke.agent, invoke.method];
-    if (invoke.args) args.push(invoke.args);
+    if (invoke.args) args.push(...invocationArguments(invoke.args));
     const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
 
     const resultJson = extractInvokeJsonResult(result.stdout);
@@ -1945,38 +2036,16 @@ export class ScenarioExecutor {
       return undefined;
     }
 
-    const parsed = parseJsonCommandOutput<unknown>(result.stdout);
-    if (!parsed || typeof parsed !== "object") {
+    const context = resolveDeployedEnvironment(parseJsonCommandOutput<unknown>(result.stdout));
+    if (!context) {
       return undefined;
     }
 
-    const document = parsed as Record<string, unknown>;
-    if (document.$type !== "environment.list" || !Array.isArray(document.environments)) {
-      return undefined;
-    }
-
-    const environments = document.environments;
-    if (environments.length === 0) {
-      return undefined;
-    }
-
-    const env = environments[0] as Record<string, unknown>;
-    const envSummary = env["environment"] as Record<string, unknown> | undefined;
-    if (!envSummary) {
-      return undefined;
-    }
-    const environmentId = envSummary["id"] as string | undefined;
-    const currentDeployment = envSummary["currentDeployment"] as
-      | Record<string, unknown>
-      | undefined;
-    const deploymentRevision = currentDeployment?.["deploymentRevision"] as number | undefined;
-
-    if (!environmentId || deploymentRevision === undefined) {
-      return undefined;
-    }
-
-    log.stepAction(stepLabel, `resolved env=${environmentId} deployment=${deploymentRevision}`);
-    return { environmentId, deploymentRevision };
+    log.stepAction(
+      stepLabel,
+      `resolved env=${context.environmentId} deployment=${context.deploymentRevision}`,
+    );
+    return context;
   }
 
   private getRouterPort(): number {

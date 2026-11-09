@@ -33,6 +33,16 @@ describe("parseStep", () => {
     }
   });
 
+  it("parses an invoke step whose args are one string per method parameter", () => {
+    const result = parseStep({
+      invoke: { agent: "my-agent", method: "do-thing", args: ['"order-1"', "true"] },
+    });
+    assert.equal(result.tag, "invoke");
+    if (result.tag === "invoke") {
+      assert.deepEqual(result.invoke.args, ['"order-1"', "true"]);
+    }
+  });
+
   it("parses an invoke step with language-conditional method names", () => {
     const result = parseStep({
       invoke: {
@@ -592,5 +602,47 @@ steps:
       );
       assert.equal(present[0], step.tag, `Step "${step.id}" action field should match tag`);
     }
+  });
+  it("keeps the language keys of a language-conditional expect block", async () => {
+    const spec = await loadScenarioYaml(`
+name: "language-conditional-expect"
+steps:
+  - id: "verify-agent-metadata"
+    get_agent_type:
+      name: "CounterAgent"
+    expect:
+      kotlin:
+        status: 200
+        body_json:
+          - path: "$.agentType.description"
+            contains: "A test counter agent"
+      rust:
+        status: 200
+`);
+    assert.deepEqual(spec.steps[0].expect, {
+      kotlin: {
+        status: 200,
+        body_json: [{ path: "$.agentType.description", contains: "A test counter agent" }],
+      },
+      rust: { status: 200 },
+    });
+  });
+
+  it("keeps a flat expect block flat", async () => {
+    const spec = await loadScenarioYaml(`
+name: "flat-expect"
+steps:
+  - id: "healthcheck"
+    http:
+      url: "http://localhost"
+    expect:
+      status: 200
+      header_contains:
+        content-type: "application/json"
+`);
+    assert.deepEqual(spec.steps[0].expect, {
+      status: 200,
+      header_contains: { "content-type": "application/json" },
+    });
   });
 });
