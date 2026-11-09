@@ -41,6 +41,11 @@ pub fn create_wasmtime_config(enable_fs_cache: bool) -> Config {
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);
     config.wasm_component_model_error_context(true);
+    // Required to run native Kotlin/Wasm (WasmGC) agent components; all three are mandatory.
+    // Additive and deterministic (no oplog-replay impact).
+    config.wasm_gc(true);
+    config.wasm_function_references(true);
+    config.wasm_exceptions(true);
     config.wasm_threads(false);
     config.shared_memory(false);
     config.epoch_interruption(true);
@@ -92,6 +97,54 @@ mod tests {
         Ok(())
     }
 
+    /// A component that uses every artifact-affecting feature Kotlin/Wasm needs: a GC struct type,
+    /// a typed function reference called through `call_ref`, and an exception tag that is thrown and
+    /// caught. Each one is required rather than incidental: `wasm-tools validate` rejects this
+    /// component with any of `gc`, `exceptions` or `function-references` turned off.
+    const KOTLIN_FEATURE_COMPONENT: &str = r#"
+        (component
+          (core module $m
+            (type $point (struct (field i32)))
+            (type $thunk (func (result i32)))
+            (tag $failure)
+            (func $answer (type $thunk) (i32.const 42))
+            (elem declare func $answer)
+            (func (export "run") (result i32)
+              (drop (struct.new $point (i32.const 7)))
+              (block $caught
+                (try_table (catch_all $caught)
+                  (throw $failure)
+                )
+              )
+              (call_ref $thunk (ref.func $answer))
+            )
+          )
+          (core instance (instantiate $m))
+        )
+    "#;
+
+    /// The compilation service precompiles and the worker executor deserializes, so the two engines
+    /// must agree on every artifact-affecting setting. An empty component cannot show that: it uses
+    /// none of the features a real guest does, and the serialized artifact records them. This
+    /// compiles a component that needs all three Kotlin/Wasm features through the same engine pair.
+    ///
+    /// A failure here is not a crash in production but a silent cost: the executor rejects the
+    /// cached artifact and compiles the component again, which is a severe cold-start regression.
+    #[test]
+    fn precompiled_components_with_gc_and_exceptions_are_compatible_across_engines()
+    -> anyhow::Result<()> {
+        let compilation_engine = Engine::new(&create_wasmtime_config_with_fs_cache())?;
+        let precompiled_component =
+            compilation_engine.precompile_component(KOTLIN_FEATURE_COMPONENT.as_bytes())?;
+        let executor_engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+
+        // SAFETY: these bytes were produced by Wasmtime in this process and are
+        // deserialized without being modified.
+        unsafe { Component::deserialize(&executor_engine, precompiled_component) }?;
+
+        Ok(())
+    }
+
     #[test]
     fn artifact_fingerprint_ignores_filesystem_cache_configuration() -> anyhow::Result<()> {
         let with_cache = Engine::new(&create_wasmtime_config_with_fs_cache())?;
@@ -123,23 +176,19 @@ mod tests {
         Ok(())
     }
 
-    /// Golem leaves the WebAssembly GC proposal disabled, so Wasmtime never allocates a GC
-    /// heap and `MemoryKind::GcHeap` never reaches a resource limiter.
+    /// Golem enables the WebAssembly GC proposal, which Kotlin/Wasm guests require.
     ///
-    /// `DurableResourceLimiter` in golem-worker-executor relies on that: it admits GC heap
-    /// growth without taking a linear-memory admission grant, because the collector's capacity
-    /// is not memory the guest declared and Golem's per-agent memory accounting is keyed to
-    /// guest linear memory. Enabling GC would make this test fail, which is the point -- that
-    /// accounting decision has to be revisited before agents can allocate GC objects.
+    /// Wasmtime grows its internal GC heaps through the same resource-limiter callbacks as
+    /// linear memory, tagged `MemoryKind::GcHeap`. `DurableResourceLimiter` in
+    /// golem-worker-executor admits that growth without taking an admission grant, because
+    /// Golem's per-agent memory accounting is keyed to guest linear memory. A guest whose
+    /// objects live in the GC heap therefore grows outside that accounting, and reconciling the
+    /// two is open work.
     #[test]
-    fn gc_proposal_is_disabled() {
+    fn gc_proposal_is_enabled() {
         let engine = Engine::new(&create_wasmtime_config_without_fs_cache()).unwrap();
         // A `struct` type definition is only valid with the GC proposal enabled.
-        let error = Module::new(&engine, "(module (type (struct (field i32))))")
-            .expect_err("the GC proposal is expected to be disabled");
-        assert!(
-            format!("{error:?}").contains("gc"),
-            "expected a GC-proposal rejection, got: {error:?}"
-        );
+        Module::new(&engine, "(module (type (struct (field i32))))")
+            .expect("the GC proposal is expected to be enabled");
     }
 }

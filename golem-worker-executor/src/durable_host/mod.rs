@@ -150,6 +150,7 @@ use crate::services::card_interest::CardInterestIndex;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::FileLoader;
+use crate::services::gc_heap::GcHeapTracker;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::linear_memory::{
@@ -495,6 +496,9 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
+    /// The store's GC heap, where a WebAssembly-GC guest keeps its objects. Accounted separately
+    /// from linear memory; see [`GcHeapTracker`].
+    gc_heap: GcHeapTracker,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
@@ -529,11 +533,10 @@ impl PrimaryInvocationBody {
 /// Wasmtime also grows its internal GC heaps through the same limiter
 /// callbacks, tagged `MemoryKind::GcHeap`. That capacity belongs to the
 /// collector rather than to memory the guest declared, so it is admitted
-/// without taking a grant and correspondingly never releases one. Golem's
-/// engine config leaves the GC proposal disabled (see
-/// `golem_common::wasmtime_config`), so no store should allocate a GC heap in
-/// the first place; the arm is here so that enabling it does not silently start
-/// billing collector capacity as guest memory.
+/// through [`DurableWorkerCtx::admit_gc_heap_growth`] instead, which enforces the
+/// agent's memory limit and takes host admission capacity but neither meters the
+/// heap nor records an oplog growth hint for it. `sdks/kotlin/MEMORY.md` records
+/// that choice and what it leaves open.
 pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
     fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Ctx>;
 
@@ -551,12 +554,18 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
                     ctx.admit_unshared_memory_growth(current, desired, maximum)
                         .await
                 }
-                MemoryKind::GcHeap => Ok(true),
+                MemoryKind::GcHeap => ctx.admit_gc_heap_growth(current, desired, maximum).await,
             }
         }
     }
 
     fn durable_memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) -> bool {
+        if kind == MemoryKind::GcHeap {
+            // Promotes the reservation taken in `admit_gc_heap_growth`. Returns false because the
+            // heap is deliberately not metered, so the caller must not record it as guest memory.
+            self.durable_worker_ctx().gc_heap.commit(desired as u64);
+            return false;
+        }
         if kind != MemoryKind::LinearMemory {
             return false;
         }
@@ -570,8 +579,11 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
     }
 
     fn durable_memory_grow_failed(&mut self, kind: MemoryKind) -> wasmtime::Result<()> {
-        if kind == MemoryKind::LinearMemory {
-            self.durable_worker_ctx().unshared_memory_growth_failed();
+        match kind {
+            MemoryKind::LinearMemory => {
+                self.durable_worker_ctx().unshared_memory_growth_failed();
+            }
+            MemoryKind::GcHeap => self.durable_worker_ctx().gc_heap.growth_failed(),
         }
         Ok(())
     }
@@ -729,6 +741,88 @@ fn validate_unshared_memory_growth(
         growth.protected_total <= worker_limit
             && memory_maximum.is_none_or(|maximum| desired <= maximum)
     })
+}
+
+/// Whether a GC heap may grow to `desired`.
+///
+/// `committed_linear` is what linear memory already holds, because the two regions share one
+/// limit: an agent is bounded by the memory it uses, not by where its runtime puts it. Without
+/// that term the limit would bind the GC heap alone, and a guest could pass it by growing
+/// whichever region was checked second.
+fn validate_gc_heap_growth(
+    committed_linear: u64,
+    desired: u64,
+    worker_limit: u64,
+    memory_maximum: Option<usize>,
+) -> bool {
+    committed_linear.saturating_add(desired) <= worker_limit
+        && memory_maximum.is_none_or(|maximum| desired <= maximum as u64)
+}
+
+/// The GC-heap cap, which is what makes a runaway WebAssembly-GC agent trap instead of growing
+/// until the host runs out. Acceptance: a total at the limit is admitted, a total past it is
+/// refused, and the limit binds the two regions together rather than each on its own.
+#[cfg(test)]
+mod gc_heap_cap_tests {
+    use super::validate_gc_heap_growth;
+    use test_r::test;
+
+    const LIMIT: u64 = 64 * 1024 * 1024;
+
+    #[test]
+    fn a_total_at_the_limit_is_admitted() {
+        assert!(validate_gc_heap_growth(0, LIMIT, LIMIT, None));
+        assert!(validate_gc_heap_growth(LIMIT / 2, LIMIT / 2, LIMIT, None));
+    }
+
+    #[test]
+    fn a_total_past_the_limit_is_refused() {
+        assert!(!validate_gc_heap_growth(0, LIMIT + 1, LIMIT, None));
+        assert!(!validate_gc_heap_growth(
+            LIMIT / 2,
+            LIMIT / 2 + 1,
+            LIMIT,
+            None
+        ));
+    }
+
+    #[test]
+    fn linear_memory_already_held_reduces_the_heaps_headroom() {
+        // The regression this guards: with the linear term dropped the heap would be measured
+        // against the whole limit, and an agent already holding linear memory could pass it.
+        let linear = 48 * 1024 * 1024;
+        assert!(validate_gc_heap_growth(
+            linear,
+            16 * 1024 * 1024,
+            LIMIT,
+            None
+        ));
+        assert!(!validate_gc_heap_growth(
+            linear,
+            16 * 1024 * 1024 + 1,
+            LIMIT,
+            None
+        ));
+    }
+
+    #[test]
+    fn a_limit_of_zero_admits_no_heap_at_all() {
+        assert!(validate_gc_heap_growth(0, 0, 0, None));
+        assert!(!validate_gc_heap_growth(0, 1, 0, None));
+    }
+
+    #[test]
+    fn the_memorys_own_maximum_is_respected_independently() {
+        // Well inside the agent's limit, but past what this memory's type allows.
+        assert!(validate_gc_heap_growth(0, 4096, LIMIT, Some(4096)));
+        assert!(!validate_gc_heap_growth(0, 4097, LIMIT, Some(4096)));
+    }
+
+    #[test]
+    fn a_total_that_would_overflow_is_refused_rather_than_wrapping() {
+        assert!(!validate_gc_heap_growth(u64::MAX, 1, LIMIT, None));
+        assert!(!validate_gc_heap_growth(1, u64::MAX, LIMIT, None));
+    }
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -1306,6 +1400,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stream_runtime_teardown: Arc::new(AtomicBool::new(false)),
             resource_limits,
             linear_memory,
+            gc_heap: GcHeapTracker::default(),
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: store_alive_guard,
         })
@@ -2947,9 +3042,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> wasmtime::Result<bool> {
         let tracker = &self.linear_memory;
         let growth = tracker.prepare_unshared_growth(current, desired);
+        // One limit across both regions, so the headroom left for linear memory is what the GC
+        // heap has not already committed. Without this the limit would bind the GC heap only, and
+        // a guest could pass it by growing whichever region was checked second.
         let Some(growth) = validate_unshared_memory_growth(
             growth,
-            self.max_linear_memory_size(),
+            self.max_linear_memory_size()
+                .saturating_sub(self.gc_heap.bytes()),
             desired,
             maximum,
         ) else {
@@ -2970,6 +3069,49 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn unshared_memory_growth_failed(&self) {
         self.linear_memory.memory_grow_failed();
+    }
+
+    /// Admits growth of the store's GC heap, where a WebAssembly-GC guest keeps its objects.
+    ///
+    /// Mirrors [`Self::admit_unshared_memory_growth`] in what it enforces — the agent's memory
+    /// limit and the host's admission capacity — and deliberately differs in what it does not do:
+    /// the heap is not metered and no oplog growth hint is written for it. `sdks/kotlin/MEMORY.md`
+    /// records that choice.
+    ///
+    /// The limit is one total across both regions rather than a limit for each, so an agent is
+    /// bounded by the memory it uses and not by where its runtime happens to put it.
+    pub async fn admit_gc_heap_growth(
+        &self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let desired = desired as u64;
+        let delta = desired.saturating_sub(current as u64);
+        if delta == 0 {
+            return Ok(true);
+        }
+
+        if !validate_gc_heap_growth(
+            self.total_linear_memory_size(),
+            desired,
+            self.max_linear_memory_size(),
+            maximum,
+        ) {
+            return Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into());
+        }
+
+        let Some(grant) = self.try_acquire_linear_memory(delta).await else {
+            crate::metrics::workers::record_worker_memory_grow_rejected();
+            return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
+        };
+        self.gc_heap.reserve_pending(grant);
+        Ok(true)
+    }
+
+    /// The committed size of the store's GC heap.
+    pub fn total_gc_heap_size(&self) -> u64 {
+        self.gc_heap.bytes()
     }
 
     /// The retry of an error trap during a speculative replay: the fixed decision of the trap

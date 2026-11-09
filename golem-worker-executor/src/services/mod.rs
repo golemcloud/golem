@@ -30,6 +30,7 @@ pub mod environment_state;
 pub mod events;
 pub mod external_durable_stream;
 pub mod file_loader;
+pub mod gc_heap;
 pub mod golem_config;
 pub mod key_value;
 pub mod linear_memory;
