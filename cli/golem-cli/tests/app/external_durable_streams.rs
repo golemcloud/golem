@@ -259,7 +259,6 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
     let app_name = format!("{language}-durable-streams-walkthrough");
     fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
     ctx.cd(&app_name);
-    ctx.add_env_var("DURABLE_STREAM_TOKEN", TEST_TOKEN);
     assert!(
         ctx.cli([
             flag::YES,
@@ -274,7 +273,9 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
     let readme = fs::read_to_string(ctx.cwd_path_join("README.md")).unwrap();
     assert!(readme.contains(&format!("ORIGIN=http://{app_name}.localhost:9006")));
     assert!(!readme.contains("ORIGIN=http://app-name.localhost:9006"));
+    // The template's secret defaults need the token only for deployment, not for a build.
     assert!(ctx.cli([flag::YES, cmd::BUILD]).await.success_or_dump());
+    ctx.add_env_var("DURABLE_STREAM_TOKEN", TEST_TOKEN);
     ctx.start_server().await;
     let manifest_path = ctx.cwd_path_join("golem.yaml");
     let mut manifest: serde_yaml::Value =
