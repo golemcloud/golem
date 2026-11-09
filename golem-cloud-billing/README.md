@@ -208,7 +208,7 @@ when none is:
 | --- | --- |
 | `subscription` | a billable subscription (`active`, `trialing` or `past_due`) is not canceled at the period end |
 | `canceledSubscription` | a billable subscription is canceled at the period end and runs to the end of the period |
-| `unbilledUsage` | a usage event is not held, and is not sent yet or was sent after the newest order of the account. Polar bills an event only after the push sends it, on the next order |
+| `unbilledUsage` | a usage event is not held, and is not sent yet, or was sent after the newest order of the account while an order can still bill it: while a subscription is billable, and for 24 hours after the last one ends (`FINAL_ORDER_WAIT_MS`). Polar bills an event only after the push sends it, on the next order. The app sets `sent_at` after Polar accepts the event, so an event that the last order billed can look newer than that order; the wait ends that |
 | `unpaidOverage` | a `pending` order has an amount for a metered price |
 
 The hold stays for the whole life of a billable subscription, also after a cancellation. Paid

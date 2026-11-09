@@ -84,10 +84,11 @@ export interface SubscriptionsShape {
     productId: string | undefined
   ) => Effect.Effect<ReadonlyArray<PendingOrder>, SubscriptionsError>
   /**
-   * Whether the usage push recorded paid overage of the account that no order bills yet: a usage
-   * event that is not held, and is not sent yet or was sent after the newest order of the account.
-   * Polar bills a sent event on the next order of the subscription. The push sends an unsent event
-   * at its next run, or holds it when Polar would not bill it.
+   * Whether the usage push recorded paid overage of the account that an order can still bill: a
+   * usage event that is not held, and is not sent yet, or was sent after the newest order of the
+   * account while a subscription can still bill it (see `unbilledUsageEvents`). Polar bills a sent
+   * event on the next order of the subscription. The push sends an unsent event at its next run,
+   * or holds it when Polar would not bill it.
    */
   readonly unbilledUsage: (accountId: string) => Effect.Effect<boolean, SubscriptionsError>
   /**
@@ -211,16 +212,34 @@ export const tables = `
   )`
 
 /**
- * The usage events of account $1 that no order bills yet: not held, and either not sent yet or
- * sent after the creation of the newest order of the account. Polar bills only the events that it
- * received, so an unsent event stays unbilled until the usage push sends it or holds it, also when
- * an order is newer.
+ * How long after its last subscription ends an account waits for the last order of that
+ * subscription. Polar creates that order at the end, so it normally comes within minutes.
+ */
+export const FINAL_ORDER_WAIT_MS = 24 * 60 * 60 * 1000
+
+/**
+ * The usage events of account $1 that an order can still bill: not held, and either
+ *
+ * - not sent yet. Polar bills only the events that it received, so an unsent event stays
+ *   unbilled until the usage push sends it or holds it, also when an order is newer, or
+ * - sent after the creation of the newest order of the account, while a subscription in a status
+ *   of $2 can still bill it, or for `FINAL_ORDER_WAIT_MS` ($3) after the last subscription ended.
+ *   After that, no order of Polar bills the event any more. The app sets `sent_at` after Polar
+ *   accepts the event, so an event that the last order billed can look newer than that order; it
+ *   counts as billed when the wait ends.
  */
 const unbilledUsageEvents = `
   usage_events e
   WHERE e.account_id = $1 AND e.held_at IS NULL
-    AND (e.sent_at IS NULL OR e.sent_at > coalesce(
-          (SELECT max(o.created_at) FROM polar_orders o WHERE o.account_id = $1), '-infinity'::timestamptz))`
+    AND (
+      e.sent_at IS NULL
+      OR (
+        e.sent_at > coalesce(
+          (SELECT max(o.created_at) FROM polar_orders o WHERE o.account_id = $1), '-infinity'::timestamptz)
+        AND (
+          EXISTS (SELECT 1 FROM polar_subscriptions s WHERE s.account_id = $1 AND s.status = ANY($2))
+          OR coalesce((SELECT max(s.modified_at) FROM polar_subscriptions s WHERE s.account_id = $1),
+                      '-infinity'::timestamptz) > clock_timestamp() - $3::double precision * interval '1 millisecond')))`
 
 interface SubscriptionRow {
   readonly subscription_id: string
@@ -349,7 +368,9 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
 
     const unbilledUsage = (accountId: string) =>
       query<{ unbilled: boolean }>(`SELECT EXISTS (SELECT 1 FROM ${unbilledUsageEvents}) AS unbilled`, [
-        accountId
+        accountId,
+        billableStatuses,
+        FINAL_ORDER_WAIT_MS
       ]).pipe(Effect.map((result) => result.rows[0]?.unbilled === true))
 
     const holdCandidates = (productId: string, since: Date, recheckBefore: Date) =>
