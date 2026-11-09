@@ -2906,7 +2906,7 @@ fn local_server_system_memory_override_rejects_invalid_values() {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 64,
+        cases: 256,
         .. ProptestConfig::default()
     })]
 
