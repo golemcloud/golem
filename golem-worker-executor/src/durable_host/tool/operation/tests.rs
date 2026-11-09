@@ -230,10 +230,10 @@ async fn dropping_a_provisional_operation_unregisters_it_and_wakes_parent_waiter
 #[timeout("10s")]
 async fn jump_fence_keeps_driving_selecting_cancellation_after_another_store_task_errors() {
     use wasmtime::AsContextMut;
-    use wasmtime::component::{Accessor, AccessorTask, HasSelf};
+    use wasmtime::component::{Accessor, HasSelf};
 
     struct CancelTask(OwnerToolOperation, Arc<Notify>);
-    impl AccessorTask<(), HasSelf<()>> for CancelTask {
+    impl CancelTask {
         async fn run(self, _: &Accessor<(), HasSelf<()>>) -> wasmtime::Result<()> {
             self.1.notified().await;
             self.0.resolve_cancel(true).await;
@@ -242,7 +242,7 @@ async fn jump_fence_keeps_driving_selecting_cancellation_after_another_store_tas
         }
     }
     struct JumpTask;
-    impl AccessorTask<(), HasSelf<()>> for JumpTask {
+    impl JumpTask {
         async fn run(self, _: &Accessor<(), HasSelf<()>>) -> wasmtime::Result<()> {
             Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
                 InterruptKind::Jump,
@@ -260,8 +260,13 @@ async fn jump_fence_keeps_driving_selecting_cancellation_after_another_store_tas
     let mut store = wasmtime::Store::new(&engine, ());
     store
         .run_concurrent(async |accessor| {
-            accessor.spawn(CancelTask(operation, release.clone()));
-            accessor.spawn(JumpTask);
+            let task = CancelTask(operation, release.clone());
+            accessor
+                .spawn(async move |accessor| task.run(accessor).await)
+                .unwrap();
+            accessor
+                .spawn(async move |accessor| JumpTask.run(accessor).await)
+                .unwrap();
         })
         .await
         .unwrap();

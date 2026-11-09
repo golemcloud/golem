@@ -21,6 +21,12 @@ pub(all) struct AgentId {
 } derive(Debug, Eq)
 
 ///|
+pub extend AgentId with Debug::{to_repr}
+
+///|
+pub extend AgentId with Eq::{equal, not_equal}
+
+///|
 fn AgentId::from_json(j : Json) -> AgentId raise {
   let m = expect_object(j)
   {

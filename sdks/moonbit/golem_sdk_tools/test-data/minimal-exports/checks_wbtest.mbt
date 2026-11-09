@@ -102,6 +102,7 @@ test "generated tool invocation and snapshot hooks" {
         input,
         None,
         None,
+        None,
         @common.Principal::Anonymous,
         group,
       )

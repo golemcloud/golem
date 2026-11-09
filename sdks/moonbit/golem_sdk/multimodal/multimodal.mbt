@@ -78,9 +78,9 @@ pub(open) trait MultimodalModality {
   /// variant cases, in declaration order.
   fn multimodal_cases(@model.SchemaBuilder) -> Array[@model.VariantCaseType]
   /// Encode an instance to its `(case index, payload value)`.
-  fn to_modality_value(Self) -> (UInt, @model.SchemaValue)
+  fn to_modality_value(Self) -> (UInt32, @model.SchemaValue)
   /// Decode a `(case index, payload value)` back to an instance.
-  fn from_modality_value(UInt, @model.SchemaValue) -> Self raise @schema.FromSchemaError
+  fn from_modality_value(UInt32, @model.SchemaValue) -> Self raise @schema.FromSchemaError
 }
 
 ///|

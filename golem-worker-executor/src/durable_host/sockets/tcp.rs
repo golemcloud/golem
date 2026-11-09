@@ -119,9 +119,9 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         result
     }
 
-    fn start_listen(&mut self, self_: Resource<TcpSocket>) -> Result<(), SocketError> {
+    async fn start_listen(&mut self, self_: Resource<TcpSocket>) -> Result<(), SocketError> {
         self.observe_function_call("sockets::tcp", "start_listen");
-        HostTcpSocket::start_listen(&mut self.as_wasi_view().sockets(), self_)
+        HostTcpSocket::start_listen(&mut self.as_wasi_view().sockets(), self_).await
     }
 
     fn finish_listen(&mut self, self_: Resource<TcpSocket>) -> Result<(), SocketError> {

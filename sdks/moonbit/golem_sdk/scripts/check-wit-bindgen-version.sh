@@ -10,7 +10,7 @@ cat >"$tmp_dir/wit-bindgen" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
   # This is the stock release, not the required Golem fork.
-  echo 'wit-bindgen-cli 0.59.0'
+  echo 'wit-bindgen-cli 0.63.0'
   exit 0
 fi
 touch "$WIT_BINDGEN_WAS_INVOKED"
@@ -20,11 +20,11 @@ chmod +x "$tmp_dir/wit-bindgen"
 
 export WIT_BINDGEN_WAS_INVOKED="$tmp_dir/invoked"
 if PATH="$tmp_dir:$PATH" "$sdk_root/scripts/regen-bindings.sh" >/dev/null 2>&1; then
-  echo "expected regeneration to reject stock wit-bindgen 0.59.0" >&2
+  echo "expected regeneration to reject stock wit-bindgen 0.63.0" >&2
   exit 1
 fi
 
 if [[ -e "$WIT_BINDGEN_WAS_INVOKED" ]]; then
-  echo "stock wit-bindgen 0.59.0 passed the fork validation and was invoked" >&2
+  echo "stock wit-bindgen 0.63.0 passed the fork validation and was invoked" >&2
   exit 1
 fi

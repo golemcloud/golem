@@ -274,8 +274,8 @@ test "duplicate map keys keep the last entry on both decode paths" {
     ],
     root: 6,
   }
-  let from_wire : Map[String, Int] = @schema.from_wire(tree)
-  let from_value : Map[String, Int] = @schema.FromSchema::from_value(
+  let from_wire : Map[String, Int32] = @schema.from_wire(tree)
+  let from_value : Map[String, Int32] = @schema.FromSchema::from_value(
     @model.SchemaValue::Map([
       { key: String("a"), value: S32(1), },
       { key: String("b"), value: S32(2), },
@@ -416,7 +416,7 @@ test "early and late wrapped endpoint aliases preserve every holder" {
 }
 
 ///|
-fn utf16(units : Array[Int]) -> String {
+fn utf16(units : Array[Int32]) -> String {
   String::from_array(units.map(unit => unit.unsafe_to_char()))
 }
 

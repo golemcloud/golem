@@ -27,6 +27,7 @@ pub fn generate_reexports(
       quantifiers: to_list([]),
       return_type: Some(make_type(fn_.return_type)),
       error_type: @syntax.ErrorType::NoErrorType,
+      nocancel_: None,
       vis: @syntax.Visibility::Pub(attr=None, loc=dummy_loc),
       attrs: to_list([]),
       doc: @syntax.DocString::empty(),

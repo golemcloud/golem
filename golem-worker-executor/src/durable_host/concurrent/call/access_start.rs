@@ -58,8 +58,7 @@ impl AccessCallIdentity {
     }
 }
 
-impl<Pair, P, T, D, Ctx, E> wasmtime::component::AccessorTask<T, D>
-    for OwnedAccessStart<Pair, P, T, D, Ctx, E>
+impl<Pair, P, T, D, Ctx, E> OwnedAccessStart<Pair, P, T, D, Ctx, E>
 where
     Pair: HostPayloadPair,
     P: DropPolicy,
@@ -121,16 +120,14 @@ where
     }
 }
 
-impl<Pair, P, T, D, Ctx> wasmtime::component::AccessorTask<T, D>
-    for OwnedReplayClaim<Pair, P, T, Ctx>
+impl<Pair, P, T, Ctx> OwnedReplayClaim<Pair, P, T, Ctx>
 where
     Pair: HostPayloadPair,
     P: DropPolicy,
     T: 'static,
-    D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    async fn run(self, accessor: &Accessor<T, D>) -> wasmtime::Result<()> {
+    async fn run<D: HasData + ?Sized>(self, accessor: &Accessor<T, D>) -> wasmtime::Result<()> {
         let Self {
             identity,
             function_type,
@@ -646,7 +643,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let (started, receiver) = oneshot::channel();
         let activity =
             store.with(|mut access| get_ctx(access.data_mut()).tail_work_tracker().activity());
-        store.spawn(OwnedAccessStart {
+        let task = OwnedAccessStart {
             stage,
             get_ctx,
             request,
@@ -654,7 +651,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             span_observer,
             started,
             _activity: activity,
-        });
+        };
+        store
+            .spawn(async move |store| task.run(store).await)
+            .map_err(|error| E::from_durable_call_trap(error.into()))?;
         receiver.await.map_err(|_| {
             WorkerExecutorError::runtime("owned durable call start ended without a result")
         })?
@@ -945,14 +945,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             let (claimed, receiver) = oneshot::channel();
             let activity =
                 store.with(|mut access| get_ctx(access.data_mut()).tail_work_tracker().activity());
-            store.spawn(OwnedReplayClaim {
+            let task = OwnedReplayClaim {
                 identity,
                 function_type,
                 claim_options,
                 get_ctx,
                 claimed,
                 _activity: activity,
-            });
+            };
+            store
+                .spawn(async move |store| task.run(store).await)
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             receiver.await.map_err(|_| {
                 WorkerExecutorError::runtime("owned durable call claim ended without a result")
             })??

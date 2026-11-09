@@ -21,13 +21,13 @@ fn run_agent_stream_async(body : async () -> Unit) -> Unit raise {
 extern "wasm" fn reset_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
 
 ///|
-extern "wasm" fn resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+extern "wasm" fn resource_drop_count(kind : Int32) -> Int32 = "golem:test" "resource-drop-count"
 
 ///|
-extern "wasm" fn set_schema_value_stream_host_mode(mode : Int) = "golem:test" "set-schema-value-stream-host-mode"
+extern "wasm" fn set_schema_value_stream_host_mode(mode : Int32) = "golem:test" "set-schema-value-stream-host-mode"
 
 ///|
-fn fake_agent_stream(id : Int) -> AgentStream[Int] {
+fn fake_agent_stream(id : Int32) -> AgentStream[Int32] {
   {
     handle: @model.GuestSchemaValueStreamHandle::from_wrapped(
       @types.SchemaValueStream::SchemaValueStream(id),
@@ -38,7 +38,7 @@ fn fake_agent_stream(id : Int) -> AgentStream[Int] {
 
 ///|
 priv enum EncodeProbe {
-  EncodeCapability(AgentStream[Int])
+  EncodeCapability(AgentStream[Int32])
   EncodeInvalid
 }
 
@@ -66,7 +66,7 @@ impl IntoWire for EncodeProbe with fn release_wire(self, releaser) {
 ///|
 test "typed producer closes normally and preserves order" {
   run_agent_stream_async(async fn() {
-    let stream : AgentStream[Int] = AgentStream::produce(async fn(writer) {
+    let stream : AgentStream[Int32] = AgentStream::produce(async fn(writer) {
       assert_true(writer.write_one(1) is Accepted)
       assert_true(writer.write_all([2, 3]) is Accepted)
     })
@@ -80,7 +80,7 @@ test "typed producer closes normally and preserves order" {
 ///|
 test "explicit close is idempotent and produces clean EOF" {
   run_agent_stream_async(async fn() {
-    let (writer, stream) : (AgentStreamWriter[Int], AgentStream[Int]) = AgentStream::new()
+    let (writer, stream) : (AgentStreamWriter[Int32], AgentStream[Int32]) = AgentStream::new()
     writer.close()
     writer.close()
     assert_true(stream.read() is None)
@@ -90,7 +90,7 @@ test "explicit close is idempotent and produces clean EOF" {
 ///|
 test "accepted write waits for reader demand" {
   run_agent_stream_async(async fn() {
-    let (writer, stream) : (AgentStreamWriter[Int], AgentStream[Int]) = AgentStream::new()
+    let (writer, stream) : (AgentStreamWriter[Int32], AgentStream[Int32]) = AgentStream::new()
     let (started, started_promise) = @async-core.Future::new()
     let completed = [false]
     @async-core.with_task_group(async fn(group) {
@@ -116,8 +116,8 @@ test "partial write_all owns and cleans every nested stream" {
   run_agent_stream_async(async fn() {
     let values = Array::makei(70, fake_agent_stream)
     let (writer, stream) : (
-      AgentStreamWriter[AgentStream[Int]],
-      AgentStream[AgentStream[Int]],
+      AgentStreamWriter[AgentStream[Int32]],
+      AgentStream[AgentStream[Int32]],
     ) = AgentStream::new()
     @async-core.with_task_group(async fn(group) {
       let write = group.spawn(async fn() { writer.write_all(values) })
@@ -138,8 +138,8 @@ test "cancelled writes propagate cancellation and clean pending items" {
   run_agent_stream_async(async fn() {
     let value = fake_agent_stream(100)
     let (writer, stream) : (
-      AgentStreamWriter[AgentStream[Int]],
-      AgentStream[AgentStream[Int]],
+      AgentStreamWriter[AgentStream[Int32]],
+      AgentStream[AgentStream[Int32]],
     ) = AgentStream::new()
     let (started, started_promise) = @async-core.Future::new()
     @async-core.with_task_group(async fn(group) {
@@ -150,7 +150,7 @@ test "cancelled writes propagate cancellation and clean pending items" {
       started.get()
       write.cancel()
       try write.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         _ => fail("writer cancellation changed error category")
       } noraise {
         _ => fail("cancelled writer unexpectedly completed")
@@ -196,7 +196,7 @@ test "cancellation while wrapping a nested stream stays canonical" {
     set_schema_value_stream_host_mode(3)
     defer set_schema_value_stream_host_mode(0)
     let captured = fake_agent_stream(120)
-    let nested : AgentStream[Int] = AgentStream::produce(
+    let nested : AgentStream[Int32] = AgentStream::produce(
       async fn(writer) {
         producer_started[0] = true
         captured.drop()
@@ -208,8 +208,8 @@ test "cancellation while wrapping a nested stream stays canonical" {
       },
     )
     let (writer, stream) : (
-      AgentStreamWriter[AgentStream[Int]],
-      AgentStream[AgentStream[Int]],
+      AgentStreamWriter[AgentStream[Int32]],
+      AgentStream[AgentStream[Int32]],
     ) = AgentStream::new()
     let (started, started_promise) = @async-core.Future::new()
     @async-core.with_task_group(async fn(group) {
@@ -220,7 +220,7 @@ test "cancellation while wrapping a nested stream stays canonical" {
       started.get()
       write.cancel()
       try write.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         error =>
           fail("nested wrap cancellation changed category: \{Repr(error)}")
       } noraise {
@@ -241,7 +241,7 @@ test "unstarted producer cleanup runs exactly once" {
   let producer_started = [false]
   let cleanup_runs = [0]
   let captured = fake_agent_stream(130)
-  let stream : AgentStream[Int] = AgentStream::produce(
+  let stream : AgentStream[Int32] = AgentStream::produce(
     async fn(writer) {
       producer_started[0] = true
       captured.drop()
@@ -266,7 +266,7 @@ test "starting a producer clears its unstarted cleanup" {
   let cleanup_runs = [0]
   run_agent_stream_async(async fn() {
     let captured = fake_agent_stream(131)
-    let stream : AgentStream[Int] = AgentStream::produce(
+    let stream : AgentStream[Int32] = AgentStream::produce(
       async fn(writer) {
         producer_started[0] = true
         captured.drop()
@@ -288,7 +288,7 @@ test "starting a producer clears its unstarted cleanup" {
 ///|
 test "cancelled reads propagate canonical cancellation" {
   run_agent_stream_async(async fn() {
-    let (writer, stream) : (AgentStreamWriter[Int], AgentStream[Int]) = AgentStream::new()
+    let (writer, stream) : (AgentStreamWriter[Int32], AgentStream[Int32]) = AgentStream::new()
     let (started, started_promise) = @async-core.Future::new()
     @async-core.with_task_group(async fn(group) {
       let read = group.spawn(async fn() {
@@ -298,7 +298,7 @@ test "cancelled reads propagate canonical cancellation" {
       started.get()
       read.cancel()
       try read.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         _ => fail("reader cancellation changed error category")
       } noraise {
         _ => fail("cancelled reader unexpectedly completed")
@@ -325,7 +325,7 @@ test "cancellation while unwrapping a stream stays canonical and drops it" {
       started.get()
       read.cancel()
       try read.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         error => fail("stream unwrap changed cancellation: \{Repr(error)}")
       } noraise {
         _ => fail("cancelled stream unwrap unexpectedly completed")
@@ -341,8 +341,8 @@ test "read distinguishes ownership wire and item failures" {
   reset_resource_drop_counts()
   run_agent_stream_async(async fn() {
     let (ownership_writer, ownership_stream) : (
-      AgentStreamWriter[Int],
-      AgentStream[Int],
+      AgentStreamWriter[Int32],
+      AgentStream[Int32],
     ) = AgentStream::new()
     ownership_writer.close()
     assert_true(ownership_stream.read() is None)
@@ -366,7 +366,7 @@ test "read distinguishes ownership wire and item failures" {
     }
     assert_true(wire_sink.write_all([malformed][:]))
     wire_sink.close()
-    let wire_stream : AgentStream[Int] = AgentStream::from_reader(
+    let wire_stream : AgentStream[Int32] = AgentStream::from_reader(
       wire_reader, from_value_as,
     )
     try wire_stream.read() catch {
@@ -388,7 +388,7 @@ test "read distinguishes ownership wire and item failures" {
     }
     assert_true(item_sink.write_all([wrong_item][:]))
     item_sink.close()
-    let item_stream : AgentStream[Int] = AgentStream::from_reader(
+    let item_stream : AgentStream[Int32] = AgentStream::from_reader(
       item_reader, from_value_as,
     )
     try item_stream.read() catch {
@@ -412,7 +412,7 @@ test "read distinguishes ownership wire and item failures" {
     }
     assert_true(partial_sink.write_all([partial_item][:]))
     partial_sink.close()
-    let partial_stream : AgentStream[(AgentStream[Int], Int)] = AgentStream::from_reader(
+    let partial_stream : AgentStream[(AgentStream[Int32], Int32)] = AgentStream::from_reader(
       partial_reader, from_value_as,
     )
     try partial_stream.read() catch {
@@ -448,8 +448,8 @@ test "unread stream transfer is affine" {
   run_agent_stream_async(async fn() {
     let original = fake_agent_stream(220)
     let (writer, stream) : (
-      AgentStreamWriter[AgentStream[Int]],
-      AgentStream[AgentStream[Int]],
+      AgentStreamWriter[AgentStream[Int32]],
+      AgentStream[AgentStream[Int32]],
     ) = AgentStream::new()
     @async-core.with_task_group(async fn(group) {
       let write = group.spawn(async fn() { writer.write_one(original) })
@@ -461,8 +461,8 @@ test "unread stream transfer is affine" {
       forwarded.drop()
     })
     let (duplicate_writer, duplicate_stream) : (
-      AgentStreamWriter[AgentStream[Int]],
-      AgentStream[AgentStream[Int]],
+      AgentStreamWriter[AgentStream[Int32]],
+      AgentStream[AgentStream[Int32]],
     ) = AgentStream::new()
     try duplicate_writer.write_one(original) catch {
       WireError::Invalid("stream has already been transferred") => ()
@@ -506,8 +506,8 @@ test "unwrap and reader failures report transport errors" {
 
 ///|
 priv struct CodecItem {
-  stream : AgentStream[Int]
-  value : Int
+  stream : AgentStream[Int32]
+  value : Int32
 }
 
 ///|
@@ -558,7 +558,7 @@ test "fallible item codec releases prefix failing item and unconverted suffix" {
 test "codec-bound producer forwards unread without running either item codec" {
   let calls = Ref(0)
   let unstarted = Ref(0)
-  let stream : AgentStream[Int] = AgentStream::produce_with_codec(
+  let stream : AgentStream[Int32] = AgentStream::produce_with_codec(
     _ => calls.val += 1,
     _ => {
       calls.val += 1
@@ -572,7 +572,7 @@ test "codec-bound producer forwards unread without running either item codec" {
     on_unstarted_drop=() => unstarted.val += 1,
   )
   let model = stream.to_schema_value()
-  let forwarded : AgentStream[Int] = AgentStream::from_value_with_codec(
+  let forwarded : AgentStream[Int32] = AgentStream::from_value_with_codec(
     model, from_value_as,
   )
   assert_eq(calls.val, 0)
@@ -615,7 +615,9 @@ test "a failed output payload encode releases its permission cards" {
   ignore(consumed.take())
   let card = @card.adopt(@types.PermissionCard::PermissionCard(642))
   run_agent_stream_async(async fn() {
-    let result = try? into_wire_payload_record_async([card, consumed])
+    let result = Ok(into_wire_payload_record_async([card, consumed])) catch {
+      error => Err(error)
+    }
     assert_true(result is Err(_))
   })
   // Nothing owns a discarded payload, so its card is dropped.

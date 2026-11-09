@@ -10,17 +10,17 @@
 ///|
 #warnings("-unused_field")
 struct StreamThenInt {
-  stream : AgentStream[Int]
-  value : Int
+  stream : AgentStream[Int32]
+  value : Int32
 }
 
 ///|
 impl FromSchema for StreamThenInt with fn from_value(value) {
   let fields = expect_record(value, "StreamThenInt")
-  let stream : AgentStream[Int] = from_value_as(
+  let stream : AgentStream[Int32] = from_value_as(
     record_field(fields, 0, "StreamThenInt"),
   )
-  let decoded : Int = from_value_as(record_field(fields, 1, "StreamThenInt"))
+  let decoded : Int32 = from_value_as(record_field(fields, 1, "StreamThenInt"))
   { stream, value: decoded, }
 }
 
@@ -63,35 +63,35 @@ test "bytes round-trip" {
 
 ///|
 test "option round-trips" {
-  assert_eq(roundtrip((Some(7) : Int?)), Some(7))
-  assert_eq(roundtrip((None : Int?)), None)
+  assert_eq(roundtrip((Some(7) : Int32?)), Some(7))
+  assert_eq(roundtrip((None : Int32?)), None)
   assert_eq(roundtrip((Some("x") : String?)), Some("x"))
 }
 
 ///|
 test "array round-trips" {
-  assert_eq(roundtrip(([1, 2, 3] : Array[Int])), [1, 2, 3])
-  assert_eq(roundtrip(([] : Array[Int])), [])
+  assert_eq(roundtrip(([1, 2, 3] : Array[Int32])), [1, 2, 3])
+  assert_eq(roundtrip(([] : Array[Int32])), [])
   assert_eq(roundtrip((["a", "b"] : Array[String])), ["a", "b"])
 }
 
 ///|
 test "result round-trips (non-unit)" {
-  assert_eq(roundtrip((Ok(1) : Result[Int, String])), Ok(1))
-  assert_eq(roundtrip((Err("boom") : Result[Int, String])), Err("boom"))
+  assert_eq(roundtrip((Ok(1) : Result[Int32, String])), Ok(1))
+  assert_eq(roundtrip((Err("boom") : Result[Int32, String])), Err("boom"))
 }
 
 ///|
 test "result round-trips (unit ok / err omit payload)" {
   assert_eq(roundtrip((Ok(()) : Result[Unit, String])), Ok(()))
   assert_eq(roundtrip((Err("e") : Result[Unit, String])), Err("e"))
-  assert_eq(roundtrip((Ok(5) : Result[Int, Unit])), Ok(5))
-  assert_eq(roundtrip((Err(()) : Result[Int, Unit])), Err(()))
+  assert_eq(roundtrip((Ok(5) : Result[Int32, Unit])), Ok(5))
+  assert_eq(roundtrip((Err(()) : Result[Int32, Unit])), Err(()))
 }
 
 ///|
 test "map round-trip" {
-  let m : Map[String, Int] = { "a": 1, "b": 2 }
+  let m : Map[String, Int32] = { "a": 1, "b": 2 }
   assert_eq(roundtrip(m), m)
 }
 
@@ -104,7 +104,7 @@ test "tuple round-trips" {
 
 ///|
 test "nested compound round-trips" {
-  assert_eq(roundtrip(([Some(1), None, Some(3)] : Array[Int?])), [
+  assert_eq(roundtrip(([Some(1), None, Some(3)] : Array[Int32?])), [
     Some(1),
     None,
     Some(3),
@@ -115,7 +115,7 @@ test "nested compound round-trips" {
 ///|
 test "structural type has no named definitions" {
   // A structural (inline) type produces no named definitions.
-  let tag : TypeTag[Int] = type_tag()
+  let tag : TypeTag[Int32] = type_tag()
   let g = into_schema_graph(tag)
   assert_eq(g.defs.length(), 0)
 }
@@ -123,7 +123,7 @@ test "structural type has no named definitions" {
 ///|
 test "shape mismatch surfaces a FromSchemaError" {
   let v : @model.SchemaValue = String("nope")
-  let r : Result[Int, FromSchemaError] = try from_value_as(v) |> Ok catch {
+  let r : Result[Int32, FromSchemaError] = try from_value_as(v) |> Ok catch {
     e => Err(e)
   }
   guard r is Err(ShapeMismatch(expected~, actual~, context~)) else {
@@ -139,7 +139,7 @@ test "AgentStream decoding shares the take-once stream holder" {
   let source = @model.GuestSchemaValueStreamHandle::from_wrapped(
     @types.SchemaValueStream::SchemaValueStream(30),
   )
-  let stream : AgentStream[Int] = from_value_as(
+  let stream : AgentStream[Int32] = from_value_as(
     @model.SchemaValue::Stream(source),
   )
   assert_true(source.is_present())
@@ -168,7 +168,7 @@ test "compound conversion rollback retains ownership in the source tree" {
     @model.SchemaValue::Stream(array_handle),
     @model.SchemaValue::S32(1),
   ])
-  let array_result : Result[Array[AgentStream[Int]], FromSchemaError] = try
+  let array_result : Result[Array[AgentStream[Int32]], FromSchemaError] = try
     from_value_as(array_source) |> Ok
   catch {
     e => Err(e)
@@ -183,7 +183,7 @@ test "compound conversion rollback retains ownership in the source tree" {
     @model.SchemaValue::Stream(tuple_handle),
     @model.SchemaValue::String("not an int"),
   ])
-  let tuple_result : Result[(AgentStream[Int], Int), FromSchemaError] = try
+  let tuple_result : Result[(AgentStream[Int32], Int32), FromSchemaError] = try
     from_value_as(tuple_source) |> Ok
   catch {
     e => Err(e)

@@ -114,7 +114,7 @@ pub(in crate::durable_host::p3::http) fn apply_headers_to_request_resource<
                     "failed to get outgoing p3 HTTP request from table: {err}"
                 ))
             })?;
-        apply_managed_http_headers(&mut request.headers, field_size_limit, headers)
+        apply_managed_http_headers(&mut request.headers, view.hooks, field_size_limit, headers)
             .map_err(WorkerExecutorError::runtime)
     })
 }

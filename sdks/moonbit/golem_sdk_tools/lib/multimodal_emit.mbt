@@ -15,7 +15,7 @@
 /// type-id package-qualified, exactly like value types.
 pub fn generate_multimodal_impls(
   enums : Array[MultimodalEnumInfo],
-  type_id_prefix? : String = "",
+  type_id_prefix~ : String = "",
 ) -> @list.List[@syntax.Impl] {
   let buf = StringBuilder()
   for e in enums {

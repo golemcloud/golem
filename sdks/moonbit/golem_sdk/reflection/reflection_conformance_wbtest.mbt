@@ -59,7 +59,11 @@ fn conformance_string(
 }
 
 ///|
-fn conformance_count(value : Json, id : String, context : String) -> Int raise {
+fn conformance_count(
+  value : Json,
+  id : String,
+  context : String,
+) -> Int32 raise {
   match value {
     Number(value, ..) => value.to_int()
     _ => fail(id + ": expected " + context + " number")
