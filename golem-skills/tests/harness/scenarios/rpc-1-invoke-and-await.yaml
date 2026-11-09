@@ -80,6 +80,18 @@ steps:
         return a `Future[Boolean]` — the value returned by `register`.
 
         Make sure the project builds successfully.
+      kotlin: >
+        In the test-app project, add a second agent type called `GlobalRegistry` that is a singleton (no constructor parameters, a single global instance, created with `GlobalRegistry()`). It must expose two
+        externally invokable methods: `register(name: String, count: Long): Boolean`
+        and `getAll(): List<RegistryEntry>`. Define a `RegistryEntry` data class with fields `name: String` and `count: Long`. `register` must store or update the name
+        and count in agent state and return `true` if count < 5, `false` otherwise. `getAll`
+        must return all stored entries.
+
+        Then modify the existing `CounterAgent` so that every time `increment` is called it
+        invokes the `GlobalRegistry` singleton's `register` method, passing the counter's
+        own name and its new count value, and awaits the result. Change `increment` to return a `Boolean` — the value returned by `register`.
+
+        Make sure the project builds successfully.
       moonbit: >
         In the test-app project, add a second agent type called `GlobalRegistry` that is a
         singleton (no constructor parameter / single global instance). It must expose two
@@ -119,6 +131,8 @@ steps:
         - "golem-call-another-agent-effect"
       scala:
         - "golem-call-another-agent-scala"
+      kotlin:
+        - "golem-call-another-agent-kotlin"
       moonbit:
         - "golem-call-another-agent-moonbit"
       go:
@@ -198,6 +212,7 @@ steps:
         ts: "getAll"
         effect: "getAll"
         scala: "getAll"
+        kotlin: "getAll"
         moonbit: "get_all"
         go: "getAll"
     expect:

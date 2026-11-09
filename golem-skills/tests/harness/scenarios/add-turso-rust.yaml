@@ -1,4 +1,8 @@
 name: "add-turso-rust"
+skip_if:
+  # Turso's embedded replica is a Rust crate linked into the component. Kotlin/Wasm has no
+  # cinterop and cannot link a native library, so there is nothing to convert.
+  language: "kotlin"
 steps:
   - id: "create-project"
     only_if:

@@ -1,0 +1,108 @@
+# Configuring Agent Durability (Kotlin)
+
+## Durable Agents (Default)
+
+By default, every Golem agent is **durable**:
+
+- State persists across invocations, failures, and restarts
+- Every side effect is recorded in an **oplog** (operation log)
+- On failure, the agent is transparently recovered by replaying the oplog
+- No special code needed — durability is automatic
+
+> **You cannot opt out of oplog writes for a durable agent.** The oplog is how durability works — every side effect must be recorded. If you are worried about oplog volume or replay cost (long-running agents, heartbeats, polling, recurring tasks), do *not* try to skip persistence. Use **durable with periodic snapshots** instead (see below).
+
+A standard durable agent needs no extra annotation parameter — this is the default:
+
+```kotlin
+import cloud.golem.BaseAgent
+import cloud.golem.annotations.Agent
+import cloud.golem.annotations.Endpoint
+
+@Agent(mount = "/counters/{name}")
+class CounterAgent(val name: String) : BaseAgent() {
+    private var count: Int = 0
+
+    @Endpoint(post = "/increment")
+    fun increment(): Int {
+        count++
+        return count
+    }
+}
+```
+
+## Durable with Periodic Snapshots
+
+Same durability guarantees as the default durable mode, but recovery starts from the **latest snapshot** instead of replaying the full oplog from the beginning. Use this whenever the oplog grows unboundedly — long-running agents, high-frequency state changes, **heartbeats, polling loops, recurring tasks**.
+
+```kotlin
+@Agent(snapshotting = "every(10)")             // snapshot every 10 successful calls
+class CounterAgent(val name: String) : BaseAgent() { /* ... */ }
+
+@Agent(snapshotting = "periodic(30000000000)") // or at most once per interval, in nanoseconds (30s here)
+class HeartbeatAgent : BaseAgent() { /* ... */ }
+```
+
+See [`golem-custom-snapshot-kotlin`](/next/how-to-guides/kotlin/golem-custom-snapshot-kotlin) for the full set of snapshotting modes and custom binary save/load hooks.
+
+## Ephemeral Agents
+
+Use **ephemeral** mode for stateless, per-invocation agents where persistence is not needed:
+
+```kotlin
+@Agent(mode = "ephemeral")
+class RequestHandler : BaseAgent() {
+    @Endpoint
+    fun handle(input: String): String = "processed: $input"
+}
+```
+
+- **No shared state**: each invocation starts from a fresh constructor call — field values set in one call are gone by the next.
+- **No replay**: an oplog is still recorded lazily (useful for debugging via `golem agent oplog`), but it is never used for replay — no automatic recovery on failure.
+- **No persistence**: the agent's memory is discarded after each invocation completes.
+- **Same identity model**: the agent is still addressed by its constructor parameters, but every call behaves as if the agent was just created.
+
+This makes ephemeral agents ideal for pure request handlers, stateless transformers, adapters, and serverless-style functions where each call is independent.
+
+### Fresh instance per invocation, contrasted
+
+```kotlin
+// DURABLE (default) -- state accumulates across calls
+@Agent(mount = "/counters/{name}")
+class DurableCounter(val name: String) : BaseAgent() {
+    private var count = 0
+    @Endpoint(post = "/increment")
+    fun increment(): Int { count++; return count }   // 1, 2, 3, ... across calls
+}
+
+// EPHEMERAL -- every call starts from a fresh instance
+@Agent(mode = "ephemeral", mount = "/counters/{name}")
+class EphemeralCounter(val name: String) : BaseAgent() {
+    private var count = 0
+    @Endpoint(post = "/increment")
+    fun increment(): Int { count++; return count }   // always 1
+}
+```
+
+### Ephemeral agents and phantom addressing
+
+Ephemeral agents only get `getPhantom`/`newPhantom` factories, never `get` — there is no single durable instance to reuse. See [`golem-multi-instance-agent-kotlin`](/next/how-to-guides/kotlin/golem-multi-instance-agent-kotlin).
+
+## When to Choose Which
+
+| Use Case | Mode |
+|----------|------|
+| Counter, shopping cart, workflow orchestrator | **Durable** (default) |
+| Stateless request processor, transformer | **Ephemeral** |
+| Long-running saga or multi-step pipeline | **Durable** (default) |
+| Pure computation, no side effects worth persisting | **Ephemeral** |
+| Agent that calls other agents with at-least-once semantics | **Durable** (default) |
+| Long-running agent with heartbeats, polling, or recurring tasks | **Durable + periodic snapshots** |
+| Any durable agent whose oplog grows so large that replay is slow | **Durable + periodic snapshots** |
+
+When in doubt, use the default (durable). Ephemeral mode is an optimization for agents that genuinely don't need persistence. Add periodic snapshots whenever recovery time matters.
+
+## Related skills
+
+- [`golem-add-agent-kotlin`](/next/how-to-guides/kotlin/golem-add-agent-kotlin)
+- [`golem-custom-snapshot-kotlin`](/next/how-to-guides/kotlin/golem-custom-snapshot-kotlin)
+- [`golem-multi-instance-agent-kotlin`](/next/how-to-guides/kotlin/golem-multi-instance-agent-kotlin)

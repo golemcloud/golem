@@ -1,0 +1,100 @@
+---
+name: golem-add-kotlin-dependency
+description: "Add a new library dependency to a Kotlin Golem project. Use when the user asks to add a library, package, artifact, or dependency."
+---
+
+# Add a Kotlin Library Dependency
+
+## Important constraints
+
+- Golem Kotlin components compile to WebAssembly through **Kotlin/Wasm with the `wasmWasi` target**.
+  Only a Kotlin Multiplatform library that publishes that target will work.
+- `wasmWasi` and `wasmJs` are different targets. A library may publish `wasmJs` and still be
+  unusable here — Ktor is the common example.
+- A JVM library never works, whatever it does: there is no `java.*`, no reflection and no
+  classloading in the component.
+- A library with a native or C part never works either. Kotlin/Wasm has no `cinterop`, which is why
+  an agent cannot embed a C library such as SQLite. Use the Golem host wrappers
+  (`golem-add-postgres-kotlin`, `golem-add-mysql-kotlin`) for a database instead.
+
+## Check the target before adding
+
+A Kotlin Multiplatform library publishes one artifact per target, suffixed with the target name, so
+the `wasmWasi` variant is `<artifact>-wasm-wasi`. Look for that artifact in the Maven Central
+listing of the library's group, for example:
+
+```
+https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-serialization-json-wasm-wasi/
+```
+
+If only `-wasm-js` is listed, the library does not support this target. Look for an alternative, or
+write the functionality against the SDK.
+
+These are known to publish `wasm-wasi`: `kotlinx-serialization-json`, `kotlinx-coroutines-core`,
+`kotlinx-io-core`, `kotlinx-datetime`, `okio`.
+
+## Steps
+
+1. **Add the dependency to the component's `build.gradle.kts`**
+
+   Put it in the `wasmWasiMain` source set, beside the SDK dependency. Write the plain artifact
+   name — Gradle appends the target suffix when it resolves a multiplatform dependency:
+
+   ```kotlin
+   kotlin {
+       sourceSets {
+           val wasmWasiMain by getting {
+               dependencies {
+                   implementation("cloud.golem:golem-kotlin-sdk:$golemKotlinVersion")
+                   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
+               }
+           }
+       }
+   }
+   ```
+
+2. **Apply the compiler plugin, if the library needs one**
+
+   `kotlinx-serialization` is a compiler plugin as well as a library, so `@Serializable` only works
+   once the plugin is applied. The component's `plugins` block carries no versions, because
+   `settings.gradle.kts` pins the ones the template uses; a plugin the template does not pin needs
+   its version here. Use the same version as the pinned Kotlin plugin:
+
+   ```kotlin
+   plugins {
+       kotlin("multiplatform")
+       kotlin("plugin.serialization") version "2.4.0"
+       id("com.google.devtools.ksp")
+       id("cloud.golem.wasm-component")
+   }
+   ```
+
+3. **Build to verify**
+
+   ```shell
+   golem build --yes
+   ```
+
+   Do NOT run `gradle build` directly — always use `golem build`, which runs the component pipeline
+   (Kotlin/Wasm compile, then `wasm-tools` embed, new and validate).
+
+## If the build fails
+
+- `Could not find <artifact>-wasm-wasi` means the library does not publish the target. The artifact
+  name in the error is the one to look for in Maven Central.
+- An unresolved reference to `java.*` means the library is JVM-only even though it resolved.
+- `Unresolved reference: Serializable` means the dependency is present but its compiler plugin is
+  not applied; see step 2.
+
+## Already available
+
+Do NOT add these again:
+
+- `cloud.golem:golem-kotlin-sdk` — agents, durability, transactions, host APIs
+- `cloud.golem:golem-kotlin-ksp` — the KSP processor that generates the agent registration
+- the Kotlin standard library, which the multiplatform plugin adds for the target
+
+## HTTP and networking
+
+Use the SDK's HTTP client (`golem-make-http-request-kotlin`). Ktor publishes no `wasm-wasi`
+artifact, and `java.net` does not exist in the component.

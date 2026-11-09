@@ -1,0 +1,38 @@
+# Marking Methods Read-Only (Kotlin)
+
+Annotate a method that does not mutate agent state with `@ReadOnly` (`cloud.golem.annotations.ReadOnly`). Golem may then cache its result.
+
+```kotlin
+@Agent(mount = "/counters/{name}")
+class CounterAgent(val name: String) : BaseAgent() {
+    private var value = 0
+
+    @Endpoint(post = "/increment")
+    fun increment(): Int = ++value
+
+    @ReadOnly                       // default policy: until-write
+    @Endpoint(get = "/count")
+    fun getCount(): Int = value
+}
+```
+
+## Cache policy
+
+The `cache` argument is a string:
+
+| Value | Meaning |
+|---|---|
+| `"until-write"` (default) | cached until the next state-mutating call |
+| `"no-cache"` | never cached |
+| `"ttl(<nanos>)"` | cached for a fixed duration in nanoseconds, e.g. `@ReadOnly("ttl(5000000000)")` for 5 s |
+
+## Rules
+
+- Only mark methods that truly do not change state or cause side effects (no RPC writes, no external effects); a cached result is not recomputed.
+- Read-only methods are still ordinary `@Endpoint` methods; combine with `@Prompt` / `@Description` freely.
+- The policy appears in the agent type metadata (`golem agent-type list --format json` shows `cachePolicy`, e.g. `{"type":"UntilWrite"}`).
+
+## Related skills
+
+- [`golem-annotate-agent-kotlin`](/next/how-to-guides/kotlin/golem-annotate-agent-kotlin)
+- [`golem-add-agent-kotlin`](/next/how-to-guides/kotlin/golem-add-agent-kotlin)

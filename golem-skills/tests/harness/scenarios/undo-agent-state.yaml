@@ -14,6 +14,7 @@ steps:
         rust: &non-effect-counter-agent 'CounterAgent("c1")'
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
+        kotlin: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
         go: *non-effect-counter-agent
       method: "increment"
@@ -37,6 +38,7 @@ steps:
         after just one increment.
       ts: *revert-counter-prompt
       scala: *revert-counter-prompt
+      kotlin: *revert-counter-prompt
       moonbit: *revert-counter-prompt
       go: *revert-counter-prompt
     expectedSkills:

@@ -24,8 +24,8 @@ steps:
 
         Add `DurableConsumer`, also with one string identity, mounted at
         `/durable-consumer/{name}`. Its normal, externally invokable method `consume_url` in Rust
-        and MoonBit or `consumeUrl` in TypeScript, Effect, and Scala accepts a protocol-compatible
-        Durable Streams URL string. Do not expose that method as an HTTP endpoint. It must use this
+        and MoonBit or `consumeUrl` in TypeScript, Effect, Scala, Kotlin, and Go accepts a
+        protocol-compatible Durable Streams URL string. Do not expose that method as an HTTP endpoint. It must use this
         language SDK's external Durable Streams JSON reader, consume string messages incrementally
         until closure, and return them as a list/array. Do not parse this URL with a generic HTTP
         client and do not use typed agent RPC for the consumer. Keep generic agent-to-agent
@@ -34,6 +34,7 @@ steps:
       ts: *durable-stream-prompt
       effect: *durable-stream-prompt
       scala: *durable-stream-prompt
+      kotlin: *durable-stream-prompt
       moonbit: *durable-stream-prompt
       go: *durable-stream-prompt
     expectedSkills:
@@ -45,6 +46,8 @@ steps:
         - "golem-durable-streams-effect"
       scala:
         - "golem-durable-streams-scala"
+      kotlin:
+        - "golem-durable-streams-kotlin"
       moonbit:
         - "golem-durable-streams-moonbit"
       go:
@@ -103,6 +106,7 @@ steps:
         ts: "consumeUrl"
         effect: "consumeUrl"
         scala: "consumeUrl"
+        kotlin: "consumeUrl"
         moonbit: "consume_url"
         go: "consumeUrl"
       args: '"http://localhost:{{custom_request_port}}/durable/main/uppercase/invocations/harness-session/streams/outbox"'

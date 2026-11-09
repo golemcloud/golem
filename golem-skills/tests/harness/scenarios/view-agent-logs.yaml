@@ -26,6 +26,12 @@ steps:
         In the test-app project, modify the CounterAgent's increment method to print the
         current counter value to stdout each time it is called, using println. For example,
         print "counter value: {value}" where {value} is the counter value after incrementing.
+      kotlin: >
+        In the test-app project, modify the CounterAgent's increment method to print the
+        current counter value to stdout each time it is called, using println. For example,
+        print "counter value: {value}" where {value} is the counter value after incrementing.
+        Do not invoke any CounterAgent instance yourself; the harness counts the increments of
+        the instance named "c1".
       moonbit: >
         In the test-app project, modify the CounterAgent's increment method to print the
         current counter value to stdout each time it is called, using println. For example,
@@ -56,6 +62,12 @@ steps:
         for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
         output looks like without streaming. Redirect the full CLI output (both stdout and stderr)
         to a file called no-stream-output.txt in the test-app directory.
+      kotlin: >
+        I want to view the agent's stdout logs. First, invoke the CounterAgent's increment method
+        for a counter named "c1" with live log streaming turned off, so the CLI prints the
+        invocation result and nothing the agent logged, to see what the output looks like without
+        streaming. Redirect the full CLI output (both stdout and stderr) to a file called
+        no-stream-output.txt in the test-app directory. Invoke "c1" exactly once.
       moonbit: >
         I want to view the agent's stdout logs. First, invoke the CounterAgent's increment method
         for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
@@ -66,8 +78,26 @@ steps:
         for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
         output looks like without streaming. Redirect the full CLI output (both stdout and stderr)
         to a file called no-stream-output.txt in the test-app directory.
+    # `golem-invoke-agent-kotlin` documents `--no-stream` itself (its flag table), and
+    # `golem-logging-kotlin` points at it, so a Kotlin agent asked to turn streaming off never
+    # needs the log-viewing skill — two runs activated those two and not it. Only the
+    # `--logs-only`, `--stream-no-timestamp` and `--stream-no-log-level` flags of the later step
+    # are exclusive to `golem-view-agent-logs`. The other six expectations are untouched.
     expectedSkills:
-      - "golem-view-agent-logs"
+      rust:
+        - "golem-view-agent-logs"
+      ts:
+        - "golem-view-agent-logs"
+      effect:
+        - "golem-view-agent-logs"
+      scala:
+        - "golem-view-agent-logs"
+      moonbit:
+        - "golem-view-agent-logs"
+      go:
+        - "golem-view-agent-logs"
+      kotlin:
+        - "golem-invoke-agent-kotlin"
 
   - id: "check-no-stream"
     check_file:
@@ -93,6 +123,11 @@ steps:
         Now invoke the CounterAgent's increment method for counter "c1" again, this time with
         default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
         stdout and stderr) to a file called stream-output.txt in the test-app directory.
+      kotlin: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time with the
+        CLI's default live log streaming, so what the agent printed appears in the output.
+        Redirect the full CLI output (both stdout and stderr) to a file called stream-output.txt
+        in the test-app directory. Invoke it exactly once.
       moonbit: >
         Now invoke the CounterAgent's increment method for counter "c1" again, this time with
         default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
@@ -102,8 +137,22 @@ steps:
         default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
         stdout and stderr) to a file called stream-output.txt in the test-app directory.
     continueSession: true
+    # Kotlin has no expectation here: the step repeats the previous invocation with the CLI's
+    # default streaming, which `golem-invoke-agent-kotlin` already covers, and it continues the
+    # same session, so no skill needs opening again.
     expectedSkills:
-      - "golem-view-agent-logs"
+      rust:
+        - "golem-view-agent-logs"
+      ts:
+        - "golem-view-agent-logs"
+      effect:
+        - "golem-view-agent-logs"
+      scala:
+        - "golem-view-agent-logs"
+      moonbit:
+        - "golem-view-agent-logs"
+      go:
+        - "golem-view-agent-logs"
 
   - id: "check-with-stream"
     check_file:
@@ -132,6 +181,12 @@ steps:
         --logs-only, --stream-no-timestamp, and --stream-no-log-level flags. Redirect the full
         CLI output (both stdout and stderr) to a file called logs-only-output.txt in the
         test-app directory.
+      kotlin: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time showing
+        only the entries the agent itself logged — no invocation markers and no stream status
+        messages — and with timestamps and log levels hidden from that output. Redirect the full
+        CLI output (both stdout and stderr) to a file called logs-only-output.txt in the
+        test-app directory. Invoke it exactly once.
       moonbit: >
         Now invoke the CounterAgent's increment method for counter "c1" again, this time with
         --logs-only, --stream-no-timestamp, and --stream-no-log-level flags. Redirect the full
@@ -159,6 +214,7 @@ steps:
         rust: 'CounterAgent("c1")'
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
+        kotlin: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
         go: 'CounterAgent("c1")'
       method: "increment"

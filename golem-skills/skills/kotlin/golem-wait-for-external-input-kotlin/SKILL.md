@@ -1,0 +1,79 @@
+---
+name: golem-wait-for-external-input-kotlin
+description: "Suspending a Kotlin agent until a human, another agent or an external system provides input. Use when the user asks for human-in-the-loop approval, durable promises, awaiting a callback, or webhooks that resume an agent."
+---
+
+# Waiting for External Input (Kotlin)
+
+A **promise** is a durable one-shot value that something else completes while the creating agent waits. The wait suspends the agent and survives restarts.
+
+```kotlin
+import cloud.golem.runtime.PromiseId
+import cloud.golem.runtime.Promises
+
+val promiseId: PromiseId = Promises.create()          // owned by this agent
+val bytes: ByteArray = Promises.await(promiseId)      // suspends until completed
+```
+
+- `Promises.await` can only be called by the agent that created the promise.
+- `Promises.complete(promiseId, data): Boolean` completes a promise from any agent; `false` = already completed.
+- `PromiseId` is a plain data class (`agentId: AgentId`, `oplogIdx: Long`), so it can be a method argument or return value and cross RPC. `Promises.await` blocks (the SDK is synchronous; there are no coroutines).
+
+## Human in the loop between two agents
+
+```kotlin
+import cloud.golem.BaseAgent
+import cloud.golem.annotations.Agent
+import cloud.golem.annotations.Endpoint
+import cloud.golem.annotations.RemoteAgent
+import cloud.golem.runtime.PromiseId
+import cloud.golem.runtime.Promises
+import cloud.golem.runtime.SchemaValue
+
+@Agent(mount = "/humans/{name}")
+class HumanAgent(val name: String) : BaseAgent() {
+    private val pending = LinkedHashMap<String, PromiseId>()
+
+    @Endpoint                                   // RPC only: called by WorkflowAgent
+    fun requestApproval(requestId: String, promiseId: PromiseId) { pending[requestId] = promiseId }
+
+    @Endpoint(post = "/decide")
+    fun decideApproval(requestId: String, approved: Boolean): Boolean {
+        val id = pending.remove(requestId) ?: return false
+        return Promises.complete(id, (if (approved) "approved" else "rejected").encodeToByteArray())
+    }
+}
+
+@RemoteAgent("HumanAgent")
+interface HumanAgentClient { fun requestApproval(requestId: String, promiseId: PromiseId) }
+
+@Agent(mount = "/workflows/{name}")
+class WorkflowAgent(val name: String) : BaseAgent() {
+    @Endpoint(post = "/run")
+    fun run(requestId: String): String {
+        val promise = Promises.create()
+        val human = HumanAgentClientRpc(SchemaValue.Record(listOf(SchemaValue.Str("reviewer"))))
+        try { human.requestApproval(requestId, promise) } finally { human.close() }
+        return Promises.await(promise).decodeToString()      // suspends here
+    }
+}
+```
+
+The `human-in-the-loop` Kotlin template (`golem new --template kotlin/human-in-the-loop`) contains a complete version. The `@RemoteAgent` interface must be in the same package as the agents; KSP generates `HumanAgentClientRpc` next to it.
+
+## Webhooks
+
+```kotlin
+import cloud.golem.runtime.Webhooks
+
+val promise = Promises.create()
+val url: String = Webhooks.create(promise)      // hand this URL to the external system
+val body: ByteArray = Promises.await(promise)   // the POST body
+```
+
+`Webhooks.create(promiseId)` returns a URL; a POST to it completes the promise with the request body. The agent type must be deployed through an HTTP API (`httpApi` in `golem.yaml`) and be the type that created the promise, otherwise `WebhookException` is thrown (`permissionDenied` is true for a refusal). The SDK binds webhooks but its tests do not exercise them end to end.
+
+## Related skills
+
+- `golem-call-another-agent-kotlin`
+- `golem-add-http-endpoint-kotlin`

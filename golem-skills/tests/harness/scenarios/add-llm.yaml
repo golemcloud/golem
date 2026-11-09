@@ -1,7 +1,7 @@
 name: "add-llm"
 # The Go SDK has no LLM support.
 skip_if:
-  language: "go"
+  language: ["go"]
 semanticRequirements:
   effect:
     - The Effect implementation must call the configured provider through Effect AI LanguageModel and an Effect AI provider layer; direct fetch and stubbed responses are not substitutes.
@@ -20,7 +20,7 @@ steps:
     prompt:
       rust: &non-effect-add-llm-prompt >
         In the test-app project, modify the existing CounterAgent to add a new method called
-        `ask_llm` (in Rust and MoonBit) or `askLlm` (in TypeScript and Scala).
+        `ask_llm` (in Rust and MoonBit) or `askLlm` (in TypeScript, Scala and Kotlin).
         The method takes a single string parameter called `question` and returns the LLM's
         response as a plain string.
 
@@ -56,6 +56,7 @@ steps:
         deploying; do not manually invoke `askLlm`, because the harness invokes it after this step.
       scala: *non-effect-add-llm-prompt
       moonbit: *non-effect-add-llm-prompt
+      kotlin: *non-effect-add-llm-prompt
     expectedSkills:
       rust:
         - "golem-add-llm-rust"
@@ -68,6 +69,8 @@ steps:
         - "golem-add-llm-scala"
       moonbit:
         - "golem-add-llm-moonbit"
+      kotlin:
+        - "golem-add-llm-kotlin"
     allowedExtraSkills:
       rust:
         - "golem-make-http-request-rust"
@@ -88,6 +91,9 @@ steps:
         - "golem-make-http-request-moonbit"
         - "golem-add-secret-moonbit"
         - "golem-add-moonbit-package"
+      kotlin:
+        - "golem-make-http-request-kotlin"
+        - "golem-add-secret-kotlin"
     verify:
       build: true
       deploy: true
@@ -101,12 +107,14 @@ steps:
         effect: "askLlm"
         scala: "askLlm"
         moonbit: "ask_llm"
+        kotlin: "askLlm"
       args:
         rust: &non-effect-llm-question '"hello"'
         ts: *non-effect-llm-question
         effect: '"hello"'
         scala: *non-effect-llm-question
         moonbit: *non-effect-llm-question
+        kotlin: *non-effect-llm-question
     expect:
       rust: &non-effect-llm-result
         result_json:
@@ -119,3 +127,4 @@ steps:
             equals: "mock-llm-ok"
       scala: *non-effect-llm-result
       moonbit: *non-effect-llm-result
+      kotlin: *non-effect-llm-result

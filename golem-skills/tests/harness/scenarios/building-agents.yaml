@@ -14,5 +14,6 @@ steps:
         ts: ["test-app/golem-temp/agents/test_app_ts_main.wasm"]
         effect: ["test-app/golem-temp/agents/test_app_effect_main.wasm"]
         scala: ["test-app/golem-temp/agents/test_app_scala_main.wasm"]
+        kotlin: ["test-app/golem-temp/agents/test_app_kotlin_main.wasm"]
         moonbit: ["test-app/golem-temp/agents/test_app_moonbit_main.wasm"]
         go: ["test-app/golem-temp/agents/test_app_go_main.wasm"]

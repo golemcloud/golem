@@ -1,0 +1,62 @@
+---
+name: golem-call-tool-kotlin
+description: "Calling a Golem tool from a Kotlin agent. Use when the user asks to discover tools, invoke a registered tool, pass stdin or capture stdout/stderr."
+---
+
+# Calling a Tool (Kotlin)
+
+```kotlin
+import cloud.golem.runtime.*
+
+val tool = ToolHost.getTool("formatter") ?: return "no such tool"     // or ToolHost.getAllTools()
+val rpc = ToolRpc(tool.lookupName)
+try {
+    val input = TypedSchemaValue("record<source:string>", SchemaValue.Record(listOf(SchemaValue.Str(src))))
+    when (val r = rpc.invokeAndAwait(listOf("format"), input)) {
+        is ToolInvokeResult.Ok -> (r.value.result?.value as? SchemaValue.Str)?.v
+        is ToolInvokeResult.Err -> error("format failed: ${r.error}")
+    }
+} finally {
+    rpc.close()
+}
+```
+
+- `input` is a `TypedSchemaValue` (WIT type string plus value); its root is a record with one field per positional/option/flag of the selected command. `commandPath` selects the command (`emptyList()` for the root).
+- Forms: `invoke` (fire and forget; returns `ToolRpcError?`), `invokeAndAwait`, `asyncInvokeAndAwait` (returns a `ToolFutureInvokeResult`; `get()` waits, `cancel()` cancels).
+- Streams: `rpc.invokeAndAwait(path, input, stdin = bytes, captureStdout = true, captureStderr = true)`; captured output is in `r.value.stdout` / `stderr`.
+- Errors: `ToolRpcError` = `ProtocolError`, `Denied`, `NotFound`, `RemoteInternalError`, `RemoteToolError(ToolError)`, `Cancelled`, `ResourceExhausted`.
+- Always `close()` the `ToolRpc`.
+
+## Generated client
+
+To call a tool of another component, or a built-in tool, declare it under `dependencies.tools` and let `golem build` generate a typed client:
+
+```yaml
+components:
+  my-app:consumer:
+    templates: kotlin
+    dependencies:
+      tools: [grep]
+```
+
+The client project is written to `golem-temp/bridge-sdk/kotlin/internal/grep-tool-guest-client/`; add its `src/wasmWasiMain/kotlin` to the consumer's `wasmWasiMain` source set (see `golem-call-another-agent-kotlin`). A dependency does not bind the tool at runtime: add it to the component's or agent's `tools` too.
+
+```kotlin
+import golem.bridge.client.grep_tool.GrepClient
+
+GrepClient.newClient().use { grep ->
+    when (val r = grep.grep("TODO", listOf("src"), null, 2, emptyList(), false, 0u)) {
+        is Either.Right -> r.value
+        is Either.Left -> error("grep failed: ${r.value}")
+    }
+}
+```
+
+- Parameters follow the host's canonical order: inherited group options and flags first, then positionals, the tail, options, flags.
+- A command group with options is reached through an accessor (`git.remote(dir, verbose).add(name, url)`) that passes them to every command below.
+- A command that declares stdin takes `stdin: ByteArray?`; one that declares stdout or stderr returns `WithOutputs<T>` with the captured bytes.
+- Declared errors are a sealed class (`GrepError`); a transport or protocol failure is a `ToolInvokeError`.
+
+## Related skills
+
+- `golem-define-tool-kotlin`

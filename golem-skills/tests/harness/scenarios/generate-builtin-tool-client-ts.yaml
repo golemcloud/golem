@@ -1,4 +1,9 @@
 name: generate-builtin-tool-client-ts
+skip_if:
+  # Every step is gated `only_if: ts`, so this scenario describes the TypeScript consumer wiring
+  # specifically. Kotlin has its own copy of the same path, which does run:
+  # `generate-builtin-tool-client-kotlin`.
+  language: "kotlin"
 steps:
   - id: create-project
     only_if: { language: ts }

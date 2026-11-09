@@ -14,6 +14,7 @@ steps:
         rust: &counter-agent 'CounterAgent("c1")'
         ts: *counter-agent
         scala: *counter-agent
+        kotlin: *counter-agent
         moonbit: *counter-agent
         go: *counter-agent
       method: "increment"
@@ -28,6 +29,7 @@ steps:
         file called metadata.txt in the test-app directory.
       ts: *get-metadata-prompt
       scala: *get-metadata-prompt
+      kotlin: *get-metadata-prompt
       moonbit: *get-metadata-prompt
       go: *get-metadata-prompt
     expectedSkills:

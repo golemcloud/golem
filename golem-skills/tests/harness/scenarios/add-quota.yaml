@@ -125,6 +125,34 @@ steps:
         - units: `requests`
 
         Make sure the project builds and deploys successfully.
+      kotlin: >
+        In the test-app project, add a new durable agent type called `QuotaAgent`
+        identified by a single constructor parameter for the instance name.
+
+        QuotaAgent must use the Golem resource quota system. In the constructor,
+        acquire a QuotaToken for a resource called "api-calls" with an expected
+        use of 1.
+
+        Store the QuotaToken in the agent's state.
+
+        Expose a method called `rateLimitedCall` that takes a string parameter
+        called `input` and returns a record/object with two fields:
+        - `input` (string) — the input that was passed in
+        - `success` (boolean) — whether the reservation succeeded
+
+        The method should use `withReservation` to reserve 1 token. Inside
+        the reservation callback, just return the input string as the result.
+        If the reservation fails, return the input with success=false.
+
+        In `golem.yaml`, define a resource default under `resourceDefaults` for
+        the `local` environment:
+        - resource name: `api-calls`
+        - limit type: `Rate` with value `100`, period `minute`, max `1000`
+        - enforcementAction: `reject`
+        - unit: `request`
+        - units: `requests`
+
+        Make sure the project builds and deploys successfully.
       moonbit: >
         In the test-app project, add a new durable agent type called `QuotaAgent`
         identified by a single constructor parameter for the instance name.
@@ -183,6 +211,8 @@ steps:
         - "golem-quota-effect"
       scala:
         - "golem-quota-scala"
+      kotlin:
+        - "golem-quota-kotlin"
       moonbit:
         - "golem-quota-moonbit"
       go:
@@ -207,6 +237,7 @@ steps:
         effect:
           ["-l", "Quota[.]withReservation|Quota[.]acquireQuotaToken", "test-app/", "-g", "*.ts"]
         scala: ["-l", "withReservation|QuotaToken", "test-app/", "-g", "*.scala"]
+        kotlin: ["-l", "withReservation|QuotaToken", "test-app/", "-g", "*.kt"]
         moonbit: ["-l", "with_reservation|QuotaToken::new", "test-app/", "-g", "*.mbt"]
         go: ["-l", "WithReservation|NewQuotaToken", "test-app/", "-g", "*.go"]
     expect:
@@ -220,6 +251,7 @@ steps:
         ts: "rateLimitedCall"
         effect: "rateLimitedCall"
         scala: "rateLimitedCall"
+        kotlin: "rateLimitedCall"
         moonbit: "rate_limited_call"
         go: "rateLimitedCall"
       args: '"hello"'
@@ -243,6 +275,12 @@ steps:
           - path: "$.success"
             equals: true
       scala:
+        result_json:
+          - path: "$.input"
+            equals: "hello"
+          - path: "$.success"
+            equals: true
+      kotlin:
         result_json:
           - path: "$.input"
             equals: "hello"

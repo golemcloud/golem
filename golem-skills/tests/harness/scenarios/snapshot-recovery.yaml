@@ -33,6 +33,17 @@ steps:
         and update the matching agent key in `golem.yaml`. Preserve the existing `increment`
         behavior. Build and deploy.
       scala: *non-effect-add-snapshot-support
+      # Kotlin copies the shared text only to reserve the instance the harness asserts on. A run
+      # smoke-tested `CounterAgent("c1")` with `increment` and `add 41`, so the harness's first
+      # increment returned 43 instead of 1 — the same way `manual-snapshot-update-agent` failed.
+      # Nothing about it is Kotlin-specific; the other six branches keep the shared prompt because
+      # none of them has ever run this scenario.
+      kotlin: >
+        In the test-app project, add custom save/load snapshot functions to the CounterAgent that
+        serialize the counter value as 4 big-endian bytes. Enable snapshotting on every
+        invocation. Build and deploy. The agent instance `CounterAgent("c1")` is reserved for the
+        harness's own assertions: do not invoke it, and use a different instance name if you
+        smoke-test.
       moonbit: *non-effect-add-snapshot-support
       go: *non-effect-add-snapshot-support
     expectedSkills:
@@ -45,6 +56,8 @@ steps:
         - "golem-snapshot-restoration-effect"
       scala:
         - "golem-custom-snapshot-scala"
+      kotlin:
+        - "golem-custom-snapshot-kotlin"
       moonbit:
         - "golem-custom-snapshot-moonbit"
       go:

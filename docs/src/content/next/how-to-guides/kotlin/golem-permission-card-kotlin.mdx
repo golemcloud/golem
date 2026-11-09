@@ -1,0 +1,22 @@
+# Permission Cards (Kotlin)
+
+Cards are unforgeable grants held by the runtime; an agent holds handles. API: `cloud.golem.permissions`.
+
+```kotlin
+val root = Permissions.wallet().first { it is WalletCard.Template }.card as PolymorphicPermissionCard
+val grant = (root.inspect() as Either.Right).value.lowerPositive.first { it.className == "card" && it.verb == "inspect" }
+val child = (root.derive(Bounds(lowerPositive = listOf(grant)), Lifespan.of(1.hours)) as Either.Right).value
+child.install(Holder.Agent(otherAgentId))          // moves child's handle
+```
+
+- Fallible calls return `Either<PermissionError, T>`.
+- **Handles move**: revoke, install, or sending a card as a method argument/result moves it; afterwards `isPresent == false` and use throws. `release()` cards you keep but no longer need.
+- `Permissions.deriveScope(parents, bounds)` builds a **scope card** that gives an RPC callee authority only for the duration of a call. On a typed client: `client.withScopeCard(scope) { ... }` or `client.withDefaultScopeCard(scope)`.
+- A method parameter or result of type `PermissionCard` / `PolymorphicPermissionCard` travels as an owned handle; receiving does not install it in the receiver's wallet.
+- Which cards an agent starts with is deployment configuration, not code.
+
+See `sdks/kotlin/docs/api/permissions.md` for the full API (`Bounds`, `PatternGrant`, `Lifespan`, `Holder`, the 12 `PermissionError` cases).
+
+## Related skills
+
+- [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin)

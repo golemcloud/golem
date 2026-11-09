@@ -1,4 +1,8 @@
 name: "add-sqlite-effect"
+skip_if:
+  # Effect-only by construction, and the SQLite route itself is `node:sqlite` from the TypeScript
+  # runtime, which Kotlin/Wasm does not have.
+  language: "kotlin"
 steps:
   - id: "create-project"
     only_if:

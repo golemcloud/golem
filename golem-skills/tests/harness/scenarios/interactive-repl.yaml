@@ -22,6 +22,7 @@ steps:
       scala: *non-effect-repl-script-prompt
       moonbit: *non-effect-repl-script-prompt
       go: *non-effect-repl-script-prompt
+      kotlin: *non-effect-repl-script-prompt
     expectedSkills:
       rust:
         - "golem-interactive-repl-rust"
@@ -35,6 +36,8 @@ steps:
         - "golem-interactive-repl-moonbit"
       go:
         - "golem-interactive-repl-go"
+      kotlin:
+        - "golem-interactive-repl-kotlin"
 
   - id: "verify-counter-incremented"
     invoke_json:
@@ -45,6 +48,7 @@ steps:
         scala: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
         go: *non-effect-counter-agent
+        kotlin: *non-effect-counter-agent
       method: "increment"
     expect:
       result_json:

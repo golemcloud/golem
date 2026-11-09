@@ -29,6 +29,12 @@ steps:
         that takes no arguments and returns nothing (Unit). It should run an infinite loop
         that increments the counter value and then sleeps for 100 milliseconds using
         Thread.sleep(100). Make sure the project builds and deploys successfully.
+      kotlin: >
+        In the test-app project, add a new method called `runForever` to the CounterAgent
+        that takes no arguments and returns nothing (Unit). It should run an infinite loop
+        that increments the counter value and then sleeps for 100 milliseconds using
+        `cloud.golem.runtime.wasi.MonotonicClock.waitFor(100_000_000)`. Make sure the project
+        builds and deploys successfully.
       moonbit: >
         In the test-app project, add a new method called `run_forever` to the CounterAgent
         that takes no arguments and returns nothing (Unit). It should run an infinite loop
@@ -47,6 +53,7 @@ steps:
         rust: 'CounterAgent("c1")'
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
+        kotlin: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
         go: 'CounterAgent("c1")'
       method: "increment"
@@ -62,6 +69,7 @@ steps:
         rust: 'CounterAgent("c1")'
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
+        kotlin: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
         go: 'CounterAgent("c1")'
       method:
@@ -69,6 +77,7 @@ steps:
         ts: "runForever"
         effect: "runForever"
         scala: "runForever"
+        kotlin: "runForever"
         moonbit: "run_forever"
         go: "runForever"
 
@@ -81,6 +90,7 @@ steps:
       rust: &interrupt-counter-agent 'Use the CLI to interrupt the CounterAgent instance named "c1".'
       ts: *interrupt-counter-agent
       scala: *interrupt-counter-agent
+      kotlin: *interrupt-counter-agent
       moonbit: *interrupt-counter-agent
       go: *interrupt-counter-agent
     expectedSkills:
@@ -94,6 +104,7 @@ steps:
         rust: &get-counter-agent ["agent", "get", "CounterAgent(\"c1\")"]
         ts: *get-counter-agent
         scala: *get-counter-agent
+        kotlin: *get-counter-agent
         moonbit: *get-counter-agent
         go: *get-counter-agent
       cwd: "test-app"
@@ -107,6 +118,7 @@ steps:
       rust: &resume-counter-agent 'Use the CLI to resume the interrupted CounterAgent instance named "c1".'
       ts: *resume-counter-agent
       scala: *resume-counter-agent
+      kotlin: *resume-counter-agent
       moonbit: *resume-counter-agent
       go: *resume-counter-agent
     expectedSkills:
@@ -123,6 +135,7 @@ steps:
         rust: *get-counter-agent
         ts: *get-counter-agent
         scala: *get-counter-agent
+        kotlin: *get-counter-agent
         moonbit: *get-counter-agent
         go: *get-counter-agent
       cwd: "test-app"
@@ -138,6 +151,7 @@ steps:
         rust: &delete-counter-agent ["agent", "delete", "CounterAgent(\"c1\")"]
         ts: *delete-counter-agent
         scala: *delete-counter-agent
+        kotlin: *delete-counter-agent
         moonbit: *delete-counter-agent
         go: *delete-counter-agent
       cwd: "test-app"

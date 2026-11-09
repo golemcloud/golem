@@ -166,6 +166,28 @@ steps:
            overflow.
 
         Make sure the project builds and deploys successfully.
+      kotlin: >
+        In the test-app project, do the following:
+
+        1. The file `test-app/data/large.bin` already exists — do NOT regenerate or modify it.
+           Provision it into the agent's filesystem at the target path `/data/large.bin` with
+           read-only permission.
+
+        2. Add a new durable agent type called `BigFileChecksum` identified by a single
+           constructor parameter for the instance name (a string).
+
+        3. `BigFileChecksum` must expose a method `fileStats` that takes no arguments,
+           reads the entire contents of `/data/large.bin`, and returns a single `String`
+           formatted EXACTLY as:
+
+               size=<N>,sum=<S>
+
+           where `<N>` is the total number of bytes read from the file and `<S>` is the
+           arithmetic sum of all byte values (treating each byte as an unsigned integer
+           in 0..255). Use a 64-bit accumulator (`Long`) for the sum so it does not
+           overflow.
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-add-initial-files"
@@ -185,6 +207,9 @@ steps:
       go:
         - "golem-add-initial-files"
         - "golem-file-io-go"
+      kotlin:
+        - "golem-add-initial-files"
+        - "golem-file-io-kotlin"
     verify:
       build: true
       deploy: true
@@ -212,5 +237,6 @@ steps:
         moonbit: "file_stats"
         effect: "fileStats"
         go: "fileStats"
+        kotlin: "fileStats"
     expect:
       stdout_contains: "size=200000,sum=13000000"

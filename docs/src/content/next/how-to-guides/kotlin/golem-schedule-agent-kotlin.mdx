@@ -1,0 +1,32 @@
+# Scheduling a Future Agent Invocation
+
+Both `golem` and `golem-cli` can be used — all commands below work with either binary.
+
+## Usage
+
+```shell
+golem agent invoke --trigger --schedule-at <DATETIME> <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
+```
+
+`--schedule-at` requires `--trigger`: the invocation is enqueued for a specific future time and the command returns immediately rather than waiting for either the scheduled time or a result. `<DATETIME>` is ISO 8601. Load [`golem-invoke-agent-kotlin`](/next/how-to-guides/kotlin/golem-invoke-agent-kotlin) for argument encoding, the agent ID format, and Kotlin value syntax.
+
+## Example
+
+```shell
+golem agent invoke --trigger --schedule-at 2026-12-01T00:00:00Z 'ReportAgent("monthly")' generate
+```
+
+## From inside agent code
+
+To schedule a call to another agent from Kotlin source rather than from the CLI, see [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin):
+
+- A generated client's `mScheduleAt(args, at)` schedules an invocation for a `Datetime`; `mScheduleCancelableAt(args, at)` returns a token whose `cancel()` withdraws it before it fires.
+- `WasmRpc.scheduleInvocation(seconds, nanos, method, args)` and `scheduleCancelableInvocation(...)` are the low-level equivalents.
+
+A durable agent that schedules its own method again at the end of each invocation (self-scheduling) builds a recurring, crash-resilient task this way: if the agent restarts, the scheduled invocation is still pending and fires at the designated time.
+
+## Related skills
+
+- [`golem-invoke-agent-kotlin`](/next/how-to-guides/kotlin/golem-invoke-agent-kotlin) — the awaited form, argument encoding and value syntax
+- [`golem-trigger-agent-kotlin`](/next/how-to-guides/kotlin/golem-trigger-agent-kotlin) — fire-and-forget without a schedule
+- [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin) — scheduling and cancelable scheduling from inside a running agent

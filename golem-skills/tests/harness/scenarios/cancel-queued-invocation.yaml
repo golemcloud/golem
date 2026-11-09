@@ -29,6 +29,12 @@ steps:
         that takes no arguments and returns nothing (Unit). It should run an infinite loop
         that increments the counter value and then sleeps for 100 milliseconds using
         Thread.sleep(100). Make sure the project builds and deploys successfully.
+      kotlin: >
+        In the test-app project, add a new method called `runForever` to the CounterAgent
+        that takes no arguments and returns nothing (Unit). It should run an infinite loop
+        that increments the counter value and then sleeps for 100 milliseconds using
+        `cloud.golem.runtime.wasi.MonotonicClock.waitFor(100_000_000)`. Make sure the project
+        builds and deploys successfully.
       moonbit: >
         In the test-app project, add a new method called `run_forever` to the CounterAgent
         that takes no arguments and returns nothing (Unit). It should run an infinite loop
@@ -47,6 +53,7 @@ steps:
         rust: 'CounterAgent("c1")'
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
+        kotlin: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
         go: 'CounterAgent("c1")'
       method:
@@ -54,6 +61,7 @@ steps:
         ts: "runForever"
         effect: "runForever"
         scala: "runForever"
+        kotlin: "runForever"
         moonbit: "run_forever"
         go: "runForever"
 
@@ -68,6 +76,7 @@ steps:
         ts: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
         effect: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "Counter(\"c1\")", "increment"]
         scala: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
+        kotlin: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
         moonbit: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
         go:
           - "agent"
@@ -92,6 +101,7 @@ steps:
         rust: &get-counter-agent ["agent", "get", "CounterAgent(\"c1\")"]
         ts: *get-counter-agent
         scala: *get-counter-agent
+        kotlin: *get-counter-agent
         moonbit: *get-counter-agent
         go: *get-counter-agent
       cwd: "test-app"
@@ -109,6 +119,7 @@ steps:
         the idempotency key "cancel-me".
       ts: *cancel-counter-agent
       scala: *cancel-counter-agent
+      kotlin: *cancel-counter-agent
       moonbit: *cancel-counter-agent
       go: *cancel-counter-agent
     expectedSkills:
@@ -122,6 +133,7 @@ steps:
         rust: *get-counter-agent
         ts: *get-counter-agent
         scala: *get-counter-agent
+        kotlin: *get-counter-agent
         moonbit: *get-counter-agent
         go: *get-counter-agent
       cwd: "test-app"
@@ -137,6 +149,7 @@ steps:
         rust: &delete-counter-agent ["agent", "delete", "CounterAgent(\"c1\")"]
         ts: *delete-counter-agent
         scala: *delete-counter-agent
+        kotlin: *delete-counter-agent
         moonbit: *delete-counter-agent
         go: *delete-counter-agent
       cwd: "test-app"

@@ -22,6 +22,17 @@ steps:
         necessary, and update the matching agent key in `golem.yaml`. Do not change any
         existing methods or behavior. Build and deploy the project.
       scala: *non-effect-add-manual-snapshot-support
+      # Kotlin has its own copy of the shared text only to reserve the instance the harness
+      # asserts on. A run of this scenario smoke-tested `CounterAgent("c1")` with `increment`
+      # and `add 41`, so the harness's first increment returned 43 instead of 1. Nothing about
+      # that is Kotlin-specific; the other six branches keep the shared prompt because none of
+      # them has ever run this scenario.
+      kotlin: >
+        In the test-app project, add custom save/load snapshot functions to the
+        CounterAgent that serialize the counter value as 4 big-endian bytes. Do not change
+        any existing methods or behavior. Build and deploy the project. The agent instance
+        `CounterAgent("c1")` is reserved for the harness's own assertions: do not invoke it,
+        and use a different instance name if you smoke-test.
       moonbit: *non-effect-add-manual-snapshot-support
       go: *non-effect-add-manual-snapshot-support
     expectedSkills:
@@ -33,6 +44,8 @@ steps:
         - "golem-custom-snapshot-effect"
       scala:
         - "golem-custom-snapshot-scala"
+      kotlin:
+        - "golem-custom-snapshot-kotlin"
       moonbit:
         - "golem-custom-snapshot-moonbit"
       go:
@@ -89,6 +102,14 @@ steps:
         the current counter value multiplied by 2. Keep the save/load snapshot
         functions unchanged so the counter value is still preserved across updates. Build
         and deploy, but do not update existing running agents.
+      kotlin: >
+        In the test-app project, make a breaking change to CounterAgent: remove the
+        `increment` method entirely, and add a new method called `getDouble` that returns
+        the current counter value multiplied by 2. Keep the save/load snapshot
+        functions unchanged so the counter value is still preserved across updates. Build
+        and deploy, but do not update existing running agents. `CounterAgent("c1")` is
+        reserved for the harness's own assertions: do not invoke it, and use a different
+        instance name if you smoke-test.
       moonbit: >
         In the test-app project, make a breaking change to CounterAgent: remove the
         `increment` method entirely, and add a new method called `get_double` that returns
@@ -121,6 +142,7 @@ steps:
         ts: "getDouble"
         effect: "getDouble"
         scala: "getDouble"
+        kotlin: "getDouble"
         moonbit: "get_double"
         go: "getDouble"
     expect:

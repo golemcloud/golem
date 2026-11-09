@@ -22,6 +22,7 @@ steps:
       scala: *non-effect-create-agent-instance-prompt
       moonbit: *non-effect-create-agent-instance-prompt
       go: *non-effect-create-agent-instance-prompt
+      kotlin: *non-effect-create-agent-instance-prompt
     expectedSkills:
       rust:
         - "golem-create-agent-instance-rust"
@@ -35,6 +36,8 @@ steps:
         - "golem-create-agent-instance-moonbit"
       go:
         - "golem-create-agent-instance-go"
+      kotlin:
+        - "golem-create-agent-instance-kotlin"
 
   - id: "verify-agent-created"
     shell:
@@ -46,6 +49,7 @@ steps:
         scala: *non-effect-created-agent-args
         moonbit: *non-effect-created-agent-args
         go: *non-effect-created-agent-args
+        kotlin: *non-effect-created-agent-args
       cwd: "test-app"
     expect:
       rust: &non-effect-created-agent-expect
@@ -58,3 +62,4 @@ steps:
       scala: *non-effect-created-agent-expect
       moonbit: *non-effect-created-agent-expect
       go: *non-effect-created-agent-expect
+      kotlin: *non-effect-created-agent-expect

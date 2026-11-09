@@ -1,0 +1,107 @@
+---
+name: golem-add-postgres-kotlin
+description: "Using PostgreSQL from a Kotlin Golem agent through cloud.golem.runtime.host.PostgresConnection. Use when the user asks to connect to PostgreSQL, run SQL, or use Postgres from Kotlin agent code."
+---
+
+# Using PostgreSQL from a Kotlin Golem Agent
+
+`cloud.golem.runtime.host.PostgresConnection` wraps `golem:rdbms/postgres`, the host-provided Postgres driver. No JDBC driver or connection pool library is added to the component; the host owns the connection.
+
+## Connecting
+
+```kotlin
+import cloud.golem.runtime.Either
+import cloud.golem.runtime.host.PostgresConnection
+
+val connectionResult = PostgresConnection.open("postgres://user:password@host:5432/dbname")
+val connection = when (connectionResult) {
+    is Either.Right -> connectionResult.value
+    is Either.Left -> error("failed to connect: ${connectionResult.value}")
+}
+```
+
+`open(address)` returns `Either<DbError, PostgresConnection>`. **Always `close()` the connection when done** — it is not released automatically.
+
+## Queries and statements
+
+```kotlin
+import cloud.golem.runtime.host.PostgresDbValue
+
+val rows = connection.query(
+    "SELECT id, name FROM users WHERE age > $1",
+    listOf(PostgresDbValue.Int4(21)),
+)
+// Either<DbError, PostgresDbResult>
+
+val updated = connection.execute(
+    "UPDATE users SET name = $1 WHERE id = $2",
+    listOf(PostgresDbValue.Text("Alice"), PostgresDbValue.Int4(5)),
+)
+// Either<DbError, Long> -- rows affected
+```
+
+- `query(statement, params)` runs a `SELECT`-style statement and returns a `PostgresDbResult`.
+- `execute(statement, params)` runs an `INSERT`/`UPDATE`/`DELETE`-style statement and returns the affected row count.
+- Bind parameters positionally with Postgres's native `$1`, `$2`, ... placeholders.
+
+## Reading results
+
+```kotlin
+when (val result = rows) { // Either<DbError, PostgresDbResult>
+    is Either.Left -> Logging.error("query failed: ${result.value}")
+    is Either.Right -> for (row in result.value.rows) {
+        val name = row.getString(1)   // convenience accessor by column index
+        val age = row.getInt(0)
+    }
+}
+```
+
+`PostgresDbResult(columns: List<DbColumn>, rows: List<PostgresDbRow>)`. `PostgresDbRow(values: List<PostgresDbValue>)` exposes `getString(index)`, `getInt(index)` and `getLong(index)` convenience accessors (each `-1`/`null` on a SQL `NULL`); for every other column type, pattern-match on `PostgresDbValue` directly.
+
+## `PostgresDbValue`
+
+A sealed class covering every Postgres column type (45 cases). The common ones:
+
+| Case | Kotlin type |
+|---|---|
+| `PostgresDbValue.Text`, `.Varchar`, `.Bpchar` | `String` |
+| `PostgresDbValue.Int2`, `.Int4`, `.Int8` | `Short`, `Int`, `Long` |
+| `PostgresDbValue.Float4`, `.Float8` | `Float`, `Double` |
+| `PostgresDbValue.Numeric` | `String` (arbitrary-precision decimal, decimal text) |
+| `PostgresDbValue.BooleanVal` | `Boolean` |
+| `PostgresDbValue.Bytea` | `List<UByte>` |
+| `PostgresDbValue.Json`, `.Jsonb` | `String` (raw JSON text) |
+| `PostgresDbValue.Uuid` | `highBits: Long, lowBits: Long` |
+| `PostgresDbValue.TimestampVal`, `.DateVal`, `.TimeVal` | `DbTimestamp`/`DbDate`/`DbTime` records |
+
+Network types (`InetVal`/`CidrVal`/`MacaddrVal`), bit strings, ranges (`Int4RangeVal`, ...), arrays, composite types, enums and domains are also covered; match on `PostgresDbValue` for the full set.
+
+## Transactions
+
+```kotlin
+when (val tx = connection.beginTransaction()) { // Either<DbError, PostgresTransaction>
+    is Either.Left -> Logging.error("could not start transaction: ${tx.value}")
+    is Either.Right -> {
+        val transaction = tx.value
+        transaction.execute("INSERT INTO ledger (amount) VALUES ($1)", listOf(PostgresDbValue.Int8(100)))
+        transaction.execute("UPDATE accounts SET balance = balance - $1 WHERE id = $2", listOf(PostgresDbValue.Int8(100), PostgresDbValue.Int4(1)))
+        transaction.commit() // or transaction.rollback()
+        transaction.close()  // always close, whether or not commit/rollback was called
+    }
+}
+```
+
+`PostgresTransaction` has the same `query`/`execute` shape as `PostgresConnection`, plus `commit()` and `rollback()` (both `Either<DbError, Unit>`). Close it when done, in every branch.
+
+## Errors
+
+`DbError` is a sealed class (6 cases, all carrying a message string) covering connection failures, statement errors, and so on.
+
+## Durability
+
+Every query, execute, and transaction call goes through the host's durability layer like any other side effect: replay does not re-run the SQL, it replays the recorded result.
+
+## Related skills
+
+- `golem-add-mysql-kotlin`
+- `golem-add-ignite-kotlin`

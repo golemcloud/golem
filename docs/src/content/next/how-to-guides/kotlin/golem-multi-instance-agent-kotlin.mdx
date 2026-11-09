@@ -1,0 +1,62 @@
+# Phantom Agents in Kotlin
+
+Phantom agents let you create **multiple distinct agent instances** that share the same constructor parameters. Normally an agent is uniquely identified by its constructor parameter values — calling `get` with the same parameters always returns the same agent. Phantom agents add an extra **phantom ID** (a UUID) to the identity, so you can have many independent instances with identical parameters.
+
+## Agent ID Format
+
+A phantom agent's ID appends the phantom UUID in square brackets:
+
+```
+AgentTypeName(param1, param2)[a09f61a8-677a-40ea-9ebe-437a0df51749]
+```
+
+A non-phantom agent ID has no bracket suffix: `AgentTypeName(param1, param2)`.
+
+## Creating and Addressing Phantom Agents (RPC)
+
+Golem's generated Kotlin client (see [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin)'s "Generated client (cross-language)" section) produces these factory functions for each agent type:
+
+| Method | Description |
+|--------|-------------|
+| `get(params...)` | Get or create a **non-phantom** (durable) agent identified solely by its parameters |
+| `newPhantom(params...)` | Create a **new phantom** agent with a freshly generated UUID |
+| `getPhantom(params..., phantom: cloud.golem.runtime.Uuid)` | Get or create a phantom agent with a **specific** UUID; the phantom UUID is always the **last** parameter |
+
+**Ephemeral agents only get `getPhantom` and `newPhantom`** — they do not have a `get` method, since there is no single durable instance to reuse (see [`golem-configure-durability-kotlin`](/next/how-to-guides/kotlin/golem-configure-durability-kotlin)).
+
+### Example
+
+```kotlin
+import golem.bridge.client.counter_agent.CounterAgentClient
+import cloud.golem.runtime.Uuid
+
+// Non-phantom: always the same agent for the same name
+val counter = CounterAgentClient.get("shared")
+
+// New phantom: creates a brand new independent instance
+val phantom1 = CounterAgentClient.newPhantom("shared")
+val phantom2 = CounterAgentClient.newPhantom("shared")
+// phantom1 and phantom2 are different agents, both with name = "shared"
+
+// Reconnect to an existing phantom by its UUID
+val existingId = Uuid(highBits = 42L, lowBits = 99L)
+val samePhantom = CounterAgentClient.getPhantom("shared", existingId)
+
+phantom1.use { it.increment() }
+```
+
+If the agent declares local configuration (`Config<T>`), each factory also has a `...WithConfig` variant taking the same arguments plus the config fields.
+
+## Key Points
+
+- Phantom agents are **fully durable** — they persist just like regular agents (unless the agent itself is ephemeral).
+- The phantom ID is a `cloud.golem.runtime.Uuid` (`highBits`/`lowBits` pair).
+- `getPhantom` is idempotent: calling it with the same UUID and parameters always returns the same agent.
+- Phantom and non-phantom agents with the same constructor parameters are **different agents** — they do not share state.
+- A phantom agent can also be addressed over HTTP by a selector — see [`golem-add-http-endpoint-kotlin`](/next/how-to-guides/kotlin/golem-add-http-endpoint-kotlin)'s "Phantom agents" section for `@Agent(phantom = true, phantomIdPath = ...)`.
+
+## Related skills
+
+- [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin)
+- [`golem-add-http-endpoint-kotlin`](/next/how-to-guides/kotlin/golem-add-http-endpoint-kotlin)
+- [`golem-configure-durability-kotlin`](/next/how-to-guides/kotlin/golem-configure-durability-kotlin)

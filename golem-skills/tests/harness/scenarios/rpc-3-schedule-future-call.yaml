@@ -88,6 +88,23 @@ steps:
         only via the scheduled future call.
 
         Make sure the project builds successfully.
+      kotlin: >
+        In the test-app project, add a second agent type called `DelayedRecorder` that has
+        the same constructor parameter as the existing CounterAgent. `DelayedRecorder` must
+        expose two externally invokable methods: `recordCount(value)` and
+        `recordedCounts()`. `recordCount` must append the received counter value to the
+        recorder agent's durable state. `recordedCounts` must return all recorded values
+        in order.
+
+        Then modify `CounterAgent` so it has a new externally invokable method called
+        `scheduleReport`. That method must increment the counter exactly like the existing
+        `increment` method, then schedule `DelayedRecorder("<same name>")`'s
+        `recordCount` method to run 30 seconds in the future with the new counter value,
+        and then return the new counter value immediately. Do not directly invoke or await
+        `recordCount` in `scheduleReport`; the update to `DelayedRecorder` must happen
+        only via the scheduled future call.
+
+        Make sure the project builds successfully.
       moonbit: >
         In the test-app project, add a second agent type called `DelayedRecorder` that has
         the same constructor parameter as the existing CounterAgent. `DelayedRecorder` must
@@ -131,6 +148,8 @@ steps:
         - "golem-schedule-future-call-effect"
       scala:
         - "golem-schedule-future-call-scala"
+      kotlin:
+        - "golem-call-another-agent-kotlin"
       moonbit:
         - "golem-schedule-future-call-moonbit"
       go:
@@ -147,6 +166,7 @@ steps:
         ts: "scheduleReport"
         effect: "scheduleReport"
         scala: "scheduleReport"
+        kotlin: "scheduleReport"
         moonbit: "schedule_report"
         go: "scheduleReport"
     expect:
@@ -162,6 +182,7 @@ steps:
         ts: "recordedCounts"
         effect: "recordedCounts"
         scala: "recordedCounts"
+        kotlin: "recordedCounts"
         moonbit: "recorded_counts"
         go: "recordedCounts"
     expect:
@@ -180,6 +201,7 @@ steps:
         ts: "recordedCounts"
         effect: "recordedCounts"
         scala: "recordedCounts"
+        kotlin: "recordedCounts"
         moonbit: "recorded_counts"
         go: "recordedCounts"
     expect:

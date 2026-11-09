@@ -90,7 +90,7 @@ components:
         targetPath: /etc/app/config.json
     presets:
       debug:
-        default: {}
+        default: true
         files:
           - sourcePath: ./data/debug-config.json
             targetPath: /etc/app/debug.json
@@ -106,7 +106,7 @@ agents:
         targetPath: /etc/agent/env
     presets:
       debug:
-        default: {}
+        default: true
         filesMergeMode: replace
         files:
           - sourcePath: ./agent-data/debug.env
@@ -130,7 +130,7 @@ components:
         targetPath: /data/schema.sql
     presets:
       debug:
-        default: {}
+        default: true
         files:
           - sourcePath: ./data/debug-seed.sql
             targetPath: /data/seed.sql
@@ -143,7 +143,7 @@ agents:
         permissions: read-write
     presets:
       debug:
-        default: {}
+        default: true
         files:
           - sourcePath: ./agent-config/debug-overrides.toml
             targetPath: /etc/agent/config/overrides.toml

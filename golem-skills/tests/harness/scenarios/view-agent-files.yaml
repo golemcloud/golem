@@ -28,6 +28,12 @@ steps:
         it writes the current counter value to a file at /data/counter.txt using the Node.js
         fs module (via scala.scalajs.js.Dynamic). Create the /data directory if it doesn't exist.
         The file should contain just the number as a string.
+      kotlin: >
+        In the test-app project, modify the CounterAgent so that every time increment is called,
+        it writes the current counter value to a file at /counter.txt using
+        `cloud.golem.runtime.wasi.Filesystem.writeBytes`. Write at the filesystem root, not under
+        /data: the Kotlin SDK's filesystem API cannot create a directory. The file should contain
+        just the number as a string.
       moonbit: >
         In the test-app project, modify the CounterAgent so that every time increment is called,
         it writes the current counter value to a file at /data/counter.txt using the filesystem
@@ -45,6 +51,7 @@ steps:
         rust: 'CounterAgent("c1")'
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
+        kotlin: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
         go: 'CounterAgent("c1")'
       method: "increment"
@@ -59,6 +66,9 @@ steps:
         full output to a file called files-output.txt in the test-app directory.
       ts: *list-counter-agent-files
       scala: *list-counter-agent-files
+      kotlin: >
+        Use the CLI to list the files of CounterAgent "c1" at the / path and save the
+        full output to a file called files-output.txt in the test-app directory.
       moonbit: *list-counter-agent-files
       go: *list-counter-agent-files
     expectedSkills:

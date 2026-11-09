@@ -16,6 +16,7 @@ steps:
         rust: &non-effect-counter-agent 'CounterAgent("c1")'
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
+        kotlin: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
         go: *non-effect-counter-agent
       method: "increment"
@@ -51,6 +52,7 @@ steps:
         rust: &get-counter-agent-args ["agent", "get", "CounterAgent(\"c1\")"]
         ts: *get-counter-agent-args
         scala: *get-counter-agent-args
+        kotlin: *get-counter-agent-args
         moonbit: *get-counter-agent-args
         go: *get-counter-agent-args
       cwd: "test-app"
@@ -70,6 +72,7 @@ steps:
         same method name, signature, and return type.
       ts: *change-increment-prompt
       scala: *change-increment-prompt
+      kotlin: *change-increment-prompt
       moonbit: *change-increment-prompt
       go: *change-increment-prompt
     verify:

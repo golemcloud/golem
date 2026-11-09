@@ -1,0 +1,71 @@
+---
+name: golem-file-io-kotlin
+description: "Reading and writing files from a Kotlin Golem agent's own code. Use when the user asks to read files, write files, check whether a file exists, or do filesystem operations from Kotlin agent code."
+---
+
+# File I/O in Kotlin Golem Agents
+
+## `Filesystem`
+
+`cloud.golem.runtime.wasi.Filesystem` wraps `wasi:filesystem/types`/`wasi:filesystem/preopens`
+(WASI preview 3):
+
+```kotlin
+import cloud.golem.runtime.Either
+import cloud.golem.runtime.wasi.Filesystem
+
+when (val config = Filesystem.readText("/data/config.json")) {
+    is Either.Right -> println("config: ${config.value}")
+    is Either.Left -> println("read failed: ${config.value}") // FileSystemErrorCode, e.g. NoEntry
+}
+
+Filesystem.writeBytes("/data/output.json", resultJson.encodeToByteArray())
+
+if (Filesystem.exists("/data/cache.bin")) { /* ... */ }
+```
+
+| Function | Returns |
+|---|---|
+| `Filesystem.readBytes(path: String)` | `Either<FileSystemErrorCode, ByteArray>` |
+| `Filesystem.readText(path: String)` | `Either<FileSystemErrorCode, String>` (`readBytes` decoded as UTF-8) |
+| `Filesystem.writeBytes(path: String, data: ByteArray)` | `Either<FileSystemErrorCode, Unit>` (creates or replaces; `create` + `truncate`) |
+| `Filesystem.exists(path: String)` | `Boolean` (swallows errors as `false`, matching `existsSync`) |
+| `Filesystem.preopenedDirectories()` | `List<String>` — the names the host preopens (always includes `/`) |
+
+`path` is always **absolute** (starts with `/`) — the same convention `golem-add-initial-files`'s
+`targetPath` uses. There is no relative-path or working-directory concept; every path resolves
+against the host's unconditionally-preopened `/` root.
+
+`FileSystemErrorCode` is a flat enum mirroring `wasi:filesystem/types@0.3.0`'s `error-code`
+(`NoEntry`, `IsDirectory`, `ReadOnly`, `NotDirectory`, and so on) — a missing file comes back as
+`Either.Left(FileSystemErrorCode.NoEntry)`, never an exception or a trap.
+
+## Reachability: IFS files, `exposeFiles`, and brand-new files
+
+Everything lives under the **same** filesystem — there is no separate "code I/O" filesystem
+disjoint from the one `golem.yaml`'s `files:` section (`golem-add-initial-files`) provisions or
+`@Agent(exposeFiles = [...])` (see `golem-add-http-endpoint-kotlin`'s "Serving files" section)
+serves over HTTP:
+
+- A file declared via `files:` at its `targetPath` is readable through `Filesystem.readBytes`/
+  `readText` at that same absolute path, whether or not anything also serves it over HTTP via
+  `exposeFiles`. Declaring `permissions: read-write` on that entry is what makes it writable; a
+  file declared `read-only` (the default) can be read but not overwritten.
+- The `/` root itself is writable regardless of any individual file's own `permissions:` —
+  `Filesystem.writeBytes` can create a path that was never declared via `files:` at all. Use this
+  for files an agent produces itself (caches, generated output) rather than declaring every such
+  path in the manifest up front.
+
+## Large files
+
+A full `readBytes`/`writeBytes` call materializes the **entire** file content as one GC-managed
+`ByteArray` — there is no streaming API. A multi-megabyte file round-trips correctly, but its full
+size lives on the Wasm GC heap for the call's duration; size the agent's workload (and its
+`ResourceLimits`, if configured — see `golem-quota-kotlin`) accordingly rather than assuming file
+I/O here behaves like a buffered stream.
+
+## Related skills
+
+- `golem-add-initial-files` — declaring files in the manifest (`files:`, the cascade hierarchy, `permissions:`)
+- `golem-add-http-endpoint-kotlin` — serving provisioned files over HTTP via `exposeFiles`
+- `golem-call-another-agent-kotlin` — delegating to a sibling agent, if a workload needs filesystem access this API does not cover

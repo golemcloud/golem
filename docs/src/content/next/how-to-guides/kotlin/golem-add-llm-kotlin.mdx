@@ -1,0 +1,125 @@
+# Adding LLM and AI Capabilities (Kotlin)
+
+## Overview
+
+There is no Golem-specific LLM interface (`golem:llm/*` does not exist in Golem 1.6.0, for any SDK). An LLM "integration" is just calling the provider's REST API over plain outgoing HTTP. For Kotlin, that means `cloud.golem.runtime.wasi.HttpOutgoingClient` — load [`golem-make-http-request-kotlin`](/next/how-to-guides/kotlin/golem-make-http-request-kotlin) for the full API; this skill only covers the parts specific to calling an LLM provider.
+
+## Calling the Provider's REST API Directly
+
+```kotlin
+import cloud.golem.runtime.Either
+import cloud.golem.runtime.wasi.HttpErrorCode
+import cloud.golem.runtime.wasi.HttpHeader
+import cloud.golem.runtime.wasi.HttpOutgoingClient
+import cloud.golem.runtime.wasi.HttpOutgoingRequest
+
+fun chatCompletion(prompt: String, apiKey: String, model: String = "gpt-4o"): String {
+    val payload = """
+        {"model":"$model","messages":[{"role":"user","content":${jsonString(prompt)}}]}
+    """.trimIndent()
+
+    val request = HttpOutgoingRequest(
+        method = "POST",
+        url = "https://api.openai.com/v1/chat/completions",
+        headers = listOf(
+            HttpHeader("Content-Type", "application/json"),
+            HttpHeader("Authorization", "Bearer $apiKey"),
+        ),
+        body = payload.encodeToByteArray(),
+    )
+
+    val response = when (val result = HttpOutgoingClient.send(request)) {
+        is Either.Left -> throw RuntimeException("LLM call failed: ${result.value}")
+        is Either.Right -> result.value
+    }
+    if (response.status !in 200..299) {
+        throw RuntimeException("LLM call returned ${response.status}: ${response.body.decodeToString()}")
+    }
+    return extractContent(response.body.decodeToString())
+}
+```
+
+Use `kotlinx.serialization` (or another JSON library already in the project) to build the request payload and parse the response, rather than hand-building JSON strings as above — `jsonString` and `extractContent` below are the minimal, illustrative versions this skill's examples lean on, not something to ship as-is:
+
+```kotlin
+private fun jsonString(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+
+private fun extractContent(responseBody: String): String {
+    val marker = "\"content\":\""
+    val start = responseBody.indexOf(marker) + marker.length
+    val end = responseBody.indexOf('"', start)
+    return responseBody.substring(start, end)
+}
+```
+
+## Setting API Keys
+
+Store provider API keys as **secrets**, not plain config — load [`golem-add-secret-kotlin`](/next/how-to-guides/kotlin/golem-add-secret-kotlin) for the full API:
+
+```kotlin
+import cloud.golem.config.Config
+import cloud.golem.config.Secret
+
+data class LlmConfig(val apiKey: Secret<String>, val model: String = "gpt-4o")
+```
+
+```shell
+golem secret create apiKey --type String --value "sk-..."
+```
+
+Reveal it right before the call with `config.value.apiKey.get()` — every reveal is audited (secret id, agent, time; never the value).
+
+## Complete Agent Example
+
+```kotlin
+import cloud.golem.BaseAgent
+import cloud.golem.annotations.Agent
+import cloud.golem.annotations.Endpoint
+import cloud.golem.config.Config
+import cloud.golem.runtime.Either
+import cloud.golem.runtime.wasi.HttpHeader
+import cloud.golem.runtime.wasi.HttpOutgoingClient
+import cloud.golem.runtime.wasi.HttpOutgoingRequest
+
+data class ChatConfig(val apiKey: Secret<String>, val model: String = "gpt-4o")
+
+@Agent(mount = "/chats/{chatName}")
+class ChatAgent(val chatName: String, val config: Config<ChatConfig>) : BaseAgent() {
+    private var messages = mutableListOf("""{"role":"system","content":"You are a helpful assistant for chat '$chatName'"}""")
+
+    @Endpoint(post = "/ask")
+    fun ask(question: String): String {
+        messages.add("""{"role":"user","content":${jsonString(question)}}""")
+
+        val payload = """{"model":"${config.value.model}","messages":[${messages.joinToString(",")}]}"""
+        val request = HttpOutgoingRequest(
+            method = "POST",
+            url = "https://api.openai.com/v1/chat/completions",
+            headers = listOf(
+                HttpHeader("Content-Type", "application/json"),
+                HttpHeader("Authorization", "Bearer ${config.value.apiKey.get()}"),
+            ),
+            body = payload.encodeToByteArray(),
+        )
+
+        val reply = when (val result = HttpOutgoingClient.send(request)) {
+            is Either.Left -> throw RuntimeException("LLM call failed: ${result.value}")
+            is Either.Right -> extractContent(result.value.body.decodeToString())
+        }
+        messages.add("""{"role":"assistant","content":${jsonString(reply)}}""")
+        return reply
+    }
+}
+```
+
+## Key Constraints
+
+- No `golem:llm/*` WIT package exists for any SDK in Golem 1.6.0 — this is a REST call over `HttpOutgoingClient`, not a dedicated LLM host interface.
+- Keep request payloads to ordinary chat-completion sizes. [`golem-make-http-request-kotlin`](/next/how-to-guides/kotlin/golem-make-http-request-kotlin)'s large-body limitation applies here too: a multi-MB outgoing body (for example a large embeddings batch, or a large document attached to a prompt) hangs the call indefinitely on the current host. Split large inputs into multiple smaller requests instead of one large one.
+- Store API keys as secrets ([`golem-add-secret-kotlin`](/next/how-to-guides/kotlin/golem-add-secret-kotlin)), never as plain `Config` fields or hardcoded strings.
+- Every outgoing HTTP call, including LLM calls, is durably recorded by Golem — a retried invocation replays the recorded response instead of calling the provider again.
+
+### Related Guides
+- [`golem-make-http-request-kotlin`](/next/how-to-guides/kotlin/golem-make-http-request-kotlin) — the outgoing HTTP client this skill is built on
+- [`golem-add-secret-kotlin`](/next/how-to-guides/kotlin/golem-add-secret-kotlin) — storing and revealing API keys
+- [`golem-retry-policies-kotlin`](/next/how-to-guides/kotlin/golem-retry-policies-kotlin) — retrying on provider rate limits or transient failures

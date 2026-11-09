@@ -1,4 +1,10 @@
 name: "add-sqlite-rust"
+skip_if:
+  # Embedded SQLite is a C library compiled into the component (a patched rusqlite over the WASI
+  # VFS). Kotlin/Wasm targets WasmGC and has no cinterop, so it cannot link one at all. A Kotlin
+  # agent reaches a database through the host wrappers instead (`add-postgres-rdbms`,
+  # `add-mysql-rdbms`, `add-ignite-rdbms`, all of which run for Kotlin).
+  language: "kotlin"
 steps:
   - id: "create-project"
     only_if:

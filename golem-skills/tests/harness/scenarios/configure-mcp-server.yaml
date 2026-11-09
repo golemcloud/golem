@@ -37,6 +37,7 @@ steps:
         Make sure the project builds and deploys successfully.
       ts: *configure-mcp-prompt
       scala: *configure-mcp-prompt
+      kotlin: *configure-mcp-prompt
       moonbit: *configure-mcp-prompt
       go: *configure-mcp-prompt
     expectedSkills:
@@ -59,6 +60,7 @@ steps:
         stdout_matches: "[\\s\\S]*mcp:[\\s\\S]*deployments:[\\s\\S]*local:[\\s\\S]*subdomain: test-app[\\s\\S]*CounterAgent:[\\s\\S]*"
       ts: *non-effect-mcp-config-expect
       scala: *non-effect-mcp-config-expect
+      kotlin: *non-effect-mcp-config-expect
       moonbit: *non-effect-mcp-config-expect
       go: *non-effect-mcp-config-expect
 
@@ -73,6 +75,7 @@ steps:
         body_contains: "increment_by"
       ts: *non-effect-list-tools-expect
       scala: *non-effect-list-tools-expect
+      kotlin: *non-effect-list-tools-expect
       moonbit: *non-effect-list-tools-expect
       go: *non-effect-list-tools-expect
 

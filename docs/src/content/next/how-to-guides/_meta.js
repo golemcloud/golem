@@ -14,6 +14,9 @@ export default {
   scala: {
     title: "Scala",
   },
+  kotlin: {
+    title: "Kotlin",
+  },
   moonbit: {
     title: "MoonBit",
   },

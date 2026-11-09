@@ -67,7 +67,7 @@ components:
       LOG_LEVEL: info
     presets:
       debug:
-        default: {}
+        default: true
         env:
           LOG_LEVEL: debug
           DEBUG_MODE: "true"
@@ -85,7 +85,7 @@ agents:
       CACHE_TTL: "300"
     presets:
       debug:
-        default: {}
+        default: true
         env:
           CACHE_TTL: "60"
 ```
@@ -106,7 +106,7 @@ components:
       DATABASE_URL: postgresql://db:5432/app
     presets:
       debug:
-        default: {}
+        default: true
         env:
           LOG_LEVEL: debug
 
@@ -117,7 +117,7 @@ agents:
       API_KEY: "{{ MY_API_KEY }}"
     presets:
       debug:
-        default: {}
+        default: true
         env:
           CACHE_TTL: "60"
 ```

@@ -56,6 +56,18 @@ steps:
         stream-bearing method with a list-based method. Make sure the project builds and deploys
         successfully. Do not run `bug_finder` or delegate a review; the harness performs external
         verification.
+      kotlin: >
+        In the test-app project, add two durable Kotlin agent types. `StreamingAgent` has a string
+        constructor parameter and an externally invokable `doubled` method that accepts
+        `cloud.golem.streams.AgentStream<Long>` and returns `AgentStream<Long>`. Transform each item
+        lazily with the stream API and preserve order. `StreamingCaller` also has a string
+        constructor parameter and exposes a normal `streamRoundtrip` method returning
+        `List<Long>`. It must create a lazily produced input stream containing 1, 2, and 3,
+        call `StreamingAgent("main")` through its typed agent client, pull the returned stream
+        incrementally, and return `[2, 4, 6]`. Do not collect the input before RPC or replace the
+        stream-bearing method with a list-based method. Make sure the project builds and deploys
+        successfully. Do not run `bug_finder` or delegate a review; the harness performs external
+        verification.
       moonbit: >
         In the test-app project, add two durable MoonBit agent types. `StreamingAgent` has a string
         constructor parameter and an externally invokable `doubled` method that accepts and returns
@@ -89,6 +101,8 @@ steps:
         - "golem-streaming-agent-effect"
       scala:
         - "golem-streaming-agent-scala"
+      kotlin:
+        - "golem-streaming-agent-kotlin"
       moonbit:
         - "golem-streaming-agent-moonbit"
       go:
@@ -105,6 +119,7 @@ steps:
         ts: "streamRoundtrip"
         effect: "streamRoundtrip"
         scala: "streamRoundtrip"
+        kotlin: "streamRoundtrip"
         moonbit: "stream_roundtrip"
         go: "streamRoundtrip"
     expect:

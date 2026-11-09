@@ -1,4 +1,8 @@
 name: "effect-phase8-capabilities"
+skip_if:
+  # Effect-only by construction: every step exercises `@golemcloud/effect-golem` capabilities that
+  # exist in no other SDK.
+  language: "kotlin"
 steps:
   - id: "create-project"
     create_project:

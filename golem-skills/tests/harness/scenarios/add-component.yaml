@@ -40,6 +40,7 @@ steps:
         rust: 'CounterAgent("test")'
         ts: 'CounterAgent("test")'
         scala: 'CounterAgent("test")'
+        kotlin: 'CounterAgent("test")'
         moonbit: 'CounterAgent("test")'
         go: 'CounterAgent("test")'
       method: "increment"

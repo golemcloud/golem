@@ -100,6 +100,7 @@ steps:
         Implement every handler as an Effect, import the module from `src/main.ts`, preserve
         existing manifest entries, and make sure the project builds and deploys successfully.
       scala: *non-effect-add-catalog-agent-prompt
+      kotlin: *non-effect-add-catalog-agent-prompt
       moonbit: *non-effect-add-catalog-agent-prompt
       go: *non-effect-add-catalog-agent-prompt
     expectedSkills:
@@ -112,6 +113,9 @@ steps:
         - "golem-http-params-effect"
       scala:
         - "golem-add-http-endpoint-scala"
+      kotlin:
+        - "golem-add-http-endpoint-kotlin"
+        - "golem-http-params-kotlin"
       moonbit:
         - "golem-add-http-endpoint-moonbit"
       go:
@@ -133,6 +137,7 @@ steps:
         ts: '{"name":"Laptop","price":999.99,"inStock":true}'
         effect: '{"name":"Laptop","price":999.99,"inStock":true}'
         scala: '{"name":"Laptop","price":999.99,"inStock":true}'
+        kotlin: '{"name":"Laptop","price":999.99,"inStock":true}'
         moonbit: '{"name":"Laptop","price":999.99,"in_stock":true}'
         go: '{"name":"Laptop","price":999.99,"inStock":true}'
     expect:
@@ -172,6 +177,15 @@ steps:
             equals: 999.99
           - path: "$.inStock"
             equals: true
+      kotlin:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Laptop"
+          - path: "$.price"
+            equals: 999.99
+          - path: "$.inStock"
+            equals: true
       moonbit:
         status: 200
         body_json:
@@ -202,6 +216,7 @@ steps:
         ts: '{"name":"Mouse","price":25.50,"inStock":true}'
         effect: '{"name":"Mouse","price":25.50,"inStock":true}'
         scala: '{"name":"Mouse","price":25.50,"inStock":true}'
+        kotlin: '{"name":"Mouse","price":25.50,"inStock":true}'
         moonbit: '{"name":"Mouse","price":25.50,"in_stock":true}'
         go: '{"name":"Mouse","price":25.50,"inStock":true}'
     expect:
@@ -221,6 +236,7 @@ steps:
         ts: '{"name":"Keyboard","price":75.00,"inStock":false}'
         effect: '{"name":"Keyboard","price":75.00,"inStock":false}'
         scala: '{"name":"Keyboard","price":75.00,"inStock":false}'
+        kotlin: '{"name":"Keyboard","price":75.00,"inStock":false}'
         moonbit: '{"name":"Keyboard","price":75.00,"in_stock":false}'
         go: '{"name":"Keyboard","price":75.00,"inStock":false}'
     expect:
@@ -246,6 +262,13 @@ steps:
           - path: "$.inStock"
             equals: false
       scala:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Keyboard"
+          - path: "$.inStock"
+            equals: false
+      kotlin:
         status: 200
         body_json:
           - path: "$.name"
@@ -359,6 +382,7 @@ steps:
         ts: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
         effect: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
         scala: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
+        kotlin: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
         moonbit: '{"name":"Gaming Mouse","price":49.99,"in_stock":true}'
         go: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
     expect:
@@ -393,6 +417,7 @@ steps:
         ts: '{"name":"Ghost","price":0,"inStock":false}'
         effect: '{"name":"Ghost","price":0,"inStock":false}'
         scala: '{"name":"Ghost","price":0,"inStock":false}'
+        kotlin: '{"name":"Ghost","price":0,"inStock":false}'
         moonbit: '{"name":"Ghost","price":0,"in_stock":false}'
         go: '{"name":"Ghost","price":0,"inStock":false}'
     expect:
@@ -425,6 +450,7 @@ steps:
         ts: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
         effect: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
         scala: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
+        kotlin: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
         moonbit: '{"products":[{"name":"Monitor","price":299.99,"in_stock":true},{"name":"Webcam","price":59.99,"in_stock":false}]}'
         go: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
     expect:

@@ -1,0 +1,86 @@
+# Parallel Workers — Fan-Out / Fan-In (Kotlin)
+
+## Overview
+
+Golem agents process invocations **sequentially** — a single agent cannot run work in parallel, and calling another agent synchronously (a typed `@RemoteAgent` client, or a generated client's blocking form) blocks until that call returns. To execute work concurrently, distribute it across **multiple agent instances** and call them asynchronously. This skill covers two approaches:
+
+1. **Child agents, called asynchronously** — spawn or address separate agent instances and dispatch work without blocking on each one before moving to the next
+2. **`HostApi.fork()`** — clone the current agent at the current execution point for lightweight parallel execution
+
+## Approach 1: Child Agent Fan-Out
+
+A synchronous typed-client call (`counter.increment()`) blocks, so fanning out to several children means not awaiting each call before issuing the next. Use the low-level `WasmRpc` (`cloud.golem.runtime.WasmRpc`, see [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin)) for its async form:
+
+```kotlin
+import cloud.golem.runtime.SchemaValue
+import cloud.golem.runtime.WasmRpc
+
+fun fanOut(items: List<String>): List<String> {
+    val rpcs = items.map { WasmRpc("WorkerAgent", SchemaValue.Record(listOf(SchemaValue.Str(it)))) }
+    try {
+        // Start every call without waiting for any of them.
+        val futures = rpcs.mapIndexed { i, rpc ->
+            rpc.asyncInvokeAndAwait("process", SchemaValue.Record(listOf(SchemaValue.Str(items[i]))), "string")
+        }
+        // Now collect: each get() blocks only until that one result is ready.
+        return futures.map { future ->
+            val result = future.get()
+            future.close()
+            when (result) {
+                is cloud.golem.runtime.RpcResult.Ok -> (result.value as SchemaValue.Str).v
+                is cloud.golem.runtime.RpcResult.Err -> error("worker failed: ${result.error}")
+            }
+        }
+    } finally {
+        rpcs.forEach { it.close() }
+    }
+}
+```
+
+The key is the two-pass shape: issue every `asyncInvokeAndAwait` first (each returns immediately with a future-like handle), *then* call `.get()` on each — by the time the second pass starts, every child is already running concurrently on the host.
+
+### Fire-and-Forget with Promise Collection
+
+For longer-running work, trigger each child with a fire-and-forget call carrying a `PromiseId`, and let each child complete its own promise when done (see [`golem-wait-for-external-input-kotlin`](/next/how-to-guides/kotlin/golem-wait-for-external-input-kotlin)). This needs a generated cross-language client for the worker's agent type (see [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin)'s "Generated client" section), since its `mTrigger(args)` form takes typed Kotlin arguments directly — including a `PromiseId` — rather than raw `SchemaValue`:
+
+```kotlin
+import cloud.golem.runtime.Promises
+import golem.bridge.client.region_worker_agent.RegionWorkerAgentClient
+
+fun dispatchAndCollect(regions: List<String>): List<String> {
+    val promises = regions.map { Promises.create() }
+    regions.zip(promises).forEach { (region, promiseId) ->
+        RegionWorkerAgentClient.get(region).use { it.runReportTrigger(promiseId) } // fire-and-forget
+    }
+    // Each await suspends this agent until that child's promise completes.
+    return promises.map { Promises.await(it).decodeToString() }
+}
+```
+
+`PromiseId` is a plain data class, so it crosses RPC like any other argument. The worker agent calls `Promises.complete(promiseId, result)` when it finishes (see [`golem-wait-for-external-input-kotlin`](/next/how-to-guides/kotlin/golem-wait-for-external-input-kotlin)).
+
+## Approach 2: `HostApi.fork()`
+
+`HostApi.fork(): ForkResult` clones the running agent at the point `fork()` is called: a new agent instance is created with the **same base agent ID but a new phantom ID**, and it continues running from the same execution point onward. Both the original and the new agent see `fork()` return, but with different results:
+
+```kotlin
+import cloud.golem.runtime.ForkResult
+import cloud.golem.runtime.HostApi
+
+when (val result = HostApi.fork()) {
+    is ForkResult.Original -> {
+        // This is the agent that called fork(). result.forkedPhantomId identifies the new sibling.
+    }
+    is ForkResult.Forked -> {
+        // This is the new agent, continuing from the same point. result.forkedPhantomId is its own phantom ID.
+    }
+}
+```
+
+This is a lower-level primitive than spawning named child agents: there is no separate constructor call, no explicit addressing by the caller beforehand, and the branch you are in determines what you do next. Prefer Approach 1 (explicit child agents with known types and identities) unless you specifically need to clone the current agent's in-flight state.
+
+## Related skills
+
+- [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin)
+- [`golem-wait-for-external-input-kotlin`](/next/how-to-guides/kotlin/golem-wait-for-external-input-kotlin)
+- [`golem-agent-reflection-kotlin`](/next/how-to-guides/kotlin/golem-agent-reflection-kotlin)

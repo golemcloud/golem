@@ -33,7 +33,9 @@ steps:
 
         And these HTTP endpoints:
 
-        - `GET /count` — returns `poll_count` as a JSON number.
+        - `GET /count` — returns `poll_count` as a JSON number. Narrow it to a 32-bit
+          integer for this response: a 64-bit integer is rendered as a JSON string over
+          the HTTP API, which would not be a JSON number.
 
         The self-scheduling must use the generated RPC client to schedule a future
         invocation on the same agent instance, not a direct function call. The agent
@@ -78,6 +80,7 @@ steps:
         Implement all methods with Effect, import the implementation module from `src/main.ts`,
         preserve existing manifest entries, and make sure the project builds successfully.
       scala: *non-effect-add-recurring-poller-prompt
+      kotlin: *non-effect-add-recurring-poller-prompt
       moonbit: *non-effect-add-recurring-poller-prompt
       go: *non-effect-add-recurring-poller-prompt
     expectedSkills:
@@ -89,6 +92,8 @@ steps:
         - "golem-recurring-task-effect"
       scala:
         - "golem-recurring-task-scala"
+      kotlin:
+        - "golem-call-another-agent-kotlin"
       moonbit:
         - "golem-recurring-task-moonbit"
       go:
@@ -105,6 +110,7 @@ steps:
         ts: "start"
         effect: "start"
         scala: "start"
+        kotlin: "start"
         moonbit: "start"
         go: "start"
 
@@ -144,6 +150,7 @@ steps:
         ts: "stop"
         effect: "stop"
         scala: "stop"
+        kotlin: "stop"
         moonbit: "stop"
         go: "stop"
 

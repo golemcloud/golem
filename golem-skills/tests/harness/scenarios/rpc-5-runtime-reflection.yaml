@@ -400,3 +400,58 @@ steps:
           equals: "reflected value"
         - path: "$.directValue"
           equals: "direct value"
+
+  - id: "create-kotlin-project"
+    only_if:
+      language: "kotlin"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  # Kotlin's reflection surface is narrower than the other SDKs': it discovers agent
+  # types and methods and invokes them through a dynamic client over packed
+  # `SchemaValue`s, but it has no caller-owned codec client, no JSON convenience path
+  # and no value API on a reflected method. This step therefore asserts the four
+  # capabilities Kotlin has rather than the seven the other languages return.
+  - id: "add-kotlin-reflected-rpc"
+    only_if:
+      language: "kotlin"
+    prompt: >
+      In the Kotlin test-app project, add a durable `ReflectionTarget` agent
+      identified by a string `name`, with an `echo` method accepting and
+      returning a string. Add a durable `ReflectionCaller`, also identified by a
+      string `name`, whose `run` method
+      uses the SDK's runtime reflection API to list the registered agent types,
+      look up `ReflectionTarget` by name, and find its `echo` method.
+
+      Then build a dynamic client for `ReflectionTarget("target")` from its agent
+      ID string and invoke `echo` through it with the positional argument
+      `direct value`, packing the argument as a `SchemaValue`. Close the client
+      when the call is done.
+
+      Return a record containing `listed` (true when `ReflectionTarget` was among
+      the listed types), `typeName`, `methodName`, and `directValue` (the string
+      the dynamic call returned). Make sure the project builds successfully.
+    expectedSkills:
+      - "golem-agent-reflection-kotlin"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-kotlin-reflected-rpc"
+    only_if:
+      language: "kotlin"
+    invoke_json:
+      agent: 'ReflectionCaller("main")'
+      method: "run"
+    expect:
+      result_json:
+        - path: "$.listed"
+          equals: true
+        - path: "$.typeName"
+          equals: "ReflectionTarget"
+        - path: "$.methodName"
+          equals: "echo"
+        - path: "$.directValue"
+          equals: "direct value"

@@ -67,6 +67,26 @@ steps:
         Implement every handler as an Effect, import the implementation module from `src/main.ts`,
         preserve existing manifest entries, and make sure the project builds and deploys.
       scala: *non-effect-add-todo-agent-with-http-prompt
+      kotlin: >
+        In the test-app project, add a new durable agent type called `TodoAgent` identified by
+        a single constructor parameter named `listName` (a `String`). Give it an HTTP mount
+        `/todos/{listName}` (the mount variable must equal the constructor parameter name) and
+        make sure it is exposed through the app HTTP API on
+        `test-app.localhost:{{custom_request_port}}`.
+
+        TodoAgent must store a list of todo items in agent state. Each item has an `id` (string),
+        a `title` (string), and a `done` (boolean) field. Use a data class named `TodoItem` for
+        this.
+
+        Expose these HTTP endpoints:
+        - `POST /items` — accepts a `title` string in the JSON request body, creates a new
+          `TodoItem` with an auto-generated sequential id (starting from "1"), `done` set to
+          `false`, stores it, and returns the created item as JSON.
+        - `GET /items` — returns all stored items as a JSON array.
+        - `POST /items/{id}/complete` — finds the item with the given id, sets `done` to `true`,
+          and returns the updated item as JSON.
+
+        Make sure the project builds and deploys successfully.
       moonbit: *non-effect-add-todo-agent-with-http-prompt
       go: *non-effect-add-todo-agent-with-http-prompt
     expectedSkills:
@@ -78,6 +98,8 @@ steps:
         - "golem-add-http-endpoint-effect"
       scala:
         - "golem-add-http-endpoint-scala"
+      kotlin:
+        - "golem-add-http-endpoint-kotlin"
       moonbit:
         - "golem-add-http-endpoint-moonbit"
       go:

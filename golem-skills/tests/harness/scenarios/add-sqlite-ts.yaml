@@ -1,4 +1,9 @@
 name: "add-sqlite-ts"
+skip_if:
+  # Embedded SQLite here is `node:sqlite` from the TypeScript runtime. Kotlin/Wasm has no JS
+  # runtime and no cinterop, so neither this route nor the Rust one is open to it; a Kotlin agent
+  # uses the host database wrappers instead.
+  language: "kotlin"
 steps:
   - id: "create-project"
     only_if:

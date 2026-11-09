@@ -14,6 +14,7 @@ const CATEGORIES: Record<string, string> = {
   ts: "TypeScript",
   effect: "Effect",
   scala: "Scala",
+  kotlin: "Kotlin",
   moonbit: "MoonBit",
   go: "Go",
 }

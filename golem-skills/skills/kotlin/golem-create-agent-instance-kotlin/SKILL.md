@@ -1,0 +1,58 @@
+---
+name: golem-create-agent-instance-kotlin
+description: "Creating a new Kotlin Golem agent instance with golem agent new. Use when asked to create, instantiate, or pre-create an agent without invoking a method."
+---
+
+# Creating a Golem Agent Instance with `golem agent new`
+
+Both `golem` and `golem-cli` can be used — all commands below work with either binary.
+
+## Usage
+
+```shell
+golem agent new <AGENT_ID> [OPTIONS]
+```
+
+This **creates a new agent instance** without invoking any method on it. The agent is initialized with its constructor parameters and starts in an idle state, ready to receive invocations. If the agent's component has not been deployed yet and the CLI is run from an application directory, it will automatically build and deploy the component first.
+
+Unlike `golem agent invoke`, which implicitly creates the agent on first call, `golem agent new` explicitly pre-creates the agent — useful when you need to set environment variables or configuration at creation time.
+
+## Agent ID Format and Value Syntax
+
+Same as `golem agent invoke`: `AgentTypeName(param1, param2, ...)`, optionally prefixed with `env/` or `app/env/` or `account/app/env/`, and parameters use Kotlin syntax (`field = value`, nullable for options, `Either.Right`/`Either.Left`, `listOf(...)`, ...). Load `golem-invoke-agent-kotlin` for the full value grammar.
+
+## Examples
+
+```shell
+golem agent new 'MyAgent()'
+golem agent new 'ChatRoom("general")'
+golem agent new 'MyAgent("user-123")' --env API_KEY=sk-abc123 --env LOG_LEVEL=debug
+golem agent new 'MyAgent()' --config maxRetries=5 --config timeoutSeconds=30
+golem agent new 'staging/MyAgent("user-123")'
+golem agent new 'OrderProcessor("us-east")' \
+  --env DATABASE_URL=postgres://... \
+  --config batchSize=100 \
+  --config retryPolicy.maxAttempts=3
+```
+
+## Available Options
+
+| Option | Description |
+|--------|-------------|
+| `-e, --env <ENV=VAL>` | Environment variables visible to the agent (can be repeated) |
+| `-c, --config <PATH=VALUE>` | Configuration entries for the agent, using dot-separated paths (can be repeated). Only configuration declared by the agent (see `golem-add-config-kotlin`) can be provided. If not provided, the default from the manifest (`agents.*.config`) is used. |
+
+## Auto-Deploy
+
+If the agent's component has not been deployed yet and the CLI is run from an application directory, `golem agent new` will automatically build and deploy the component before creating the agent.
+
+## When to Use `golem agent new` vs `golem agent invoke`
+
+- Use `golem agent new` when you need to **pre-create** an agent with specific environment variables or configuration before any invocation.
+- Use `golem agent invoke` when you want to call a method — the agent is created automatically on first invocation if it doesn't exist.
+- An agent created with `golem agent new` can be invoked later with `golem agent invoke` using the same agent ID.
+
+## Related skills
+
+- `golem-invoke-agent-kotlin` — the full value syntax, and invoking a method once the agent exists
+- `golem-add-config-kotlin` — declaring the `Config<T>` values a `--config` entry can override

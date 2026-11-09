@@ -67,6 +67,7 @@ steps:
         sure the project builds and deploys successfully. Do not invoke the agent or its HTTP
         routes after deployment; the harness must observe the untouched `"none"` state first.
       scala: *non-effect-add-secure-agent-prompt
+      kotlin: *non-effect-add-secure-agent-prompt
       moonbit: *non-effect-add-secure-agent-prompt
       go: *non-effect-add-secure-agent-prompt
     expectedSkills:
@@ -78,6 +79,8 @@ steps:
         - "golem-add-http-auth-effect"
       scala:
         - "golem-add-http-auth-scala"
+      kotlin:
+        - "golem-add-http-endpoint-kotlin"
       moonbit:
         - "golem-add-http-auth-moonbit"
       go:

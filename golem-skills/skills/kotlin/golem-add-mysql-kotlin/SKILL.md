@@ -1,0 +1,107 @@
+---
+name: golem-add-mysql-kotlin
+description: "Using MySQL from a Kotlin Golem agent through cloud.golem.runtime.host.MysqlConnection. Use when the user asks to connect to MySQL, run SQL, or use MySQL from Kotlin agent code."
+---
+
+# Using MySQL from a Kotlin Golem Agent
+
+`cloud.golem.runtime.host.MysqlConnection` wraps `golem:rdbms/mysql`, the host-provided MySQL driver. No JDBC driver or connection pool library is added to the component; the host owns the connection.
+
+## Connecting
+
+```kotlin
+import cloud.golem.runtime.Either
+import cloud.golem.runtime.host.MysqlConnection
+
+when (val connectionResult = MysqlConnection.open("mysql://user:password@host:3306/dbname")) {
+    is Either.Left -> error("failed to connect: ${connectionResult.value}")
+    is Either.Right -> {
+        val connection = connectionResult.value
+        // ... use connection ...
+        connection.close()
+    }
+}
+```
+
+`open(address)` returns `Either<MysqlDbError, MysqlConnection>`. **Always `close()` the connection when done** — it is not released automatically.
+
+## Queries and statements
+
+```kotlin
+import cloud.golem.runtime.host.MysqlDbValue
+
+val rows = connection.query(
+    "SELECT id, name FROM users WHERE age > ?",
+    listOf(MysqlDbValue.IntVal(21)),
+)
+// Either<MysqlDbError, MysqlDbResult>
+
+val updated = connection.execute(
+    "UPDATE users SET name = ? WHERE id = ?",
+    listOf(MysqlDbValue.VarChar("Alice"), MysqlDbValue.IntVal(5)),
+)
+// Either<MysqlDbError, Long> -- rows affected
+```
+
+- `query(statement, params)` runs a `SELECT`-style statement and returns a `MysqlDbResult`.
+- `execute(statement, params)` runs an `INSERT`/`UPDATE`/`DELETE`-style statement and returns the affected row count.
+- Bind parameters positionally with MySQL's native `?` placeholders, in order.
+
+## Reading results
+
+```kotlin
+when (val result = rows) { // Either<MysqlDbError, MysqlDbResult>
+    is Either.Left -> Logging.error("query failed: ${result.value}")
+    is Either.Right -> for (row in result.value.rows) {
+        val name = row.getString(1)   // convenience accessor by column index
+        val age = row.getInt(0)
+    }
+}
+```
+
+`MysqlDbResult(columns: List<MysqlDbColumn>, rows: List<MysqlDbRow>)`. `MysqlDbRow(values: List<MysqlDbValue>)` exposes `getString(index)`, `getInt(index)` and `getLong(index)` convenience accessors (each `null` on a SQL `NULL`); for every other column type, pattern-match on `MysqlDbValue` directly.
+
+## `MysqlDbValue`
+
+A sealed class covering MySQL's column types, including the unsigned variants MySQL has and Postgres does not:
+
+| Case | Kotlin type |
+|---|---|
+| `MysqlDbValue.VarChar`, `.Text`, `.TinyText`, `.MediumText`, `.LongText`, `.FixChar` | `String` |
+| `MysqlDbValue.TinyInt`, `.SmallInt`, `.MediumInt`, `.IntVal`, `.BigInt` | `Byte`, `Short`, `Int`, `Int`, `Long` |
+| `MysqlDbValue.TinyIntUnsigned`, `.SmallIntUnsigned`, `.MediumIntUnsigned`, `.IntUnsigned`, `.BigIntUnsigned` | `UByte`, `UShort`, `UInt`, `UInt`, `ULong` |
+| `MysqlDbValue.FloatVal`, `.DoubleVal` | `Float`, `Double` |
+| `MysqlDbValue.Decimal` | `String` (arbitrary-precision decimal text) |
+| `MysqlDbValue.BooleanVal` | `Boolean` |
+| `MysqlDbValue.Binary`, `.VarBinary` | `List<UByte>` |
+| `MysqlDbValue.DateVal`, `.DateTimeVal`, `.TimestampVal`, `.TimeVal`, `.Year` | `DbDate`/`DbTimestamp`/`DbTime`/`UShort` |
+
+## Transactions
+
+```kotlin
+when (val tx = connection.beginTransaction()) { // Either<MysqlDbError, MysqlTransaction>
+    is Either.Left -> Logging.error("could not start transaction: ${tx.value}")
+    is Either.Right -> {
+        val transaction = tx.value
+        transaction.execute("INSERT INTO ledger (amount) VALUES (?)", listOf(MysqlDbValue.BigInt(100)))
+        transaction.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", listOf(MysqlDbValue.BigInt(100), MysqlDbValue.IntVal(1)))
+        transaction.commit() // or transaction.rollback()
+        transaction.close()  // always close, whether or not commit/rollback was called
+    }
+}
+```
+
+`MysqlTransaction` has the same `query`/`execute` shape as `MysqlConnection`, plus `commit()` and `rollback()` (both `Either<MysqlDbError, Unit>`). Close it when done, in every branch.
+
+## Errors
+
+`MysqlDbError` is a sealed class covering connection failures, statement errors, and so on.
+
+## Durability
+
+Every query, execute, and transaction call goes through the host's durability layer like any other side effect: replay does not re-run the SQL, it replays the recorded result.
+
+## Related skills
+
+- `golem-add-postgres-kotlin`
+- `golem-add-ignite-kotlin`

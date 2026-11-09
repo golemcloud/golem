@@ -14,6 +14,7 @@ steps:
         rust: &non-effect-counter-agent 'CounterAgent("c1")'
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
+        kotlin: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
         go: *non-effect-counter-agent
       method: "increment"
@@ -37,6 +38,7 @@ steps:
         to a file called oplog-full.txt in the test-app directory.
       ts: *dump-oplog-prompt
       scala: *dump-oplog-prompt
+      kotlin: *dump-oplog-prompt
       moonbit: *dump-oplog-prompt
       go: *dump-oplog-prompt
     expectedSkills:
@@ -58,6 +60,7 @@ steps:
         and save the output to a file called oplog-search.txt in the test-app directory.
       ts: *search-oplog-prompt
       scala: *search-oplog-prompt
+      kotlin: *search-oplog-prompt
       moonbit: *search-oplog-prompt
       go: *search-oplog-prompt
     continueSession: true

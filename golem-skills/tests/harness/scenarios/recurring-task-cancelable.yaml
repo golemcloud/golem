@@ -136,6 +136,38 @@ steps:
         (.scheduleCancelableAt() in Scala) which returns a CancellationToken.
 
         Make sure the project builds successfully.
+      kotlin: >
+        In the test-app project, add a second durable agent type called `Ticker`
+        identified by a single name constructor parameter.
+
+        `Ticker` must have mutable state:
+        - `tickCount` (Long, initially 0): how many times `tick` has executed
+        - `running` (Boolean, initially false): whether the recurring loop is active
+
+        It must expose these externally invokable methods:
+
+        - `start` — sets `running` to true and immediately calls `tick`. Returns nothing.
+
+        - `tick` — if `running` is false, returns without doing anything. Otherwise,
+          increments `tickCount` by 1. If `tickCount` is less than 5, it schedules
+          itself (the same agent's `tick` method) to run again 5 seconds in the future
+          using the cancelable schedule variant. The cancelable schedule variant returns
+          a CancellationToken. Store the cancellation token in agent state so it can be
+          used later. Returns nothing.
+
+        - `cancel` — sets `running` to false. If a cancellation token is stored from a
+          previous `tick`, cancel it (call cancel() on the token) so the pending scheduled
+          invocation is dropped immediately without waiting for it to fire. Returns nothing.
+
+        - `getTickCount` — returns `tickCount` as a Long.
+
+        The self-scheduling must go through the RPC layer rather than a direct method call, to
+        schedule a future invocation on the same agent instance. Use the cancelable variant
+        which returns a CancellationToken. Note that the KSP-generated `@RemoteAgent` client has
+        no schedule variant, and a generated cross-language bridge client cannot serve the agent's
+        own component, so find the API that does support this.
+
+        Make sure the project builds successfully.
       moonbit: >
         In the test-app project, add a second durable agent type called `Ticker`
         identified by a single name constructor parameter.
@@ -204,6 +236,8 @@ steps:
         - "golem-recurring-task-effect"
       scala:
         - "golem-recurring-task-scala"
+      kotlin:
+        - "golem-call-another-agent-kotlin"
       moonbit:
         - "golem-recurring-task-moonbit"
       go:
@@ -220,6 +254,7 @@ steps:
         ts: "start"
         effect: "start"
         scala: "start"
+        kotlin: "start"
         moonbit: "start"
         go: "start"
 
@@ -231,6 +266,7 @@ steps:
         ts: "getTickCount"
         effect: "getTickCount"
         scala: "getTickCount"
+        kotlin: "getTickCount"
         moonbit: "get_tick_count"
         go: "getTickCount"
     expect:
@@ -254,6 +290,7 @@ steps:
         ts: "getTickCount"
         effect: "getTickCount"
         scala: "getTickCount"
+        kotlin: "getTickCount"
         moonbit: "get_tick_count"
         go: "getTickCount"
     expect:
@@ -269,6 +306,7 @@ steps:
         ts: "cancel"
         effect: "cancel"
         scala: "cancel"
+        kotlin: "cancel"
         moonbit: "cancel"
         go: "cancel"
 
@@ -283,6 +321,7 @@ steps:
         ts: "getTickCount"
         effect: "getTickCount"
         scala: "getTickCount"
+        kotlin: "getTickCount"
         moonbit: "get_tick_count"
         go: "getTickCount"
     expect:

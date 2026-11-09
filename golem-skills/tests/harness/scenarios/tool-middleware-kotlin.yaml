@@ -1,0 +1,61 @@
+name: tool-middleware-kotlin
+# Kotlin-only: `golem-tools-middleware-kotlin` is asserted by no scenario, and the only middleware
+# scenario in the catalog (`effect-phase8-capabilities`) is Effect-only by construction. Builds on
+# the tool that `define-and-call-tool-kotlin` proves, then wraps its invocation.
+steps:
+  - id: create-project
+    only_if: { language: kotlin }
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: define-tool-and-middleware
+    only_if: { language: kotlin }
+    prompt: >
+      In test-app, define a Golem tool named shout that takes one string positional named text and
+      returns the string "shouted-by-tool:" followed by the uppercased text.
+
+      Also define a tool middleware named tag-result that wraps a tool invocation, calls the
+      wrapped tool unchanged, and replaces the returned string with "tagged(" followed by the
+      tool's own returned string and ")". Leave a rejected or failed invocation as it is.
+
+      Declare both the tool and the middleware in the application manifest, with the middleware
+      implemented by this component, and bind the shout tool to the CounterAgent with the
+      tag-result middleware applied to it.
+
+      Add a CounterAgent.shoutViaTool method with one string input named text and a string return
+      value. The method must look the tool up by name at run time, invoke it through the tool RPC
+      API, and return the string the invocation produced. Return "missing-tool" when the lookup
+      finds no such tool.
+
+      Do not uppercase the text, build the "shouted-by-tool:" prefix, or add the "tagged(...)"
+      wrapper in the agent: the tool owns the first two and the middleware owns the third. Do not
+      use a generated typed client. Preserve the template CounterAgent identity. Make sure the app
+      builds and deploys locally.
+    expectedSkills:
+      - golem-tools-middleware-kotlin
+    allowedExtraSkills:
+      - golem-define-tool-kotlin
+      - golem-call-tool-kotlin
+      - golem-add-agent-kotlin
+      - golem-edit-manifest
+      - golem-build
+      - golem-deploy
+      - golem-add-kotlin-dependency
+    verify:
+      build: true
+      deploy: true
+
+  # Only a real middleware in the invocation path produces the wrapper, so an agent or tool that
+  # built the string itself cannot pass this step.
+  - id: invoke-through-middleware
+    only_if: { language: kotlin }
+    invoke_json:
+      agent: 'CounterAgent("middleware-test")'
+      method: shoutViaTool
+      args: '"hello-tool"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "tagged(shouted-by-tool:HELLO-TOOL)"

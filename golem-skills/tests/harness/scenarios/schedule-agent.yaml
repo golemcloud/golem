@@ -13,6 +13,9 @@ steps:
         I have the test-app project deployed with a CounterAgent that has a string constructor
         parameter (the counter name) and an increment method. Use the CLI to schedule an
         invocation of the increment method for a counter named "c1" to run 15 seconds from now.
+        Submit the scheduling command as your final operational step; do not wait for it to run
+        and do not invoke increment yourself. The harness owns every invocation of the counter,
+        and one of its own leaves the counter on a value the harness does not expect.
       ts: *non-effect-schedule-agent-prompt
       effect: >
         I have the Effect-based test-app project deployed with the generated `Counter` agent. Its
@@ -25,6 +28,7 @@ steps:
       scala: *non-effect-schedule-agent-prompt
       moonbit: *non-effect-schedule-agent-prompt
       go: *non-effect-schedule-agent-prompt
+      kotlin: *non-effect-schedule-agent-prompt
     expectedSkills:
       rust:
         - "golem-schedule-agent-rust"
@@ -38,6 +42,8 @@ steps:
         - "golem-schedule-agent-moonbit"
       go:
         - "golem-schedule-agent-go"
+      kotlin:
+        - "golem-schedule-agent-kotlin"
 
   - id: "invoke-before-schedule"
     invoke_json:
@@ -48,6 +54,7 @@ steps:
         scala: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
         go: *non-effect-counter-agent
+        kotlin: *non-effect-counter-agent
       method: "increment"
     expect:
       result_json:

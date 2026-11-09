@@ -1,0 +1,111 @@
+---
+name: golem-add-ignite-kotlin
+description: "Using Apache Ignite from a Kotlin Golem agent through cloud.golem.runtime.host.IgniteConnection. Use when the user asks to connect to Apache Ignite 2, run SQL over Ignite, or use Ignite from Kotlin agent code."
+---
+
+# Using Apache Ignite from a Kotlin Golem Agent
+
+`cloud.golem.runtime.host.IgniteConnection` wraps `golem:rdbms/ignite2`, the host-provided Apache Ignite 2 driver (Ignite's SQL interface). No Ignite client library is added to the component; the host owns the connection.
+
+## Connecting
+
+```kotlin
+import cloud.golem.runtime.Either
+import cloud.golem.runtime.host.IgniteConnection
+
+when (val connectionResult = IgniteConnection.open("ignite://host:10800")) {
+    is Either.Left -> error("failed to connect: ${connectionResult.value}")
+    is Either.Right -> {
+        val connection = connectionResult.value
+        // ... use connection ...
+        connection.close()
+    }
+}
+```
+
+`open(address)` returns `Either<IgniteDbError, IgniteConnection>`. **Always `close()` the connection when done** — it is not released automatically.
+
+## Queries and statements
+
+```kotlin
+import cloud.golem.runtime.host.IgniteDbValue
+
+val rows = connection.query(
+    "SELECT id, name FROM users WHERE age > ?",
+    listOf(IgniteDbValue.DbInt(21)),
+)
+// Either<IgniteDbError, IgniteDbResult>
+
+val updated = connection.execute(
+    "UPDATE users SET name = ? WHERE id = ?",
+    listOf(IgniteDbValue.DbString("Alice"), IgniteDbValue.DbInt(5)),
+)
+// Either<IgniteDbError, Long> -- rows affected
+```
+
+- `query(statement, params)` runs a `SELECT`-style statement and returns an `IgniteDbResult`.
+- `execute(statement, params)` runs an `INSERT`/`UPDATE`/`DELETE`-style statement and returns the affected row count.
+- Bind parameters positionally with `?` placeholders, in order.
+
+## Reading results
+
+```kotlin
+when (val result = rows) { // Either<IgniteDbError, IgniteDbResult>
+    is Either.Left -> Logging.error("query failed: ${result.value}")
+    is Either.Right -> for (row in result.value.rows) {
+        val name = row.getString(1)   // convenience accessor by column index
+        val age = row.getInt(0)
+    }
+}
+```
+
+`IgniteDbResult(columns: List<IgniteDbColumn>, rows: List<IgniteDbRow>)`. `IgniteDbRow(values: List<IgniteDbValue>)` exposes `getString(index)`, `getInt(index)` and `getLong(index)` convenience accessors; for every other column type, pattern-match on `IgniteDbValue` directly.
+
+## `IgniteDbValue`
+
+A sealed class covering Ignite's column types:
+
+| Case | Kotlin type |
+|---|---|
+| `IgniteDbValue.DbNull` | (object — a SQL `NULL`) |
+| `IgniteDbValue.DbString` | `String` |
+| `IgniteDbValue.DbBoolean` | `Boolean` |
+| `IgniteDbValue.DbByte`, `.DbShort`, `.DbInt`, `.DbLong` | `Byte`, `Short`, `Int`, `Long` |
+| `IgniteDbValue.DbFloat`, `.DbDouble` | `Float`, `Double` |
+| `IgniteDbValue.DbDecimal` | `String` (arbitrary-precision decimal text) |
+| `IgniteDbValue.DbChar` | `Char` (16-bit Unicode code unit) |
+| `IgniteDbValue.DbUuid` | `highBits: Long, lowBits: Long` |
+| `IgniteDbValue.DbDate` | `millis: Long` (since Unix epoch, UTC) |
+| `IgniteDbValue.DbTimestamp` | `millis: Long, nanos: Int` (sub-millisecond remainder) |
+| `IgniteDbValue.DbTime` | `nanos: Long` (since midnight) |
+| `IgniteDbValue.DbByteArray` | `List<UByte>` |
+
+## Transactions
+
+```kotlin
+when (val tx = connection.beginTransaction()) { // Either<IgniteDbError, IgniteTransaction>
+    is Either.Left -> Logging.error("could not start transaction: ${tx.value}")
+    is Either.Right -> {
+        val transaction = tx.value
+        transaction.execute("INSERT INTO ledger (amount) VALUES (?)", listOf(IgniteDbValue.DbLong(100)))
+        transaction.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", listOf(IgniteDbValue.DbLong(100), IgniteDbValue.DbInt(1)))
+        transaction.commit() // or transaction.rollback()
+        transaction.close()  // always close, whether or not commit/rollback was called
+    }
+}
+```
+
+`IgniteTransaction` has the same `query`/`execute` shape as `IgniteConnection`, plus `commit()` and `rollback()` (both `Either<IgniteDbError, Unit>`). Close it when done, in every branch.
+
+## Errors
+
+`IgniteDbError` is a sealed class covering connection failures, statement errors, and so on.
+
+## Durability
+
+Every query, execute, and transaction call goes through the host's durability layer like any other side effect: replay does not re-run the SQL, it replays the recorded result.
+
+## Related skills
+
+- `golem-add-postgres-kotlin`
+- `golem-add-mysql-kotlin`

@@ -54,6 +54,18 @@ steps:
         updated `Item`. `deleteItem` must take an item id string and return `true` when
         the item was removed. `listItems` must return all stored items. Store the items
         in agent state keyed by id. Make sure the project builds and deploys successfully.
+      kotlin: >
+        In the test-app project, add a new durable agent type named `ItemRepositoryAgent`
+        with a single constructor or identity parameter for the repository name. It must
+        represent a simple item repository and expose externally invokable CRUD methods
+        named `createItem`, `getItem`, `updateItem`, `deleteItem`, and `listItems`.
+        Use an `Item` data class with exactly two fields: `id`
+        and `name`. `createItem` must take an `Item` and return the stored `Item`.
+        `getItem` must take an item id string and return the stored `Item`. `updateItem`
+        must take an `Item`, replace the stored value with the same id, and return the
+        updated `Item`. `deleteItem` must take an item id string and return `true` when
+        the item was removed. `listItems` must return all stored items. Store the items
+        in agent state keyed by id. Make sure the project builds and deploys successfully.
       moonbit: >
         In the test-app project, add a new durable agent type named `ItemRepositoryAgent`
         with a single constructor or identity parameter for the repository name. It must
@@ -87,6 +99,8 @@ steps:
         - "golem-add-agent-effect"
       scala:
         - "golem-add-agent-scala"
+      kotlin:
+        - "golem-add-agent-kotlin"
       moonbit:
         - "golem-add-agent-moonbit"
       go:
@@ -103,6 +117,7 @@ steps:
         ts: "createItem"
         effect: "createItem"
         scala: "createItem"
+        kotlin: "createItem"
         moonbit: "create_item"
         go: "createItem"
       args:
@@ -110,6 +125,7 @@ steps:
         ts: '{ id: "item-1", name: "Hammer" }'
         effect: '{ id: "item-1", name: "Hammer" }'
         scala: 'Item(id = "item-1", name = "Hammer")'
+        kotlin: '{ id = "item-1", name = "Hammer" }'
         moonbit: '{ id: "item-1", name: "Hammer" }'
         go: '{ id: "item-1", name: "Hammer" }'
     expect:
@@ -127,6 +143,7 @@ steps:
         ts: "getItem"
         effect: "getItem"
         scala: "getItem"
+        kotlin: "getItem"
         moonbit: "get_item"
         go: "getItem"
       args: '"item-1"'
@@ -145,6 +162,7 @@ steps:
         ts: "updateItem"
         effect: "updateItem"
         scala: "updateItem"
+        kotlin: "updateItem"
         moonbit: "update_item"
         go: "updateItem"
       args:
@@ -152,6 +170,7 @@ steps:
         ts: '{ id: "item-1", name: "Updated Hammer" }'
         effect: '{ id: "item-1", name: "Updated Hammer" }'
         scala: 'Item(id = "item-1", name = "Updated Hammer")'
+        kotlin: '{ id = "item-1", name = "Updated Hammer" }'
         moonbit: '{ id: "item-1", name: "Updated Hammer" }'
         go: '{ id: "item-1", name: "Updated Hammer" }'
     expect:
@@ -169,6 +188,7 @@ steps:
         ts: "listItems"
         effect: "listItems"
         scala: "listItems"
+        kotlin: "listItems"
         moonbit: "list_items"
         go: "listItems"
     expect:
@@ -186,6 +206,7 @@ steps:
         ts: "deleteItem"
         effect: "deleteItem"
         scala: "deleteItem"
+        kotlin: "deleteItem"
         moonbit: "delete_item"
         go: "deleteItem"
       args: '"item-1"'
@@ -202,6 +223,7 @@ steps:
         ts: "listItems"
         effect: "listItems"
         scala: "listItems"
+        kotlin: "listItems"
         moonbit: "list_items"
         go: "listItems"
     expect:

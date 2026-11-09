@@ -18,6 +18,7 @@ steps:
         methods, state, snapshot configuration, and registration, and make sure the project builds
         and deploys successfully.
       scala: *change-to-ephemeral-prompt
+      kotlin: *change-to-ephemeral-prompt
       moonbit: *change-to-ephemeral-prompt
       go: *change-to-ephemeral-prompt
     expectedSkills:
@@ -29,6 +30,8 @@ steps:
         - "golem-configure-durability-effect"
       scala:
         - "golem-configure-durability-scala"
+      kotlin:
+        - "golem-configure-durability-kotlin"
       moonbit:
         - "golem-configure-durability-moonbit"
       go:
@@ -56,6 +59,7 @@ steps:
         methods, state, snapshot configuration, and registration, and make sure the project builds
         and deploys successfully.
       scala: *change-to-durable-prompt
+      kotlin: *change-to-durable-prompt
       moonbit: *change-to-durable-prompt
       go: *change-to-durable-prompt
     expectedSkills:
@@ -67,6 +71,8 @@ steps:
         - "golem-configure-durability-effect"
       scala:
         - "golem-configure-durability-scala"
+      kotlin:
+        - "golem-configure-durability-kotlin"
       moonbit:
         - "golem-configure-durability-moonbit"
       go:

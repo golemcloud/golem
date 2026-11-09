@@ -119,6 +119,34 @@ steps:
         - `server.port` set to `8080`
 
         Make sure the project builds and deploys successfully.
+      kotlin: >
+        In the test-app project, add a new durable agent type called `AppConfigAgent`
+        identified by a single constructor parameter for the instance name.
+
+        AppConfigAgent must accept typed configuration with the following structure:
+        - `appName` (string)
+        - `maxRetries` (a 32-bit signed integer)
+        - `server` — a nested record/object with two fields:
+          - `host` (string)
+          - `port` (a 32-bit signed integer)
+
+        Define Kotlin data classes for both the top-level config and the
+        nested `server` record, and use the agent config mechanism (Config<T>) to
+        receive them in the constructor.
+
+        Expose a method called `getSettings` that returns a record/object with four
+        fields: `appName` (string), `maxRetries` (s32/number/Int), `serverHost`
+        (string), and `serverPort` (s32/number/Int). The values must come from the
+        agent's typed configuration, reading through the nested `server` record.
+
+        In `golem.yaml`, set default configuration values under the `agents` section for
+        `AppConfigAgent`:
+        - `appName` set to `"MyApp"`
+        - `maxRetries` set to `3`
+        - `server.host` set to `"localhost"`
+        - `server.port` set to `8080`
+
+        Make sure the project builds and deploys successfully.
       moonbit: >
         In the test-app project, add a new durable agent type called `AppConfigAgent`
         identified by a single constructor parameter for the instance name.
@@ -184,6 +212,8 @@ steps:
         - "golem-add-config-effect"
       scala:
         - "golem-add-config-scala"
+      kotlin:
+        - "golem-add-config-kotlin"
       moonbit:
         - "golem-add-config-moonbit"
       go:
@@ -216,6 +246,7 @@ steps:
         ts: "getSettings"
         effect: "getSettings"
         scala: "getSettings"
+        kotlin: "getSettings"
         moonbit: "get_settings"
         go: "getSettings"
     expect:
@@ -250,6 +281,16 @@ steps:
           - path: "$.serverPort"
             equals: 8080
       scala:
+        result_json:
+          - path: "$.appName"
+            equals: "MyApp"
+          - path: "$.maxRetries"
+            equals: 3
+          - path: "$.serverHost"
+            equals: "localhost"
+          - path: "$.serverPort"
+            equals: 8080
+      kotlin:
         result_json:
           - path: "$.appName"
             equals: "MyApp"

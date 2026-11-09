@@ -1,0 +1,68 @@
+name: define-and-call-tool-kotlin
+# Kotlin-only counterpart to `generate-builtin-tool-client-kotlin`: that scenario covers the
+# generated typed client and forbids the raw API, so it can never assert `golem-call-tool-kotlin`.
+# This one defines a tool in the application itself and calls it through `ToolHost` and `ToolRpc`,
+# which is what `golem-define-tool-kotlin` and `golem-call-tool-kotlin` describe. No other
+# language's catalog has a scenario for its own `golem-define-tool-*` skill yet.
+steps:
+  - id: create-project
+    only_if: { language: kotlin }
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: define-and-call-tool
+    only_if: { language: kotlin }
+    prompt: >
+      In test-app, define a Golem tool named shout that takes one string positional named text.
+      The tool returns the string "shouted-by-tool:" followed by the uppercased text, and rejects
+      a blank text with a structured constraint-violation tool error. Declare the tool in the
+      application manifest and bind it to the CounterAgent so the agent is allowed to call it.
+
+      Add a CounterAgent.shoutViaTool method with one string input named text and a string return
+      value. The method must look the tool up by name at run time and invoke it through the tool
+      RPC API. Return the tool's own returned string unchanged when the invocation succeeds,
+      return "rejected:constraint-violation" when the tool reports a constraint violation, and
+      return "missing-tool" when the lookup finds no such tool.
+
+      Do not uppercase the text, build the "shouted-by-tool:" prefix, or reject blank input in the
+      agent; all three belong to the tool. Do not use a generated typed client, and do not add a
+      dependency on another component: the tool lives in this component. Preserve the template
+      CounterAgent identity. Make sure the app builds and deploys locally.
+    expectedSkills:
+      - golem-define-tool-kotlin
+      - golem-call-tool-kotlin
+    allowedExtraSkills:
+      - golem-add-agent-kotlin
+      - golem-edit-manifest
+      - golem-build
+      - golem-deploy
+      - golem-add-kotlin-dependency
+    verify:
+      build: true
+      deploy: true
+
+  - id: invoke-through-tool
+    only_if: { language: kotlin }
+    invoke_json:
+      agent: 'CounterAgent("tool-test")'
+      method: shoutViaTool
+      args: '"hello-tool"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "shouted-by-tool:HELLO-TOOL"
+
+  # A blank text only produces this string if the tool really ran and the host carried its
+  # structured error back, so an agent that inlined the tool's work cannot pass this step.
+  - id: invoke-rejected-by-tool
+    only_if: { language: kotlin }
+    invoke_json:
+      agent: 'CounterAgent("tool-test")'
+      method: shoutViaTool
+      args: '""'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "rejected:constraint-violation"

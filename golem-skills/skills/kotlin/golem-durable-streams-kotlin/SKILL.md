@@ -1,0 +1,86 @@
+---
+name: golem-durable-streams-kotlin
+description: "Reading and writing external Durable Streams from Kotlin, and exposing HTTP routes over Durable Streams. Use when the user asks for DurableStreams, resumable stream append/read, producer epochs, or durable stream slots on an endpoint."
+---
+
+# Durable Streams (Kotlin)
+
+Two parts: **clients** for an existing external Durable Streams server (`DurableStreams`), and **HTTP routes** that expose a stream parameter/result as Durable Streams (`@DurableStreamSlot`).
+
+All client types are in `cloud.golem.streams`; the slot annotations are in `cloud.golem.annotations`.
+
+## Reading
+
+```kotlin
+import cloud.golem.streams.DurableStreamCheckpoint
+import cloud.golem.streams.DurableStreamIterator
+import cloud.golem.streams.DurableStreamReadOptions
+import cloud.golem.streams.DurableStreamTransport
+import cloud.golem.streams.DurableStreams
+
+val messages: DurableStreamIterator<String> = DurableStreams.json(
+    "https://streams.example/events",
+    DurableStreamReadOptions(checkpoint = DurableStreamCheckpoint("now"), liveTransport = DurableStreamTransport.SSE),
+    auth = config.value.bearer,                       // optional Secret<String>
+)
+for (message in messages) println(message)            // each element is one message's raw JSON text
+```
+
+- `DurableStreamCheckpoint(offset = "-1", cursor = null)`: `"-1"` is the start, `"now"` the current tail. `DurableStreamTransport` is `CATCH_UP`, `LONG_POLL` (default) or `SSE`. Other read options: `timeoutMs` (1..300000), `idleDelayMs`, `retry = DurableStreamRetry(maxRetries = 8, initialDelayMs, maxDelayMs)`.
+- `DurableStreams.bytes(url, options, auth)` yields byte chunks (concatenate; chunk boundaries are not message boundaries).
+- `hasNext()` blocks while waiting; `toList()` collects until the stream closes. Close with `close()` (also released at end or on failure).
+- Typed `TIMEOUT`, `TRANSPORT`, `RATE_LIMITED`, `UNAVAILABLE` errors are retried with bounded durable backoff (`DurableStreamRetry`); a missing stream, `GONE` or a malformed payload throws.
+
+## Appending
+
+```kotlin
+import cloud.golem.streams.DurableStreamProducer
+
+val writer = DurableStreams.jsonWriter("https://streams.example/events", DurableStreamProducer("orders-v1", epoch = 4))
+val receipt = writer.append(listOf("""[9007199254740993,7]"""), close = true)   // each value is one message's JSON text
+```
+
+- `byteWriter(url, contentType)` appends `ByteArray`s. Omit the producer to allocate an id (`DurableStreams.newProducer()`). `DurableStreamProducer(id, epoch = 0)`: the server deduplicates by (id, epoch, sequence); start a new epoch after exhausting the sequence.
+- Both writers also take `auth`, `timeoutMs` and `retry`; an empty append is only valid with `close = true`.
+- **One uncertain request at a time**: after a failed `append`, call `retryPending()` before appending again; `append` refuses while one is pending.
+- `dispose()` releases the host resource without closing the remote stream.
+- Use HTTPS (HTTP only for loopback); redirects and URL userinfo are not supported.
+
+## HTTP routes over Durable Streams
+
+```kotlin
+import cloud.golem.annotations.DurableStreamOptions
+import cloud.golem.annotations.DurableStreamSlot
+import cloud.golem.streams.AgentStream
+
+@Endpoint(put = "/echo")
+@DurableStreamSlot(source = "input", slot = "input")
+@DurableStreamSlot(source = "output", slot = "\$result")
+@DurableStreamOptions(allowExternalWrites = true, maxConcurrentReadersPerStream = 4)
+fun durableEcho(input: AgentStream<String>): AgentStream<String> = TODO()
+```
+
+- `source` is `"input"` (the stream parameter named by `slot`) or `"output"` (the result, whose slot must be named `"$result"` — the host rejects any other name for an output slot).
+- The method must return or take a stream. The host rejects route options on a method that uses none.
+- Options: `allowExternalWrites`, `allowStreamDelete`, `allowInvocationDelete`, `maxConcurrentReadersPerStream` (1..16), `maxAppendRequestsPerSecondPerStream` (needs external writes). `0` leaves a limit unset.
+- **Only a flag you actually write is sent.** The three `allow*` flags are optional on the wire, and leaving one out means the host's default rather than `true`. This matters for an output-only route: the host rejects `allowExternalWrites` set to *any* value, including `false`, on a route with no writable input slot — so set it only where an input slot exists.
+- `@DurableStreamSlot` is repeatable and also takes `name` and `contentType` overrides.
+
+### Choosing the endpoint when a method has several
+
+Both annotations take `endpointMethod` and / or `endpointPath` to say which endpoint they belong to. A method with one endpoint needs no selector; a method with several needs one, or the build fails with `selector is ambiguous or missing`. Slots may target different endpoints of the same method:
+
+```kotlin
+@Endpoint(post = "/report-now", get = "/report")
+@DurableStreamSlot(source = "output", slot = "\$result", endpointMethod = "GET")
+@DurableStreamOptions(maxConcurrentReadersPerStream = 4, endpointMethod = "GET")
+fun report(): AgentStream<String> = TODO()
+```
+
+Give the two endpoints **different paths**. Two verbs on one path collide once either carries a stream, because the generated stream routes derive from the path, and the deploy fails with `ROUTE_IS_AMBIGUOUS`.
+- The `golem new --template kotlin/streaming` template contains a runnable agent with routes, external streams and a README with `curl` walkthrough.
+
+## Related skills
+
+- `golem-streaming-agent-kotlin`
+- `golem-add-secret-kotlin`

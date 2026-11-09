@@ -16,6 +16,7 @@ steps:
         rust: &default-counter-agent 'CounterAgent("test")'
         ts: *default-counter-agent
         scala: *default-counter-agent
+        kotlin: *default-counter-agent
         moonbit: *default-counter-agent
         go: *default-counter-agent
       method: 'increment'

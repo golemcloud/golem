@@ -1,0 +1,67 @@
+# Adding Agent Configuration (Kotlin)
+
+An agent declares its configuration as a **tree of data classes** and takes it as a constructor parameter of type `Config<T>`. KSP derives the config declarations from the tree, so the host knows which keys exist before the agent runs.
+
+```kotlin
+import cloud.golem.BaseAgent
+import cloud.golem.annotations.Agent
+import cloud.golem.annotations.Endpoint
+import cloud.golem.config.Config
+import cloud.golem.config.Secret
+
+data class DbConfig(val host: String, val port: Int, val password: Secret<String>)
+
+data class AppConfig(
+    val appName: String,
+    val apiKey: Secret<String>,
+    val db: DbConfig,
+    val retries: Int?,            // optional: reads as null when not configured
+    val tags: List<String>?,
+)
+
+@Agent(mount = "/config/{id}")
+class ConfigAgent(val id: String, val config: Config<AppConfig>) : BaseAgent() {
+    @Endpoint(post = "/greet")
+    fun greet(): String {
+        val cfg = config.value                  // read on every access
+        return "Hello from ${cfg.appName}! DB at ${cfg.db.host}:${cfg.db.port}"
+    }
+}
+```
+
+## Rules
+
+- A non-null data class contributes a path segment per field (`db.host`) and is never a leaf. Everything else — primitives, lists, enums, `Either`, nullable types — is a local leaf. `Secret<T>` is a secret leaf (see [`golem-add-secret-kotlin`](/next/how-to-guides/kotlin/golem-add-secret-kotlin)).
+- `Config` and `Secret` live in `cloud.golem.config` (not `cloud.golem.runtime`).
+- The `Config` parameter is **not** an identity argument: callers (RPC, CLI) never pass it, and it is not bound by the HTTP mount (only the other constructor parameters are).
+- Field names are the config keys, so they are camelCase in `golem.yaml` and `--config` (`appName`, `db.port`).
+- Reading an undeclared key fails with `cloud.golem.config.ConfigException`, except nullable keys which read as `null`. A nullable data class is a leaf, not a nested group.
+- `config.value` is re-read on each access, so changed shared keys are picked up.
+- To override config of an agent you call through RPC, pass `List<ConfigOverride>` (see [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin)).
+
+## Supplying values
+
+Local values come from the component's per-agent-type `config` in `golem.yaml` (or the deployment), keyed by the field path:
+
+```yaml
+agents:
+  ConfigAgent:
+    config:
+      appName: My App
+      db:
+        host: localhost
+        port: 5432
+```
+
+Override at agent creation from the CLI (repeat `--config path=value`; dots address nested fields; the value is parsed as **JSON**, so strings need their own quotes inside the shell quotes):
+
+```shell
+golem agent new 'ConfigAgent("a1")' --config appName='"My App"' --config db.port=5432 --config tags='["a","b"]'
+```
+
+Secret leaves come from the environment's agent secrets (see [`golem-add-secret-kotlin`](/next/how-to-guides/kotlin/golem-add-secret-kotlin)). A required value that is missing stops the agent from being created.
+
+## Related skills
+
+- [`golem-add-secret-kotlin`](/next/how-to-guides/kotlin/golem-add-secret-kotlin)
+- [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin) — overriding config keys on RPC

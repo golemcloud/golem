@@ -1,0 +1,131 @@
+# Annotating Agent Methods (Kotlin)
+
+Annotations in `cloud.golem.annotations` add metadata to the generated agent type. The metadata is what MCP clients, the CLI and other agents see. `@Description`, `@Prompt` and `@ReadOnly` take effect on `@Endpoint` methods, and `@Description` on the `@Agent` class. A method with no `@Endpoint` is not part of the agent type at all.
+
+## `@Description`
+
+On a class (overrides `@Agent(description = ...)`) or on a method:
+
+```kotlin
+import cloud.golem.annotations.Description
+
+@Agent(mount = "/counters/{name}", description = "A durable counter agent")
+@Description("A counter, one instance per name")
+class CounterAgent(val name: String) : BaseAgent() {
+    @Description("Increments the counter and returns the new value")
+    @Endpoint(post = "/increment")
+    fun increment(): Int = ++value
+}
+```
+
+### The KDoc is the fallback, so do not write the summary twice
+
+Without a `@Description`, the declaration's KDoc becomes the description. The rule is the whole prose up to the first tag line (`@param`, `@return`, ...), with every paragraph kept, so a documented agent needs no annotation at all:
+
+```kotlin
+/**
+ * A durable counter agent.
+ *
+ * Both paragraphs reach the agent type's description; the `@param` below does not.
+ *
+ * @param name the counter's instance name
+ */
+@Agent(mount = "/counters/{name}")
+class CounterAgent(val name: String) : BaseAgent() {
+
+    /** Increments the counter and returns the new value. */
+    @Endpoint(post = "/increment")
+    fun increment(): Int = ++value
+}
+```
+
+Precedence is `@Description`, then `@Agent(description = ...)`, then the KDoc. Prefer the KDoc unless the description has to differ from what a Kotlin reader should see.
+
+## `@Agent(typeName = ...)`
+
+The agent type the host registers is the class's simple name unless `typeName` overrides it:
+
+```kotlin
+@Agent(typeName = "Counter", mount = "/counters/{name}")
+class CounterAgentImpl(val name: String) : BaseAgent() { /* ... */ }
+```
+
+The type name is what every other reference uses, so changing it is not a local edit: the manifest's `httpApi.deployments.<env>.agents` key must match it, or the deploy fails with `HTTP_API_MISSING_AGENT_TYPE`, and any `@RemoteAgent(typeName = ...)` client that calls this agent must match it too.
+
+## Putting the annotations on a contract interface
+
+An interface's methods can carry `@Endpoint`, `@Description`, `@Prompt` and `@ReadOnly` for every class that implements it, so a contract shared between the agent and its callers is described once:
+
+```kotlin
+interface CounterContract {
+    @Prompt("Increase the count by one")
+    @Description("Increases the count by one and returns the new value")
+    @Endpoint(post = "/increment")
+    fun increment(): Int
+}
+
+@Agent(mount = "/counters/{name}")
+class CounterAgent(val name: String) : BaseAgent(), CounterContract {
+    override fun increment(): Int = ++value
+}
+```
+
+The nearest declaration wins, so an annotation on the override replaces the interface's. Kotlin does not inherit annotations onto an override, so this works because the processor walks the overridden declarations itself — a KDoc on the interface method is inherited the same way. One exception: a **type-use** annotation such as `@Languages` or `@MimeTypes` sits on the override's own parameter type and cannot come from the interface.
+
+## `@Prompt`
+
+An LLM-facing hint about *when* to call a method:
+
+```kotlin
+import cloud.golem.annotations.Prompt
+
+@Prompt("Increase the count by one")
+@Endpoint(post = "/increment")
+fun increment(): Int = ++value
+```
+
+An empty hint is stored as no prompt.
+
+## `@ReadOnly`
+
+Marks a method that does not mutate state so Golem can cache its result. The `cache` argument is a string DSL:
+
+| Value | Meaning |
+|---|---|
+| `"until-write"` (default) | cache until the next state-mutating call |
+| `"no-cache"` | never cache |
+| `"ttl(<nanos>)"` | cache for a fixed time, e.g. `"ttl(5000000000)"` for 5 s |
+
+```kotlin
+import cloud.golem.annotations.ReadOnly
+
+@ReadOnly("ttl(1000000000)")
+@Endpoint(get = "/value")
+fun getValue(): Int = value
+```
+
+Only mark methods that really are free of side effects.
+
+## Parameter-level annotations
+
+- `@Header("Name")` binds a method parameter to an HTTP request header (see [`golem-add-http-endpoint-kotlin`](/next/how-to-guides/kotlin/golem-add-http-endpoint-kotlin)).
+- `@Languages("en", "de")` / `@MimeTypes("image/png")` are type-use annotations on `UnstructuredText` / `UnstructuredBinary` (`cloud.golem.schema`) and restrict the accepted languages / MIME types; an inline value with another language / MIME type is rejected:
+
+```kotlin
+import cloud.golem.annotations.Languages
+import cloud.golem.annotations.MimeTypes
+import cloud.golem.schema.UnstructuredBinary
+import cloud.golem.schema.UnstructuredText
+
+@Endpoint(post = "/summarize")
+fun summarize(text: @Languages("en", "de") UnstructuredText): String = TODO()
+
+@Endpoint(post = "/render")
+fun render(image: @MimeTypes("image/png") UnstructuredBinary): String = TODO()
+```
+
+## Related skills
+
+- [`golem-add-agent-kotlin`](/next/how-to-guides/kotlin/golem-add-agent-kotlin)
+- [`golem-add-http-endpoint-kotlin`](/next/how-to-guides/kotlin/golem-add-http-endpoint-kotlin)
+- [`golem-call-another-agent-kotlin`](/next/how-to-guides/kotlin/golem-call-another-agent-kotlin) — sharing a contract interface with a `@RemoteAgent` client

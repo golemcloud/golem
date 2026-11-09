@@ -49,6 +49,7 @@ steps:
       scala: *non-effect-add-request-recorder-prompt
       moonbit: *non-effect-add-request-recorder-prompt
       go: *non-effect-add-request-recorder-prompt
+      kotlin: *non-effect-add-request-recorder-prompt
     expectedSkills:
       rust:
         - "golem-add-http-endpoint-rust"
@@ -62,6 +63,8 @@ steps:
         - "golem-add-http-endpoint-moonbit"
       go:
         - "golem-add-http-endpoint-go"
+      kotlin:
+        - "golem-add-http-endpoint-kotlin"
     verify:
       build: true
 
@@ -110,6 +113,7 @@ steps:
       scala: *non-effect-make-outgoing-http-request-prompt
       moonbit: *non-effect-make-outgoing-http-request-prompt
       go: *non-effect-make-outgoing-http-request-prompt
+      kotlin: *non-effect-make-outgoing-http-request-prompt
     expectedSkills:
       rust:
         - "golem-make-http-request-rust"
@@ -123,6 +127,8 @@ steps:
         - "golem-make-http-request-moonbit"
       go:
         - "golem-make-http-request-go"
+      kotlin:
+        - "golem-make-http-request-kotlin"
     verify:
       build: true
       deploy: true
@@ -144,6 +150,7 @@ steps:
         scala: "recordMessageViaHttp"
         moonbit: "record_message_via_http"
         go: "recordMessageViaHttp"
+        kotlin: "recordMessageViaHttp"
       args: '"hello from counter"'
     expect:
       result_json:

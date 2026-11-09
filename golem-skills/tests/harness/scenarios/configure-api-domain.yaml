@@ -35,6 +35,7 @@ steps:
         Do not add or change any `httpApi` deployment configuration in `golem.yaml` yet. Only add
         the Effect agent and its HTTP metadata so the project builds successfully.
       scala: *non-effect-add-greeting-agent-with-http-prompt
+      kotlin: *non-effect-add-greeting-agent-with-http-prompt
       moonbit: *non-effect-add-greeting-agent-with-http-prompt
       go: *non-effect-add-greeting-agent-with-http-prompt
     expectedSkills:
@@ -46,6 +47,8 @@ steps:
         - "golem-add-http-endpoint-effect"
       scala:
         - "golem-add-http-endpoint-scala"
+      kotlin:
+        - "golem-add-http-endpoint-kotlin"
       moonbit:
         - "golem-add-http-endpoint-moonbit"
       go:
@@ -82,6 +85,7 @@ steps:
         metadata. The existing `GET /greetings/{name}/hello` endpoint must become reachable and
         the generated OpenAPI specification must be served at `/openapi.yaml`.
       scala: *non-effect-configure-api-domain-prompt
+      kotlin: *non-effect-configure-api-domain-prompt
       moonbit: *non-effect-configure-api-domain-prompt
       go: *non-effect-configure-api-domain-prompt
     expectedSkills:

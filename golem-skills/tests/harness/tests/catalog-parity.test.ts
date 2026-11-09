@@ -7,7 +7,15 @@ import yaml from "yaml";
 const harnessRoot = process.cwd();
 const skillsRoot = path.resolve(harnessRoot, "../../skills/effect");
 const scenariosRoot = path.join(harnessRoot, "scenarios");
-const languageKeys = new Set(["ts", "effect", "rust", "scala", "moonbit", "go"]);
+const languageKeys = new Set(["ts", "effect", "rust", "scala", "kotlin", "moonbit", "go"]);
+
+function skipsLanguage(
+  condition: { language?: string | string[] } | undefined,
+  language: string,
+): boolean {
+  const languages = condition?.language;
+  return Array.isArray(languages) ? languages.includes(language) : languages === language;
+}
 
 // A language map with at least `minLanguages` entries must carry a `language` branch.
 function findMissingBranches(
@@ -55,7 +63,7 @@ describe("catalog Effect parity", () => {
       const steps = [...(document.steps ?? []), ...(document.finally ?? [])];
       steps.forEach((step, index) => {
         if (step.only_if?.language && step.only_if.language !== "effect") return;
-        if (step.skip_if?.language === "effect") return;
+        if (skipsLanguage(step.skip_if, "effect")) return;
         failures.push(...findMissingBranches(step, "effect", 1, `${file}.steps[${index}]`));
       });
     }
@@ -98,11 +106,11 @@ describe("catalog Go parity", () => {
     const failures: string[] = [];
     for (const file of (await fs.readdir(scenariosRoot)).filter((name) => name.endsWith(".yaml"))) {
       const document = yaml.parse(await fs.readFile(path.join(scenariosRoot, file), "utf8"));
-      if (document.skip_if?.language === "go") continue;
+      if (skipsLanguage(document.skip_if, "go")) continue;
       const steps = [...(document.steps ?? []), ...(document.finally ?? [])];
       steps.forEach((step, index) => {
         if (step.only_if?.language && step.only_if.language !== "go") return;
-        if (step.skip_if?.language === "go") return;
+        if (skipsLanguage(step.skip_if, "go")) return;
         failures.push(...findMissingBranches(step, "go", 2, `${file}.steps[${index}]`));
       });
     }

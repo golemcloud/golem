@@ -87,6 +87,7 @@ steps:
         Implement every handler as an Effect, preserve existing manifest entries, and make sure
         the project builds successfully.
       scala: *non-effect-add-webhook-agents-prompt
+      kotlin: *non-effect-add-webhook-agents-prompt
       moonbit: *non-effect-add-webhook-agents-prompt
       go: *non-effect-add-webhook-agents-prompt
     expectedSkills:
@@ -99,6 +100,8 @@ steps:
         - "golem-make-http-request-effect"
       scala:
         - "golem-add-webhook-scala"
+      kotlin:
+        - "golem-wait-for-external-input-kotlin"
       moonbit:
         - "golem-add-webhook-moonbit"
       go:

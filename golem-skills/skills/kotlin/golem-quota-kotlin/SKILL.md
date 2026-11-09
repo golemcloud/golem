@@ -1,0 +1,54 @@
+---
+name: golem-quota-kotlin
+description: "Using resource quotas in a Kotlin agent. Use when the user asks to rate-limit, reserve capacity for a named resource, commit actual usage, or split and share quota tokens between agents."
+---
+
+# Quota (Kotlin)
+
+A `QuotaToken` is an unforgeable, affine capability for a named, rate-limited resource declared in the application manifest. Reserve capacity before work and commit what you actually used.
+
+```kotlin
+import cloud.golem.runtime.Either
+import cloud.golem.runtime.host.QuotaToken
+
+fun sendBatch(messages: List<String>): Int {
+    val token = QuotaToken.create(resourceName = "outbound-emails", expectedUse = 100)
+    val result = token.withReservation(amount = messages.size.toLong()) { _ ->
+        var sent = 0
+        for (m in messages) if (deliver(m)) sent++
+        Pair(sent.toLong(), sent)                 // (units actually used, value to return)
+    }
+    return when (result) {
+        is Either.Right -> result.value
+        is Either.Left -> error("quota rejected; retry in about ${result.value.estimatedWaitNanos ?: 0} ns")
+    }
+}
+```
+
+- `withReservation` reserves, runs the block, commits the usage it returns, and commits **zero** (rethrowing) if the block throws.
+- Manual form: `token.reserve(n)` returns `Either<FailedReservation, Reservation>`; `reservation.commit(used)` consumes the reservation (used < reserved returns capacity; used > reserved goes into debt).
+- `reserve` blocks until capacity is available or the enforcement policy fires (`reject` -> `Left(FailedReservation(estimatedWaitNanos))`).
+- `token.split(childExpectedUse)` makes a child token to delegate (traps if it exceeds the parent's expected use); `token.merge(child)` takes it back (the child is consumed; both must be for the same resource).
+- A token passed to another agent (as a method argument or result, `QuotaToken` is a mappable type) is moved: you cannot use it afterwards. Split first if you need to keep some.
+- `QuotaApi.withReservation(token, amount) { ... }` is the same as `token.withReservation`.
+- With a `throttle` enforcement action `reserve` suspends transparently; only `reject` yields `Left`.
+
+Resources and their limits are declared per environment in `golem.yaml` under `resourceDefaults`; the name passed to `QuotaToken.create` must match:
+
+```yaml
+resourceDefaults:
+  local:
+    outbound-emails:
+      limit:
+        type: Rate
+        value: 100
+        period: minute
+        max: 1000
+      enforcementAction: reject
+      unit: email
+      units: emails
+```
+
+## Related skills
+
+- `golem-call-another-agent-kotlin` — sending tokens between agents

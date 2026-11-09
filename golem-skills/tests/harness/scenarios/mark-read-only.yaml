@@ -36,6 +36,13 @@ steps:
         value without modifying any state, and mark it as a read-only method using the default
         (until-write) cache policy so its result can be cached. Make sure the project builds and
         deploys successfully.
+      kotlin: >
+        The test-app project already contains a stateful `CounterAgent` whose identity is a
+        counter name and which has an `increment` method that mutates and returns the counter.
+        Add a new method `getCount` to the same `CounterAgent` that returns the current counter
+        value without modifying any state, and mark it as a read-only method using the default
+        (until-write) cache policy so its result can be cached. Make sure the project builds and
+        deploys successfully.
       moonbit: >
         The test-app project already contains a stateful `CounterAgent` whose identity is a
         counter name and which has an `increment` method that mutates and returns the counter.
@@ -59,6 +66,8 @@ steps:
         - "golem-read-only-method-effect"
       scala:
         - "golem-mark-read-only-scala"
+      kotlin:
+        - "golem-mark-read-only-kotlin"
       moonbit:
         - "golem-mark-read-only-moonbit"
       go:
@@ -101,6 +110,7 @@ steps:
         ts: "getCount"
         effect: "getCount"
         scala: "getCount"
+        kotlin: "getCount"
         moonbit: "get_count"
         go: "getCount"
     expect:

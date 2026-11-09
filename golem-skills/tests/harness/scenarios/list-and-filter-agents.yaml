@@ -25,6 +25,7 @@ steps:
             golem agent invoke 'CounterAgent("c3")' increment
         ts: *create-counter-agents
         scala: *create-counter-agents
+        kotlin: *create-counter-agents
         moonbit: *create-counter-agents
         go: *create-counter-agents
       cwd: "test-app"

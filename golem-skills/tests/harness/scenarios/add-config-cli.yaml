@@ -50,6 +50,7 @@ steps:
 
         Make sure the project builds and deploys successfully.
       scala: *non-effect-add-config-cli-prompt
+      kotlin: *non-effect-add-config-cli-prompt
       moonbit: *non-effect-add-config-cli-prompt
       go: *non-effect-add-config-cli-prompt
     expectedSkills:
@@ -61,6 +62,8 @@ steps:
         - "golem-add-config-effect"
       scala:
         - "golem-add-config-scala"
+      kotlin:
+        - "golem-add-config-kotlin"
       moonbit:
         - "golem-add-config-moonbit"
       go:
@@ -94,6 +97,7 @@ steps:
         ts: "greet"
         effect: "greet"
         scala: "greet"
+        kotlin: "greet"
         moonbit: "greet"
         go: "greet"
       args: '"World"'

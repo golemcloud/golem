@@ -1,4 +1,8 @@
 name: generate-mcp-tool-client-ts
+skip_if:
+  # Every step is gated `only_if: ts`. The MCP import half of the tool-client path has no Kotlin
+  # scenario yet; `generate-builtin-tool-client-kotlin` covers the built-in release half.
+  language: "kotlin"
 steps:
   - id: create-project
     only_if: { language: ts }

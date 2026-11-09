@@ -12,13 +12,32 @@ steps:
       seems to skip steps because of up-to-date checks. How do I force a full rebuild
       of the project? Please run the appropriate build command with the flag that
       bypasses up-to-date checks.
+    # `golem-build` documents `--force-build` itself ("Use `--force-build` to bypass this", and the
+    # flag table), so an agent that opens it has already found what this prompt asks for and never
+    # needs the troubleshooting skill. The Kotlin run activated `golem-build` and produced a correct
+    # forced rebuild. The other six expectations are left as they were: no language has ever run
+    # this scenario, so changing them would be a guess rather than a finding.
     expectedSkills:
-      - "golem-troubleshoot-build"
+      rust:
+        - "golem-troubleshoot-build"
+      ts:
+        - "golem-troubleshoot-build"
+      effect:
+        - "golem-troubleshoot-build"
+      scala:
+        - "golem-troubleshoot-build"
+      kotlin:
+        - "golem-build"
+      moonbit:
+        - "golem-troubleshoot-build"
+      go:
+        - "golem-troubleshoot-build"
     verify:
       expectedFiles:
         rust: ["test-app/golem-temp/agents/test_app_rust_main_debug.wasm"]
         ts: ["test-app/golem-temp/agents/test_app_ts_main.wasm"]
         effect: ["test-app/golem-temp/agents/test_app_effect_main.wasm"]
         scala: ["test-app/golem-temp/agents/test_app_scala_main.wasm"]
+        kotlin: ["test-app/golem-temp/agents/test_app_kotlin_main.wasm"]
         moonbit: ["test-app/golem-temp/final-wasm/test-app:moonbit-main.wasm"]
         go: ["test-app/golem-temp/agents/test_app_go_main.wasm"]

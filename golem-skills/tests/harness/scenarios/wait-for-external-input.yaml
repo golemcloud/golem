@@ -90,6 +90,7 @@ steps:
         Do not invoke `request` or call either approval endpoint during your own validation because
         the harness performs the state-changing flow after this prompt.
       scala: *non-effect-approval-workflow-prompt
+      kotlin: *non-effect-approval-workflow-prompt
       moonbit: *non-effect-approval-workflow-prompt
       go: *non-effect-approval-workflow-prompt
     expectedSkills:
@@ -101,6 +102,8 @@ steps:
         - "golem-wait-for-external-input-effect"
       scala:
         - "golem-wait-for-external-input-scala"
+      kotlin:
+        - "golem-wait-for-external-input-kotlin"
       moonbit:
         - "golem-wait-for-external-input-moonbit"
       go:

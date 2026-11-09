@@ -13,6 +13,7 @@ steps:
       ts: "Add the 'change-case' npm package to the test-app project. Make sure it builds and deploys successfully."
       effect: "Add the 'change-case' npm package to the Effect-based test-app project. Make sure it builds and deploys successfully."
       scala: "Add the 'com.lihaoyi::upickle::4.1.0' library to the test-app project. Make sure it builds and deploys successfully."
+      kotlin: "Add the 'org.jetbrains.kotlinx:kotlinx-serialization-json' library to the test-app project. Make sure it builds and deploys successfully."
       moonbit: "Add the 'moonbitlang/x' package to the test-app project. Make sure it builds and deploys successfully."
       go: "Add the 'github.com/iancoleman/strcase' Go module (version v0.3.0) to the test-app project. Make sure it builds and deploys successfully."
     expectedSkills:
@@ -24,6 +25,8 @@ steps:
         - "golem-add-npm-package-effect"
       scala:
         - "golem-add-scala-dependency"
+      kotlin:
+        - "golem-add-kotlin-dependency"
       moonbit:
         - "golem-add-moonbit-package"
       go: ["golem-add-go-module"]
@@ -56,6 +59,11 @@ steps:
         Modify the CounterAgent in test-app so the 'increment' function uses upickle to serialize
         the counter value into a JSON string like {"count":1} and returns that string.
         Change the method's return type to string.
+        Make sure it builds and deploys successfully.
+      kotlin: >
+        Modify the CounterAgent in test-app so the 'increment' method uses kotlinx-serialization to
+        serialize the counter value into a JSON string like {"count":1} and returns that string.
+        Change the method's return type to String.
         Make sure it builds and deploys successfully.
       moonbit: >
         Modify the CounterAgent in test-app so the 'increment' method converts the current counter
@@ -108,6 +116,17 @@ steps:
   - id: "verify-result-scala"
     only_if:
       language: "scala"
+    invoke_json:
+      agent: 'CounterAgent("dep-test")'
+      method: 'increment'
+    expect:
+      result_json:
+        - path: "$"
+          contains: '"count"'
+
+  - id: "verify-result-kotlin"
+    only_if:
+      language: "kotlin"
     invoke_json:
       agent: 'CounterAgent("dep-test")'
       method: 'increment'

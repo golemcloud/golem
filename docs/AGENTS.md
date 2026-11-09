@@ -110,7 +110,7 @@ How-To Guide pages are auto-generated from the [Golem skill catalog](../golem-sk
 - `bun run update-skills-local` does the same without going through cargo make.
 - `bun run update-skills` fetches the latest skills from GitHub instead (useful when working outside the monorepo).
 
-The sync script (`skills/sync-skills.ts`) strips AI-agent frontmatter, converts cross-references between skills into doc links, and generates MDX pages organized by category (General, Rust, TypeScript, Scala, MoonBit). Set `GITHUB_TOKEN` env var to avoid GitHub API rate limits when using `update-skills`.
+The sync script (`skills/sync-skills.ts`) strips AI-agent frontmatter, converts cross-references between skills into doc links, and generates MDX pages organized by category (General, Rust, TypeScript, Effect, Scala, Kotlin, MoonBit, Go). Set `GITHUB_TOKEN` env var to avoid GitHub API rate limits when using `update-skills`.
 
 ## Pre-commit Checks
 

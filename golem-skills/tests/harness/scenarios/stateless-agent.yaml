@@ -30,6 +30,14 @@ steps:
         agent must expose two externally invokable methods: `toUpper` which takes a
         string and returns it uppercased, and `toLower` which takes a string and
         returns it lowercased. Make sure the project builds and deploys successfully.
+      kotlin: >
+        In the test-app project, add a new ephemeral (stateless) agent type named
+        `TextProcessorAgent` with a single constructor or identity parameter for the
+        processor name. It should be a pure request-handler style agent that gets a
+        fresh instance for every invocation with no shared state between calls. The
+        agent must expose two externally invokable methods: `toUpper` which takes a
+        string and returns it uppercased, and `toLower` which takes a string and
+        returns it lowercased. Make sure the project builds and deploys successfully.
       moonbit: >
         In the test-app project, add a new ephemeral (stateless) agent type named
         `TextProcessorAgent` with a single constructor or identity parameter for the
@@ -63,6 +71,8 @@ steps:
         - "golem-stateless-agent-ts"
       scala:
         - "golem-stateless-agent-scala"
+      kotlin:
+        - "golem-configure-durability-kotlin"
       moonbit:
         - "golem-stateless-agent-moonbit"
       effect:
@@ -88,6 +98,7 @@ steps:
         rust: "to_upper"
         ts: "toUpper"
         scala: "toUpper"
+        kotlin: "toUpper"
         moonbit: "to_upper"
         effect: "toUpper"
         go: "toUpper"
@@ -104,6 +115,7 @@ steps:
         rust: "to_lower"
         ts: "toLower"
         scala: "toLower"
+        kotlin: "toLower"
         moonbit: "to_lower"
         effect: "toLower"
         go: "toLower"
