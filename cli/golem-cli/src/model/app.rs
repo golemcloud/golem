@@ -10857,7 +10857,7 @@ bridge:
         fs::write(
             &golem_yaml_path,
             indoc! {r#"
-                manifestVersion: 1.5.0-dev.1
+                manifestVersion: 2.0.0
                 includes:
                   - ./shared/*.yaml
                 futureMigrationHints:

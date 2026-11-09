@@ -19,12 +19,12 @@ pub mod sdk {
     pub const SCALA: &str = "2.0.2";
     pub const MOONBIT: &str = "0.6.2";
     pub const GO: &str = "0.1.2";
-    pub const MANIFEST: &str = "1.6.0";
+    pub const MANIFEST: &str = "2.0.0";
 
     #[macro_export]
     macro_rules! manifest_schema_version {
         () => {
-            "1.6.0"
+            "2.0.0-dev.1"
         };
     }
 }

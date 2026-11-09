@@ -16,12 +16,9 @@ use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{AppValidationError, CustomCommandError, format_warns};
-use crate::app::manifest_upgrade::plan_manifest_upgrade_steps;
 use crate::app::manifest_version::validate_manifest_versions;
 use crate::app::template::AppTemplateRepo;
 use crate::command_handler::ResolvedToolMiddlewareGrants;
-use crate::command_handler::interactive::InteractiveHandler;
-use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{LogColorize, LogIndent, LogOutput, Output, log_action, logln};
 use crate::model::app::{
@@ -33,10 +30,7 @@ use crate::model::app::{
 use crate::model::app_raw;
 use crate::model::component::format_component_applied_layers;
 use crate::model::config::server::ToFormattedServerContext;
-use crate::model::deploy::log_unified_diff_for_path;
-use crate::model::format::Format;
 use crate::model::language::GuestLanguage;
-use crate::model::text_format::DecoratedIndent;
 use crate::model::tool_release::ResolvedToolGrants;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{anyhow, bail};
@@ -44,7 +38,6 @@ use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentPlanAmbientToolEntry;
-use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails;
@@ -352,86 +345,6 @@ impl ApplicationContext {
             builtin_local_url: "http://localhost:9881".parse().unwrap(),
             tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps::new(),
         }
-    }
-
-    pub fn plan_and_apply_manifest_upgrades_before_load(
-        source_mode: ApplicationSourceMode,
-        yes: bool,
-    ) -> anyhow::Result<()> {
-        Self::plan_and_apply_manifest_upgrades_before_load_from(
-            source_mode,
-            yes,
-            &fs::current_dir_lexical()?,
-        )
-    }
-
-    fn plan_and_apply_manifest_upgrades_before_load_from(
-        source_mode: ApplicationSourceMode,
-        yes: bool,
-        calling_working_dir: &Path,
-    ) -> anyhow::Result<()> {
-        let collected_sources = {
-            let _output = LogOutput::new(Output::None);
-            match &source_mode {
-                ApplicationSourceMode::Automatic => collect_sources_from(calling_working_dir, None),
-                ApplicationSourceMode::ByRootManifest(root_manifest) => {
-                    collect_sources_from(calling_working_dir, Some(root_manifest))
-                }
-                ApplicationSourceMode::Preloaded(_) | ApplicationSourceMode::None => None,
-            }
-        };
-
-        let Some(collected_sources) = collected_sources else {
-            return Ok(());
-        };
-
-        let collected_sources = validated_to_anyhow(
-            "Failed to collect application manifests for automatic upgrade",
-            collected_sources,
-            None,
-        )?;
-
-        let steps = plan_manifest_upgrade_steps(&collected_sources.sources)?;
-        if steps.is_empty() {
-            return Ok(());
-        }
-
-        let _output = LogOutput::new(Output::Stderr);
-        logln("");
-        log_action("Planned", "automatic application manifest upgrade changes");
-        let _indent = DecoratedIndent::new_primary(Format::Text);
-
-        for step in &steps {
-            logln(format!(
-                "- {} {}",
-                "update".green(),
-                step.path.display().to_string().log_color_highlight()
-            ));
-            let _indent = LogIndent::new();
-            let _indent = DecoratedIndent::new_secondary(Format::Text);
-            log_unified_diff_for_path(
-                &step.path,
-                &diff::unified_diff(step.current.as_str(), step.new.as_str()),
-            );
-        }
-
-        if !InteractiveHandler::confirm_manifest_upgrade_plan_apply(yes)? {
-            bail!(NonSuccessfulExit);
-        }
-
-        logln("");
-        log_action("Applying", "application manifest upgrades");
-        let _indent = LogIndent::new();
-
-        for step in &steps {
-            log_action(
-                "Updating",
-                format!("{}", step.path.display().to_string().log_color_highlight()),
-            );
-            fs::write_str(&step.path, step.new.as_str())?;
-        }
-
-        Ok(())
     }
 
     pub fn preload_application(
@@ -1169,49 +1082,8 @@ pub fn validated_to_anyhow<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::ApplicationContext;
-    use crate::model::app::{Application, ApplicationSourceMode, ResolvedLocalServer};
+    use crate::model::app::{Application, ResolvedLocalServer};
     use test_r::test;
-
-    #[test]
-    fn automatic_manifest_upgrade_applies_before_load_without_changing_cwd() {
-        let original_dir = std::env::current_dir().unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let app_dir = temp_dir.path().join("app");
-        std::fs::create_dir(&app_dir).unwrap();
-        let manifest = app_dir.join("golem.yaml");
-        std::fs::write(
-            &manifest,
-            r#"# $schema: https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
-manifestVersion: 1.5.0
-app: demo
-"#,
-        )
-        .unwrap();
-
-        let nested_dir = app_dir.join("src");
-        std::fs::create_dir(&nested_dir).unwrap();
-
-        let result = ApplicationContext::plan_and_apply_manifest_upgrades_before_load_from(
-            ApplicationSourceMode::Automatic,
-            true,
-            &nested_dir,
-        );
-
-        let current_dir = std::env::current_dir().unwrap();
-        result.unwrap();
-        assert_eq!(
-            std::fs::canonicalize(current_dir).unwrap(),
-            std::fs::canonicalize(original_dir).unwrap()
-        );
-
-        let upgraded = std::fs::read_to_string(manifest).unwrap();
-        assert!(upgraded.contains("manifestVersion: 1.6.0"));
-        assert!(upgraded.contains(&format!(
-            "/{}/golem.schema.json",
-            crate::manifest_schema_version!()
-        )));
-    }
 
     #[test]
     fn preload_resolves_local_server_paths_against_declaring_manifest_dir() {
@@ -1226,7 +1098,7 @@ app: demo
         std::fs::write(
             &manifest,
             r#"
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 app: demo
 includes:
   - config/local-server.yaml
@@ -1239,7 +1111,7 @@ environments:
         std::fs::write(
             &local_server_manifest,
             r#"
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 localServer:
   portsFile: .golem/ports.json
   dataDir: .golem/data

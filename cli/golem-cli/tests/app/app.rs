@@ -423,44 +423,38 @@ async fn profile_new_without_input_in_non_interactive_mode_shows_help_on_stderr(
 }
 
 #[test]
-async fn app_help_does_not_apply_manifest_upgrade(_tracing: &Tracing) {
-    let app_name = "test-app-help-no-upgrade";
-
-    let mut ctx = TestContext::new();
-    let outputs = ctx
-        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    ctx.cd(app_name);
-
+async fn app_rejects_old_manifests_without_modifying_files(_tracing: &Tracing) {
+    let ctx = TestContext::new();
     let manifest_path = ctx.cwd_path_join("golem.yaml");
-    let old_manifest = indoc! {"
-        manifestVersion: 1.5.0
+    let included_manifest_path = ctx.cwd_path_join("included.yaml");
 
-        app: test-app-help-no-upgrade
+    for version in ["1.5.0", "1.6.0"] {
+        let old_manifest = formatdoc! {"
+            # $schema: https://schema.golem.cloud/app/golem/{version}/golem.schema.json
+            manifestVersion: {version}
+            app: test-app-old-manifest
+            includes:
+              - included.yaml
+        "};
+        fs::write_str(&manifest_path, old_manifest).unwrap();
+        fs::write_str(
+            &included_manifest_path,
+            format!("manifestVersion: {version}\n"),
+        )
+        .unwrap();
+        let before = snapshot_dir(ctx.cwd_path());
 
-        environments:
-          local:
-            server: local
-
-        components:
-          test-app-help-no-upgrade:ts-main:
-            templates: ts
-    "};
-    fs::write_str(&manifest_path, old_manifest).unwrap();
-
-    // Help runs (without --yes, in a non-interactive shell) must not plan or
-    // apply manifest upgrades, while still showing application help
-    let outputs = ctx.cli(cmd::NO_ARGS).await;
-    assert!(!outputs.success());
-    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
-    assert!(outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
-    assert!(!outputs.stderr_contains("Planned automatic application manifest upgrade"));
-    assert!(!outputs.stderr_contains("This action requires confirmation"));
-    assert!(!outputs.stdout_contains("Planned automatic application manifest upgrade"));
-
-    assert_eq!(fs::read_to_string(&manifest_path).unwrap(), old_manifest);
+        for args in [vec![cmd::BUILD], vec![flag::YES, cmd::BUILD]] {
+            let outputs = ctx.cli(args).await;
+            assert!(!outputs.success());
+            assert!(
+                outputs.stdout_contains("Unknown application manifest version")
+                    || outputs.stderr_contains("Unknown application manifest version")
+            );
+            assert!(!outputs.stderr_contains("This action requires confirmation"));
+            assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+        }
+    }
 }
 
 #[test]
@@ -482,6 +476,17 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
+
+    let manifest = fs::read_to_string(ctx.cwd_path_join("golem.yaml")).unwrap();
+    let document: serde_yaml::Value = serde_yaml::from_str(&manifest).unwrap();
+    assert_eq!(
+        document["manifestVersion"].as_str(),
+        Some(versions::sdk::MANIFEST)
+    );
+    assert!(manifest.contains(&format!(
+        "https://schema.golem.cloud/app/golem/{}/golem.schema.json",
+        golem_cli::manifest_schema_version!()
+    )));
 
     let outputs = ctx
         .cli([
@@ -686,7 +691,10 @@ async fn app_new_adds_template_to_component_of_included_manifest(_tracing: &Trac
     let component_entry = format!("  {app_name}:ts-main:\n    templates: ts\n");
     fs::write_str(
         ctx.cwd_path_join("sub/golem.yaml"),
-        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+        format!(
+            "manifestVersion: {}\ncomponents:\n{component_entry}",
+            versions::sdk::MANIFEST
+        ),
     )
     .unwrap();
     let manifest_path = ctx.cwd_path_join("golem.yaml");
@@ -757,7 +765,10 @@ async fn app_new_adds_template_to_scala_component_of_included_manifest(_tracing:
     let component_entry = format!("  {app_name}:scala-main:\n    templates: scala\n");
     fs::write_str(
         ctx.cwd_path_join("sub/golem.yaml"),
-        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+        format!(
+            "manifestVersion: {}\ncomponents:\n{component_entry}",
+            versions::sdk::MANIFEST
+        ),
     )
     .unwrap();
     let manifest_path = ctx.cwd_path_join("golem.yaml");

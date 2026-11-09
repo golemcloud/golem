@@ -30,7 +30,7 @@ static LATEST_MANIFEST_VERSION: LazyLock<Version> = LazyLock::new(|| {
     })
 });
 
-const SUPPORTED_MANIFEST_VERSIONS: &[&str] = &["1.5.0", versions::sdk::MANIFEST];
+const SUPPORTED_MANIFEST_VERSIONS: &[&str] = &[versions::sdk::MANIFEST];
 
 static SUPPORTED_MANIFEST_VERSION_VALUES: LazyLock<Vec<Version>> = LazyLock::new(|| {
     SUPPORTED_MANIFEST_VERSIONS
@@ -204,16 +204,21 @@ mod tests {
     }
 
     #[test]
-    fn manifest_version_check_accepts_previous_compatible_version() {
+    fn manifest_version_check_rejects_previous_versions() {
         let temp_dir = tempfile::tempdir().unwrap();
         let source = temp_dir.path().join("golem.yaml");
-        std::fs::write(&source, "manifestVersion: 1.5.0\n").unwrap();
 
-        let result = validate_manifest_versions(&BTreeSet::from([source]));
-        let (_value, warns, errors) = result.into_product();
+        for version in ["1.5.0", "1.6.0"] {
+            std::fs::write(&source, format!("manifestVersion: {version}\n")).unwrap();
 
-        assert!(warns.is_empty(), "unexpected warnings: {warns:?}");
-        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+            let result = validate_manifest_versions(&BTreeSet::from([source.clone()]));
+            let (_value, warns, errors) = result.into_product();
+
+            assert!(warns.is_empty(), "unexpected warnings: {warns:?}");
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0].contains("Unknown application manifest version"));
+            assert!(errors[0].contains(versions::sdk::MANIFEST));
+        }
     }
 
     #[test]
@@ -266,7 +271,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let source = temp_dir.path().join("golem.yaml");
 
-        std::fs::write(&source, "manifestVersion: 1.6.1\n").unwrap();
+        std::fs::write(&source, "manifestVersion: 2.0.1\n").unwrap();
 
         let result = validate_manifest_versions(&BTreeSet::from([source]));
         let (_value, warns, errors) = result.into_product();

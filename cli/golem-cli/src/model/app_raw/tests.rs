@@ -1885,6 +1885,15 @@ fn schema_and_serde_reject_component_guest_language() {
 
 #[test]
 fn schema_is_loadable_and_validates_empty_app() {
+    let schema: Value = serde_json::from_str(crate::APP_MANIFEST_JSON_SCHEMA).unwrap();
+    assert_eq!(
+        schema["$id"],
+        format!(
+            "https://schema.golem.cloud/app/golem/{}/golem.schema.json",
+            crate::manifest_schema_version!()
+        )
+    );
+
     let app = Application {
         app: Some("app-name".to_string()),
         ..Default::default()

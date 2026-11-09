@@ -1,5 +1,5 @@
 # Minimal consumer: build only the Durable Streams agent and its native-stream sink.
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 app: effect-golem-durable-streams-test
 localServer:
   routerPort: 9882

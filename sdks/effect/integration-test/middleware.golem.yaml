@@ -1,5 +1,5 @@
 # Build with `golem -A middleware.golem.yaml -Y build --step build`.
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 app: effect-golem-middleware-integration-test
 environments:
   local:

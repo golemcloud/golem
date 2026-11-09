@@ -1,4 +1,4 @@
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 app: http-update-effect
 includes:
   - ../golem-test-components-common.yaml

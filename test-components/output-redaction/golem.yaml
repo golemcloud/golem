@@ -1,6 +1,6 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
-manifestVersion: 1.6.0
+# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
+manifestVersion: 2.0.0
 app: output-redaction
 
 componentTemplates:
