@@ -13,7 +13,9 @@ if (command === undefined) {
   NodeRuntime.runMain(Commands.pushUsage.pipe(Effect.provide(logger)), { disableErrorReporting: true })
 } else if (command === "cleanup-deleted-accounts") {
   NodeRuntime.runMain(Commands.cleanupDeletedAccounts.pipe(Effect.provide(logger)), { disableErrorReporting: true })
+} else if (command === "settle-usage") {
+  NodeRuntime.runMain(Commands.settleUsage(process.argv[3]).pipe(Effect.provide(logger)), { disableErrorReporting: true })
 } else {
-  process.stderr.write(`Unknown command: ${command}. Commands: push-usage, cleanup-deleted-accounts\n`)
+  process.stderr.write(`Unknown command: ${command}. Commands: push-usage, cleanup-deleted-accounts, settle-usage\n`)
   process.exitCode = 2
 }

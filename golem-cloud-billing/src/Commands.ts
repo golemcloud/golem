@@ -41,6 +41,31 @@ export const pushUsage = Effect.gen(function* () {
   )
 )
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * `settle-usage <account ID>` records that an administrator checked the account in Polar: Polar
+ * has billed, or will never bill, the usage that the usage push recorded until now (see
+ * `Subscriptions.settleUsage`). The deletion hold and the cleanup then no longer count that usage.
+ * It needs only the database settings, so it runs in the pod of the web app.
+ */
+export const settleUsage = (accountId: string | undefined) =>
+  Effect.suspend((): Effect.Effect<void, unknown> =>
+    accountId !== undefined && uuidPattern.test(accountId)
+      ? Effect.gen(function* () {
+          const subscriptions = yield* Subscriptions.Subscriptions
+          const settledThrough = yield* subscriptions.settleUsage(accountId)
+          yield* Effect.logInfo("Settled the recorded usage of the account").pipe(
+            Effect.annotateLogs({ golemAccountId: accountId, settledThrough: settledThrough.toISOString() })
+          )
+        }).pipe(Effect.provide(Subscriptions.commandLayer.pipe(Layer.provide(Database.layerFromEnv))))
+      : Effect.fail(new Error(`settle-usage needs the ID of a Golem account, not ${accountId ?? "nothing"}`))
+  ).pipe(
+    Effect.tapCause((cause) =>
+      Effect.logError("The usage settlement failed").pipe(Effect.annotateLogs({ error: messageOf(cause) }))
+    )
+  )
+
 /**
  * `cleanup-deleted-accounts` deletes the Polar customer and the Better Auth user of each account
  * that the registry deleted, once (see `Cleanup.ts`). Like `push-usage`, it reads only the

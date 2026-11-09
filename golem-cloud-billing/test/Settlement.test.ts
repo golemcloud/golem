@@ -126,6 +126,7 @@ describe("sweeper", () => {
       ending: (productId: string) => Effect.sync(() => (sweeps.push(productId), [])),
       awaitingPayment: () => Effect.succeed([]),
       holdCandidates: () => Effect.succeed([]),
+      settleUsage: () => Effect.die("unused"),
       recordHold: () => Effect.die("unused"),
       forgetHold: () => Effect.die("unused"),
       record: () => Effect.die("unused"),

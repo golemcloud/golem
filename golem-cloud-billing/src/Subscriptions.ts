@@ -127,6 +127,13 @@ export interface SubscriptionsShape {
     accountId: string,
     productId: string
   ) => Effect.Effect<Subscription | undefined, SubscriptionsError>
+  /**
+   * Records that an administrator checked the account in Polar: Polar has billed, or will never
+   * bill, the usage events that the usage push recorded until now. `unbilledUsage` then skips them,
+   * so the deletion hold and the cleanup no longer count them. A later event counts again. Returns
+   * the time up to which the usage is settled.
+   */
+  readonly settleUsage: (accountId: string) => Effect.Effect<Date, SubscriptionsError>
   /** Records that the app placed a deletion hold on the account in the registry, with this reason. */
   readonly recordHold: (accountId: string, reason: string) => Effect.Effect<void, SubscriptionsError>
   /** Records that the app removed its deletion hold from the account. */
@@ -150,8 +157,8 @@ export class Subscriptions extends Context.Service<Subscriptions, SubscriptionsS
 
 /**
  * The tables of the app besides the tables of Better Auth: the subscriptions and their orders,
- * the usage events of the usage push, the deleted accounts that the cleanup has finished, and the
- * deletion holds that the app placed in the registry.
+ * the usage events of the usage push, the deleted accounts that the cleanup has finished, the
+ * deletion holds that the app placed in the registry, and the usage settlements of administrators.
  * The web app, the usage push and the cleanup each create them, because each reads tables that
  * another one writes and can run first.
  */
@@ -209,6 +216,10 @@ export const tables = `
     account_id UUID PRIMARY KEY,
     reason TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+  );
+  CREATE TABLE IF NOT EXISTS usage_settlements (
+    account_id UUID PRIMARY KEY,
+    settled_through TIMESTAMPTZ NOT NULL
   )`
 
 /**
@@ -224,11 +235,15 @@ export const tables = `
  *   event that the last order billed can look newer than that order; the last order settles it.
  *
  * A subscription that Polar ends before its period end has no order after the period end. Its
- * events that look newer than the newest order keep the hold until an administrator removes it.
+ * events that look newer than the newest order count until an administrator checks the account in
+ * Polar and records a usage settlement (`settleUsage`): an event that the push recorded up to the
+ * settlement no longer counts.
  */
 const unbilledUsageEvents = `
   usage_events e
   WHERE e.account_id = $1 AND e.held_at IS NULL
+    AND e.created_at > coalesce(
+          (SELECT u.settled_through FROM usage_settlements u WHERE u.account_id = $1), '-infinity'::timestamptz)
     AND (
       e.sent_at IS NULL
       OR (
@@ -393,6 +408,14 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
         [productId, billableStatuses, since, recheckBefore]
       ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
 
+    const settleUsage = (accountId: string) =>
+      query<{ settled_through: Date }>(
+        `INSERT INTO usage_settlements (account_id, settled_through) VALUES ($1, clock_timestamp())
+         ON CONFLICT (account_id) DO UPDATE SET settled_through = EXCLUDED.settled_through
+         RETURNING settled_through`,
+        [accountId]
+      ).pipe(Effect.map((result) => result.rows[0]!.settled_through))
+
     const recordHold = (accountId: string, reason: string) =>
       query(
         `INSERT INTO deletion_holds (account_id, reason) VALUES ($1, $2)
@@ -478,6 +501,7 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
       pendingOrders,
       unbilledUsage,
       holdCandidates,
+      settleUsage,
       recordHold,
       forgetHold,
       ending,

@@ -4,6 +4,7 @@ import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
 import * as Settlement from "../src/Settlement.ts"
+import * as Subscriptions from "../src/Subscriptions.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
 import {
   baseUrl,
@@ -66,7 +67,8 @@ describe("Polar billing", () => {
     const schema = config.db.schema
     await pool.query(
       `TRUNCATE "${schema}"."user", "${schema}".polar_subscriptions, "${schema}".polar_orders,
-         "${schema}".polar_webhook_deliveries, "${schema}".usage_events, "${schema}".deletion_holds CASCADE`
+         "${schema}".polar_webhook_deliveries, "${schema}".usage_events, "${schema}".deletion_holds,
+         "${schema}".usage_settlements CASCADE`
     )
   })
 
@@ -846,6 +848,28 @@ describe("Polar billing", () => {
       await sweep(new Date())
 
       expect(upstreams.deletionHolds.get(accountId)).toBe(unbilledHold)
+    })
+
+    it("removes the hold of an early revocation after an administrator settles the recorded usage", async () => {
+      // Polar ended the subscription before its period end, after a paid order that the last
+      // event looks newer than: no order after the period end will settle that event.
+      const accountId = randomUUID()
+      await deliver("subscription.active", subscription(accountId))
+      const lastOrderAt = new Date(Date.now() - 10 * MINUTE).toISOString()
+      await deliver("order.paid", order(accountId, { status: "paid", paid: true, created_at: lastOrderAt }))
+      await usageEvent(accountId, MINUTE)
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, { status: "canceled", modified_at: new Date(Date.now() - 5 * MINUTE).toISOString() })
+      )
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unbilledHold)
+
+      await services.runPromise(
+        Effect.flatMap(Subscriptions.Subscriptions, (subscriptions) => subscriptions.settleUsage(accountId))
+      )
+      await sweep(new Date())
+
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
     })
 
     it("checks a recorded hold again with no time limit, and removes it when the account owes nothing", async () => {

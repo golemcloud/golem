@@ -143,7 +143,8 @@ describe("cleanup of deleted accounts", () => {
 
   afterEach(async () => {
     await pool.query(
-      `TRUNCATE "user", polar_subscriptions, polar_orders, usage_events, deleted_account_cleanups, deletion_holds CASCADE`
+      `TRUNCATE "user", polar_subscriptions, polar_orders, usage_events, deleted_account_cleanups, deletion_holds,
+         usage_settlements CASCADE`
     )
   })
 
@@ -209,6 +210,27 @@ describe("cleanup of deleted accounts", () => {
     await pool.query("UPDATE polar_subscriptions SET status = 'canceled' WHERE account_id = $1", [accountId])
     expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
     expect(await recordedHolds()).toEqual([])
+  })
+
+  it("deletes the customer and the user of an early revocation after an administrator settles the usage", async () => {
+    // The subscription ended before its period end, and the push sent usage after the newest order.
+    const { accountId, userId } = await deletedAccount()
+    await pool.query("UPDATE polar_subscriptions SET current_period_end = now() + interval '20 days' WHERE account_id = $1", [
+      accountId
+    ])
+    await pool.query(
+      `INSERT INTO usage_events (event_id, account_id, period, dimension, from_micro_units, to_micro_units, sent_at)
+       VALUES ('event_early', $1, '2026-11', 'compute', 0, 5, now())`,
+      [accountId]
+    )
+    expect(await cleanup()).toEqual({ deletedCustomers: 0, unsettled: 1, deletedUsers: 0 })
+
+    await pool.query("INSERT INTO usage_settlements (account_id, settled_through) VALUES ($1, clock_timestamp())", [
+      accountId
+    ])
+
+    expect(await cleanup()).toEqual({ deletedCustomers: 1, unsettled: 0, deletedUsers: 1 })
+    expect(await rowsOf(userId)).toEqual({ users: 0, sessions: 0, accounts: 0 })
   })
 
   it("counts a customer that Polar does not have as deleted", async () => {

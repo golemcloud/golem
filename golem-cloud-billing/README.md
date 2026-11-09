@@ -65,8 +65,8 @@ the billing account, the webhooks and the sweep call `GET /v1/me/token`,
 `GET /v1/accounts/{account_id}`, `PUT /v1/accounts/{account_id}/plan`, and `PUT` and `DELETE`
 `/v1/accounts/{account_id}/deletion-holds/{holder_account_id}` (see
 [Subscriptions](#subscriptions)). The app also keeps tables of its own: `polar_subscriptions`,
-`polar_orders`, `polar_webhook_deliveries`, `usage_events`, `deleted_account_cleanups` and
-`deletion_holds`. An administrator creates the role once:
+`polar_orders`, `polar_webhook_deliveries`, `usage_events`, `deleted_account_cleanups`,
+`deletion_holds` and `usage_settlements`. An administrator creates the role once:
 
 ```sql
 CREATE ROLE golem_cloud_billing LOGIN PASSWORD '…' CONNECTION LIMIT 10;
@@ -229,8 +229,15 @@ sweep tries the removal again with no time limit.
 
 A subscription that Polar ends before its period end, for example a revocation, has no order after
 the period end. When the push sent paid overage after the newest order of such an account, the
-hold stays until an administrator checks the account in Polar and removes the hold
-(`override-deletion-hold`).
+hold stays until an administrator checks the account in Polar and runs
+`node main.mjs settle-usage <account ID>`. The command records in `usage_settlements` that Polar
+has billed, or will never bill, the usage events that the push recorded until then. The app then
+removes its hold at the next sweep, and the cleanup no longer counts these events either. A
+later event counts again. The command reads only the `GOLEM__DB__*` variables.
+
+Do not remove the hold of the app in the registry instead (`override-deletion-hold`): the next
+reconcile places it again while the reason holds, and after a delete the cleanup checks the same
+reasons and keeps the user, so the person cannot sign up again.
 
 The registry refuses `DELETE /v1/accounts/{account_id}` with 409 while the account has a hold, and
 shows the reason text to the person, for example in `golem-cli account delete`. The text starts
