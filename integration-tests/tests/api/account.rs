@@ -13,11 +13,18 @@
 // limitations under the License.
 
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceGetAccountByEmailError,
+    RegistryServiceClient, RegistryServiceCreateAccountError,
+    RegistryServiceCreatePermissionShareError, RegistryServiceGetAccountByEmailError,
+    RegistryServiceSetAccountPlanError,
 };
 use golem_client::model::AccountUpdate;
-use golem_common::model::account::{AccountCreation, AccountEmail, AccountRevision};
+use golem_common::model::account::{
+    AccountCreation, AccountEmail, AccountRevision, AccountSetPlan,
+};
 use golem_common::model::account_usage::StorageResourceLimitValue;
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use pretty_assertions::{assert_eq, assert_matches};
 use test_r::{inherit_test_dep, test};
@@ -148,6 +155,159 @@ async fn create_account_with_duplicate_email_fails(
             ))
         ));
     }
+
+    Ok(())
+}
+
+fn account_share(
+    account: &AccountEmail,
+    recipient: &AccountEmail,
+    verbs: &[&str],
+) -> PermissionShareData {
+    PermissionShareData {
+        lower_positive: verbs
+            .iter()
+            .map(|verb| {
+                format!(
+                    "account({}) @ {} : {verb} :",
+                    account.as_str(),
+                    recipient.as_str()
+                )
+            })
+            .collect(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn owner_cannot_change_the_plan_of_the_own_account(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    let result = client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_fuel_plan(),
+            },
+        )
+        .await;
+    assert_matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceSetAccountPlanError::Error403(_)
+        ))
+    );
+
+    let account = client.get_account(&user.account_id.0).await?;
+    assert_eq!(account.plan_id, deps.registry_service().default_plan());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn admin_can_change_the_plan_of_an_account(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let admin = deps.admin().await;
+    let admin_client = deps.registry_service().client(&admin.token).await;
+
+    let account = admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_fuel_plan(),
+            },
+        )
+        .await?;
+    assert_eq!(account.plan_id, deps.registry_service().low_fuel_plan());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn set_plan_permission_share_lets_the_recipient_change_a_plan(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let customer = deps.user().await?;
+    let billing = deps.user().await?;
+    let admin = deps.admin().await;
+    let admin_client = deps.registry_service().client(&admin.token).await;
+    let billing_client = deps.registry_service().client(&billing.token).await;
+
+    let set_plan = AccountSetPlan {
+        current_revision: AccountRevision::INITIAL,
+        plan: deps.registry_service().low_fuel_plan(),
+    };
+    // Without the share the customer account is not visible to the billing account.
+    let before_share = billing_client
+        .set_account_plan(&customer.account_id.0, &set_plan)
+        .await;
+    assert_matches!(
+        before_share,
+        Err(golem_client::Error::Item(
+            RegistryServiceSetAccountPlanError::Error404(_)
+        ))
+    );
+
+    admin_client
+        .create_permission_share(
+            &admin.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: billing.account_email.clone(),
+                name: PermissionShareName(format!("set-plan-{}", customer.account_id.0)),
+                data: account_share(
+                    &customer.account_email,
+                    &billing.account_email,
+                    &["view", "set-plan"],
+                ),
+            },
+        )
+        .await?;
+
+    let account = billing_client
+        .set_account_plan(&customer.account_id.0, &set_plan)
+        .await?;
+    assert_eq!(account.plan_id, deps.registry_service().low_fuel_plan());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn owner_cannot_share_set_plan_on_the_own_account(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let other = deps.user().await?;
+    let client = deps.registry_service().client(&owner.token).await;
+
+    let result = client
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: other.account_email.clone(),
+                name: PermissionShareName("set-plan".to_string()),
+                data: account_share(&owner.account_email, &other.account_email, &["set-plan"]),
+            },
+        )
+        .await;
+    assert_matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceCreatePermissionShareError::Error403(_)
+        ))
+    );
 
     Ok(())
 }
