@@ -517,6 +517,15 @@ exec --fail-on-error node test-capability-exports/check.mjs mixed test-capabilit
 exec --fail-on-error node test-capability-exports/check-client.mjs test-capability-exports/toolExportsFixture/target/scala-3.8.2/toolexportsfixture-opt/main.js test-capability-exports/clientExportsFixture/target/scala-3.8.2/clientexportsfixture-opt/main.js
 '''
 
+[tasks.check-sdk-kotlin-generated]
+description = "Checks that the generated Kotlin SDK sources are in step with the WIT"
+cwd = "."
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error python3 sdks/kotlin/scripts/gen-schema-tags.py --check
+exec --fail-on-error python3 sdks/kotlin/scripts/gen-oplog.py --check
+'''
+
 [tasks.clean-sdk-moonbit]
 description = "Cleans the MoonBit SDK workspace"
 cwd = "./sdks/moonbit"
