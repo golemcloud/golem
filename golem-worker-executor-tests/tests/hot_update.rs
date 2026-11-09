@@ -6411,6 +6411,126 @@ async fn a_manual_update_whose_target_initial_file_does_not_load_fails_only_the_
     Ok(())
 }
 
+/// Two initial files where the second is under the first, `/a` and `/a/b`. They can never
+/// install: the file at `/a` leaves no directory for `/a/b`.
+fn nested_initial_files() -> anyhow::Result<Vec<IFSEntry>> {
+    [("foo.txt", "/a"), ("bar.txt", "/a/b")]
+        .into_iter()
+        .map(|(source, target)| {
+            Ok(IFSEntry {
+                source_path: PathBuf::from(format!("initial-file-system/files/{source}")),
+                target_path: CanonicalFilePath::from_abs_str(target).map_err(anyhow::Error::msg)?,
+                permissions: AgentFilePermissions::ReadOnly,
+            })
+        })
+        .collect()
+}
+
+/// A start whose initial files nest fails before any change. The caller gets the failure
+/// promptly, and the start does not run again.
+#[test]
+#[timeout("120s")]
+async fn a_start_with_an_initial_file_under_another_declared_file_fails_once_and_promptly(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .with_files("RevisionEnvAgent", &nested_initial_files()?)
+        .store()
+        .await?;
+    let id = agent_id!("RevisionEnvAgent");
+    let worker = AgentId {
+        component_id: component.id,
+        agent_id: id.to_string(),
+    };
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(20),
+        executor.invoke_and_await_agent(
+            &component,
+            &id,
+            "get_revision_from_env_var",
+            data_value!(),
+        ),
+    )
+    .await?
+    .unwrap_err();
+    let metadata = executor.get_worker_metadata(&worker).await?;
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    drop(executor);
+
+    let recovery_errors = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Error(params) if params.kind == OplogErrorKind::Recovery)
+        })
+        .count();
+    assert!(format!("{error:?}").contains("a/b"), "{error:?}");
+    assert_eq!(metadata.status, AgentStatus::Failed);
+    assert_eq!(recovery_errors, 1, "the start must not run again");
+    Ok(())
+}
+
+/// An automatic update whose target initial files nest fails at the update point before any
+/// change. The update does not stay pending, and the agent keeps running on its source revision.
+#[test]
+#[timeout("120s")]
+async fn an_update_to_an_initial_file_under_another_declared_file_fails_only_the_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let id = agent_id!("RevisionEnvAgent");
+    let worker = executor.start_agent(&component.id, id.clone()).await?;
+    let before = executor
+        .invoke_and_await_agent(&component, &id, "get_revision_from_env_var", data_value!())
+        .await?;
+    let target = executor
+        .update_component_with_files(
+            &component.id,
+            "RevisionEnvAgent",
+            "it_agent_update_v2_release",
+            nested_initial_files()?,
+        )
+        .await?;
+
+    executor
+        .auto_update_worker(&worker, target.revision, false)
+        .await?;
+    let failed = wait_for_update_counts(&executor, &worker, (0, 0, 1)).await?;
+    let after = executor
+        .invoke_and_await_agent(&component, &id, "get_revision_from_env_var", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker).await?;
+    drop(executor);
+
+    let details = failed
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(details.contains("a/b"), "{details}");
+    assert_eq!(before, after);
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_ne!(metadata.status, AgentStatus::Failed);
+    Ok(())
+}
+
 /// A blob storage that cannot give the content of an initial file while it is down, as a blob
 /// storage whose outage outlived the retry budget of its backend cannot. Every other operation
 /// goes to the storage that it wraps.

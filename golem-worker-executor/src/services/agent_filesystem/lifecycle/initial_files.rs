@@ -341,6 +341,8 @@ fn rule<'a>(
 /// `installed` holds the files that the lifecycle installed for `old`. `states` gives what is at
 /// the paths, as [`plan`] needs it. A path without a state holds nothing. A conflict fails the
 /// install with an [`InitialFileConflict`] that names the conflicting path and what is at it.
+/// A plan that seeds a file under another file that it seeds fails the install with
+/// [`Error::InitialFileFailed`] before the sources load.
 /// The install loads every source before its first change, so a conflict or a failed load changes
 /// nothing. A failure after the plan
 /// passes and the sources load invalidates the generation. The result gives the files that the
@@ -358,6 +360,7 @@ pub(super) async fn install<'a, Adapter: SandboxFilesystemAdapter>(
         states.get(path).copied().unwrap_or(PathState::Absent)
     })
     .map_err(|conflict| Error::InitialFileConflict(Box::new(conflict)))?;
+    refuse_nested_seeds(&steps)?;
     let sources = sources.load(&steps).await?;
     match apply(generation, sandbox, &sources, &steps).await {
         Ok(recorded) => Ok(installed_after(installed, new, &steps, recorded)),
@@ -366,6 +369,34 @@ pub(super) async fn install<'a, Adapter: SandboxFilesystemAdapter>(
             Err(error)
         }
     }
+}
+
+/// Refuses `steps` that seed a file under another file that they seed: the file at the upper path
+/// leaves no directory for the file under it. The plan decides each path against the tree before
+/// the install, so it cannot see this case. The error names the first such path in path order.
+fn refuse_nested_seeds(steps: &[Step<'_>]) -> Result<(), Error> {
+    let seeded = steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Seed { path, .. } => Some(*path),
+            Step::Unlink { .. } | Step::RemoveDirectory { .. } => None,
+        })
+        .collect::<BTreeSet<&Path>>();
+    seeded
+        .iter()
+        .find(|path| {
+            path.ancestors()
+                .skip(1)
+                .any(|ancestor| seeded.contains(ancestor))
+        })
+        .map_or(Ok(()), |path| {
+            Err(Error::InitialFileFailed(FilesystemStorageError::from(
+                OperationContext::verification(
+                    "refuse an initial file under another declared initial file",
+                    Some(path),
+                ),
+            )))
+        })
 }
 
 /// Makes the changes of `steps`: the unlinks, then the removals of directories with the deepest

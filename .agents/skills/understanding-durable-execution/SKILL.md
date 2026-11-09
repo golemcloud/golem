@@ -2250,7 +2250,10 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
   The install loads every source before its first change, so the agent runs on its source
   revision. The text names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`)
   writes no failed update and retries as a recovery. An invalid declaration or a missing or
-  corrupt source of the target (`InitialFileFailed`) fails the update without a code. Every other
+  corrupt source of the target (`InitialFileFailed`) fails the update without a code. So does an
+  install that would seed a file under another file that it seeds, such as `/a` and `/a/b`: the
+  file at the upper path leaves no directory for the lower one, so `initial_files::install`
+  refuses that plan before any change. Every other
   start loads the files of the revision that the agent runs, also the source restart after a
   failed update: there a refused, invalid, missing or corrupt source fails the agent and its
   waiting invocations with the cause. `InitialFileFailed` does not share the retryable sandbox-I/O
