@@ -34,8 +34,8 @@ pub(all) struct Logger {
 ///|
 /// Creates a new logger with the given context and optional minimum level.
 pub fn Logger::new(
-  context? : String = "",
-  min_level? : Level? = None,
+  context~ : String = "",
+  min_level~ : Level? = None,
 ) -> Logger {
   { context, min_level, }
 }

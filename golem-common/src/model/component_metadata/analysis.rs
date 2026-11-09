@@ -196,6 +196,8 @@ impl RawComponentMetadata {
             component_provision_config: ComponentProvisionConfig::default(),
             agent_method_streams: ComponentMetadata::derive_agent_method_streams(&agent_types),
             agent_types,
+            agent_type_ids: BTreeMap::new(),
+            tool_type_ids: BTreeMap::new(),
             agent_type_provision_configs,
             tools,
             tool_middlewares,

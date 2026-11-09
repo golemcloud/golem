@@ -16,7 +16,7 @@ priv struct ToolByteStreamSource {
     Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]
   mut pending : FixedArray[Byte]?
-  mut pending_offset : Int
+  mut pending_offset : Int32
   mut closed : Bool
   drive_result : () -> Unit
 }
@@ -24,7 +24,7 @@ priv struct ToolByteStreamSource {
 ///|
 fn ToolByteStreamSource::read_pending(
   self : ToolByteStreamSource,
-  count : Int,
+  count : Int32,
 ) -> FixedArray[Byte]? {
   guard self.pending is Some(bytes) else { return None }
   let remaining = bytes.length() - self.pending_offset
@@ -41,7 +41,7 @@ fn ToolByteStreamSource::read_pending(
 ///|
 async fn ToolByteStreamSource::read(
   self : ToolByteStreamSource,
-  count : Int,
+  count : Int32,
 ) -> FixedArray[Byte]? {
   (self.drive_result)()
   if self.closed {
@@ -103,7 +103,7 @@ pub fn byte_stream(
   source : @async-core.Stream[
     Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ],
-  drive_result? : () -> Unit = fn() {  },
+  drive_result~ : () -> Unit = fn() {  },
 ) -> @async-core.Stream[Byte] {
   let source = ToolByteStreamSource::{
     source,
@@ -127,16 +127,13 @@ async fn reject_stdin_source(
   ],
   failure : @toolStreams.ByteStreamFailure,
 ) -> Unit {
-  @async-core.protect_from_cancel(
-    async fn() {
-      source.drop()
-      let failure : Result[FixedArray[Byte], @toolStreams.ByteStreamFailure] = Err(
-        failure,
-      )
-      ignore(sink.write_all([failure]))
-    },
-    resume_on_cancel=true,
-  )
+  @async-core.protect_from_cancel(async fn() {
+    source.drop()
+    let failure : Result[FixedArray[Byte], @toolStreams.ByteStreamFailure] = Err(
+      failure,
+    )
+    ignore(sink.write_all([failure]))
+  })
 }
 
 ///|
@@ -147,6 +144,15 @@ fn stdin_byte_stream(
 ] {
   @async-core.Stream::produce(
     async fn(sink) {
+      errdefer (if @async-core.is_being_cancelled() {
+        @async-core.protect_from_cancel(() => {
+          reject_stdin_source(
+            source,
+            sink,
+            @toolStreams.ByteStreamFailure::Cancelled,
+          )
+        })
+      })
       for ;; {
         let chunk = source.read(65536) catch {
           ToolStreamError::Cancelled => {
@@ -178,14 +184,6 @@ fn stdin_byte_stream(
               source,
               sink,
               @toolStreams.ByteStreamFailure::Failed(message),
-            )
-            return
-          }
-          @async-core.Cancelled::Cancelled => {
-            reject_stdin_source(
-              source,
-              sink,
-              @toolStreams.ByteStreamFailure::Cancelled,
             )
             return
           }

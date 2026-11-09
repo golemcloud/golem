@@ -2632,7 +2632,7 @@ impl ComponentCommandHandler {
             .map_err(UpdateStagedComponentError::Other)?;
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let changed_files = component_stager
-            .changed_files(current_component.metadata.tool_middlewares())
+            .changed_files(&current_component.metadata.tool_middlewares)
             .await
             .map_err(UpdateStagedComponentError::Other)?;
 
@@ -2681,7 +2681,7 @@ impl ComponentCommandHandler {
                     tool_middleware_provision_config_updates: component_stager
                         .tool_middleware_provision_config_updates_if_changed(
                             &changed_files,
-                            current_component.metadata.tool_middlewares(),
+                            &current_component.metadata.tool_middlewares,
                         )
                         .await
                         .map_err(UpdateStagedComponentError::Other)?,

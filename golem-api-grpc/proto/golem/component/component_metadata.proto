@@ -32,6 +32,8 @@ message ComponentMetadata {
   golem.schema.ComponentConfigSchema config_schema = 13;
   ComponentProvisionConfig component_provision_config = 14;
   map<string, ToolMiddlewareDeploymentMetadata> tool_middlewares = 15;
+  map<string, uint32> agent_type_ids = 16;
+  map<string, uint32> tool_type_ids = 17;
 }
 
 message ComponentProvisionConfig {

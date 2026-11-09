@@ -1078,7 +1078,7 @@ impl SchedulerWorkerAccess for DirectAccess {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _target_worker_fingerprint: AgentFingerprint,
-        _invocation: AgentInvocation,
+        _delivery: crate::services::worker_activator::ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
         unreachable!("the sweep never enqueues invocations")
     }

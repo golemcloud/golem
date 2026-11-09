@@ -23,12 +23,19 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId,
+    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, Weak};
 use tracing::warn;
+
+/// Work delivered only to the already existing scheduling incarnation.
+pub enum ExactExistingDelivery {
+    Invoke(Box<AgentInvocation>),
+    Resume,
+    CompletePromise(PromiseId),
+}
 
 /// Service for activating workers in the background
 #[async_trait]
@@ -99,7 +106,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
-        invocation: AgentInvocation,
+        delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError>;
 
     async fn enqueue_ephemeral_external_tool(
@@ -313,7 +320,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
-        invocation: AgentInvocation,
+        delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
         let activator = self
             .worker_activator
@@ -325,7 +332,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                 WorkerExecutorError::runtime("WorkerActivator is disabled, not invoking instance")
             })?;
         activator
-            .enqueue_exact_existing(owned_agent_id, expected_fingerprint, invocation)
+            .enqueue_exact_existing(owned_agent_id, expected_fingerprint, delivery)
             .await
     }
 
@@ -557,17 +564,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
-        invocation: AgentInvocation,
+        delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
-        let principal = invocation.principal().cloned().ok_or_else(|| {
-            WorkerExecutorError::invalid_request("external tool invocation has no principal")
-        })?;
-        let worker = match Worker::get_exact_existing_suspended(
-            &self.all,
-            owned_agent_id,
-            principal,
-        )
-        .await
+        let principal = match &delivery {
+            ExactExistingDelivery::Invoke(invocation) => invocation
+                .principal()
+                .cloned()
+                .unwrap_or_else(Principal::anonymous),
+            _ => Principal::anonymous(),
+        };
+        let worker = match self
+            .all
+            .active_agents()
+            .get_existing_with_fingerprint(
+                &self.all,
+                owned_agent_id,
+                principal,
+                Some(expected_fingerprint),
+            )
+            .await
         {
             Ok(worker) => worker,
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
@@ -576,7 +591,29 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint {
             return Ok(false);
         }
-        worker.clone().invoke(invocation).await?;
+        match delivery {
+            ExactExistingDelivery::Invoke(invocation) => {
+                worker.clone().invoke(*invocation).await?;
+            }
+            ExactExistingDelivery::Resume => {}
+            ExactExistingDelivery::CompletePromise(promise_id) => {
+                let oplog_service = self.all.oplog_service();
+                let lifecycle = oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await;
+                let identity = self
+                    .all
+                    .worker_service()
+                    .resolve_agent_identity(owned_agent_id)
+                    .await?;
+                if !identity.is_some_and(|identity| identity.fingerprint == expected_fingerprint) {
+                    return Ok(false);
+                }
+                self.all
+                    .promise_service()
+                    .complete_without_wakeup(promise_id, vec![])
+                    .await?;
+                drop(lifecycle);
+            }
+        }
         Worker::start_if_needed(worker).await?;
         Ok(true)
     }

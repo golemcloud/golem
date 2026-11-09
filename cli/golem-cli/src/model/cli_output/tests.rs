@@ -880,7 +880,8 @@ fn component_metadata_displays_tools_middlewares_and_files() {
                 files: sample.files.clone(),
                 ..Default::default()
             },
-        ),
+        )
+        .into(),
     });
     assert_eq!(component.tools, sample.tools);
     assert_eq!(component.tool_middlewares, sample.tool_middlewares);
@@ -2880,6 +2881,7 @@ fn arb_deployed_registered_agent_type()
                 account_email,
                 webhook_prefix_authority_and_path,
             )| golem_common::model::agent::DeployedRegisteredAgentType {
+                type_id: golem_common::model::type_id::TypeId::try_from(42u32).unwrap(),
                 agent_type,
                 implemented_by: golem_common::model::agent::RegisteredAgentTypeImplementer {
                     component_id: golem_common::model::component::ComponentId(component_id),
@@ -6548,6 +6550,7 @@ fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
 fn sample_deployed_tool() -> golem_common::model::tool::DeployedRegisteredTool {
     let release = sample_tool_release();
     golem_common::model::tool::DeployedRegisteredTool {
+        type_id: golem_common::model::type_id::TypeId::try_from(1_u32).unwrap(),
         deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         release_id: Some(release.id),
         definition: release.definition,

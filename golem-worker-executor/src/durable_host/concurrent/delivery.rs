@@ -668,6 +668,29 @@ impl CompletionDelivery {
         self.settle();
     }
 
+    /// A future transferred back into a host operation no longer has a guest terminal.
+    /// Its recipient owns any later guest observation. A marker-bearing replay cannot change
+    /// its destination; a markerless host result must not wait for that recipient's history.
+    pub(crate) fn settle_host_internal(mut self) -> Result<(), WorkerExecutorError> {
+        match std::mem::replace(&mut self.state, CompletionDeliveryState::Done) {
+            CompletionDeliveryState::Live(live) => Self::settle_live_without_marker(*live),
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(_))
+            | CompletionDeliveryState::Unarmed => {}
+            CompletionDeliveryState::ReplayDelivered(replay) => {
+                return Err(
+                    replay.fail("a guest-observed completion was transferred to a host consumer")
+                );
+            }
+            CompletionDeliveryState::ReplayDiscarded => {
+                return Err(WorkerExecutorError::runtime(
+                    "a discarded completion was transferred to a host consumer",
+                ));
+            }
+            CompletionDeliveryState::Done => unreachable!("a completion is settled exactly once"),
+        }
+        Ok(())
+    }
+
     /// Consumes the token by arming Wasmtime's terminal-consumption observer for the host
     /// subtask `store` belongs to: the *actual* guest-delivery boundary of a direct accessor
     /// host call. The host method returning its result is not that boundary — Wasmtime still

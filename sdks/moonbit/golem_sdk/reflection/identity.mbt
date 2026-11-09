@@ -5,7 +5,7 @@
 pub fn ParsedAgentId::create(
   type_name : String,
   constructor_value : @model.SchemaValue,
-  phantom_id? : @schema.Uuid? = None,
+  phantom_id~ : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   let wire = @model.schema_value_to_wit(constructor_value) catch {
     error => raise Schema("failed to encode constructor value: \{repr(error)}")

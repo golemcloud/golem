@@ -1490,7 +1490,12 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
             (&component.metadata, AgentConfigSource::Local),
             (&target.metadata, AgentConfigSource::Secret),
         ] {
-            let agent_type = metadata.find_agent_type_by_name(&agent.agent_type).unwrap();
+            let agent_type = metadata
+                .agent_types
+                .iter()
+                .find(|agent_type| agent_type.declaration.type_name == agent.agent_type)
+                .map(|agent_type| agent_type.declaration.clone())
+                .unwrap();
             assert_eq!(
                 agent_type
                     .config

@@ -18,7 +18,7 @@
 ///|
 /// The present holders, by raw handle index. Each entry empties its holder
 /// without releasing the raw handle.
-let held : Map[Int, () -> Unit] = Map([])
+let held : Map[Int32, () -> Unit] = Map([])
 
 ///|
 fn register(raw : @types.PermissionCard, invalidate : () -> Unit) -> Unit {
@@ -135,6 +135,12 @@ pub fn GuestPermissionCardHandle::is_present(
 pub impl Eq for GuestPermissionCardHandle with fn equal(self, other) {
   physical_equal(self, other)
 }
+
+///|
+pub extend GuestPermissionCardHandle with Eq::{equal, not_equal}
+
+///|
+pub extend GuestPermissionCardHandle with Debug::{to_repr}
 
 ///|
 pub impl Debug for GuestPermissionCardHandle with fn to_repr(self) {

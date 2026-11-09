@@ -32,6 +32,9 @@ pub(all) struct CreateAgentResponse {
 } derive(Debug)
 
 ///|
+pub extend CreateAgentResponse with Debug::{to_repr}
+
+///|
 /// Response of a `POST /v1/agents/invoke-agent` request.
 pub(all) struct AgentInvocationResult {
   agent_id : AgentId

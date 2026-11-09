@@ -80,7 +80,6 @@ pub async fn GuestSchemaValueStreamHandle::prepare_outgoing(
     Some(Wrapped(value)) => self.cell = Some(Wrapped(value))
     Some(Native(reader)) => {
       let wrapped = @types.SchemaValueStream::wrap(reader) catch {
-        @async-core.Cancelled::Cancelled as err => raise err
         e => raise EncodeError("failed wrapping schema value stream: \{e}")
       }
       self.cell = Some(Wrapped(wrapped))
@@ -123,7 +122,6 @@ pub async fn GuestSchemaValueStreamHandle::read_native(
     Some(Native(reader)) => reader
     Some(Wrapped(value)) =>
       @types.SchemaValueStream::unwrap(value) catch {
-        @async-core.Cancelled::Cancelled as err => raise err
         e =>
           raise SchemaValueStreamReadError::Transport(
             "failed unwrapping schema value stream: \{repr(e)}",
@@ -135,7 +133,6 @@ pub async fn GuestSchemaValueStreamHandle::read_native(
       self.cell = Some(Native(reader))
     }
     reader.read(1) catch {
-      @async-core.Cancelled::Cancelled as err => raise err
       e =>
         raise SchemaValueStreamReadError::Transport(
           "failed reading schema value stream: \{repr(e)}",

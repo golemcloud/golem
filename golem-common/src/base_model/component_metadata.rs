@@ -202,6 +202,10 @@ pub struct ComponentMetadataInnerData {
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_types: Vec<AgentTypeSchema>,
 
+    /// Registry-assigned identities, separate from guest declarations.
+    pub agent_type_ids: BTreeMap<AgentTypeName, crate::base_model::type_id::TypeId>,
+    pub tool_type_ids: BTreeMap<ToolName, crate::base_model::type_id::TypeId>,
+
     /// Server-derived streaming classification for each declared agent method.
     pub agent_method_streams: BTreeMap<AgentTypeName, BTreeMap<String, AgentMethodStreamMetadata>>,
 
@@ -220,6 +224,127 @@ pub struct ComponentMetadataInnerData {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+}
+
+crate::declare_structs! {
+    /// Component metadata projected for REST responses, with identities beside declarations.
+    pub struct ComponentMetadataDto {
+        pub known_exports: KnownExports,
+        pub producers: Vec<Producers>,
+        pub memories: Vec<LinearMemory>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub config_schema: ComponentConfigSchema,
+        pub component_provision_config: ComponentProvisionConfig,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub agent_types: Vec<ComponentAgentTypeDto>,
+        pub agent_method_streams: BTreeMap<AgentTypeName, BTreeMap<String, AgentMethodStreamMetadata>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tools: BTreeMap<ToolName, ComponentToolDto>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+    }
+
+    pub struct ComponentAgentTypeDto {
+        pub declaration: AgentTypeSchema,
+        /// Registry-assigned identity when available for this declaration.
+        #[cfg_attr(feature = "full", oai(nullable))]
+        pub type_id: Option<crate::base_model::type_id::TypeId>,
+    }
+
+    pub struct ComponentToolDto {
+        pub declaration: ToolDeploymentMetadata,
+        /// Registry-assigned identity when available for this declaration.
+        #[cfg_attr(feature = "full", oai(nullable))]
+        pub type_id: Option<crate::base_model::type_id::TypeId>,
+    }
+}
+
+impl From<ComponentMetadata> for ComponentMetadataDto {
+    fn from(value: ComponentMetadata) -> Self {
+        let data = Arc::unwrap_or_clone(value.data);
+        Self {
+            known_exports: data.known_exports,
+            producers: data.producers,
+            memories: data.memories,
+            config_schema: data.config_schema,
+            component_provision_config: data.component_provision_config,
+            agent_types: data
+                .agent_types
+                .into_iter()
+                .map(|declaration| ComponentAgentTypeDto {
+                    type_id: data.agent_type_ids.get(&declaration.type_name).copied(),
+                    declaration,
+                })
+                .collect(),
+            agent_method_streams: data.agent_method_streams,
+            agent_type_provision_configs: data.agent_type_provision_configs,
+            tools: data
+                .tools
+                .into_iter()
+                .map(|(name, declaration)| {
+                    let type_id = data.tool_type_ids.get(&name).copied();
+                    (
+                        name,
+                        ComponentToolDto {
+                            declaration,
+                            type_id,
+                        },
+                    )
+                })
+                .collect(),
+            tool_middlewares: data.tool_middlewares,
+        }
+    }
+}
+
+impl From<ComponentMetadataDto> for ComponentMetadata {
+    fn from(value: ComponentMetadataDto) -> Self {
+        let mut agent_type_ids = BTreeMap::new();
+        let agent_types = value
+            .agent_types
+            .into_iter()
+            .map(|agent| {
+                if let Some(id) = agent.type_id {
+                    agent_type_ids.insert(agent.declaration.type_name.clone(), id);
+                }
+                agent.declaration
+            })
+            .collect();
+        let mut tool_type_ids = BTreeMap::new();
+        let tools = value
+            .tools
+            .into_iter()
+            .map(|(name, tool)| {
+                if let Some(id) = tool.type_id {
+                    tool_type_ids.insert(name.clone(), id);
+                }
+                (name, tool.declaration)
+            })
+            .collect();
+        Self {
+            data: Arc::new(ComponentMetadataInnerData {
+                known_exports: value.known_exports,
+                producers: value.producers,
+                memories: value.memories,
+                config_schema: value.config_schema,
+                component_provision_config: value.component_provision_config,
+                agent_types,
+                agent_type_ids,
+                tool_type_ids,
+                agent_method_streams: value.agent_method_streams,
+                agent_type_provision_configs: value.agent_type_provision_configs,
+                tools,
+                tool_middlewares: value.tool_middlewares,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

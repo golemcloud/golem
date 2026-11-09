@@ -26,7 +26,7 @@ fn __golem_tool_concat_globals(
 ///
 fn __golem_tool_rebase_node(
   node : @tool.CommandNodeDef,
-  offset : Int,
+  offset : Int32,
 ) -> @tool.CommandNodeDef {
   {
     name: node.name,
@@ -292,7 +292,6 @@ async fn __golem_tool_invoke_Messages(
       let __golem_value = Messages::send(message)
       Ok(
         @tool.invocation_result_wire(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
           error => raise error
@@ -524,7 +523,6 @@ async fn __golem_tool_invoke_PublicFiles(
       let __golem_value = PublicFiles::read(path)
       Ok(
         @tool.invocation_result_wire(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
           error => raise error
@@ -756,7 +754,6 @@ async fn __golem_tool_invoke_Storage(
       let __golem_value = Storage::fetch(key)
       Ok(
         @tool.invocation_result_wire(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
           @types.ToolError::InvalidResult(message) =>
             return Err(@types.ToolError::InvalidResult(message))
           error => raise error

@@ -116,7 +116,7 @@ test "lifecycle-output-backpressure waits for body demand and propagates cancell
       assert_false(completed.val)
       producer.cancel()
       try producer.wait() catch {
-        @asyncCore.Cancelled::Cancelled => ()
+        @asyncCore.TaskCancelled::TaskCancelled => ()
         _ => fail("cancellation changed category")
       } noraise {
         _ => fail("cancelled writer succeeded")

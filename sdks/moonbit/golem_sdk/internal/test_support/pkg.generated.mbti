@@ -7,17 +7,17 @@ import {
 }
 
 // Values
-pub const PERMISSION_CARD_DROPS : Int = 2
+pub const PERMISSION_CARD_DROPS : Int32 = 2
 
-pub const QUOTA_TOKEN_DROPS : Int = 1
+pub const QUOTA_TOKEN_DROPS : Int32 = 1
 
-pub const SECRET_DROPS : Int = 0
+pub const SECRET_DROPS : Int32 = 0
 
-pub fn failing_card_input(@permission_card.GuestPermissionCardHandle, Int) -> Array[@schema_model.SchemaValue]
+pub fn failing_card_input(@permission_card.GuestPermissionCardHandle, Int32) -> Array[@schema_model.SchemaValue]
 
 pub fn reset_resource_drop_counts() -> Unit
 
-pub fn resource_drop_count(Int) -> Int
+pub fn resource_drop_count(Int32) -> Int32
 
 pub fn run_async(async () -> Unit) -> Unit raise
 

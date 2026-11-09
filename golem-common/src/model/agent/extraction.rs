@@ -41,8 +41,7 @@ use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::cli::StdoutStream;
 use wasmtime_wasi::p2::pipe;
 use wasmtime_wasi::{IoCtx, IoData, IoView, WasiCtx, WasiCtxView, WasiView};
-use wasmtime_wasi_http::WasiHttpCtx;
-use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView, default_hooks};
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView, default_hooks};
 
 const AGENT_INTERFACE_NAME: &str = "golem:agent/guest@2.0.0";
 const AGENT_FUNCTION_NAME: &str = "discover-agent-types";

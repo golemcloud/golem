@@ -557,15 +557,11 @@ fn write_scala_caller(ctx: &TestContext) {
 }
 
 fn write_moonbit(ctx: &TestContext) {
-    let manifest = ctx.cwd_path_join("moon.mod.json");
-    let mut module: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
-    module["deps"]["rust-uuid-target-guest-client"] = serde_json::json!({"path": "golem-temp/bridge-sdk/moonbit/internal/rust-uuid-target-guest-client"});
-    fs::write_str(
-        &manifest,
-        serde_json::to_string_pretty(&module).unwrap() + "\n",
-    )
-    .unwrap();
+    super::add_moonbit_local_dependency(
+        ctx,
+        "rust-uuid-target-guest-client",
+        "golem-temp/bridge-sdk/moonbit/internal/rust-uuid-target-guest-client",
+    );
     let manifest = ctx.cwd_path_join("moonbit/moon.pkg");
     let package = fs::read_to_string(&manifest).unwrap().replace(
         "import {",
@@ -647,9 +643,6 @@ fn write_moonbit(ctx: &TestContext) {
                 "ok:" + touches.to_string()
               })
             }
-
-            ///|
-            fn main {}
         "#},
     )
     .unwrap();
@@ -984,11 +977,7 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
     touch += 1;
 
     let moonbit_client = ctx.cwd_path_join("moonbit-uuid-bridge/rust-uuid-target-client");
-    let moonbit_manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(moonbit_client.join("moon.mod.json")).unwrap(),
-    )
-    .unwrap();
-    let moonbit_module = moonbit_manifest["name"].as_str().unwrap();
+    let moonbit_module = "rust-uuid-target-client";
     let moonbit_main_dir = moonbit_client.join("main");
     std::fs::create_dir_all(&moonbit_main_dir).unwrap();
     std::fs::write(

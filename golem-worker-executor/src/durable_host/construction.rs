@@ -268,8 +268,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             config.agent_sockets.enabled,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
-        let mut wasi_http = WasiHttpCtx::new();
-        wasi_http.connection_pool = http_connection_pool.clone();
+        let wasi_http = WasiHttpCtx::new();
         let http_hooks = DurableHttpHooks {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
@@ -565,7 +564,7 @@ impl PrivateDurableWorkerState {
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
             open_p3_http_responses: HashMap::new(),
-            pending_p3_http_request_transmissions: HashMap::new(),
+            p3_http_transmissions: Default::default(),
             open_websocket_connections: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashSet::new(),

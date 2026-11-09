@@ -16,7 +16,7 @@ use crate::app::build::go_inputs;
 use crate::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
-    GoModDepsMarkerHash, InjectToPrebuiltQuickJsCommandMarkerHash, MoonInstallDepsMarkerHash,
+    GoModDepsMarkerHash, InjectToPrebuiltQuickJsCommandMarkerHash, MoonSyncDepsMarkerHash,
     NpmInstallDepsMarkerHash, PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash,
     TaskResultMarker,
 };
@@ -498,18 +498,13 @@ pub async fn ensure_common_deps_for_tool(
                 })
                 .await
         }
-        _ if normalized == "moon"
-            || tool_lives_in_mooncakes(tool)
-            || Path::new(tool)
-                .components()
-                .any(|component| component.as_os_str() == "__moonbin__") =>
-        {
+        "moon" | "moonx" => {
             let app_root_dir = fs::absolute_lexical_path(ctx.application().app_root_dir())?;
             let build_dir = fs::absolute_lexical_path(build_dir)?;
             let Some(moon_module_root) = build_dir
                 .ancestors()
                 .take_while(|dir| dir.starts_with(&app_root_dir))
-                .find(|dir| dir.join("moon.mod.json").exists())
+                .find(|dir| dir.join("moon.mod").exists())
             else {
                 return Ok(());
             };
@@ -542,14 +537,6 @@ pub async fn ensure_common_deps_for_tool(
         }
         _ => Ok(()),
     }
-}
-
-/// Returns true if the given tool path lives inside a `.mooncakes/` directory,
-/// meaning it is a binary installed by `moon install` from a `bin-deps` entry.
-fn tool_lives_in_mooncakes(tool: &str) -> bool {
-    Path::new(tool)
-        .components()
-        .any(|c| c.as_os_str() == ".mooncakes")
 }
 
 async fn ensure_npm_dependencies(
@@ -619,18 +606,25 @@ async fn ensure_moon_dependencies(
     ctx: &BuildContext<'_>,
     app_root_dir: &Path,
 ) -> anyhow::Result<()> {
-    let moon_mod_json_path = app_root_dir.join("moon.mod.json");
+    let manifest_path = app_root_dir.join("moon.mod");
     let mooncakes_path = app_root_dir.join(".mooncakes");
 
-    let moon_mod_json_hash = blake3::hash(&std::fs::read(&moon_mod_json_path)?)
-        .to_hex()
-        .to_string();
+    let mut inputs = blake3::Hasher::new();
+    inputs.update(&std::fs::read(&manifest_path)?);
+    if let Some(workspace) = app_root_dir
+        .ancestors()
+        .map(|dir| dir.join("moon.work"))
+        .find(|path| path.exists())
+    {
+        inputs.update(&std::fs::read(workspace)?);
+    }
+    let inputs_hash = inputs.finalize().to_hex().to_string();
 
     let marker = TaskResultMarker::new(
         &ctx.application().task_result_marker_dir(),
-        MoonInstallDepsMarkerHash {
+        MoonSyncDepsMarkerHash {
             moon_module_root: app_root_dir,
-            moon_mod_json_hash: &moon_mod_json_hash,
+            inputs_hash: &inputs_hash,
         },
     )?;
 
@@ -643,7 +637,7 @@ async fn ensure_moon_dependencies(
             "Detected",
             format!(
                 "dependency changes, executing {}",
-                "moon install".log_color_highlight()
+                "moon tree --package --target wasm".log_color_highlight()
             ),
         );
     } else {
@@ -652,22 +646,19 @@ async fn ensure_moon_dependencies(
             format!(
                 "missing {}, executing {}",
                 ".mooncakes".log_color_highlight(),
-                "moon install".log_color_highlight()
+                "moon tree --package --target wasm".log_color_highlight()
             ),
         );
     }
 
-    marker.result(run_moon_install(app_root_dir).await)
+    marker.result(run_moon_sync(app_root_dir).await)
 }
 
-async fn run_moon_install(app_root_dir: &Path) -> anyhow::Result<()> {
+async fn run_moon_sync(app_root_dir: &Path) -> anyhow::Result<()> {
+    // Package discovery synchronizes dependency sources without compiling them.
+    // Code generation needs the SDK sources before the first build.
     Command::new(which("moon")?)
-        .args(["update"])
-        .current_dir(app_root_dir)
-        .stream_and_run("moon")
-        .await?;
-    Command::new(which("moon")?)
-        .args(["install"])
+        .args(["tree", "--package", "--target", "wasm"])
         .current_dir(app_root_dir)
         .stream_and_run("moon")
         .await

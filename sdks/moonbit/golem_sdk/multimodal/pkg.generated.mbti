@@ -27,6 +27,6 @@ pub impl[T : @schema.WireSchema] @schema.WireSchema for Multimodal[T]
 pub(open) trait MultimodalModality {
   fn multimodal_type_id() -> String
   fn multimodal_cases(@schema_model.SchemaBuilder) -> Array[@schema_model.VariantCaseType]
-  fn to_modality_value(Self) -> (UInt, @schema_model.SchemaValue)
-  fn from_modality_value(UInt, @schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
+  fn to_modality_value(Self) -> (UInt32, @schema_model.SchemaValue)
+  fn from_modality_value(UInt32, @schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
 }

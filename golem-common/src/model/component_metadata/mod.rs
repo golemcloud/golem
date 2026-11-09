@@ -26,6 +26,7 @@ use crate::model::card::PolymorphicCard;
 use crate::model::component::InstalledPlugin;
 use crate::model::tool::{ToolDeploymentMetadata, ToolName};
 use crate::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
+use crate::model::type_id::TypeId;
 use crate::schema::agent::{
     AgentTypeSchema, ComponentConfigSchema, FieldSource, contains_stream_in_graph,
 };
@@ -115,6 +116,8 @@ impl ComponentMetadata {
                 component_provision_config: ComponentProvisionConfig::default(),
                 agent_method_streams: Self::derive_agent_method_streams(&agent_types),
                 agent_types,
+                agent_type_ids: BTreeMap::new(),
+                tool_type_ids: BTreeMap::new(),
                 agent_type_provision_configs,
                 tools,
                 tool_middlewares,
@@ -138,6 +141,8 @@ impl ComponentMetadata {
                 config_schema: data.config_schema.clone(),
                 component_provision_config: data.component_provision_config.clone(),
                 agent_types: data.agent_types.clone(),
+                agent_type_ids: data.agent_type_ids.clone(),
+                tool_type_ids: data.tool_type_ids.clone(),
                 agent_method_streams: data.agent_method_streams.clone(),
                 agent_type_provision_configs,
                 tools: data.tools.clone(),
@@ -170,6 +175,8 @@ impl ComponentMetadata {
                 config_schema: data.config_schema.clone(),
                 component_provision_config: data.component_provision_config.clone(),
                 agent_types: data.agent_types.clone(),
+                agent_type_ids: data.agent_type_ids.clone(),
+                tool_type_ids: data.tool_type_ids.clone(),
                 agent_method_streams: data.agent_method_streams.clone(),
                 agent_type_provision_configs: data.agent_type_provision_configs.clone(),
                 tools,
@@ -215,6 +222,28 @@ impl ComponentMetadata {
 
     pub fn agent_types(&self) -> &[AgentTypeSchema] {
         &self.data.agent_types
+    }
+
+    pub fn agent_type_ids(&self) -> &BTreeMap<AgentTypeName, TypeId> {
+        &self.data.agent_type_ids
+    }
+
+    pub fn tool_type_ids(&self) -> &BTreeMap<ToolName, TypeId> {
+        &self.data.tool_type_ids
+    }
+
+    /// Replaces registry-assigned identities without changing guest declarations.
+    pub fn with_type_ids(
+        &self,
+        agent_type_ids: BTreeMap<AgentTypeName, TypeId>,
+        tool_type_ids: BTreeMap<ToolName, TypeId>,
+    ) -> Self {
+        let mut data = self.data.as_ref().clone();
+        data.agent_type_ids = agent_type_ids;
+        data.tool_type_ids = tool_type_ids;
+        Self {
+            data: Arc::new(data),
+        }
     }
 
     pub fn config_schema(&self) -> &ComponentConfigSchema {

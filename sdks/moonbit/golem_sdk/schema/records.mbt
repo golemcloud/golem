@@ -28,7 +28,7 @@ pub fn expect_record(
 /// Read a record field by position with a bounds check.
 pub fn record_field(
   fields : Array[@model.SchemaValue],
-  pos : Int,
+  pos : Int32,
   context : String,
 ) -> @model.SchemaValue raise FromSchemaError {
   if pos < 0 || pos >= fields.length() {
@@ -44,7 +44,7 @@ pub fn record_field(
 pub fn expect_enum(
   v : @model.SchemaValue,
   context : String,
-) -> UInt raise FromSchemaError {
+) -> UInt32 raise FromSchemaError {
   match v {
     Enum(case) => case
     other =>
@@ -57,7 +57,7 @@ pub fn expect_enum(
 pub fn expect_variant(
   v : @model.SchemaValue,
   context : String,
-) -> (UInt, @model.SchemaValue?) raise FromSchemaError {
+) -> (UInt32, @model.SchemaValue?) raise FromSchemaError {
   match v {
     Variant(case, payload) => (case, payload)
     other =>
@@ -72,8 +72,8 @@ pub fn expect_variant(
 ///|
 /// Raise `OutOfRange` if a decoded case index exceeds the known case count.
 pub fn check_case_index(
-  case : UInt,
-  count : UInt,
+  case : UInt32,
+  count : UInt32,
   context : String,
 ) -> Unit raise FromSchemaError {
   if case >= count {

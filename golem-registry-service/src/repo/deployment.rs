@@ -42,7 +42,7 @@ use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::deployment::{
     CurrentDeploymentRevisionRecord, DeployRepoError, DeployedDeploymentIdentity,
-    DeploymentIdentity, DeploymentRevisionRecord,
+    DeploymentIdentity, DeploymentRevisionRecord, EnvironmentTypeIdRecord,
 };
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
@@ -57,6 +57,7 @@ use futures::future::BoxFuture;
 use golem_common::model::mcp_import::McpImportCredential;
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::ToolMiddlewareName;
+use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -69,8 +70,21 @@ use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
+mod type_ids;
+
 #[async_trait]
 pub trait DeploymentRepo: Send + Sync {
+    async fn list_environment_type_ids(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<EnvironmentTypeIdRecord>>;
+
+    async fn get_environment_type_id(
+        &self,
+        environment_id: Uuid,
+        type_id: i64,
+    ) -> RepoResult<Option<EnvironmentTypeIdRecord>>;
+
     async fn get_http_routing_epoch_if_exists(
         &self,
         environment_id: Uuid,
@@ -294,6 +308,27 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
 
 #[async_trait]
 impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
+    async fn list_environment_type_ids(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<EnvironmentTypeIdRecord>> {
+        self.repo
+            .list_environment_type_ids(environment_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn get_environment_type_id(
+        &self,
+        environment_id: Uuid,
+        type_id: i64,
+    ) -> RepoResult<Option<EnvironmentTypeIdRecord>> {
+        self.repo
+            .get_environment_type_id(environment_id, type_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
     async fn get_http_routing_epoch_if_exists(
         &self,
         environment_id: Uuid,
@@ -794,6 +829,27 @@ impl DbDeploymentRepo<PostgresPool> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
+    async fn list_environment_type_ids(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<EnvironmentTypeIdRecord>> {
+        self.with_ro("list_environment_type_ids").fetch_all_as(
+            sqlx::query_as("SELECT kind, name, type_id FROM environment_agent_type_ids WHERE environment_id = $1 ORDER BY type_id")
+                .bind(environment_id),
+        ).await
+    }
+
+    async fn get_environment_type_id(
+        &self,
+        environment_id: Uuid,
+        type_id: i64,
+    ) -> RepoResult<Option<EnvironmentTypeIdRecord>> {
+        self.with_ro("get_environment_type_id").fetch_optional_as(
+            sqlx::query_as("SELECT kind, name, type_id FROM environment_agent_type_ids WHERE environment_id = $1 AND type_id = $2")
+                .bind(environment_id).bind(type_id),
+        ).await
+    }
+
     async fn get_http_routing_epoch_if_exists(
         &self,
         environment_id: Uuid,
@@ -1040,6 +1096,35 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         expected_http_routing_epoch,
                     )
                     .await?;
+
+                    let stored_rows: Vec<(String, String, i64)> = tx
+                        .fetch_all_as(
+                            sqlx::query_as("SELECT kind, name, type_id FROM environment_agent_type_ids WHERE environment_id = $1")
+                                .bind(environment_id),
+                        )
+                        .await?;
+                    let stored = stored_rows
+                        .into_iter()
+                        .map(|(kind, name, type_id)| {
+                            Ok(((kind.parse().map_err(anyhow::Error::msg)?, name),
+                                TypeId::try_from(type_id).map_err(anyhow::Error::msg)?))
+                        })
+                        .collect::<anyhow::Result<std::collections::BTreeMap<_, _>>>()?;
+                    let names = deployment_creation.registered_agent_types.iter()
+                        .map(|registration| (TypeIdKind::AgentType, registration.agent_type_name.clone()))
+                        .chain(deployment_creation.registered_tools.iter()
+                            .map(|registration| (TypeIdKind::Tool, registration.tool_name.clone())));
+                    let allocations = type_ids::allocate_type_ids(&stored, names)
+                        .map_err(|_| DeployRepoError::TypeIdSpaceExhausted)?;
+                    for ((kind, name), type_id) in allocations {
+                        tx.execute(
+                            sqlx::query("INSERT INTO environment_agent_type_ids (environment_id, kind, name, type_id) VALUES ($1, $2, $3, $4)")
+                                .bind(environment_id)
+                                .bind(kind.as_str())
+                                .bind(name)
+                                .bind(i64::from(type_id)),
+                        ).await?;
+                    }
 
                     let deployment_revision = Self::create_deployment_revision(
                         tx,
@@ -1600,6 +1685,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     SELECT
                         r.environment_id,
                         r.deployment_revision_id,
+                        (SELECT ids.type_id FROM environment_agent_type_ids ids WHERE ids.environment_id = r.environment_id AND ids.kind = 'agent-type' AND ids.name = r.agent_type_name) AS type_id,
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
@@ -1632,6 +1718,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     SELECT
                         r.environment_id,
                         r.deployment_revision_id,
+                        (SELECT ids.type_id FROM environment_agent_type_ids ids WHERE ids.environment_id = r.environment_id AND ids.kind = 'agent-type' AND ids.name = r.agent_type_name) AS type_id,
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
@@ -1664,6 +1751,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     SELECT
                         r.environment_id,
                         r.deployment_revision_id,
+                        (SELECT ids.type_id FROM environment_agent_type_ids ids WHERE ids.environment_id = r.environment_id AND ids.kind = 'tool' AND ids.name = r.tool_name) AS type_id,
                         r.tool_name,
                         r.tool_release_id,
                         r.source_kind,
@@ -1703,6 +1791,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     SELECT
                         r.environment_id,
                         r.deployment_revision_id,
+                        (SELECT ids.type_id FROM environment_agent_type_ids ids WHERE ids.environment_id = r.environment_id AND ids.kind = 'tool' AND ids.name = r.tool_name) AS type_id,
                         r.tool_name,
                         r.tool_release_id,
                         r.source_kind,
@@ -1910,6 +1999,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     SELECT
                         r.environment_id,
                         r.deployment_revision_id,
+                        (SELECT ids.type_id FROM environment_agent_type_ids ids WHERE ids.environment_id = r.environment_id AND ids.kind = 'agent-type' AND ids.name = r.agent_type_name) AS type_id,
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
@@ -1954,6 +2044,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     SELECT
                         r.environment_id,
                         r.deployment_revision_id,
+                        (SELECT ids.type_id FROM environment_agent_type_ids ids WHERE ids.environment_id = r.environment_id AND ids.kind = 'agent-type' AND ids.name = r.agent_type_name) AS type_id,
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
@@ -2061,6 +2152,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             )
             SELECT
               r.environment_id, r.deployment_revision_id, target.current_deployment_revision_id,
+              (SELECT ids.type_id FROM environment_agent_type_ids ids WHERE ids.environment_id = r.environment_id AND ids.kind = 'agent-type' AND ids.name = r.agent_type_name) AS type_id,
               r.agent_type_name, r.canonical_agent_type_name,
               r.component_id, c.name AS component_name, r.component_revision_id,
               r.webhook_prefix_authority_and_path, r.agent_type,
@@ -2143,6 +2235,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     SELECT
                         r.environment_id,
                         r.deployment_revision_id,
+                        (SELECT ids.type_id FROM environment_agent_type_ids ids WHERE ids.environment_id = r.environment_id AND ids.kind = 'agent-type' AND ids.name = r.agent_type_name) AS type_id,
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
@@ -2194,6 +2287,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     SELECT
                         r.environment_id,
                         r.deployment_revision_id,
+                        (SELECT ids.type_id FROM environment_agent_type_ids ids WHERE ids.environment_id = r.environment_id AND ids.kind = 'agent-type' AND ids.name = r.agent_type_name) AS type_id,
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,

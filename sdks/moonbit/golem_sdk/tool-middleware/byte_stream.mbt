@@ -4,14 +4,14 @@ priv struct FailureAwareByteSource {
     Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]
   mut pending : FixedArray[Byte]?
-  mut offset : Int
+  mut offset : Int32
   mut closed : Bool
 }
 
 ///|
 async fn FailureAwareByteSource::read(
   self : FailureAwareByteSource,
-  count : Int,
+  count : Int32,
 ) -> FixedArray[Byte]? {
   if self.closed {
     return None

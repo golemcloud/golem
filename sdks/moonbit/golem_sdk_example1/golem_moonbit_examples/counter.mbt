@@ -29,8 +29,3 @@ pub fn Counter::decrement(self : Self) -> Unit {
 pub fn Counter::get_value(self : Self) -> UInt64 {
   self.value
 }
-
-///|
-fn main {
-
-}

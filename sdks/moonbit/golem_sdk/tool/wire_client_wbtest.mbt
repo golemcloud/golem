@@ -3,10 +3,10 @@ test "concrete client decoding does not consult a supplied result graph" {
   let payload : @types.TypedSchemaValue = {
     graph: { type_nodes: [], defs: [], root: 731, },
     value: @schema.into_wire(
-      (Some([Ok(17U), Err("no")]) : Array[Result[UInt, String]]?),
+      (Some([Ok(17U), Err("no")]) : Array[Result[UInt32, String]]?),
     ),
   }
-  let result : Result[Array[Result[UInt, String]]?, ToolError[NoToolError]] = decode_wire_result_value({
+  let result : Result[Array[Result[UInt32, String]]?, ToolError[NoToolError]] = decode_wire_result_value({
       result: Some(payload),
       stdout: None,
       stderr: None,
@@ -20,16 +20,17 @@ test "concrete client decoding does not consult a supplied result graph" {
 ///|
 test "concrete client rejects mismatched values and out-of-bounds children" {
   let graph : @types.SchemaGraph = { type_nodes: [], defs: [], root: 0, }
-  let wrong : Result[UInt, ToolError[NoToolError]] = decode_wire_result_value({
-    result: Some({
-      graph,
-      value: { value_nodes: [@types.StringValue("17")], root: 0, },
-    }),
-    stdout: None,
-    stderr: None,
-  })
+  let wrong : Result[UInt32, ToolError[NoToolError]] = decode_wire_result_value({
+      result: Some({
+        graph,
+        value: { value_nodes: [@types.StringValue("17")], root: 0, },
+      }),
+      stdout: None,
+      stderr: None,
+    },
+  )
   assert_true(wrong is Err(Rpc(Protocol(_))))
-  let invalid_child : Result[Array[UInt], ToolError[NoToolError]] = decode_wire_result_value({
+  let invalid_child : Result[Array[UInt32], ToolError[NoToolError]] = decode_wire_result_value({
       result: Some({
         graph,
         value: { value_nodes: [@types.ListValue([19])], root: 0, },

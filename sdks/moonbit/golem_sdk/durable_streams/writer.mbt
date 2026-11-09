@@ -26,7 +26,7 @@ fn[T] make_writer(
   epoch : UInt64,
   auth : @types.Secret?,
   timeout_ms : UInt64,
-  max_retries : Int,
+  max_retries : Int32,
 ) -> Writer[T] raise {
   check_timeout(timeout_ms)
   guard epoch <= 9007199254740991 else {
@@ -63,10 +63,10 @@ fn[T] make_writer(
 pub fn[T : ToJson] json_writer(
   url : String,
   producer_id? : String,
-  epoch? : UInt64 = 0,
+  epoch~ : UInt64 = 0,
   auth? : @types.Secret,
-  timeout_ms? : UInt64 = 30000,
-  max_retries? : Int = 8,
+  timeout_ms~ : UInt64 = 30000,
+  max_retries~ : Int32 = 8,
 ) -> Writer[T] raise {
   json_writer_with_codec(
     url,
@@ -86,10 +86,10 @@ pub fn[T] json_writer_with_codec(
   url : String,
   encode : (T) -> String raise,
   producer_id? : String,
-  epoch? : UInt64 = 0,
+  epoch~ : UInt64 = 0,
   auth? : @types.Secret,
-  timeout_ms? : UInt64 = 30000,
-  max_retries? : Int = 8,
+  timeout_ms~ : UInt64 = 30000,
+  max_retries~ : Int32 = 8,
 ) -> Writer[T] raise {
   make_writer(
     url,
@@ -114,12 +114,12 @@ pub fn[T] json_writer_with_codec(
 ///|
 pub fn byte_writer(
   url : String,
-  content_type? : String = "application/octet-stream",
+  content_type~ : String = "application/octet-stream",
   producer_id? : String,
-  epoch? : UInt64 = 0,
+  epoch~ : UInt64 = 0,
   auth? : @types.Secret,
-  timeout_ms? : UInt64 = 30000,
-  max_retries? : Int = 8,
+  timeout_ms~ : UInt64 = 30000,
+  max_retries~ : Int32 = 8,
 ) -> Writer[Byte] raise {
   make_writer(
     url,
@@ -220,7 +220,7 @@ async fn[T] Writer::send_pending(self : Writer[T]) -> Receipt {
 pub async fn[T] Writer::append(
   self : Writer[T],
   values : Array[T],
-  close? : Bool = false,
+  close~ : Bool = false,
 ) -> Receipt {
   self.lock.acquire()
   defer self.lock.release()
@@ -232,7 +232,7 @@ pub async fn[T] Writer::append(
 pub async fn Writer::append_bytes(
   self : Writer[Byte],
   bytes : Bytes,
-  close? : Bool = false,
+  close~ : Bool = false,
 ) -> Receipt {
   self.append(bytes.to_array(), close~)
 }

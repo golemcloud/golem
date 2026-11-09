@@ -24286,6 +24286,21 @@ components:
       required:
       - import
       - callback
+    ComponentAgentTypeDto:
+      title: ComponentAgentTypeDto
+      type: object
+      properties:
+        declaration:
+          $ref: '#/components/schemas/AgentTypeSchema'
+        typeId:
+          nullable: true
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          description: Registry-assigned identity when available for this declaration.
+          type: integer
+          format: uint32
+      required:
+      - declaration
     ComponentConfigSchema:
       type: object
       properties:
@@ -24403,7 +24418,7 @@ components:
           type: integer
           format: uint64
         metadata:
-          $ref: '#/components/schemas/ComponentMetadata'
+          $ref: '#/components/schemas/ComponentMetadataDto'
         createdAt:
           type: string
           format: date-time
@@ -24422,8 +24437,9 @@ components:
       - metadata
       - createdAt
       - wasmHash
-    ComponentMetadata:
-      title: ComponentMetadata
+    ComponentMetadataDto:
+      title: ComponentMetadataDto
+      description: Component metadata projected for REST responses, with identities beside declarations.
       type: object
       properties:
         knownExports:
@@ -24457,30 +24473,24 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/AgentTypeSchema'
+            $ref: '#/components/schemas/ComponentAgentTypeDto'
         agentMethodStreams:
-          description: Server-derived streaming classification for each declared agent method.
           type: object
           additionalProperties:
             type: object
             additionalProperties:
               $ref: '#/components/schemas/AgentMethodStreamMetadata'
         agentTypeProvisionConfigs:
-          description: |-
-            Per-agent-type provisioning configuration: env, config, plugins, files.
-            Kept separate from agent type declarations so AgentType stays a pure declaration type.
           default: {}
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfig'
         tools:
-          description: Complete deployment input for every tool implemented by this component.
           default: {}
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/ToolDeploymentMetadata'
+            $ref: '#/components/schemas/ComponentToolDto'
         toolMiddlewares:
-          description: Complete deployment input for every tool middleware implemented by this component.
           default: {}
           type: object
           additionalProperties:
@@ -24547,6 +24557,21 @@ components:
             $ref: '#/components/schemas/AgentFileOptions'
       required:
       - initialPermissions
+    ComponentToolDto:
+      title: ComponentToolDto
+      type: object
+      properties:
+        declaration:
+          $ref: '#/components/schemas/ToolDeploymentMetadata'
+        typeId:
+          nullable: true
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          description: Registry-assigned identity when available for this declaration.
+          type: integer
+          format: uint32
+      required:
+      - declaration
     ComponentUpdate:
       title: ComponentUpdate
       type: object
@@ -24790,6 +24815,11 @@ components:
         Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
       type: object
       properties:
+        typeId:
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          type: integer
+          format: uint32
         agentType:
           $ref: '#/components/schemas/AgentTypeSchema'
         implementedBy:
@@ -24797,12 +24827,18 @@ components:
         webhookPrefixAuthorityAndPath:
           type: string
       required:
+      - typeId
       - agentType
       - implementedBy
     DeployedRegisteredTool:
       title: DeployedRegisteredTool
       type: object
       properties:
+        typeId:
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          type: integer
+          format: uint32
         deploymentRevision:
           type: integer
           format: uint64
@@ -24824,6 +24860,7 @@ components:
           type: string
           format: hash
       required:
+      - typeId
       - deploymentRevision
       - definition
       - source

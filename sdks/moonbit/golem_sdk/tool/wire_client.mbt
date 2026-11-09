@@ -90,12 +90,12 @@ pub fn[E] decode_wire_result_empty(
 /// Applies a text annotation to a freshly encoded concrete input field.
 pub fn wire_text_input_field(
   tree : @types.SchemaValueTree,
-  field : Int,
+  field : Int32,
 ) -> Unit {
   guard tree.value_nodes[tree.root] is @types.RecordValue(fields) else {
     abort("generated input must be a record")
   }
-  fn refine(index : Int) -> Unit {
+  fn refine(index : Int32) -> Unit {
     match tree.value_nodes[index] {
       @types.StringValue(text) =>
         tree.value_nodes[index] = @types.TextValue({ text, language: None, })

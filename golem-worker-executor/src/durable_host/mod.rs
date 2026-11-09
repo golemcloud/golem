@@ -236,7 +236,6 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 pub use durability::*;
@@ -288,7 +287,6 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use http_body_util::BodyExt;
-use http_body_util::combinators::UnsyncBoxBody;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -309,17 +307,14 @@ use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
 };
-use wasmtime_wasi_http::p3::RequestOptions;
-use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-use wasmtime_wasi_http::{HttpConnectionPool, WasiHttpCtx};
+use wasmtime_wasi_http::{HttpConnectionPool, RequestOptions, WasiHttpCtx};
 
 /// Hooks providing the custom HTTP request handling needed for durable
 /// execution. Stored on `DurableWorkerCtx` and exposed via `WasiHttpCtxView`
 /// for `wasmtime-wasi-http`.
+#[derive(Clone)]
 pub struct DurableHttpHooks {
-    /// Connection pool used for outgoing HTTP requests. Mirror of
-    /// `WasiHttpCtx::connection_pool` so that `WasiHttpHooks::send_request`
-    /// can construct the deferred future without re-borrowing `WasiHttpCtx`.
+    /// Connection pool used for outgoing HTTP requests.
     pub connection_pool: Option<HttpConnectionPool>,
     /// Shared replay flag that durable execution toggles when transitioning
     /// between live and replay modes. When `true`, outgoing HTTP requests are
@@ -587,7 +582,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     )> {
         (self.agent_mode() == AgentMode::Durable).then(|| {
             (
-                self.state.wakeup_scheduler(),
+                self.state.wakeup_scheduler(
+                    self.public_state
+                        .worker()
+                        .get_initial_worker_metadata()
+                        .fingerprint,
+                ),
                 self.state.config.suspend.clone(),
             )
         })
@@ -1166,13 +1166,9 @@ struct PrivateDurableWorkerState {
     pub(crate) open_p3_http_responses:
         HashMap<u32, crate::durable_host::p3::http::OpenP3HttpResponseState>,
 
-    /// Body-transmission wiring of open p3 outgoing HTTP requests, keyed by the request resource
-    /// rep. Registered by the durable `request::new` (which interposes on the guest-facing
-    /// transmission future) and detached by the host call that consumes the request:
-    /// `client::send` records/replays the transmission result durably, while a guest-side
-    /// `consume-body`/`drop` forwards the deterministic value with no recording.
-    pub(crate) pending_p3_http_request_transmissions:
-        HashMap<u32, crate::durable_host::p3::http::PendingHttpRequestBodyTransmission>,
+    /// Transmission wiring and future identities for P3 HTTP bodies. Host transfers preserve
+    /// their recorded result while the recipient owns any later guest delivery boundary.
+    pub(crate) p3_http_transmissions: crate::durable_host::p3::http::HttpTransmissionRegistry,
 
     /// WebSocket connection state indexed by websocket resource rep.
     open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
@@ -1375,6 +1371,7 @@ pub(crate) struct WakeupScheduler {
     oplog: Arc<dyn Oplog>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
+    target_worker_fingerprint: golem_common::model::AgentFingerprint,
 }
 
 impl WakeupScheduler {
@@ -1395,6 +1392,7 @@ impl WakeupScheduler {
                     account_id: self.created_by,
                     environment_id: self.owned_agent_id.environment_id(),
                     promise_id,
+                    target_worker_fingerprint: self.target_worker_fingerprint,
                 },
             )
             .await;
@@ -1489,13 +1487,17 @@ impl PrivateDurableWorkerState {
         self.tail_work.clone()
     }
 
-    fn wakeup_scheduler(&self) -> WakeupScheduler {
+    fn wakeup_scheduler(
+        &self,
+        target_worker_fingerprint: golem_common::model::AgentFingerprint,
+    ) -> WakeupScheduler {
         WakeupScheduler {
             promise_service: self.promise_service.clone(),
             scheduler_service: self.scheduler_service.clone(),
             oplog: self.oplog.clone(),
             owned_agent_id: self.owned_agent_id.clone(),
             created_by: self.created_by,
+            target_worker_fingerprint,
         }
     }
 

@@ -85,7 +85,9 @@ use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Pa
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
+use golem_common::model::component_metadata::{
+    ComponentMetadata, ParsedFunctionName, ParsedFunctionSite,
+};
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
@@ -1371,10 +1373,10 @@ impl AgentCommandHandler {
 
                 let parsed_agent_type_name =
                     ParsedAgentId::parse_agent_type_name(&raw_agent_id).ok();
+                let component_metadata: ComponentMetadata = agent_component.metadata.into();
 
                 let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
-                    agent_component
-                        .metadata
+                    component_metadata
                         .agent_type_provision_configs()
                         .get(agent_type_name)
                         .cloned()
@@ -1383,8 +1385,7 @@ impl AgentCommandHandler {
                 let source_language = parsed_agent_type_name
                     .as_ref()
                     .and_then(|type_name| {
-                        agent_component
-                            .metadata
+                        component_metadata
                             .agent_types()
                             .iter()
                             .find(|at| &at.type_name == type_name)
@@ -1396,7 +1397,7 @@ impl AgentCommandHandler {
                     .as_ref()
                     .map(|agent_type_name| {
                         secret_config_paths_for_agent_type(
-                            agent_component.metadata.agent_types(),
+                            component_metadata.agent_types(),
                             agent_type_name,
                         )
                     })
@@ -1406,7 +1407,7 @@ impl AgentCommandHandler {
                     .with_defaults(defaults)
                     .with_secret_config_paths(secret_config_paths);
 
-                let parsed = ParsedAgentId::parse(&raw_agent_id, &agent_component.metadata).ok();
+                let parsed = ParsedAgentId::parse(&raw_agent_id, &component_metadata).ok();
                 agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
                     parsed.as_ref(),
                     &source_language,
@@ -1445,8 +1446,9 @@ impl AgentCommandHandler {
 
         if component
             .metadata
-            .agent_types()
+            .agent_types
             .iter()
+            .map(|agent_type| &agent_type.declaration)
             .find(|agent_type| agent_type.type_name == agent_id_match.agent_type_name)
             .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral)
             && !self
@@ -1617,14 +1619,14 @@ impl AgentCommandHandler {
             AgentMetadata::from(agent_id_match.component_name, result)
         };
 
-        let defaults = component
-            .metadata
+        let component_metadata: ComponentMetadata = component.metadata.into();
+        let defaults = component_metadata
             .agent_type_provision_configs()
             .get(&agent_id_match.agent_type_name)
             .cloned();
 
         let secret_config_paths = secret_config_paths_for_agent_type(
-            component.metadata.agent_types(),
+            component_metadata.agent_types(),
             &agent_id_match.agent_type_name,
         );
 
@@ -1957,8 +1959,8 @@ impl AgentCommandHandler {
             .unwrap_or_default();
 
         let agent_type = AgentTypeName(agent_type_name.clone());
-        let plugins = component
-            .metadata
+        let component_metadata: ComponentMetadata = component.metadata.clone().into();
+        let plugins = component_metadata
             .agent_type_plugins(&agent_type)
             .unwrap_or_default();
 
@@ -2716,8 +2718,9 @@ pub(crate) fn try_recanonicalize_agent_id_with_parsed(
     // Look up the agent type from component metadata
     let agent_type = component
         .metadata
-        .agent_types()
+        .agent_types
         .iter()
+        .map(|agent_type| &agent_type.declaration)
         .find(|at| at.type_name.0 == type_name);
 
     let Some(agent_type) = agent_type else {
@@ -3004,11 +3007,12 @@ impl AgentCommandHandler {
         agent_id: &RawAgentId,
         function_name: Option<&str>,
     ) -> anyhow::Result<Option<(ParsedAgentId, AgentTypeSchema)>> {
-        if !component.metadata.is_agent() {
+        let component_metadata: ComponentMetadata = component.metadata.clone().into();
+        if !component_metadata.is_agent() {
             return Ok(None);
         }
 
-        match ParsedAgentId::parse_and_resolve_type(&agent_id.0, &component.metadata) {
+        match ParsedAgentId::parse_and_resolve_type(&agent_id.0, &component_metadata) {
             Ok((agent_id, agent_type)) => {
                 validate_ordinary_agent_type(&agent_type)?;
                 match function_name {

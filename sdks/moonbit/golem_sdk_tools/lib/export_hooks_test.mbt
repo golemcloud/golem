@@ -21,7 +21,7 @@ test "export hooks follow all eight source-category combinations" {
           (if tools { 2 } else { 0 }) +
           (if middlewares { 2 } else { 0 }),
         )
-        let original = "import {\n}\noptions(\n  \"is-main\": true,\n)\n"
+        let original = "import {\n}\npkgtype(kind: \"foreign_library\")\noptions(\n)\n"
         let wired = @lib.reconcile_generated_pkg_imports(original, imports)
         assert_eq(@lib.reconcile_generated_pkg_imports(wired, []), original)
       }

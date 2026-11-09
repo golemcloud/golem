@@ -16,7 +16,7 @@ use super::hash::SqlBlake3Hash;
 use anyhow::anyhow;
 use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
-use golem_common::model::tool::{HostToolId, RegisteredTool, ToolName, ToolSource};
+use golem_common::model::tool::{HostToolId, ToolName, ToolRegistration, ToolSource};
 use golem_common::model::tool_release::{
     SystemToolAvailability, SystemToolReleaseProvision, ToolRelease, ToolReleaseId,
     ToolReleaseLifecycle, ToolReleaseOrigin, tool_metadata_digest,
@@ -72,7 +72,7 @@ pub struct ToolReleaseWithOwnerRecord {
 
 impl ToolReleaseRecord {
     pub fn from_registered_tool(
-        tool: &RegisteredTool,
+        tool: &ToolRegistration,
         immutable: bool,
         actor: AccountId,
     ) -> anyhow::Result<Self> {

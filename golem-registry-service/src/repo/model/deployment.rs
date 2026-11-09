@@ -57,12 +57,13 @@ use golem_common::model::security_scheme::{
 };
 use golem_common::model::tool::{
     CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolDeploymentState,
-    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolRegistration, ToolSource,
 };
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, RegisteredToolMiddleware, ToolMiddlewareInstallation,
     ToolMiddlewareMergeMode, ToolMiddlewareName,
 };
+use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_common::schema::tool::Tool;
 use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
 use golem_common::schema::{AgentTypeSchema, RegisteredAgentTypeSchema};
@@ -81,6 +82,8 @@ use uuid::Uuid;
 pub enum DeployRepoError {
     #[error("Concurrent modification")]
     ConcurrentModification,
+    #[error("Environment type ID space exhausted")]
+    TypeIdSpaceExhausted,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
     #[error("Secret for path {rendered_path} already exsists", rendered_path = path.join("."))]
@@ -632,6 +635,7 @@ impl DeploymentCompiledRouteRecord {
 pub struct DeploymentRegisteredAgentTypeRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
+    pub type_id: Option<i64>,
     pub agent_type_name: String,
     pub canonical_agent_type_name: String,
 
@@ -648,11 +652,12 @@ impl DeploymentRegisteredAgentTypeRecord {
     pub fn from_model(
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
-        registered_agent_type: DeployedRegisteredAgentType,
+        registered_agent_type: PreparedAgentType,
     ) -> Self {
         Self {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
+            type_id: None,
             agent_type_name: registered_agent_type.agent_type.type_name.to_string(),
             canonical_agent_type_name: registered_agent_type
                 .agent_type
@@ -682,6 +687,12 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
     type Error = DeployRepoError;
     fn try_from(value: DeploymentRegisteredAgentTypeRecord) -> Result<Self, Self::Error> {
         Ok(Self {
+            type_id: TypeId::try_from(
+                value
+                    .type_id
+                    .ok_or_else(|| anyhow!("Agent type allocation missing"))?,
+            )
+            .map_err(anyhow::Error::msg)?,
             agent_type: value.agent_type.into_value(),
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
@@ -699,6 +710,7 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
 pub struct DeploymentRegisteredAgentTypeScopedRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
+    pub type_id: i64,
     pub agent_type_name: String,
     pub canonical_agent_type_name: String,
 
@@ -713,6 +725,7 @@ pub struct DeploymentRegisteredAgentTypeScopedRecord {
 pub struct DeploymentRegisteredToolRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
+    pub type_id: Option<i64>,
     pub tool_name: String,
     pub tool_release_id: Option<Uuid>,
     pub source_kind: i16,
@@ -735,7 +748,7 @@ pub struct DeploymentRegisteredToolRecord {
 impl DeploymentRegisteredToolRecord {
     pub fn from_model(
         environment_id: EnvironmentId,
-        registered_tool: RegisteredTool,
+        registered_tool: ToolRegistration,
         published: bool,
         deployment_hash: Option<diff::Hash>,
     ) -> Self {
@@ -774,6 +787,7 @@ impl DeploymentRegisteredToolRecord {
         Self {
             environment_id: environment_id.0,
             deployment_revision_id: registered_tool.deployment_revision.into(),
+            type_id: None,
             tool_name: registered_tool
                 .definition
                 .name()
@@ -852,18 +866,26 @@ impl TryFrom<DeploymentRegisteredToolRecord> for RegisteredTool {
                 )
             })?;
         Ok(Self {
-            deployment_revision: value.deployment_revision_id.try_into()?,
-            release_id: value
-                .tool_release_id
-                .map(golem_common::model::tool_release::ToolReleaseId),
-            definition,
-            provision: value.tool_provision_config.into_value(),
-            component_bindings: value.component_bindings.into_value(),
-            source,
-            owner_account_id: value.owner_account_id.into(),
-            owner_account_email: AccountEmail::new(value.owner_account_email),
-            metadata_version: value.metadata_version,
-            metadata_digest,
+            type_id: TypeId::try_from(
+                value
+                    .type_id
+                    .ok_or_else(|| anyhow!("Tool type allocation missing"))?,
+            )
+            .map_err(anyhow::Error::msg)?,
+            registration: ToolRegistration {
+                deployment_revision: value.deployment_revision_id.try_into()?,
+                release_id: value
+                    .tool_release_id
+                    .map(golem_common::model::tool_release::ToolReleaseId),
+                definition,
+                provision: value.tool_provision_config.into_value(),
+                component_bindings: value.component_bindings.into_value(),
+                source,
+                owner_account_id: value.owner_account_id.into(),
+                owner_account_email: AccountEmail::new(value.owner_account_email),
+                metadata_version: value.metadata_version,
+                metadata_digest,
+            },
         })
     }
 }
@@ -999,13 +1021,13 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                 let name = ToolName::try_from(record.tool_name.as_str())
                     .map_err(|error| DeployRepoError::InternalError(anyhow!(error)))?;
                 let registered: RegisteredTool = record.try_into()?;
-                if registered.deployment_revision != deployment_revision {
+                if registered.registration.deployment_revision != deployment_revision {
                     return Err(DeployRepoError::InternalError(anyhow!(
                         "registered tool {name} belongs to deployment revision {}, expected {deployment_revision}",
-                        registered.deployment_revision
+                        registered.registration.deployment_revision
                     )));
                 }
-                if registered.definition.name() != Some(name.as_str()) {
+                if registered.registration.definition.name() != Some(name.as_str()) {
                     return Err(DeployRepoError::InternalError(anyhow!(
                         "registered tool row name {name} does not match its definition"
                     )));
@@ -1044,6 +1066,7 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                     binding.tool_name
                 ))
             })?;
+            let registered = &registered.registration;
             if binding.metadata_digest == Hash::empty() {
                 binding.metadata_digest = registered.metadata_digest;
             }
@@ -1129,6 +1152,7 @@ impl DeploymentRegisteredAgentTypeScopedRecord {
         owner_account_email: AccountEmail,
     ) -> Result<DeployedRegisteredAgentType, DeployRepoError> {
         Ok(DeployedRegisteredAgentType {
+            type_id: TypeId::try_from(self.type_id).map_err(anyhow::Error::msg)?,
             agent_type: self.agent_type.into_value(),
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: self.component_id.into(),
@@ -1146,6 +1170,7 @@ impl DeploymentRegisteredAgentTypeScopedRecord {
 pub struct ResolvedAgentTypeRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
+    pub type_id: i64,
     pub current_deployment_revision_id: Option<i64>,
     pub agent_type_name: String,
     pub canonical_agent_type_name: String,
@@ -1162,6 +1187,7 @@ impl TryFrom<ResolvedAgentTypeRecord> for DeployedRegisteredAgentType {
     type Error = DeployRepoError;
     fn try_from(value: ResolvedAgentTypeRecord) -> Result<Self, Self::Error> {
         Ok(Self {
+            type_id: TypeId::try_from(value.type_id).map_err(anyhow::Error::msg)?,
             agent_type: value.agent_type.into_value(),
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
@@ -1172,6 +1198,30 @@ impl TryFrom<ResolvedAgentTypeRecord> for DeployedRegisteredAgentType {
             },
             webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         })
+    }
+}
+
+#[derive(Debug)]
+pub struct PreparedAgentType {
+    pub agent_type: AgentTypeSchema,
+    pub implemented_by: RegisteredAgentTypeImplementer,
+    pub webhook_prefix_authority_and_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct EnvironmentTypeIdRecord {
+    pub kind: String,
+    pub name: String,
+    pub type_id: i64,
+}
+
+impl EnvironmentTypeIdRecord {
+    pub fn into_model(self) -> Result<(TypeIdKind, String, TypeId), DeployRepoError> {
+        Ok((
+            self.kind.parse().map_err(anyhow::Error::msg)?,
+            self.name,
+            TypeId::try_from(self.type_id).map_err(anyhow::Error::msg)?,
+        ))
     }
 }
 
@@ -1218,7 +1268,7 @@ pub struct DeploymentRevisionCreationRecord {
 
 #[derive(Debug)]
 pub struct CompiledTools {
-    pub registered_tools: Vec<RegisteredTool>,
+    pub registered_tools: Vec<ToolRegistration>,
     pub agent_tool_bindings: Vec<CompiledToolBinding>,
 }
 
@@ -1248,7 +1298,7 @@ impl DeploymentRevisionCreationRecord {
         mcp_deployments: Vec<McpDeployment>,
         compiled_routes: Vec<UnboundCompiledRoute>,
         compiled_mcp: Vec<CompiledMcp>,
-        registered_agent_types: Vec<DeployedRegisteredAgentType>,
+        registered_agent_types: Vec<PreparedAgentType>,
         compiled_tools: CompiledTools,
         mcp_imports: Vec<(u32, McpImport, Option<McpImportCredential>)>,
         tool_releases: Vec<ToolReleaseRecord>,

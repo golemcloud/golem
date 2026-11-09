@@ -1202,3 +1202,24 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
 
     join_set.abort_all();
 }
+
+#[test]
+async fn test_environment_type_ids_survive_removal_and_readdition(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_type_ids_survive_removal_and_readdition(deps).await;
+}
+
+#[test]
+async fn test_environment_type_ids_rollback_and_environment_isolation(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_type_ids_rollback_and_environment_isolation(deps).await;
+}
+
+#[test]
+async fn test_environment_type_ids_concurrent_deployments(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_type_ids_concurrent_deployments(deps).await;
+}

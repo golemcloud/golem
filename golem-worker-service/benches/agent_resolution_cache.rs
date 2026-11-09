@@ -143,6 +143,7 @@ fn representative_agent_type() -> AgentTypeSchema {
 fn representative_resolved_agent_type() -> ResolvedAgentType {
     ResolvedAgentType {
         registered_agent_type: RegisteredAgentType {
+            type_id: golem_common::model::type_id::TypeId::try_from(42u32).unwrap(),
             agent_type: representative_agent_type(),
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: ComponentId(Uuid::nil()),

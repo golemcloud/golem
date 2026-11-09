@@ -249,7 +249,7 @@ pub async fn consume(client : {client}) -> Unit {{
         .unwrap();
         run(
             "moon",
-            &["check", "--target", "wasm", "--deny-warn"],
+            &["check", "client", "--target", "wasm", "--deny-warn"],
             target,
         );
     }
