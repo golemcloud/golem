@@ -66,6 +66,12 @@ pub(all) enum ReconnectPolicy {
 } derive(Debug, Eq)
 
 ///|
+pub extend ReconnectPolicy with Debug::{to_repr}
+
+///|
+pub extend ReconnectPolicy with Eq::{equal, not_equal}
+
+///|
 /// The reconnect policy of a configuration that does not set one: 5 minutes.
 pub let default_reconnect_policy : ReconnectPolicy = Within(5 * 60 * 1000)
 
