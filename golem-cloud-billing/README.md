@@ -208,7 +208,7 @@ when none is:
 | --- | --- |
 | `subscription` | a billable subscription (`active`, `trialing` or `past_due`) is not canceled at the period end |
 | `canceledSubscription` | a billable subscription is canceled at the period end and runs to the end of the period |
-| `unbilledUsage` | a usage event is not held, and is not sent yet, or was sent after the newest order of the account while an order can still bill it: while a subscription is billable, and for 24 hours after the last one ends (`FINAL_ORDER_WAIT_MS`). Polar bills an event only after the push sends it, on the next order. The app sets `sent_at` after Polar accepts the event, so an event that the last order billed can look newer than that order; the wait ends that |
+| `unbilledUsage` | a usage event is not held, and is not sent yet, or was sent after the newest order of the account and the last order of its ended subscription has not come. Polar bills an event only after the push sends it, on the next order. The last order is an order of the account's newest subscription, created at or after its period end, when that subscription is no longer billable. No order bills anything after it, so it settles every sent event, also one whose `sent_at` the app recorded after that order |
 | `unpaidOverage` | a `pending` order has an amount for a metered price |
 
 The hold stays for the whole life of a billable subscription, also after a cancellation. Paid
@@ -226,6 +226,11 @@ It also reconciles the accounts without a billable subscription whose usage even
 no webhook comes for a usage event, and each account whose row is older than an hour
 (`HOLD_RECHECK_MS`). A placement refreshes the row, and a removal that failed keeps it, so the
 sweep tries the removal again with no time limit.
+
+A subscription that Polar ends before its period end, for example a revocation, has no order after
+the period end. When the push sent paid overage after the newest order of such an account, the
+hold stays until an administrator checks the account in Polar and removes the hold
+(`override-deletion-hold`).
 
 The registry refuses `DELETE /v1/accounts/{account_id}` with 409 while the account has a hold, and
 shows the reason text to the person, for example in `golem-cli account delete`. The text starts

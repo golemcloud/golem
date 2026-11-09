@@ -4,7 +4,6 @@ import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
 import * as Settlement from "../src/Settlement.ts"
-import { FINAL_ORDER_WAIT_MS } from "../src/Subscriptions.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
 import {
   baseUrl,
@@ -806,23 +805,47 @@ describe("Polar billing", () => {
       expect(upstreams.deletionHolds.has(accountId)).toBe(false)
     })
 
-    it("counts an event that looks newer than the last order as billed once the wait after the end is over", async () => {
+    it("settles an event that looks newer than the last order once Polar created that order after the period end", async () => {
       const accountId = randomUUID()
-      await deliver("subscription.active", subscription(accountId))
-      // Polar billed the event on the last order before the usage push recorded `sent_at`.
-      const lastOrderAt = new Date(Date.now() - 10 * MINUTE).toISOString()
-      await deliver("order.paid", order(accountId, { status: "paid", paid: true, created_at: lastOrderAt }))
+      const periodEnd = new Date(Date.now() - 20 * MINUTE).toISOString()
+      await deliver("subscription.active", subscription(accountId, { current_period_end: periodEnd }))
       await usageEvent(accountId, MINUTE)
-      const endedAt = new Date(Date.now() - 60 * MINUTE).toISOString()
-      await deliver("subscription.revoked", subscription(accountId, { status: "canceled", modified_at: endedAt }))
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, {
+          status: "canceled",
+          current_period_end: periodEnd,
+          modified_at: new Date(Date.now() - 15 * MINUTE).toISOString()
+        })
+      )
       expect(upstreams.deletionHolds.get(accountId)).toBe(unbilledHold)
 
-      await pool.query(
-        "UPDATE polar_subscriptions SET modified_at = clock_timestamp() - $2 * interval '1 millisecond' WHERE account_id = $1",
-        [accountId, FINAL_ORDER_WAIT_MS + MINUTE]
-      )
-      await sweep(new Date())
+      // The last order: Polar billed the event on it before the usage push recorded `sent_at`.
+      const lastOrderAt = new Date(Date.now() - 10 * MINUTE).toISOString()
+      await deliver("order.created", order(accountId, { created_at: lastOrderAt }))
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unpaidHold)
+
+      await deliver("order.paid", order(accountId, { ...paidLater, created_at: lastOrderAt }))
       expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+    })
+
+    it("keeps the hold of an ended subscription until its last order comes, with no time limit", async () => {
+      const accountId = randomUUID()
+      const periodEnd = new Date(Date.now() - 3 * DAY).toISOString()
+      await deliver("subscription.active", subscription(accountId, { current_period_end: periodEnd }))
+      await usageEvent(accountId, 3 * DAY + MINUTE)
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, {
+          status: "canceled",
+          current_period_end: periodEnd,
+          modified_at: new Date(Date.now() - 2 * DAY).toISOString()
+        })
+      )
+
+      await sweep(new Date())
+
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unbilledHold)
     })
 
     it("checks a recorded hold again with no time limit, and removes it when the account owes nothing", async () => {
