@@ -5569,6 +5569,109 @@ async fn rust_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(_tr
 }
 
 #[test]
+async fn rust_workspace_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let producer_wasm = placeholder_component_wasm(&ctx);
+    let producer_wasm = producer_wasm.to_str().unwrap();
+    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
+
+    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
+
+    let extracted_component_metadata_dir =
+        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
+    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
+    seed_extracted_metadata(
+        &ctx,
+        "app:producer",
+        &producer_final_wasm,
+        &fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap(),
+    );
+    seed_extraction_marker(&ctx, "app:producer");
+
+    fs::write_str(
+        ctx.cwd_path_join("Cargo.toml"),
+        indoc! {r#"
+            [workspace]
+            members = ["consumer"]
+            resolver = "2"
+
+            [workspace.dependencies]
+            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
+        "#},
+    )
+    .unwrap();
+    fs::create_dir_all(ctx.cwd_path_join("consumer/src")).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("consumer/Cargo.toml"),
+        indoc! {r#"
+            [package]
+            name = "consumer"
+            version = "0.1.0"
+            edition = "2021"
+
+            [dependencies]
+            bar = { workspace = true }
+        "#},
+    )
+    .unwrap();
+    fs::write_str(ctx.cwd_path_join("consumer/src/lib.rs"), "").unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: rust-workspace-cargo-path-guest-bridge-dependency
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:producer:
+                componentWasm: {producer_wasm}
+                outputWasm: producer-final.wasm
+
+              app:consumer:
+                templates: rust
+                dir: consumer
+                dependencies:
+                  agents:
+                    - app:producer/BarAgent
+                buildMergeMode: replace
+                componentWasm: consumer.wasm
+                outputWasm: consumer-final.wasm
+                build:
+                  - command: cargo metadata --format-version=1
+                    sources:
+                      - Cargo.toml
+                      - src
+                    targets:
+                      - consumer.wasm
+                  - command: cp -p {producer_wasm} consumer.wasm
+
+            bridge:
+              rust:
+                internal:
+                  agents: BarAgent
+                  outputDir: bridge
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(outputs.success_or_dump());
+}
+
+#[test]
 async fn rust_no_build_producer_generates_guest_bridge_before_consumer_build(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let producer_wasm = placeholder_component_wasm(&ctx);
