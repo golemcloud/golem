@@ -162,7 +162,8 @@ export interface RegistryShape {
    * Places or replaces the deletion hold of `holderAccountId` on the account, through
    * `PUT /v1/accounts/{account_id}/deletion-holds/{holder_account_id}`. The registry refuses to
    * delete an account with a deletion hold, and shows the reason to the caller of the delete.
-   * Only the account of the token can be the holder.
+   * The holder is the account of the token, unless the token has the system permission
+   * `override-deletion-hold`.
    */
   readonly placeDeletionHold: (
     token: Redacted.Redacted<string>,

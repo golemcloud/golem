@@ -273,8 +273,9 @@ impl AccountService {
         let reason = validate_deletion_hold_reason(creation.reason)?;
 
         info!(
-            "Placing the deletion hold of account {} on account {}",
-            holder_account_id, account_id
+            account_id = %account_id,
+            holder_account_id = %holder_account_id,
+            "Placing a deletion hold"
         );
 
         let record = self
@@ -303,8 +304,9 @@ impl AccountService {
         authorize_deletion_hold_permission(auth, &account.email, holder_account_id)?;
 
         info!(
-            "Removing the deletion hold of account {} from account {}",
-            holder_account_id, account_id
+            account_id = %account_id,
+            holder_account_id = %holder_account_id,
+            "Removing a deletion hold"
         );
 
         self.account_repo

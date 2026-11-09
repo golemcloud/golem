@@ -434,8 +434,9 @@ impl AccountsApi {
 
     /// Place a deletion hold on an account.
     ///
-    /// The holder is the account of the caller. When the holder has a hold on the account
-    /// already, the reason replaces the reason of that hold.
+    /// The holder is the account of the caller. An administrator with the
+    /// `override-deletion-hold` permission can also place a hold for another holder. When the
+    /// holder has a hold on the account already, the reason replaces the reason of that hold.
     #[oai(
         path = "/:account_id/deletion-holds/:holder_account_id",
         method = "put",
@@ -485,7 +486,8 @@ impl AccountsApi {
 
     /// Remove a deletion hold from an account.
     ///
-    /// Removing a hold that does not exist succeeds.
+    /// The holder removes its own hold. An administrator with the `override-deletion-hold`
+    /// permission can remove the hold of any holder. Removing a hold that does not exist succeeds.
     #[oai(
         path = "/:account_id/deletion-holds/:holder_account_id",
         method = "delete",

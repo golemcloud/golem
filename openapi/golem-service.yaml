@@ -3150,8 +3150,9 @@ paths:
       - Account
       summary: Place a deletion hold on an account.
       description: |-
-        The holder is the account of the caller. When the holder has a hold on the account
-        already, the reason replaces the reason of that hold.
+        The holder is the account of the caller. An administrator with the
+        `override-deletion-hold` permission can also place a hold for another holder. When the
+        holder has a hold on the account already, the reason replaces the reason of that hold.
       operationId: place_account_deletion_hold
       parameters:
       - in: path
@@ -3235,7 +3236,9 @@ paths:
       - RegistryService
       - Account
       summary: Remove a deletion hold from an account.
-      description: Removing a hold that does not exist succeeds.
+      description: |-
+        The holder removes its own hold. An administrator with the `override-deletion-hold`
+        permission can remove the hold of any holder. Removing a hold that does not exist succeeds.
       operationId: remove_account_deletion_hold
       parameters:
       - in: path
@@ -23619,7 +23622,8 @@ components:
       title: AccountDeletionHold
       description: |-
         A deletion hold: while an account has one, the registry refuses to delete it. The holder
-        is the account that placed the hold, and only the holder removes it.
+        is the account that placed the hold. Only the holder removes it, or an administrator with
+        the `override-deletion-hold` permission.
       type: object
       properties:
         accountId:

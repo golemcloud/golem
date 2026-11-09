@@ -238,7 +238,8 @@ declare_structs! {
     }
 
     /// A deletion hold: while an account has one, the registry refuses to delete it. The holder
-    /// is the account that placed the hold, and only the holder removes it.
+    /// is the account that placed the hold. Only the holder removes it, or an administrator with
+    /// the `override-deletion-hold` permission.
     pub struct AccountDeletionHold {
         pub account_id: AccountId,
         pub holder_account_id: AccountId,
