@@ -13,6 +13,7 @@ use quote::ToTokens;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use syn::{Expr, ImplItem, Item, ItemImpl, Lit, Type};
 use test_r::test;
 use uuid::uuid;
@@ -523,7 +524,7 @@ struct SourceSummary {
 
 #[test]
 fn cli_output_schema_source_kinds_are_consistent() {
-    let summary = collect_source_summary();
+    let summary = &*SOURCE_SUMMARY;
     let mut errors = Vec::new();
 
     if let Ok(path) = std::env::var("GOLEM_CLI_OUTPUT_SUMMARY_MD") {
@@ -623,9 +624,7 @@ fn cli_output_schema_matches_source_registry() {
         "oneOf refs must match output types"
     );
 
-    jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    LazyLock::force(&COMMAND_OUTPUT_SCHEMA_VALIDATOR);
 }
 
 #[test]
@@ -911,9 +910,7 @@ fn component_metadata_displays_tools_middlewares_and_files() {
     assert!(!text.contains("middleware-env-secret"));
     assert!(!text.contains("middleware-plugin-secret"));
 
-    let validator = jsonschema::options()
-        .build(&load_command_output_schema())
-        .unwrap();
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     for show_secrets in [false, true] {
         let get = to_structured_output_value_masked(
             ComponentGetView(component.clone()),
@@ -1434,10 +1431,7 @@ fn fixed_hash(input: &str) -> golem_common::model::diff::Hash {
 
 #[test]
 fn cli_output_schema_validates_schema_native_secret_outputs() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     let secret = golem_client::model::AgentSecretDto {
         id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
@@ -1571,9 +1565,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
     })
     .expect("agent.oplog should serialize");
 
-    let validator = jsonschema::options()
-        .build(&load_command_output_schema())
-        .expect("command output schema must be valid");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     assert!(
         validator.is_valid(&output),
         "schema rejected agent.oplog secret metadata: {:?}",
@@ -1599,10 +1591,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
 
 #[test]
 fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let mut runner = proptest::test_runner::TestRunner::deterministic();
 
     let component = arb_component_view()
@@ -1651,10 +1640,7 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
 
 #[test]
 fn cli_output_schema_rejects_invalid_tool_definition() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let output = to_structured_output_value(crate::model::component::ComponentGetView(
         sample_component_view(),
     ))
@@ -1678,10 +1664,7 @@ fn cli_output_schema_rejects_invalid_tool_definition() {
 // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
 #[test]
 fn cli_output_schema_rejects_out_of_range_tool_command_index() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let mut output = to_structured_output_value(crate::model::component::ComponentGetView(
         sample_component_view(),
     ))
@@ -1706,10 +1689,7 @@ fn cli_output_schema_rejects_out_of_range_tool_command_index() {
 
 #[test]
 fn cli_output_schema_rejects_noncanonical_node_http_router_ports() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let mut output = (arb_component_manifest_trace_result())
         .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
         .expect("component.manifest-trace strategy should produce a value")
@@ -1738,9 +1718,7 @@ fn cli_output_schema_rejects_noncanonical_node_http_router_ports() {
 #[test]
 fn cli_output_schema_validates_discriminated_documents() {
     let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     let definitions = schema_definitions(&schema);
     for output_type in schema_output_entries(&schema).keys() {
@@ -1780,9 +1758,7 @@ fn cli_output_schema_validates_discriminated_documents() {
 fn cli_output_schema_exact_registered_schemas_reject_extra_fields() {
     let schema = load_command_output_schema();
     let definitions = schema_definitions(&schema);
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     for entry in STRUCTURED_OUTPUT_TEST_REGISTRY.iter().filter(|entry| {
         !definition_allows_additional_properties(
@@ -1808,10 +1784,7 @@ fn cli_output_schema_exact_registered_schemas_reject_extra_fields() {
 
 #[test]
 fn cli_output_schema_validates_registered_examples() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     for entry in STRUCTURED_OUTPUT_TEST_REGISTRY {
         for example in (entry.examples)() {
@@ -1840,10 +1813,7 @@ fn cli_output_schema_accepts_fractional_memory_billable_excess() {
         json!(0.5)
     );
 
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     assert!(
         validator.is_valid(&example),
         "account limits schema should accept fractional memory billable excess: {:?}",
@@ -1857,10 +1827,7 @@ fn cli_output_schema_accepts_fractional_memory_billable_excess() {
 proptest! {
     #[test]
     fn cli_output_schema_accepts_registered_generated_examples(value in arb_registered_output_document()) {
-        let schema = load_command_output_schema();
-        let validator = jsonschema::options()
-            .build(&schema)
-            .expect("command output schema must be a valid JSON schema");
+        let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
         prop_assert!(
             validator.is_valid(&value),
@@ -1872,6 +1839,12 @@ proptest! {
         );
     }
 }
+
+static COMMAND_OUTPUT_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
+    jsonschema::options()
+        .build(&load_command_output_schema())
+        .expect("command output schema must be a valid JSON schema")
+});
 
 fn load_command_output_schema() -> Value {
     serde_json::from_str(crate::model::cli_output::COMMAND_OUTPUT_SCHEMA_JSON)
@@ -1935,12 +1908,14 @@ fn registry_output_entries() -> BTreeMap<String, String> {
 }
 
 fn source_output_entries() -> BTreeMap<String, String> {
-    collect_source_summary()
+    SOURCE_SUMMARY
         .outputs
-        .into_iter()
-        .map(|output| (output.type_name(), output.rust_type))
+        .iter()
+        .map(|output| (output.type_name(), output.rust_type.clone()))
         .collect()
 }
+
+static SOURCE_SUMMARY: LazyLock<SourceSummary> = LazyLock::new(collect_source_summary);
 
 fn collect_source_summary() -> SourceSummary {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

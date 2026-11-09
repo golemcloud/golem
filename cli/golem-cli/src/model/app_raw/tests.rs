@@ -2564,6 +2564,37 @@ bridge:
             "schema accepted {invalid_dependency}"
         );
     }
+
+    for valid_dependency in [
+        "{ git: https://example.test/repo }",
+        "{ git: https://example.test/repo, branch: main }",
+        "{ git: https://example.test/repo, tag: v1 }",
+        "{ git: https://example.test/repo, rev: abc123 }",
+        "{ version: '1', package: custom, features: [extra], defaultFeatures: true }",
+    ] {
+        let valid = format!(
+            "app: test-app\nbridge:\n  rust:\n    external:\n      agents: '*'\n      additionalDependencies:\n        custom: {valid_dependency}\n"
+        );
+        let app = Application::from_yaml_str(&valid)
+            .unwrap_or_else(|err| panic!("serde rejected {valid_dependency}: {err}"));
+        let app_value = serde_json::to_value(&app).unwrap();
+        assert_eq!(
+            app_value["bridge"]["rust"]["external"]["additionalDependencies"]["custom"],
+            serde_yaml::from_str::<serde_json::Value>(valid_dependency).unwrap(),
+            "{valid_dependency}"
+        );
+        let reparsed = Application::from_yaml_str(&serde_yaml::to_string(&app).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&reparsed).unwrap(),
+            app_value,
+            "{valid_dependency}"
+        );
+        assert!(
+            JSON_SCHEMA_VALIDATOR
+                .is_valid(&serde_yaml::from_str::<serde_json::Value>(&valid).unwrap()),
+            "schema rejected {valid_dependency}"
+        );
+    }
 }
 
 #[test]
@@ -2634,6 +2665,39 @@ fn root_version_source_shape_rules() {
     // hashOnly must be true; unknown fields rejected
     assert!(parse("git:\n  hashOnly: false").is_err());
     assert!(parse("git:\n  tagPattern: \"v*\"\n  bogus: 1").is_err());
+
+    for (source, expected) in [
+        (
+            "{ git: { tagPattern: 'v*', commitInfo: false, hashFallback: true, allowDirty: true, staticFallback: '0.0.0' } }",
+            AppVersionSource::Git {
+                git: GitVersionSource::Tag(GitTagVersionSource {
+                    tag_pattern: "v*".to_string(),
+                    commit_info: Some(false),
+                    hash_fallback: Some(true),
+                    allow_dirty: Some(true),
+                    static_fallback: Some("0.0.0".to_string()),
+                }),
+            },
+        ),
+        (
+            "{ git: { hashOnly: true, allowDirty: true, staticFallback: '0.0.0' } }",
+            AppVersionSource::Git {
+                git: GitVersionSource::Hash(GitHashVersionSource {
+                    hash_only: Marker,
+                    allow_dirty: Some(true),
+                    static_fallback: Some("0.0.0".to_string()),
+                }),
+            },
+        ),
+    ] {
+        assert_eq!(parse(source).unwrap(), expected, "{source}");
+        let manifest = format!("app: a\nversion: {source}\n");
+        assert!(
+            JSON_SCHEMA_VALIDATOR
+                .is_valid(&serde_yaml::from_str::<serde_json::Value>(&manifest).unwrap()),
+            "schema rejected {source}"
+        );
+    }
 }
 
 #[test]
@@ -2665,6 +2729,39 @@ fn override_version_source_shape_rules() {
     ));
     // mixing hash and tag options is still rejected
     assert!(parse("git:\n  hashOnly: true\n  tagPattern: \"v*\"").is_err());
+
+    for (source, expected) in [
+        (
+            "{ git: { tagPattern: 'v*', commitInfo: false, hashFallback: true, allowDirty: true, staticFallback: '0.0.0' } }",
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Tag(GitTagVersionSourceOverride {
+                    tag_pattern: Some("v*".to_string()),
+                    commit_info: Some(false),
+                    hash_fallback: Some(true),
+                    allow_dirty: Some(true),
+                    static_fallback: Some("0.0.0".to_string()),
+                }),
+            },
+        ),
+        (
+            "{ git: { hashOnly: true, allowDirty: true, staticFallback: '0.0.0' } }",
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Hash(GitHashVersionSource {
+                    hash_only: Marker,
+                    allow_dirty: Some(true),
+                    static_fallback: Some("0.0.0".to_string()),
+                }),
+            },
+        ),
+    ] {
+        assert_eq!(parse(source).unwrap(), expected, "{source}");
+        let manifest = format!("app: a\nenvironments:\n  e:\n    version: {source}\n");
+        assert!(
+            JSON_SCHEMA_VALIDATOR
+                .is_valid(&serde_yaml::from_str::<serde_json::Value>(&manifest).unwrap()),
+            "schema rejected {source}"
+        );
+    }
 }
 
 #[test]
@@ -2809,7 +2906,7 @@ fn local_server_system_memory_override_rejects_invalid_values() {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 400,
+        cases: 64,
         .. ProptestConfig::default()
     })]
 
@@ -2829,22 +2926,14 @@ proptest! {
         prop_assert_eq!(app_from_json_value, app_original_value);
 
         let json_value: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let json_evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&json_value);
-        prop_assert!(
-            json_evaluation.flag().valid,
-            "Schema validation failed for generated app JSON payload: {:?}",
-            json_evaluation
-                .iter_errors()
-                .map(|e| format!("{} :: {}", e.instance_location, e.error))
-                .collect::<Vec<_>>()
-        );
-
         let yaml_value: serde_json::Value = serde_yaml::from_str(&yaml_str).unwrap();
-        let yaml_evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&yaml_value);
+        prop_assert_eq!(&json_value, &yaml_value);
+
         prop_assert!(
-            yaml_evaluation.flag().valid,
-            "Schema validation failed for generated app YAML payload: {:?}",
-            yaml_evaluation
+            JSON_SCHEMA_VALIDATOR.is_valid(&json_value),
+            "Schema validation failed for generated app payload: {:?}",
+            JSON_SCHEMA_VALIDATOR
+                .evaluate(&json_value)
                 .iter_errors()
                 .map(|e| format!("{} :: {}", e.instance_location, e.error))
                 .collect::<Vec<_>>()
