@@ -178,8 +178,9 @@ impl ReplayState {
         &self,
         start_index: OplogIndex,
         marker_index: OplogIndex,
+        activity: Option<&TailActivity>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(Some(start_index), marker_index, None)
+        self.await_delivery_boundary(Some(start_index), marker_index, None, activity)
             .await
     }
 
@@ -187,7 +188,7 @@ impl ReplayState {
         &self,
         index: OplogIndex,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(None, index, None).await
+        self.await_delivery_boundary(None, index, None, None).await
     }
 
     pub(in crate::durable_host) async fn await_guest_stream_observation(
@@ -195,26 +196,37 @@ impl ReplayState {
         index: OplogIndex,
         order: Option<GuestReadOrder>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(None, index, order).await
+        self.await_delivery_boundary(None, index, order, None).await
     }
 
+    /// With `activity`, the passive progress wait parks while an `AgentInvocationFinished` lies
+    /// between the cursor and the boundary: only a later invocation can replay the guest
+    /// progress that reaches it, and that invocation cannot start until this one settles.
+    /// Cursor operations, and waits for a boundary inside the current invocation, stay active.
     async fn await_delivery_boundary(
         &self,
         start_index: Option<OplogIndex>,
         marker_index: OplogIndex,
         guest_order: Option<GuestReadOrder>,
+        activity: Option<&TailActivity>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
+        // `None` until looked up; `Some(None)` when no invocation finish precedes the boundary.
+        let mut invocation_finish: Option<Option<OplogIndex>> = None;
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
 
+            let look_up_finish = activity.is_some()
+                && invocation_finish.is_none_or(|finish| {
+                    finish.is_some_and(|finish| finish <= self.last_replayed_index())
+                });
             let guest_order = guest_order.clone();
-            let barrier = self
+            let (barrier, looked_up_finish) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| {
-                            Ok(tx
+                            let barrier = tx
                                 .consume_delivery_boundary(
                                     start_index,
                                     marker_index,
@@ -233,13 +245,22 @@ impl ReplayState {
                                         marker_index,
                                         gate,
                                     ),
-                                }))
+                                });
+                            let finish = if barrier.is_none() && look_up_finish {
+                                Some(tx.invocation_finish_before(marker_index).await?)
+                            } else {
+                                None
+                            };
+                            Ok((barrier, finish))
                         })
                         .await
                 })
                 .await?;
             if let Some(barrier) = barrier {
                 return Ok(barrier);
+            }
+            if let Some(finish) = looked_up_finish {
+                invocation_finish = Some(finish);
             }
 
             if self.is_live() {
@@ -257,8 +278,17 @@ impl ReplayState {
                 ));
             }
 
-            self.wait_while_blocked(BlockedOn::CursorProgress, progress)
-                .await?;
+            let wait = self.wait_while_blocked(BlockedOn::CursorProgress, progress);
+            match activity {
+                Some(activity)
+                    if invocation_finish
+                        .flatten()
+                        .is_some_and(|finish| self.last_replayed_index() < finish) =>
+                {
+                    activity.park(wait).await?
+                }
+                _ => wait.await?,
+            }
         }
     }
 

@@ -162,6 +162,12 @@ pub trait HttpClient4 {
     /// Cancels an upload read, then drops its reader after the upload completes.
     async fn cancel_upload_completion(&mut self) -> String;
 
+    /// Cancels an upload read, completes the upload, and retains the reader for a later invocation.
+    async fn retain_completed_upload_reader(&mut self) -> String;
+
+    /// Consumes the upload reader retained by the preceding invocation.
+    async fn consume_retained_upload_reader(&mut self) -> String;
+
     /// Sends a raw wasip3 GET over `https` to a plain-HTTP server, which fails
     /// the TLS handshake with a permanent (non-retried) `ErrorCode`. The error
     /// returned by `client::send` is stored in agent state and returned.
@@ -555,6 +561,56 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn cancel_upload_completion(&mut self) -> String {
         let result = do_cancel_upload_completion().await;
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn retain_completed_upload_reader(&mut self) -> String {
+        use golem_rust::wasip3::http::{client, types};
+        use golem_rust::wasip3::{clocks::monotonic_clock, wit_future};
+        use std::future::{Future, IntoFuture};
+        use std::task::Poll;
+
+        let port = std::env::var("PORT").unwrap();
+        let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+        drop(trailers_tx);
+        let (request, transmit) =
+            types::Request::new(types::Fields::new(), None, trailers_rx, None);
+        request.set_method(&types::Method::Post).unwrap();
+        request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+        request
+            .set_authority(Some(&format!("localhost:{port}")))
+            .unwrap();
+        request.set_path_with_query(Some("/upload")).unwrap();
+        let mut read = Box::pin(transmit.into_future());
+        futures_util::future::poll_fn(|cx| match read.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("upload completed before send: {result:?}"),
+        })
+        .await;
+        let transmit = read
+            .as_mut()
+            .cancel()
+            .expect_err("the unsent upload read must cancel");
+        drop(read);
+        let response = client::send(request).await.unwrap();
+        let status = response.get_status_code();
+        drop(response);
+        self.retained_completion = Some(transmit);
+        monotonic_clock::wait_for(0).await;
+        let result = format!("retained-upload={status}");
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn consume_retained_upload_reader(&mut self) -> String {
+        let transmit = self
+            .retained_completion
+            .take()
+            .expect("no retained upload reader");
+        let result = transmit.await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(0).await;
+        let result = format!("consumed-upload={result:?}");
         self.last_full_response = Some(result.clone());
         result
     }

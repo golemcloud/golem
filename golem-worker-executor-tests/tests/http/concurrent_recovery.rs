@@ -882,6 +882,129 @@ async fn upload_future_cancellation_reconstructs_without_delivery(
 }
 
 #[test]
+#[test_r::timeout("3m")]
+async fn retained_upload_reader_reconstructs_after_delivery_in_later_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let received = requests.clone();
+    let http_server = spawn(async move {
+        let router = Router::new().route(
+            "/upload",
+            post(move |body: Bytes| {
+                received.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    assert!(body.is_empty());
+                    "uploaded"
+                }
+            }),
+        );
+        axum::serve(listener, router).await.unwrap();
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+
+    let retained = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "retain_completed_upload_reader",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(retained, "retained-upload=200");
+    let consumed = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "consume_retained_upload_reader",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(consumed, "consumed-upload=Ok(())");
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let uploads = partition_starts(&oplog, "http::types::request::body-transmission");
+    assert_eq!(uploads.counts(), (0, 1, 0));
+    let upload = uploads.ended[0];
+    let position = |matches: &dyn Fn(&PublicOplogEntry) -> bool| {
+        oplog
+            .iter()
+            .find(|entry| matches(&entry.entry))
+            .map(|entry| entry.oplog_index)
+    };
+    let end =
+        position(&|entry| matches!(entry, PublicOplogEntry::End(end) if end.start_index == upload))
+            .expect("the upload completes durably");
+    let delivered = position(&|entry| {
+        matches!(entry, PublicOplogEntry::CompletionDelivered(delivered) if delivered.start_index == upload)
+    })
+    .expect("the later invocation observes the upload result");
+    let retaining_finish = oplog
+        .iter()
+        .find(|entry| {
+            entry.oplog_index > upload
+                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+        })
+        .expect("the retaining invocation finishes")
+        .oplog_index;
+    assert!(
+        end < retaining_finish && retaining_finish < delivered,
+        "the upload End belongs to the retaining invocation and its delivery to the consuming one"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    let _ = http_server.await;
+    let executor = start(deps, &context).await?;
+    let stored = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "stored_full_response",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(stored, "consumed-upload=Ok(())");
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "reconstruction must not resend the completed upload"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn post_writer_get_crash_before_headers_drains_before_send_resolution(
     last_unique_id: &LastUniqueId,
