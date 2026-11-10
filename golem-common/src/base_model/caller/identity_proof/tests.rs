@@ -14,12 +14,13 @@
 
 use super::{
     AWS_SESSION_TAGS_CLAIM, AWS_STS_AUDIENCE, AgentPrincipal, AwsSessionTagError, AwsSessionTags,
-    GolemProofClaim, GolemSubject, IDENTITY_PROOF_LIFETIME_SECONDS, IdentityProofClaims,
-    IdentityProofHeader, Kind, ProofReceiver, ProofSubject, ToolPrincipal,
+    GolemProofClaim, IDENTITY_PROOF_LIFETIME_SECONDS, IdentityProofClaims, IdentityProofHeader,
+    Kind, ProofReceiver, ProofSubject, ToolPrincipal,
 };
 use crate::base_model::AgentFingerprint;
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
+use crate::base_model::caller::GolemSubject;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
 use serde_json::Value;
@@ -322,6 +323,39 @@ fn the_characters_that_aws_allows_in_a_tag_value_are_accepted() {
         assert_eq!(
             tags.principal_tags.agent_type.unwrap(),
             [allowed.to_string()]
+        );
+    }
+}
+
+#[test]
+fn separators_aws_allows_are_accepted_and_combining_marks_it_refuses_are_refused() {
+    // AWS STS documents tag values as [\p{L}\p{Z}\p{N}_.:/=+\-@]*: general categories L, Z and N,
+    // not the Unicode "Alphabetic" property that `char::is_alphanumeric` tests.
+    let no_break_space = char::from_u32(0x00a0).unwrap();
+    let line_separator = char::from_u32(0x2028).unwrap();
+    let combining_ypogegrammeni = char::from_u32(0x0345).unwrap();
+    let hebrew_point_sheva = char::from_u32(0x05b0).unwrap();
+
+    for separator in [no_break_space, line_separator] {
+        let value = format!("Report{separator}Q3");
+        let agent = make_agent(&value);
+        let claims = claims_for(ProofSubject::Agent(&agent), &ProofReceiver::aws_sts())
+            .unwrap_or_else(|error| panic!("{separator:?} was refused: {error}"));
+        assert_eq!(
+            claims.aws_session_tags.unwrap().principal_tags.agent_type,
+            Some([value])
+        );
+    }
+
+    for mark in [combining_ypogegrammeni, hebrew_point_sheva] {
+        let agent = make_agent(&format!("Report{mark}Q3"));
+        assert_eq!(
+            claims_for(ProofSubject::Agent(&agent), &ProofReceiver::aws_sts()).unwrap_err(),
+            AwsSessionTagError::CharacterRefused {
+                tag: "golem:agent-type",
+                character: mark
+            },
+            "{mark:?}"
         );
     }
 }

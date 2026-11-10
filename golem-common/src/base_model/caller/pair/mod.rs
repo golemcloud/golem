@@ -239,3 +239,6 @@ pub enum TextFormError {
     #[error("unexpected text after the pair at byte {position}")]
     TrailingText { position: usize },
 }
+
+#[cfg(test)]
+mod tests;

@@ -66,8 +66,10 @@ value" and "You must pass a single value for each session tag". The real-AWS tes
 plan decides between the list and the plain string; the vectors follow the example until then.
 
 The builder refuses to make a proof for AWS role assumption when a tag value breaks the rules
-that the AWS pages state: at most 256 characters; only letters, numbers, spaces and
-`_ . : / = + - @`; no `aws:` prefix. A proof for another receiver has no such limit. No vector
+that the AWS pages state: at most 256 characters; only the characters of the pattern
+`[\p{L}\p{Z}\p{N}_.:/=+\-@]*` that the AWS STS API reference gives for `Tag` values
+(https://docs.aws.amazon.com/STS/latest/APIReference/API_Tag.html; Unicode letters, separators and
+numbers by general category); no `aws:` prefix. A proof for another receiver has no such limit. No vector
 holds a refused value, so the vectors do not change; the tests cover the refusals.
 
 The vectors fix the header and the claim set, not a signature.
@@ -118,9 +120,8 @@ Each case gives:
 
 ## Consumers
 
-- Rust (the source of truth): `text_form_tests.rs`, `principal_tests.rs`,
-  `identity_proof_tests.rs` and `conversion_from_1_6_tests.rs` in
-  `golem-common/src/base_model/caller/`.
+- Rust (the source of truth): `pair/tests.rs`, `subject/tests.rs`, `identity_proof/tests.rs` and
+  `conversion_from_1_6_tests.rs` in `golem-common/src/base_model/caller/`.
 
 When the format changes, change these files in the same commit; the Rust tests fail until both
 agree.

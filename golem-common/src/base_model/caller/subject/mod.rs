@@ -131,3 +131,6 @@ fn canonical_uuid(text: &str, subject: &str) -> Result<Uuid, String> {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests;
