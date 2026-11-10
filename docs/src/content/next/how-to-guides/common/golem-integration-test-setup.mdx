@@ -156,11 +156,11 @@ For random HTTP/MCP ports, generate an included manifest fragment **after discov
 For example, in an isolated test copy of the application, include `golem-test-ports.json` from the root `golem.yaml` and generate that fragment with:
 
 ```shell
-jq -e '{manifestVersion: "1.6.0", localServer: {customRequestPort: .customRequestPort, mcpPort: .mcpPort}}' \
+jq -e '{manifestVersion: "2.0.0", localServer: {customRequestPort: .customRequestPort, mcpPort: .mcpPort}}' \
   tests/fixtures/ports.json > golem-test-ports.json
 ```
 
-JSON is valid YAML. Every included fragment requires `manifestVersion: "1.6.0"`. Create the included file with `{"manifestVersion":"1.6.0"}` before starting the server so manifest loading succeeds, then replace it with the discovered ports before deploying. Do not define `localServer` elsewhere in this test manifest. Parallel runs need separate application copies or manifests as well as unique data paths, so they do not overwrite each other's fragment. Remove the generated fragment during teardown.
+JSON is valid YAML. Every included fragment requires `manifestVersion: "2.0.0"`. Create the included file with `{"manifestVersion":"2.0.0"}` before starting the server so manifest loading succeeds, then replace it with the discovered ports before deploying. Do not define `localServer` elsewhere in this test manifest. Parallel runs need separate application copies or manifests as well as unique data paths, so they do not overwrite each other's fragment. Remove the generated fragment during teardown.
 
 Alternatively, for a single non-parallel test run, use stable nonzero manifest ports and start the server with those same ports (omit the three port-0 flags in step 3):
 
@@ -191,7 +191,7 @@ includes:
 Then define `localServer` in `golem-local-server.yaml`:
 
 ```yaml
-manifestVersion: "1.6.0"
+manifestVersion: "2.0.0"
 
 localServer:
   routerPort: 9881
@@ -262,7 +262,7 @@ Pseudocode for a typical test harness:
 ```text
 allocate a unique run directory and an isolated application copy
 set data_dir and ports_file inside that run directory
-create the included fragment with {"manifestVersion":"1.6.0"}
+create the included fragment with {"manifestVersion":"2.0.0"}
 child = none
 try:
     spawn child: golem server run --data-dir <data_dir> \
@@ -276,7 +276,7 @@ try:
         wait briefly
     read ports; validate all three are nonzero
     set GOLEM_BUILTIN_LOCAL_URL to http://127.0.0.1:<routerPort> for every CLI subprocess
-    generate the included fragment with manifestVersion "1.6.0" and discovered HTTP/MCP ports
+    generate the included fragment with manifestVersion "2.0.0" and discovered HTTP/MCP ports
     run golem -E test deploy from the isolated application copy
     run tests against discovered ports and matching subdomain Host headers
 finally:

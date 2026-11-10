@@ -1294,7 +1294,8 @@ that owns open nodes. Cleanup drains those nodes; retaining one across the drain
 
 Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
 lifecycle guard. Fork reads persisted source history without constructing an absent source;
-the complete hidden stage is published atomically into an absent target under its lifecycle guard.
+only `ComponentAgent` sources are accepted. Oplog processors and external-tool owners are rejected before staging.
+The complete hidden stage is published atomically into an absent target under its lifecycle guard.
 Source and target guards are never held together, and publication releases the target guard before
 resuming the child. Before the publication, a `ForkCopy` ticket copies the filesystem snapshots of
 the source into the repository of the stage (`AgentSnapshots::agent(target, stage_id)`), and
@@ -1337,8 +1338,10 @@ generation's error.
 A failure while creating or preparing the instance is durable health state, not only a resident-worker
 error. The invocation loop commits `Error { kind: Recovery, .. }` before unloading and preserves the
 underlying classification. Infrastructure failures do not advance the agent's semantic retry policy:
-they remain `Retrying` without a limit and retry on the next demand (invoke, resume, scheduler
-activation, or shard reassignment), rather than keeping an executor resident for a scheduled retry.
+they remain `Retrying` without a semantic attempt limit. Known transient startup failures request
+`RecoveryRequired`, so the durable loop backs off and reconstructs automatically while its callers
+wait. Infrastructure errors that stop the loop instead retry on the next demand (invoke, resume,
+scheduler activation, or shard reassignment).
 Invalid components, exports, snapshot baselines, replay divergence, and other permanent failures are terminal.
 An authoritative manual-update or promoted snapshot-assisted baseline that cannot be loaded is
 terminal, because recovery has no compatible replay fallback. A payload download failure is
@@ -1760,7 +1763,13 @@ Tests: `tests/http/concurrent_recovery.rs`.
 The outgoing request's `body-transmission` result is also a guest input. Its Store task uses
 deferred completion and the transmission `FutureReader` retains the delivery token until its
 terminal observer confirms consumption or discard. Live and replay both use the fresh-block
-delivery gate; replay waits for the recorded marker before resolving the future. Completing the
+delivery gate; replay waits for the recorded marker before resolving the future. A reader retained
+across invocations records its marker in the invocation that consumes it. While an
+`AgentInvocationFinished` lies between the cursor and that marker, the marker wait parks its
+passive progress wait, so the invocation that recorded the `End` can settle and the consuming
+invocation can replay. Its cursor operations stay active. The wait finds that finish in
+`invocation_finishes`, which the recovery metadata scan builds and keeps in step with the replay
+target, so the wait adds no oplog reads. Completing the
 host channel without this boundary can wake the POST continuation early and exchange the import
 ordinals of concurrent response-body consumers. Response trailers share the same
 `HttpFutureDelivery` observer state. Transmission readers returned by request and response
@@ -2285,14 +2294,24 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
 - `UPDATE_TARGET_NOT_FOUND`, `UPDATE_TARGET_REFUSED`: the component service has no target
   revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
   writes no failed update: the recovery path retries the start.
-- `UPDATE_BLOB_STORAGE_REFUSED`: at the update point, the blob storage refused the executor a read
-  of an initial-file source of the target (`FilesystemError::InitialFileRefused`, from
-  `BlobFailure::Refused` of a `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other
-  than a code that asks for a retry, or `PermissionDenied` of the filesystem backend). The install
-  loads every source before its first change, so the agent runs on its source revision. The text
-  names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`) writes no failed
-  update and retries as a recovery; outside the update point a refused source is a
-  reconstruction error. The guest blob store maps the same refusal to a permanent
+- `UPDATE_BLOB_STORAGE_REFUSED`: the blob storage refused the executor a read of an initial-file
+  source of the target (`FilesystemError::InitialFileRefused`, from `BlobFailure::Refused` of a
+  `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other than a code that asks for a
+  retry, or `PermissionDenied` of the filesystem backend). Two places load the files of a target:
+  the update point, and the start of a pending snapshot-based manual update, which replays at the
+  target revision (the row `StartProblem::InitialFileRefused`). The start sends a failed load of
+  its initial files through the outcome table (`end_failed_start`), as it sends a failed restore.
+  The install loads every source before its first change, so the agent runs on its source
+  revision. The text names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`)
+  writes no failed update and retries as a recovery. An invalid declaration or a missing or
+  corrupt source of the target (`InitialFileFailed`) fails the update without a code. So does an
+  install that would seed a file under another file that it seeds, such as `/a` and `/a/b`: the
+  file at the upper path leaves no directory for the lower one, so `initial_files::install`
+  refuses that plan before any change. Every other
+  start loads the files of the revision that the agent runs, also the source restart after a
+  failed update: there a refused, invalid, missing or corrupt source fails the agent and its
+  waiting invocations with the cause. `InitialFileFailed` does not share the retryable sandbox-I/O
+  classification. The guest blob store maps the same refusal to a permanent
   `BlobStoreError::PermissionDenied`.
 
 Before loading a pending target, Worker validates its cached metadata with
@@ -2324,6 +2343,14 @@ entry; an archive read returns `UnreadableOplog` instead.
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots, because the files of the
 agent differ from its initial files.
+
+Transient startup failures use `RecoveryRequired`: the durable invocation loop retains its
+startup attempt and pending callers, releases its permit, backs off and reconstructs without a
+manual resume. This includes transient baseline restores, initial-file downloads, filesystem
+reconstruction and component-service unavailability outside an update. A caller can still reach
+its own deadline; the first failed start does not complete it. Permanent component errors and
+deterministic instantiation errors are not converted into recovery retries. Cleanup failures,
+quota suspension, interrupts, shard retirement and ephemeral fail-stop keep their own paths.
 
 Transient causes write no failed update, and the start retries: for every pending column,
 `RestoreClass::Transient`, a reconstruction error, a full quota, an interrupted instantiation and
@@ -3211,6 +3238,23 @@ exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 `durable_stream/mod.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
 stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.
+
+Oplog processors have the explicit persisted `OwnerKind::OplogProcessor` and resolved
+`ResolvedOwnerContext::OplogProcessor`. Their Create records durable mode and the owner component,
+but no agent type, canonical key or phantom identity. Internal local delivery and system-only
+remote delivery use dedicated processor admission; the reserved processor namespace is a
+consistency check, not authority. The selected component revision must export the processor
+interface, whether or not it also declares agents. Ordinary agent creation rejects processor
+names and generic non-agent components. No agent constructor is queued for a processor.
+
+Processor batches use the ordinary committed invocation queue, durable results, RunningWorkers
+index and outer-loop reconstruction. Scheduler activation reconstructs only an existing
+incarnation; it cannot recreate a deleted processor through agent admission. Processor owners
+accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
+They retain component-level config, environment defaults, files and permissions, and have no
+attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
+otherwise they use `default_snapshotting`. The delivery protocol retains its recorded target,
+range and key across retries, independently of a rebuilt per-executor processor cache.
 
 ## Permission-card handles
 

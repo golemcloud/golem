@@ -327,6 +327,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: &IdempotencyKey,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<(), WorkerExecutorError> {
+        if freshness_disposition == InvocationFreshnessDisposition::MayExist
+            && let Some(metadata) = deps.worker_service().get(owned_agent_id).await?
+        {
+            let metadata = metadata.initial_worker_metadata;
+            if metadata.agent_type_name.is_none() {
+                return Ok(());
+            }
+            if metadata.agent_mode == AgentMode::Ephemeral {
+                crate::metrics::ephemeral::record_invocation_attempt(freshness_disposition);
+            }
+            return validate_resolved_invocation_identity(
+                metadata.agent_mode,
+                metadata.original_phantom_id,
+                idempotency_key,
+                freshness_disposition,
+            );
+        }
         let component = deps
             .component_service()
             .get_metadata(owned_agent_id.component_id(), None)
@@ -357,15 +374,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        let agent_mode = if freshness_disposition == InvocationFreshnessDisposition::MayExist {
-            deps.worker_service()
-                .get(owned_agent_id)
-                .await?
-                .map(|metadata| metadata.initial_worker_metadata.agent_mode)
-                .unwrap_or(agent_type.mode)
-        } else {
-            agent_type.mode
-        };
+        let agent_mode = agent_type.mode;
 
         if agent_mode == AgentMode::Ephemeral {
             crate::metrics::ephemeral::record_invocation_attempt(freshness_disposition);
@@ -541,7 +550,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let (started, result) = self.initialize_with(build).await;
             match result {
                 Err(WorkerExecutorError::AgentNotFound { .. }) if !started => continue,
-                result => return result,
+                result => {
+                    result?;
+                    if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
+                        return Err(WorkerExecutorError::invalid_request(
+                            "execution owner kind does not match the requested creation mode",
+                        ));
+                    }
+                    return Ok(());
+                }
             }
         }
     }
@@ -1061,11 +1078,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         metadata: GetWorkerMetadataResult,
         shard_epoch: Option<ShardEpoch>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
-        let component_id = owned_agent_id.component_id();
         let GetWorkerMetadataResult {
             initial_worker_metadata,
             last_known_status,
         } = metadata;
+        if initial_worker_metadata.owner_kind == OwnerKind::OplogProcessor
+            && (initial_worker_metadata.agent_mode != AgentMode::Durable
+                || initial_worker_metadata.agent_type_name.is_some()
+                || initial_worker_metadata.canonical_key.is_some()
+                || initial_worker_metadata.original_phantom_id.is_some())
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "oplog processor metadata must be durable and have no agent type, key or phantom identity",
+            ));
+        }
+        let component_id = initial_worker_metadata.component_id;
+        // This consistency check applies while IDs still encode the component and type.
+        debug_assert_eq!(component_id, owned_agent_id.component_id());
+        if let Some(agent_type_name) = &initial_worker_metadata.agent_type_name {
+            debug_assert_eq!(
+                ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).as_ref(),
+                Ok(agent_type_name),
+            );
+        }
         initial_worker_metadata
             .owner_kind
             .validate_instance_name(&owned_agent_id.agent_id.agent_id)
@@ -1092,12 +1127,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
         let current_status = Arc::new(arc_swap::ArcSwap::from_pointee(current_status));
-        let owner_context = ResolvedOwnerContext::from_authoritative_kind(
-            initial_worker_metadata.owner_kind,
-            &owned_agent_id.agent_id.agent_id,
-            &initial_component.metadata,
-        )
-        .map_err(WorkerExecutorError::invalid_request)?;
+        let owner_context = match initial_worker_metadata.owner_kind {
+            OwnerKind::ComponentAgent => {
+                let agent = initial_worker_metadata
+                    .parse_agent_id(&initial_component.metadata)
+                    .map_err(WorkerExecutorError::invalid_request)?;
+                ResolvedOwnerContext::Agent(Box::new(agent))
+            }
+            kind => ResolvedOwnerContext::from_authoritative_kind(
+                kind,
+                &owned_agent_id.agent_id.agent_id,
+                &initial_component.metadata,
+            )
+            .map_err(WorkerExecutorError::invalid_request)?,
+        };
         if matches!(owner_context, ResolvedOwnerContext::ComponentBaseline)
             && initial_worker_metadata.agent_mode == AgentMode::Durable
         {
@@ -1105,16 +1148,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "An external tool owner cannot use durable mode",
             ));
         }
-        let agent_id = owner_context.agent().cloned();
         let ResolvedAgentProperties {
             snapshot_policy, ..
-        } = resolve_agent_properties(this, agent_id.as_ref(), &initial_component.metadata);
-        let snapshot_policy =
-            if initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
-                SnapshotPolicy::Disabled
-            } else {
-                snapshot_policy
-            };
+        } = resolve_agent_properties(this, &owner_context, &initial_component.metadata);
         let execution_status = Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
             agent_mode,
             timestamp: Timestamp::now_utc(),
@@ -1175,11 +1211,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let shard_epoch = owned_shard_epoch(this, &owned_agent_id.agent_id)?;
         let component_id = owned_agent_id.component_id();
 
-        if creation_mode == WorkerCreationMode::ComponentAgent {
-            OwnerKind::ComponentAgent
-                .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-                .map_err(WorkerExecutorError::invalid_request)?;
-        }
+        let owner_kind = creation_mode.owner_kind();
+        owner_kind
+            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
 
         // KnownFresh has already been validated against the ephemeral agent type, phantom ID, and
         // idempotency key at invocation ingress. All other paths retain the checked lookup.
@@ -1191,7 +1226,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         match existing {
-            Some(existing) => Ok(existing),
+            Some(existing) => {
+                if existing.initial_worker_metadata.owner_kind != owner_kind {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "execution owner kind does not match the requested creation mode",
+                    ));
+                }
+                Ok(existing)
+            }
             None => {
                 // Create and initialize a new worker.
                 let component = this
@@ -1199,19 +1241,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .get_metadata(component_id, component_revision)
                     .await?;
 
-                let virtual_owner = creation_mode == WorkerCreationMode::EphemeralExternalTool;
-                let owner_kind = if virtual_owner {
-                    OwnerKind::EphemeralExternalTool
-                } else {
-                    OwnerKind::ComponentAgent
-                };
                 let owner_context = ResolvedOwnerContext::from_authoritative_kind(
                     owner_kind,
                     &owned_agent_id.agent_id.agent_id,
                     &component.metadata,
                 )
                 .map_err(WorkerExecutorError::invalid_request)?;
-                if virtual_owner && component.environment_id != owned_agent_id.environment_id {
+                if owner_kind != OwnerKind::ComponentAgent
+                    && component.environment_id != owned_agent_id.environment_id
+                {
                     return Err(WorkerExecutorError::invalid_request(
                         "owner environment does not match the component environment",
                     ));
@@ -1221,12 +1259,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let ResolvedAgentProperties {
                     agent_mode,
                     snapshot_policy,
-                } = resolve_agent_properties(this, agent_id.as_ref(), &component.metadata);
-                let (agent_mode, snapshot_policy) = if virtual_owner {
-                    (AgentMode::Ephemeral, SnapshotPolicy::Disabled)
-                } else {
-                    (agent_mode, snapshot_policy)
-                };
+                } = resolve_agent_properties(this, &owner_context, &component.metadata);
 
                 let execution_status = ExecutionStatus::Suspended {
                     agent_mode,
@@ -1288,6 +1321,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
+                    component_id,
+                    agent_type_name: agent_id.as_ref().map(|id| id.agent_type.clone()),
+                    canonical_key: agent_id
+                        .as_ref()
+                        .filter(|id| agent_mode == AgentMode::Durable && id.phantom_id.is_none())
+                        .map(ToString::to_string),
                     owner_kind,
                     env: worker_env,
                     config: initial_agent_config,
@@ -1319,6 +1358,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let initial_oplog_entry =
                     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
                         agent_id: initial_worker_metadata.agent_id.clone(),
+                        component_id: initial_worker_metadata.component_id,
+                        agent_type_name: initial_worker_metadata.agent_type_name.clone(),
+                        canonical_key: initial_worker_metadata.canonical_key.clone(),
                         owner_kind: initial_worker_metadata.owner_kind,
                         agent_mode: initial_worker_metadata.agent_mode,
                         component_revision: initial_worker_metadata
@@ -1398,32 +1440,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
 pub(in crate::worker) fn resolve_agent_properties<T: HasConfig>(
     deps: &T,
-    agent_id: Option<&ParsedAgentId>,
+    owner_context: &ResolvedOwnerContext,
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> ResolvedAgentProperties {
-    let resolved_agent_type =
-        agent_id.and_then(|id| metadata.find_agent_type_by_name_ref(&id.agent_type));
-
-    let agent_mode = resolved_agent_type.map_or(AgentMode::Durable, |at| at.mode);
-
-    let configured_policy = if let Some(agent_type) = resolved_agent_type {
-        // Agent with explicit metadata — use agent-level snapshotting config
-        resolve_snapshot_policy(
-            &deps.config().oplog.default_snapshotting,
-            Some(&agent_type.snapshotting),
-        )
-    } else if is_snapshot_capable_oplog_processor(metadata) {
-        // Oplog processor that exports save-snapshot/load-snapshot — use the
-        // oplog-processor-specific global config
-        deps.config().oplog.oplog_processor_snapshotting.clone()
-    } else {
-        // Non-agent, non-snapshot-capable-oplog-processor — use default
-        resolve_snapshot_policy(&deps.config().oplog.default_snapshotting, None)
-    };
-
-    ResolvedAgentProperties {
-        agent_mode,
-        snapshot_policy: snapshot_policy_of_mode(agent_mode, configured_policy),
+    match owner_context {
+        ResolvedOwnerContext::Agent(agent_id) => {
+            let agent_type = metadata
+                .find_agent_type_by_name_ref(&agent_id.agent_type)
+                .expect("Resolved agent type must exist in component metadata");
+            let configured_policy = resolve_snapshot_policy(
+                &deps.config().oplog.default_snapshotting,
+                Some(&agent_type.snapshotting),
+            );
+            ResolvedAgentProperties {
+                agent_mode: agent_type.mode,
+                snapshot_policy: snapshot_policy_of_mode(agent_type.mode, configured_policy),
+            }
+        }
+        ResolvedOwnerContext::ComponentBaseline => ResolvedAgentProperties {
+            agent_mode: AgentMode::Ephemeral,
+            snapshot_policy: SnapshotPolicy::Disabled,
+        },
+        ResolvedOwnerContext::OplogProcessor => ResolvedAgentProperties {
+            agent_mode: AgentMode::Durable,
+            snapshot_policy: if metadata.has_save_snapshot() && metadata.has_load_snapshot() {
+                deps.config().oplog.oplog_processor_snapshotting.clone()
+            } else {
+                deps.config().oplog.default_snapshotting.clone()
+            },
+        },
     }
 }
 
@@ -1467,15 +1512,6 @@ pub(in crate::worker) fn resolve_snapshot_policy(
             }
         }
     }
-}
-
-/// Returns true if the component is an oplog processor that also exports
-/// save-snapshot and load-snapshot functions, making it eligible for
-/// automatic snapshot-based recovery.
-pub(in crate::worker) fn is_snapshot_capable_oplog_processor(
-    metadata: &golem_common::model::component_metadata::ComponentMetadata,
-) -> bool {
-    metadata.has_oplog_processor() && metadata.has_save_snapshot() && metadata.has_load_snapshot()
 }
 
 pub fn merge_agent_env_with_default_env(

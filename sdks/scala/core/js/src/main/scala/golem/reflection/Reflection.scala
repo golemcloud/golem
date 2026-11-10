@@ -13,16 +13,9 @@ package golem.reflection
 import golem.host.PermissionsApi.ScopeCard
 import golem.host.SchemaWireInterop
 import golem.host.js.{JsComponentId, JsUuid}
-import golem.host.js.schema.{
-  JsInputSchema,
-  JsNamedField,
-  JsOutputSchema,
-  JsSchemaValueTree,
-  JsTypedSchemaValue,
-  JsUuid => JsSchemaUuid
-}
+import golem.host.js.schema.{JsInputSchema, JsNamedField, JsOutputSchema, JsSchemaValueTree, JsTypedSchemaValue}
 import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
-import golem.runtime.rpc.{CancellationToken, InvocationReceipt}
+import golem.runtime.rpc.{AgentIdentity, CancellationToken, InvocationReceipt}
 import golem.runtime.tool.host.ToolHostApi
 import golem.schema._
 import golem.schema.SchemaTypeBody.RecordType
@@ -92,16 +85,16 @@ object ParsedAgentId {
     phantomId: Option[UUID] = None
   ): Either[GolemReflectError, ParsedAgentId] =
     encode(constructorValue).flatMap(payload =>
-      AgentHostApi
-        .makeAgentId(typeName, payload, phantomId)
+      AgentIdentity
+        .make(typeName, payload, phantomId)
         .left
         .map(GolemReflectError.Identity.apply)
         .map(ParsedAgentId(_))
     )
 
   def parse(agentId: ParsedAgentId): Either[GolemReflectError, ParsedAgentIdParts] =
-    AgentHostApi
-      .parseAgentId(agentId.value)
+    AgentIdentity
+      .parse(agentId.value)
       .left
       .map(GolemReflectError.Identity.apply)
       .flatMap { parts =>
@@ -625,9 +618,8 @@ private[reflection] object Transport {
   ): Either[GolemReflectError, Transport] =
     encode(constructor).flatMap { payload =>
       try {
-        val phantomArg = phantom.fold[js.UndefOr[JsSchemaUuid]](js.undefined)(JsSchemaUuid.fromUuid)
-        WasmRpcApi
-          .createClient(typeName, payload, phantomArg, golem.config.ConfigOverrideEncoder.encode(config))
+        AgentIdentity
+          .createConnection(typeName, payload, phantom, config)
           .left
           .map(error => GolemReflectError.Remote(decodeRpcError(error)))
           .map(new Transport(_))

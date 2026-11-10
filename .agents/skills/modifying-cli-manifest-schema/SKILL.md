@@ -55,9 +55,9 @@ new publication identifier; do not invent a version bump merely to retain the ol
 4. Update `cli/golem-cli/src/versions.rs`:
    - change `sdk::MANIFEST` only when the YAML document version changes;
    - change `manifest_schema_version!()` only when using a new schema publication identifier.
-5. If `sdk::MANIFEST` changes, replace old-version policy and upgrade behavior in
-   `cli/golem-cli/src/app/manifest_version.rs` and `manifest_upgrade.rs` with the new current
-   contract. Do not keep previous versions accepted or generate compatibility upgrades.
+5. If `sdk::MANIFEST` changes, replace the old-version policy in
+   `cli/golem-cli/src/app/manifest_version.rs` with the new current contract. Do not keep previous
+   versions accepted or generate compatibility upgrades.
 6. Check every schema-version consumer, especially:
    - `cli/golem-cli/src/lib.rs`
    - `cli/golem-cli/src/app/template/snippet.rs`
@@ -84,7 +84,6 @@ new publication identifier; do not invent a version bump merely to retain the ol
 - `cli/golem-cli/src/lib.rs`
 - `cli/golem-cli/src/app/template/snippet.rs`
 - `cli/golem-cli/src/app/manifest_version.rs`
-- `cli/golem-cli/src/app/manifest_upgrade.rs`
 - `cli/golem-cli/src/app/build/check/mod.rs`
 - `cli/golem-cli/src/model/app_raw.rs`
 - `cli/schema.golem.cloud/app/golem/*/golem.schema.json`

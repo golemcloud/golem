@@ -73,6 +73,9 @@ macro_rules! create_oplog_entry {
      $environment_id:expr, $created_by:expr, $parent:expr, $component_size:expr,
      $memory_size:expr, $plugins:expr, $config:expr, $phantom_id:expr, $instance_id:expr $(,)?) => {
         OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            component_id: $agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             agent_id: $agent_id,
             owner_kind: OwnerKind::ComponentAgent,
             agent_mode: $agent_mode,
@@ -270,6 +273,9 @@ pub(super) fn make_agent_metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         agent_id,
         owner_kind: OwnerKind::ComponentAgent,
         env: vec![],
@@ -6623,14 +6629,18 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
     let timestamp = Timestamp::now_utc();
+    let create_component_id = ComponentId(Uuid::new_v4());
     let create_entry = OplogEntry::Create {
         timestamp,
         parameters: Box::new(golem_common::model::oplog::CreateParameters {
             owner_kind: OwnerKind::ComponentAgent,
             agent_id: AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
+                component_id: create_component_id,
                 agent_id: "test".to_string(),
             },
+            component_id: create_component_id,
+            agent_type_name: None,
+            canonical_key: None,
             agent_mode: AgentMode::Durable,
             component_revision: ComponentRevision::new(1).unwrap(),
             env: vec![],
@@ -6785,14 +6795,18 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
     let timestamp = Timestamp::now_utc();
+    let create_component_id = ComponentId(Uuid::new_v4());
     let create_entry = OplogEntry::Create {
         timestamp,
         parameters: Box::new(golem_common::model::oplog::CreateParameters {
             owner_kind: OwnerKind::ComponentAgent,
             agent_id: AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
+                component_id: create_component_id,
                 agent_id: "test".to_string(),
             },
+            component_id: create_component_id,
+            agent_type_name: None,
+            canonical_key: None,
             agent_mode: AgentMode::Ephemeral,
             component_revision: ComponentRevision::new(1).unwrap(),
             env: vec![],
@@ -13793,6 +13807,9 @@ async fn a_fork_target_handle_is_not_reused_by_the_owners_first_open(_tracing: &
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
         agent_id: agent_id.clone(),
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         agent_mode: AgentMode::Durable,
         component_revision: ComponentRevision::new(1).unwrap(),
@@ -13984,6 +14001,9 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
     let create_entry = || {
         OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
             agent_id: agent_id.clone(),
+            component_id: agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_mode: AgentMode::Durable,
             component_revision: ComponentRevision::new(1).unwrap(),

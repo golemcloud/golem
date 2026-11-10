@@ -52,15 +52,6 @@ pub(super) async fn enrich_golem_rpc_scheduled_invocation(
     payload
 }
 
-fn resolve_agent_type_from_worker_name<'a>(
-    metadata: &'a golem_common::model::component_metadata::ComponentMetadata,
-    worker_name: &str,
-) -> Option<&'a golem_common::schema::agent::AgentTypeSchema> {
-    ParsedAgentId::parse_agent_type_name(worker_name)
-        .ok()
-        .and_then(|type_name| metadata.find_agent_type_by_name_ref(&type_name))
-}
-
 /// A schema-native empty value (`()`), used as the best-effort fallback when
 /// the driving schema cannot be resolved from the component metadata. Mirrors
 /// the previous `DataValue::Tuple(empty)` fallback in the legacy renderer.
@@ -135,7 +126,8 @@ fn output_value_to_typed_schema_value(
 
 pub(super) async fn agent_invocation_to_public(
     components: Arc<dyn ComponentService>,
-    owned_agent_id: &OwnedAgentId,
+    owner_component_id: ComponentId,
+    agent_type_name: Option<&AgentTypeName>,
     component_revision: ComponentRevision,
     invocation: AgentInvocation,
 ) -> Result<PublicAgentInvocation, String> {
@@ -147,17 +139,12 @@ pub(super) async fn agent_invocation_to_public(
             ..
         } => {
             let metadata = components
-                .get_metadata(
-                    owned_agent_id.agent_id.component_id,
-                    Some(component_revision),
-                )
+                .get_metadata(owner_component_id, Some(component_revision))
                 .await
                 .map_err(|err| err.to_string())?;
 
-            let agent_type = resolve_agent_type_from_worker_name(
-                &metadata.metadata,
-                &owned_agent_id.agent_id.agent_id,
-            );
+            let agent_type = agent_type_name
+                .and_then(|name| metadata.metadata.find_agent_type_by_name_ref(name));
 
             let constructor_parameters = match agent_type {
                 Some(agent_type) => input_value_to_typed_schema_value(
@@ -189,17 +176,12 @@ pub(super) async fn agent_invocation_to_public(
             ..
         } => {
             let metadata = components
-                .get_metadata(
-                    owned_agent_id.agent_id.component_id,
-                    Some(component_revision),
-                )
+                .get_metadata(owner_component_id, Some(component_revision))
                 .await
                 .map_err(|err| err.to_string())?;
 
-            let agent_type = resolve_agent_type_from_worker_name(
-                &metadata.metadata,
-                &owned_agent_id.agent_id.agent_id,
-            );
+            let agent_type = agent_type_name
+                .and_then(|name| metadata.metadata.find_agent_type_by_name_ref(name));
 
             let method = agent_type.and_then(|at| {
                 at.methods
@@ -271,7 +253,8 @@ pub(super) async fn agent_invocation_to_public(
 
 pub(super) async fn agent_invocation_result_to_public(
     components: Arc<dyn ComponentService>,
-    owned_agent_id: &OwnedAgentId,
+    owner_component_id: ComponentId,
+    agent_type_name: Option<&AgentTypeName>,
     component_revision: ComponentRevision,
     method_name: Option<String>,
     result: AgentInvocationResult,
@@ -279,7 +262,6 @@ pub(super) async fn agent_invocation_result_to_public(
     match result {
         AgentInvocationResult::AgentInitialization => {
             let _ = components;
-            let _ = owned_agent_id;
             let _ = component_revision;
 
             Ok(PublicAgentInvocationResult::AgentInitialization(
@@ -294,10 +276,7 @@ pub(super) async fn agent_invocation_result_to_public(
             let metadata = match &method_name {
                 Some(_) => Some(
                     components
-                        .get_metadata(
-                            owned_agent_id.agent_id.component_id,
-                            Some(component_revision),
-                        )
+                        .get_metadata(owner_component_id, Some(component_revision))
                         .await
                         .map_err(|err| err.to_string())?,
                 ),
@@ -309,16 +288,14 @@ pub(super) async fn agent_invocation_result_to_public(
                     .as_ref()
                     .zip(method_name.as_ref())
                     .and_then(|(metadata, method_name)| {
-                        resolve_agent_type_from_worker_name(
-                            &metadata.metadata,
-                            &owned_agent_id.agent_id.agent_id,
-                        )
-                        .and_then(|at| {
-                            at.methods
-                                .iter()
-                                .find(|m| m.name == *method_name)
-                                .map(|m| (at, m))
-                        })
+                        agent_type_name
+                            .and_then(|name| metadata.metadata.find_agent_type_by_name_ref(name))
+                            .and_then(|at| {
+                                at.methods
+                                    .iter()
+                                    .find(|m| m.name == *method_name)
+                                    .map(|m| (at, m))
+                            })
                     });
 
             let output = match method {

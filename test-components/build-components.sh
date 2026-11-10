@@ -133,7 +133,7 @@ resolve_target_dir() {
   local repo_root="$1"
   local target_dir=""
   if command -v cargo >/dev/null 2>&1; then
-    target_dir=$(cargo metadata --no-deps --format-version 1 --manifest-path "${repo_root}/Cargo.toml" 2>/dev/null \
+    target_dir=$( (cd "$repo_root" && cargo metadata --no-deps --format-version 1 2>/dev/null) \
       | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
   fi
   if [ -z "$target_dir" ]; then
@@ -448,9 +448,9 @@ if [ "$group" = "benchmarks" ]; then
     echo "Building benchmark tool-streaming components..."
     "$GOLEM_CLI" --preset release build golem-it:tool-streaming-rust-provider \
       golem-it:tool-streaming-rust-caller --yes --skip-check
-    cp golem-temp/agents/golem_it_tool_streaming_rust_provider_release.wasm \
+    cp "$(resolve_target_dir "$PWD/rust-provider")/wasm32-wasip2/release/golem_it_tool_streaming_rust_provider.wasm" \
       ../golem_it_tool_streaming_rust_provider_release.wasm
-    cp golem-temp/agents/golem_it_tool_streaming_rust_caller_release.wasm \
+    cp "$(resolve_target_dir "$PWD/rust-caller")/wasm32-wasip2/release/golem_it_tool_streaming_rust_caller.wasm" \
       ../golem_it_tool_streaming_rust_caller_release.wasm
   fi
   popd || exit
@@ -466,7 +466,7 @@ if [ "$group" = "benchmarks" ]; then
   elif [ "$clean_only" = false ]; then
     echo "Building golem-it:agent-rpc-rust..."
     "$GOLEM_CLI" --preset release build golem-it:agent-rpc-rust --yes --skip-check
-    cp golem-temp/agents/golem_it_agent_rpc_rust_release.wasm \
+    cp "$(resolve_target_dir "$PWD/golem-it-agent-rpc-rust")/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm" \
       ../golem_it_agent_rpc_rust_release.wasm
   fi
   popd || exit

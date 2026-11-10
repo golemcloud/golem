@@ -275,7 +275,7 @@ agents:
 
 ### What presets can override
 
-**Component presets** can override: `env`, `wasiConfig`, `plugins`, `files`, `config`, `build`, `componentWasm`, `outputWasm`, `customCommands`, `clean`.
+**Component presets** can override: `env`, `wasiConfig`, `plugins`, `files`, `config`, `build`, `componentWasm`, `customCommands`, `clean`.
 
 **Agent presets** can override: `env`, `wasiConfig`, `plugins`, `files`, `config`.
 

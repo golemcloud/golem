@@ -157,7 +157,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
             else {
                 continue;
             };
-            if agent_id.component_id == *component_id
+            if metadata.component_id == *component_id
                 && (metadata.last_known_status.status == AgentStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))
             {

@@ -14,7 +14,7 @@ import {MultiPlatformCommand} from "@/components/multi-platform-command"
 
 ## JSON schema
 
-For the application manifest format we also publish _JSON schemas_. The current version (1.6.0) is available [here](https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json).
+For the application manifest format we also publish _JSON schemas_. The current schema publication (2.0.0-dev.1) is available [here](https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json). It describes manifest format 2.0.0.
 
 The _JSON schema_ is intended to be used with _editors_ and _IDEs_, to help with base _validation_ and _code completion_.
 
@@ -24,12 +24,12 @@ Use the following _YAML comments_ at the start of your `golem.yaml` documents to
   commands={[
     {
       label: "IntelliJ IDEA based products",
-      command: "# $schema: https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json",
+      command: "# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json",
     },
     {
       label: "VSCode with YAML Language Support plugin",
       command:
-        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json",
+        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json",
     },
   ]}
   language={"yaml"}
@@ -44,6 +44,18 @@ The _Golem CLI_ commands that use _Application Manifest_ start by searching for 
 After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by passing component names as positional arguments to the commands that accept them (e.g. `golem build <COMPONENT_NAME>...`), or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
 
 An Application Manifest can also be selected explicitly with `--app-manifest-path` (`-A`). This chooses the root manifest instead of searching parent directories; its `includes` are still resolved. Use `--disable-app-manifest-discovery` (`-X`) to run without manifest discovery.
+
+### Upgrading older manifests
+
+At startup, commands that load an application manifest preview the upgrade plan for manifest versions `1.5.0` and `1.6.0` and ask for confirmation before writing files. Use `--yes` to confirm without an interactive prompt.
+
+The upgrade sets `manifestVersion` to `"2.0.0"`, updates existing schema URLs to `https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json`, and adds the current marker to included versionless fragments in the older application. Unknown or future manifest versions are not rewritten.
+
+The upgrade removes `outputWasm` from component and component-template base properties and presets. It leaves `componentWasm` unchanged: this path identifies the actual built component artifact used for deployment. The CLI does not add a copy stage to preserve the removed staged artifact path.
+
+If a manifest configuration string, including a command, still references the removed staged artifact path, the CLI rejects the upgrade before writing any files. Update those references to use the actual artifact identified by `componentWasm`, then retry. The CLI does not guess paths that depend on a build profile. A `1.5.0` manifest with bridge configuration still requires manual adjustment before the upgrade can proceed.
+
+The guard inspects strings in the manifest, not the contents of external scripts invoked by commands. Check those scripts manually and update any staged-path references to use the actual `componentWasm` artifact. The upgrade does not inspect or rewrite external scripts.
 
 ## Template variables and functions
 
@@ -509,7 +521,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "manifestVersion",
   }}>
-    ***Required manifest format marker***: use `manifestVersion: "1.6.0"` in every manifest document. All loaded documents must use the same marker. The CLI validates it separately from the editor's `1.6.0` JSON schema URL; it is not the application's deployment version.
+    ***Required manifest format marker***: use `manifestVersion: "2.0.0"` in every current manifest document. The CLI offers a confirmed upgrade for versions `1.5.0` and `1.6.0`; see [Upgrading older manifests](#upgrading-older-manifests) for the changes and cases that require manual adjustment. The CLI validates the marker separately from the editor's `2.0.0-dev.1` JSON schema URL; it is not the application's deployment version.
   </Field>
 
   <Field meta={{
@@ -1305,9 +1317,11 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "components.<component-name>.componentWasm",
   }}>
-    ***File path*** for the built _WASM_ component. It must be nonempty after templates and presets resolve.
+    ***File path*** for the final _WASM_ component used unchanged for metadata extraction and upload. It must be nonempty after templates and presets resolve. There is no output-copy build stage.
 
     The path is relative to the effective component directory, including when inherited from a template in another manifest.
+
+    Built-in Rust templates select the Cargo artifact under the resolved `cargoTarget` directory (`target` by default), in `wasm32-wasip2/debug/` or `wasm32-wasip2/release/`. TypeScript, Effect, and Scala templates select the `.preinitialized.wasm` artifact for the `optimized` preset or the `.dynamic.wasm` artifact for the `quick` preset under `golem-temp/agents/`.
 
     <Example>
       { /* @formatter:off */ }
@@ -1316,27 +1330,6 @@ For registry-backed tools, the generator reads only the release's safe tool defi
         pack-ns:component-name:
           # ...
           componentWasm: build/component.wasm
-      ```
-      { /* @formatter:on */}
-    </Example>
-
-  </Field>
-
-  <Field meta={{
-    path: "components.<component-name>.outputWasm",
-    since: Release.R_1_5_0
-  }}>
-    ***Optional file path*** for the output _WASM_ component which is ready to be uploaded to Golem.
-
-    The path is relative to the effective component directory. Defaults to `<golemTempDir>/final-wasm/<component-name>.wasm`.
-
-    <Example>
-      { /* @formatter:off */ }
-      ```yaml
-      components:
-        pack-ns:component-name:
-          # ...
-          outputWasm: build/output.wasm
       ```
       { /* @formatter:on */}
     </Example>
@@ -1759,13 +1752,6 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field
     meta={{
       path: "componentTemplates.<template-name>.componentWasm",
-    }}
-  ></Field>
-
-  <Field
-    meta={{
-      path: "componentTemplates.<template-name>.outputWasm",
-      since: Release.R_1_5_0,
     }}
   ></Field>
 

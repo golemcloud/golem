@@ -42,11 +42,16 @@
 //!   unobserved delivery, and invocation settlement may own the remaining tail;
 //! * a destructor's passive wait for sibling history or the natural replay tail.
 //!   Its cursor transactions stay active, and it cannot perform a missing live
-//!   effect until the normal replay-to-live transition authorizes continuation.
+//!   effect until the normal replay-to-live transition authorizes continuation;
+//! * passive replay-progress notification for a recorded delivery marker while an
+//!   `AgentInvocationFinished` lies between the cursor and the marker. A reader
+//!   retained across invocations is consumed in a later invocation, which cannot
+//!   replay until this one settles.
 //!
 //! Waits whose completion is *not* guest-driven — durable oplog appends,
 //! live network / file I/O, ordinary replay-resolver waits, queued or running cursor
-//! transactions, and recorded delivery-marker waits — keep the task active:
+//! transactions, and waits for a delivery marker recorded in the current
+//! invocation — keep the task active:
 //! the completion path waits for them (bounded by the invocation tail-drain
 //! timeout).
 

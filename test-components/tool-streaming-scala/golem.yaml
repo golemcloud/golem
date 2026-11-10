@@ -1,4 +1,4 @@
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 
 app: tool-streaming-scala
 
@@ -22,10 +22,9 @@ componentTemplates:
         - preinitializeJs: "{{ golemTempDir }}/agents/scala_examples.dynamic.wasm"
           into: "{{ golemTempDir }}/agents/scala_examples.preinitialized.wasm"
         componentWasm: "{{ golemTempDir }}/agents/scala_examples.preinitialized.wasm"
-        outputWasm: "{{ golemTempDir }}/agents/scala_examples.wasm"
         customCommands:
           copy:
-          - command: cp "{{ golemTempDir }}/agents/scala_examples.wasm" "{{ appRootDir }}/../golem_it_tool_streaming_scala.wasm"
+          - command: cp "{{ golemTempDir }}/agents/scala_examples.preinitialized.wasm" "{{ appRootDir }}/../golem_it_tool_streaming_scala.wasm"
 
 components:
   scala:examples:

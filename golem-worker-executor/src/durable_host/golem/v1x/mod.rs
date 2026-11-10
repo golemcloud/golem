@@ -130,7 +130,7 @@ pub(super) async fn resolve_agent_owner<Ctx: WorkerCtx>(
     component_id: &ComponentId,
     agent: Option<&str>,
 ) -> Result<(AgentOwnerPattern, EnvironmentId), WorkerExecutorError> {
-    let component = if *component_id == ctx.owned_agent_id.component_id() {
+    let component = if *component_id == ctx.owner_component_metadata().id {
         ctx.owner_component_metadata().clone()
     } else {
         ctx.state
@@ -1015,7 +1015,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             };
 
             let target_agent_id = AgentId {
-                component_id: self.owned_agent_id.component_id(),
+                component_id: self.owner_component_metadata().id,
                 agent_id: new_name.clone(),
             };
             // The forked worker must inherit the source state from the source-side fork call's

@@ -23,14 +23,14 @@ use super::{
     AtomicOplogIndex, AtomicU8, BlockedOn, CHUNK_SIZE, CompletionMarker, CompletionMarkers,
     ConcurrentReplayResolver, CursorState, DeletedRegions, DurableInvocationId, EntityAttribution,
     ForkResult, Future, GuestReadOrder, HashMap, HashSet, Hasher, HostFunctionName, HostResponse,
-    HostResponseGolemApiFork, InvocationContextStack, LivePublicationOutcome, LogLevel,
-    MetroHash128, MissingStart, Mutex, MutexGuard, Notify, Oplog, OplogEntry,
+    HostResponseGolemApiFork, InvocationContextStack, InvocationFinishes, LivePublicationOutcome,
+    LogLevel, MetroHash128, MissingStart, Mutex, MutexGuard, Notify, Oplog, OplogEntry,
     OplogEntryLookupResult, OplogIndex, OplogOps, OplogRegion, OplogScopeProjection, Ordering,
     OwnedAgentId, PublishedPosition, QuotaClass, ReplayCallHandle, ReplayCursor, ReplayEvent,
     ReplayState, ReplayToLiveOutcome, ReplayToLiveRole, ReplayTransitionPhase, Resolution,
-    RetainedStart, RetainedStartCounts, StartClaimAttempt, StartsByInvocationId,
-    StreamObservationPositions, ToolAttachmentReconstruction, TransactionMarkers, VecDeque,
-    WorkerExecutorError, debug, warn,
+    RetainedStart, RetainedStartCounts, ScannedRecoveryMetadata, StartClaimAttempt,
+    StartsByInvocationId, StreamObservationPositions, ToolAttachmentReconstruction,
+    TransactionMarkers, VecDeque, WorkerExecutorError, debug, warn,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::{CardId, StoredCard};

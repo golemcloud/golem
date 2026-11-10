@@ -225,6 +225,7 @@ pub(in crate::wasi_filesystem) fn p2_agent_error(error: AgentFilesystemError) ->
         | AgentFilesystemError::Baseline(_)
         | AgentFilesystemError::InitialFileConflict(_)
         | AgentFilesystemError::InitialFileUnavailable(_)
+        | AgentFilesystemError::InitialFileFailed(_)
         | AgentFilesystemError::InitialFileRefused { .. }
         | AgentFilesystemError::RuntimeInvalidated) => {
             FsError::trap(wasmtime::Error::msg(error.to_string()))
