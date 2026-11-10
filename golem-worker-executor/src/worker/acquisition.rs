@@ -534,6 +534,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     worker_env,
                     worker_agent_config,
                     parent,
+                    &principal,
+                    &invocation_context_stack,
                     freshness_disposition,
                     creation_mode,
                 )
@@ -1198,6 +1200,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_env: Option<Vec<(String, String)>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
+        principal: &Principal,
+        invocation_context: &InvocationContextStack,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
@@ -1339,6 +1343,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
+                    create_request: CreateRequest::new(
+                        if agent_id.as_ref().is_some_and(|id| id.phantom_id.is_some()) {
+                            CreateRequestKind::Phantom
+                        } else {
+                            CreateRequestKind::GetOrCreate
+                        },
+                        None,
+                        principal.clone(),
+                        &invocation_context
+                            .clone()
+                            .limit_depth(this.config().limits.max_invocation_context_stack_depth),
+                    ),
                 };
 
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
@@ -1381,6 +1397,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         local_agent_config,
                         original_phantom_id: initial_worker_metadata.original_phantom_id,
                         instance_id,
+                        create_request: initial_worker_metadata.create_request.clone(),
                     }));
 
                 let initial_status = Arc::new(arc_swap::ArcSwap::from_pointee(initial_status));

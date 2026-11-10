@@ -771,9 +771,61 @@ fn create_serialization_poem_serde_equivalence() {
 
 #[test]
 fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
-    use super::{CreateParameters, OplogEnrichmentEntry};
-    use crate::model::agent::{AgentMode, AgentTypeName, OwnerKind};
+    use super::{CreateParameters, CreateRequest, CreateRequestKind, OplogEnrichmentEntry};
+    use crate::model::agent::{AgentMode, AgentPrincipal, AgentTypeName, OwnerKind};
     use crate::model::environment::EnvironmentId;
+    use crate::model::invocation_context::{
+        AttributeValue, InvocationContextSpan, InvocationContextStack,
+    };
+
+    let mut creator_context = InvocationContextStack::new(
+        TraceId::generate(),
+        InvocationContextSpan::external_parent(SpanId::generate()),
+        vec!["vendor=creator".to_string()],
+    );
+    creator_context.push(
+        InvocationContextSpan::local()
+            .rounded()
+            .parent(Some(creator_context.spans.first().clone()))
+            .with_attributes(HashMap::from([(
+                "request".to_string(),
+                AttributeValue::String("create".to_string()),
+            )]))
+            .build(),
+    );
+    let creator = Principal::Agent(AgentPrincipal {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "Creator(1)".to_string(),
+        },
+    });
+    let mut requests = [
+        CreateRequestKind::GetOrCreate,
+        CreateRequestKind::Exclusive,
+        CreateRequestKind::Phantom,
+        CreateRequestKind::Fork,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, kind)| {
+        CreateRequest::new(
+            kind,
+            (index % 2 == 0).then(|| IdempotencyKey::new(format!("create-{index}"))),
+            creator.clone(),
+            &creator_context,
+        )
+    })
+    .cycle();
+    let recorded = requests.next().unwrap();
+    assert_eq!(recorded.invocation_context().to_oplog_data().len(), 2);
+    assert_eq!(
+        recorded.invocation_context().to_oplog_data(),
+        creator_context.to_oplog_data()
+    );
+    assert_eq!(
+        recorded.invocation_context().trace_id,
+        creator_context.trace_id
+    );
 
     for agent_type_name in [None, Some(AgentTypeName("StoredType".to_string()))] {
         for canonical_key in [None, Some("StructuralType(\"parameter\")".to_string())] {
@@ -801,6 +853,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     local_agent_config: vec![],
                     original_phantom_id: None,
                     instance_id: Uuid::new_v4(),
+                    create_request: requests.next().unwrap(),
                 }),
             };
             let bytes = crate::serialization::serialize(&entry).unwrap();

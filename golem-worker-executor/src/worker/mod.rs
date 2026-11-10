@@ -199,8 +199,9 @@ use golem_common::model::entity::{
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogErrorKind, OplogIndex,
-    OplogPayload, ReadOnlyViolationError, SnapshotAssistedUpdateDetails, UpdateDescription,
+    CreateRequest, CreateRequestKind, DurableStreamEventSummary, FilesystemSnapshotName,
+    OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
+    SnapshotAssistedUpdateDetails, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};

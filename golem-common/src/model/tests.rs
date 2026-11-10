@@ -1127,6 +1127,12 @@ fn worker_filter_matches() {
         original_phantom_id: None,
         fingerprint: AgentFingerprint(Uuid::now_v7()),
         agent_mode: AgentMode::Durable,
+        create_request: crate::model::oplog::CreateRequest::new(
+            crate::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            crate::model::agent::Principal::anonymous(),
+            &crate::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     };
 
     assert!(

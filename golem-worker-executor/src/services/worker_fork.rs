@@ -680,6 +680,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             original_phantom_id: initial_source_worker_metadata.original_phantom_id,
             fingerprint: AgentFingerprint(instance_id),
             agent_mode,
+            create_request: initial_source_worker_metadata.create_request,
         };
 
         let source_oplog = self
