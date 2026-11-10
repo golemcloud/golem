@@ -320,9 +320,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .await;
 
         match result {
-            Ok(InvokeResult::NotStarted) => {
-                unreachable!("snapshot invocations do not consume pending invocations")
-            }
             Ok(InvokeResult::Succeeded { result, .. }) => {
                 let AgentInvocationResult::SaveSnapshot { snapshot } = *result else {
                     return Err(self
@@ -449,9 +446,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .data_mut()
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
-        let result =
-            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
-                .await;
+        let result = invoke_observed_and_traced(lowered, self.store, self.instance).await;
         self.store.data().set_suspended();
         self.store
             .data_mut()
@@ -541,7 +536,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 warn!("Worker interrupted during periodic snapshot save");
                 Err(CommandOutcome::BreakInnerLoop(RetryDecision::None))
             }
-            Ok(InvokeResult::NotStarted | InvokeResult::Failed { .. }) | Err(_) => unreachable!(),
+            Ok(InvokeResult::Failed { .. }) | Err(_) => unreachable!(),
         }
     }
 }

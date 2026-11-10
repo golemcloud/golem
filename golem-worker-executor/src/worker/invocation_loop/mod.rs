@@ -40,7 +40,7 @@ use crate::worker::filesystem_snapshots::{
 };
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, LoweredInvocation, invocation_uses_streams,
+    InvokeResult, LoweredInvocation, invocation_uses_streams, invoke_live_observed_and_traced,
     invoke_observed_and_traced, lower_invocation, materialize_streaming_result,
 };
 use crate::worker::monthly_limits::ExecutionWindow;
@@ -119,9 +119,7 @@ mod invocation;
 mod permits;
 mod snapshots;
 mod startup;
-pub(in crate::worker) use startup::{
-    EphemeralStart, ephemeral_inspection_may_start, ephemeral_start_decision,
-};
+pub use startup::{EphemeralStart, ephemeral_inspection_may_start, ephemeral_start_decision};
 mod unload;
 
 use commands::apply_delayed_retry_commands_after_unload;

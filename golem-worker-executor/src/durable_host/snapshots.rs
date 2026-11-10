@@ -166,8 +166,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
-        let load_result =
-            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        let load_result = invoke_observed_and_traced(lowered, store, instance).await;
         store.as_context_mut().data().set_suspended();
 
         store
@@ -188,9 +187,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             });
 
         match load_result {
-            Ok(InvokeResult::NotStarted) => {
-                unreachable!("snapshot invocations do not consume pending invocations")
-            }
             Err(error) => Err(ManualLoadResult::Failed(format!(
                 "Manual update failed to load snapshot: {error}"
             ))),
@@ -458,8 +454,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
-        let load_result =
-            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        let load_result = invoke_observed_and_traced(lowered, store, instance).await;
         store.as_context_mut().data().set_suspended();
 
         store

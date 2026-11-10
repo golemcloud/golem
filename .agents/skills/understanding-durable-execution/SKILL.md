@@ -290,10 +290,13 @@ The original retry decision, later interrupt arbitration, ephemeral fail-stop co
 cleanup-failure handling remain in the common tail.
 
 `DurableWorkerCtx::replay` (`durable_host/recovery.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
-each recorded invocation in `InvocationMode::Replay`, and when there is no further
+each recorded invocation through `invoke_observed_and_traced` without pending admission, and when there is no further
 `AgentInvocationStarted` it switches to live. Ephemeral owners replay at most one recorded
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
+Live queued invocations use `invoke_live_observed_and_traced`: it commits the pending-to-started
+transition before materializing inputs and returns `None` if admission declines to start. Replay
+and snapshot execution return `InvokeResult` directly, which has no not-started variant.
 Constructor-only replay covers restarts before the accepted invocation ran. An ephemeral agent
 never reconstructs in process once its Store has run: `on_invocation_failure` turns traps that
 would restart it into terminal failures and notifies the caller. Any other `Immediate`, `Delayed`,

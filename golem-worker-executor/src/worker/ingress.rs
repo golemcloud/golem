@@ -749,7 +749,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.state_actor.status().await.pending_invocations.clone()
     }
 
-    pub(in crate::worker) async fn has_due_invocations(&self) -> bool {
+    pub async fn has_due_invocations(&self) -> bool {
         let status = self.state_actor.status().await;
         let now = Timestamp::now_utc();
         status
@@ -1089,7 +1089,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// existing entry for the same schedule id, so this only restores wakes that were lost
     /// between the pending commit and the wake insert. A wake registered for an entry cancelled
     /// meanwhile finds no pending entry at delivery and is acknowledged without effect.
-    pub(in crate::worker) async fn register_pending_invocation_wakes(&self) {
+    pub async fn register_pending_invocation_wakes(&self) {
         // Construction publishes before this runs, so deletion may already have stopped the actor.
         let Ok(Some(status)) = self.state_actor.observe_status().await else {
             return;

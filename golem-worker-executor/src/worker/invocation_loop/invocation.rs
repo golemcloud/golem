@@ -209,9 +209,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result = self
             .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
+        let result = match result {
+            Ok(None) => return CommandOutcome::Continue,
+            Ok(Some(result)) => Ok(result),
+            Err(error) => Err(error),
+        };
 
         match result {
-            Ok(InvokeResult::NotStarted) => CommandOutcome::Continue,
             Ok(InvokeResult::Succeeded {
                 result: invocation_result,
                 consumed_fuel,
@@ -253,7 +257,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         mut invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
         invocation: HydratedInvocation,
-    ) -> Result<InvokeResult, WorkerExecutorError> {
+    ) -> Result<Option<InvokeResult>, WorkerExecutorError> {
         let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
                 .data_mut()
@@ -302,17 +306,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         .await?;
 
         let display_name = lowered.display_name.clone();
-        let result = invoke_observed_and_traced(
-            lowered,
-            self.store,
-            self.instance,
-            InvocationMode::Live(invocation),
-        )
-        .await;
-        let result = if self.uses_streams {
-            materialize_streaming_result(self.store, result, &display_name, &idempotency_key).await
-        } else {
-            result
+        let result =
+            invoke_live_observed_and_traced(lowered, self.store, self.instance, invocation).await;
+        let result = match result {
+            Ok(Some(result)) if self.uses_streams => materialize_streaming_result(
+                self.store,
+                Ok(result),
+                &display_name,
+                &idempotency_key,
+            )
+            .await
+            .map(Some),
+            result => result,
         };
 
         // Invocation-owned spans are closed by AgentInvocationFinished in the

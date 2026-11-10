@@ -1522,6 +1522,11 @@ pub fn merge_agent_env_with_default_env(
     result
 }
 
+/// Restores first-execution admission for an ephemeral target created before its scheduled work
+/// is due. Reconstructing that target must not consume its first execution or admit a different
+/// method in place of its accepted work. An execution-begun marker or terminal status keeps the
+/// target observation-only; the startup gate separately enforces the deadline.
+///
 /// The admission a reconstructed ephemeral agent may still run, when it never began executing:
 /// `Some(Some(key))` for one scheduled method, `Some(None)` when no method was accepted yet.
 /// `None` keeps the agent observation-only. An agent with a constructor
@@ -1529,7 +1534,7 @@ pub fn merge_agent_env_with_default_env(
 /// when a crash left only `Create`, which acquisition repairs by appending the reservation. A
 /// withdrawn reservation is not repaired: nothing could initialize the agent before the method
 /// runs.
-pub(in crate::worker) fn never_started_ephemeral_admission(
+pub fn never_started_ephemeral_admission(
     status: &AgentStatusRecord,
     initialization_key: Option<&IdempotencyKey>,
 ) -> Option<Option<IdempotencyKey>> {

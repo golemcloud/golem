@@ -965,10 +965,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     /// Records the start of an ephemeral agent's execution before any of its guest code runs.
     /// The committed `Restart` makes the agent fail-stop; scheduled cancellation takes the same
-    /// instance mutex, so exactly one of them wins.
-    pub(in crate::worker) async fn begin_ephemeral_execution(
-        &self,
-    ) -> Result<EphemeralStart, WorkerExecutorError> {
+    /// instance mutex, so exactly one of them wins. Targets created for future work stay unloaded
+    /// until that work is due. A loss after this commit never permits another execution, even if
+    /// instantiation had not yet run guest code.
+    pub async fn begin_ephemeral_execution(&self) -> Result<EphemeralStart, WorkerExecutorError> {
         let instance_guard = self.instance.lock().await;
         let status = self
             .state_actor
@@ -987,9 +987,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(decision)
     }
 
-    /// Restarts an ephemeral worker that stopped as not runnable if its start would run now. A
-    /// start requested while the stop was in progress joined the stopping attempt and was lost.
-    pub(in crate::worker) async fn restart_if_ephemeral_start_became_runnable(self: &Arc<Self>) {
+    /// Rechecks due work after a never-started ephemeral worker stopped as not runnable. A wake
+    /// during the stop can join the stopping attempt without starting a new instance. Requesting
+    /// a start after the stop prevents that race from stranding the first execution. This does not
+    /// reconstruct an ephemeral instance that already executed guest code.
+    pub async fn restart_if_ephemeral_start_became_runnable(self: &Arc<Self>) {
         let Ok(status) = self.state_actor.try_status().await else {
             return;
         };
@@ -1007,7 +1009,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             });
         }
     }
-    /// Cancels only scheduled work recorded for this incarnation and scheduling agent.
+    /// Commits cancellation only for scheduled work belonging to this incarnation and scheduling
+    /// agent. Returns false for a stale receipt, withdrawn work, or a start that already won.
+    /// Cancelling a never-started ephemeral target also withdraws its constructor reservation, so
+    /// it cannot run initialization after its scheduled method was withdrawn.
     pub async fn cancel_scheduled_invocation(
         &self,
         idempotency_key: IdempotencyKey,

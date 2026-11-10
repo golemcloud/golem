@@ -47,9 +47,9 @@ use backend::rustic::RusticSnapshotStore;
 pub(crate) use errors::{CallError, Failed, ReadError, RestoreFailure, SaveError};
 #[cfg(any(test, feature = "test-utils"))]
 pub(crate) use retry::run_delay;
-pub(crate) use run_admission::{RunSlots, Slot, Withdrawal};
-#[cfg(any(test, feature = "test-utils"))]
-pub(crate) use run_admission::{Unlimited, WithdrawnCall, withdrawn_call};
+pub(crate) use run_admission::{
+    RunSlots, Slot, Unlimited, Withdrawal, WithdrawnCall, withdrawn_call,
+};
 pub(crate) use snapshot_name::{InvalidSnapshotName, SnapshotName};
 
 /// What a snapshot holds.

@@ -212,7 +212,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            InvocationMode::Replay,
                         )
                         .instrument(span)
                         .await;
