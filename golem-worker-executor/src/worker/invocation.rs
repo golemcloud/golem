@@ -88,16 +88,18 @@ pub enum InvocationMode {
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
 /// - `mode`: whether this is a live invocation or a replay
+/// - `stream_session`: the session to materialize before ending the invocation scope
 pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     mode: InvocationMode,
+    stream_session: Option<&IdempotencyKey>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
-    let result = invoke_observed(lowered, &mut store, instance, mode).await;
+    let result = invoke_observed(lowered, &mut store, instance, mode, stream_session).await;
 
     match &result {
         Err(_) => {
@@ -144,6 +146,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     mode: InvocationMode,
+    stream_session: Option<&IdempotencyKey>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -224,7 +227,16 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .data_mut()
         .durable_ctx_mut()
         .set_invocation_principal(invocation_principal);
-    let call_future = dispatch_call(&mut store, instance, call, &display_name);
+    let call_future = async {
+        let result = dispatch_call(&mut store, instance, call, &display_name).await;
+        // Returning a stream handle does not end its producer's invocation. Keep its
+        // authority and lane registration until production and tail work settle.
+        if let Some(idempotency_key) = stream_session {
+            materialize_streaming_result(&mut store, result, &display_name, idempotency_key).await
+        } else {
+            result
+        }
+    };
 
     let call_outcome = std::panic::AssertUnwindSafe(call_future)
         .catch_unwind()
@@ -366,7 +378,7 @@ fn retain_invocation_failure(
 
 /// Publishes the early stream-bearing result and drives its producers to completion.
 /// Live execution and replay use the same trap classification as the guest export.
-pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
+async fn materialize_streaming_result<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     result: Result<InvokeResult, WorkerExecutorError>,
     display_name: &str,
