@@ -184,6 +184,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<(OplogIndex, OplogEntry)>> {
         concurrent::drain_queued_dropped_call_events(self).await?;
         let expected = request.expected_description();
+        self.state.refuse_on_bootstrap_cursor(expected)?;
         loop {
             if self.is_live() {
                 return Ok(None);

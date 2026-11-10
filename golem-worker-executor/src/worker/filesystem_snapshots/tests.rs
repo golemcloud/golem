@@ -337,14 +337,16 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
         },
         bootstrap: None,
     };
-    let plan = |source, snapshot, skip_through, role| StartPlan {
+    let plan = |source, snapshot, skip_through, role, bootstrap| StartPlan {
         source,
         replay: ReplayBaseline {
             snapshot,
             skip_through,
             role,
+            bootstrap,
         },
     };
+    let range = |from, to| Some(OplogRegion::from_range(from..=to));
     let periodic = SnapshotSource::Automatic;
     let assisted = SnapshotSource::SnapshotAssistedAutomatic;
     let manual = SnapshotSource::ManualUpdate;
@@ -357,7 +359,10 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
     );
     let cases: Vec<Case<'_>> = vec![
         (
-            SelectedBaseline::Periodic(record(10, Some(&name))),
+            SelectedBaseline::Periodic(UsableAutomaticSnapshot {
+                bootstrap: range(4, 6),
+                ..record(10, Some(&name))
+            }),
             None,
             true,
             Ok(plan(
@@ -365,6 +370,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), periodic)),
                 Some(index(10)),
                 BaselineRole::Periodic(index(10)),
+                BootstrapSource::Recorded(range(4, 6)),
             )),
         ),
         (
@@ -382,6 +388,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), periodic)),
                 Some(index(10)),
                 BaselineRole::Periodic(index(10)),
+                BootstrapSource::Recorded(None),
             )),
         ),
         (
@@ -396,6 +403,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 Some(index(10)),
                 BaselineRole::AssistedPending(assisted_head(Some(&name))),
+                BootstrapSource::Attempt { anchor: index(12) },
             )),
         ),
         (
@@ -419,12 +427,14 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 Some(index(10)),
                 BaselineRole::AssistedPending(assisted_head(None)),
+                BootstrapSource::Attempt { anchor: index(12) },
             )),
         ),
         (
             SelectedBaseline::AssistedPromoted {
                 index: index(10),
                 name: Some(name.clone()),
+                bootstrap: range(2, 5),
             },
             None,
             true,
@@ -433,12 +443,14 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 None,
                 BaselineRole::AssistedPromoted,
+                BootstrapSource::Recorded(range(2, 5)),
             )),
         ),
         (
             SelectedBaseline::AssistedPromoted {
                 index: index(10),
                 name: Some(name.clone()),
+                bootstrap: range(2, 5),
             },
             None,
             false,
@@ -448,6 +460,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
             SelectedBaseline::AssistedPromoted {
                 index: index(10),
                 name: None,
+                bootstrap: None,
             },
             None,
             false,
@@ -456,6 +469,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 None,
                 BaselineRole::AssistedPromoted,
+                BootstrapSource::Recorded(None),
             )),
         ),
         (
@@ -470,6 +484,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(5), assisted)),
                 Some(index(7)),
                 BaselineRole::ManualPending(manual_head()),
+                BootstrapSource::Attempt { anchor: index(7) },
             )),
         ),
         (
@@ -488,6 +503,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(5), manual)),
                 Some(index(7)),
                 BaselineRole::ManualPending(manual_head()),
+                BootstrapSource::Attempt { anchor: index(7) },
             )),
         ),
         (
@@ -511,10 +527,14 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 None,
                 Some(index(7)),
                 BaselineRole::ManualPending(manual_head()),
+                BootstrapSource::Attempt { anchor: index(7) },
             )),
         ),
         (
-            SelectedBaseline::ManualPromoted { index: index(7) },
+            SelectedBaseline::ManualPromoted {
+                index: index(7),
+                bootstrap: range(3, 4),
+            },
             Some(&update),
             true,
             Ok(plan(
@@ -522,16 +542,23 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(7), manual)),
                 None,
                 BaselineRole::ManualPromoted,
+                BootstrapSource::Recorded(range(3, 4)),
             )),
         ),
         (
-            SelectedBaseline::ManualPromoted { index: index(7) },
+            SelectedBaseline::ManualPromoted {
+                index: index(7),
+                bootstrap: range(3, 4),
+            },
             Some(&update),
             false,
             Err(()),
         ),
         (
-            SelectedBaseline::ManualPromoted { index: index(7) },
+            SelectedBaseline::ManualPromoted {
+                index: index(7),
+                bootstrap: range(3, 4),
+            },
             None,
             true,
             Ok(plan(
@@ -539,6 +566,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(7), manual)),
                 None,
                 BaselineRole::ManualPromoted,
+                BootstrapSource::Recorded(range(3, 4)),
             )),
         ),
         (
@@ -550,6 +578,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 None,
                 None,
                 BaselineRole::InitialFiles,
+                BootstrapSource::Positional,
             )),
         ),
     ];
@@ -562,6 +591,61 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 "{selected:?} with {manual_name:?}, enabled: {enabled}"
             );
         });
+}
+
+/// A start that rejects the last periodic record falls back to the previous usable record, and
+/// its initializer replays the bootstrap range of that record, not the range of the rejected one.
+#[test]
+async fn a_fallback_to_the_previous_periodic_record_replays_the_bootstrap_range_of_that_record() {
+    use crate::worker::snapshot_selection::{SnapshotExclusions, StartSelection};
+    use golem_common::model::{AgentStatusRecord, AutomaticSnapshot, SnapshotFiles};
+    let index = OplogIndex::from_u64;
+    let status = AgentStatusRecord {
+        component_revision: ComponentRevision::new(2).unwrap(),
+        last_automatic_snapshot: Some(AutomaticSnapshot {
+            index: index(20),
+            timestamp: Timestamp::from(2_000),
+            component_revision: ComponentRevision::new(2).unwrap(),
+            files: SnapshotFiles::named(None),
+            bootstrap: Some(OplogRegion::from_range(2..=7)),
+        }),
+        previous_usable_automatic_snapshot: Some(UsableAutomaticSnapshot {
+            bootstrap: Some(OplogRegion::from_range(2..=3)),
+            ..record(10, None)
+        }),
+        ..Default::default()
+    };
+    let bootstrap = |exclusions: &SnapshotExclusions| {
+        plan_start(
+            &StartSelection::of(&status, exclusions, true).baseline,
+            None,
+            true,
+        )
+        .map(|plan| {
+            (
+                plan.replay.snapshot.map(|(index, _)| index),
+                plan.replay.bootstrap,
+            )
+        })
+        .ok()
+    };
+
+    assert_eq!(
+        [
+            bootstrap(&SnapshotExclusions::default()),
+            bootstrap(&SnapshotExclusions::default().rejecting(index(20), &status)),
+        ],
+        [
+            Some((
+                Some(index(20)),
+                BootstrapSource::Recorded(Some(OplogRegion::from_range(2..=7)))
+            )),
+            Some((
+                Some(index(10)),
+                BootstrapSource::Recorded(Some(OplogRegion::from_range(2..=3)))
+            )),
+        ]
+    );
 }
 
 #[test]
@@ -584,6 +668,7 @@ async fn the_skipped_regions_of_a_start_skip_the_history_before_a_pending_record
         snapshot: None,
         skip_through,
         role: BaselineRole::InitialFiles,
+        bootstrap: BootstrapSource::Positional,
     };
     let pending = replay(Some(index(6))).skipped_regions(&status_regions);
     let promoted = replay(None).skipped_regions(&status_regions);
@@ -1249,6 +1334,7 @@ async fn a_baseline_restored_the_name_of_its_record_as_a_periodic_or_an_authorit
             snapshot,
             skip_through: None,
             role,
+            bootstrap: BootstrapSource::Positional,
         },
     };
     let manual_head = Arc::new(head(

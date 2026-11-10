@@ -823,6 +823,21 @@ pub(crate) struct ReplayBaseline {
     pub(crate) skip_through: Option<OplogIndex>,
     /// The column of the start outcome table.
     pub(crate) role: BaselineRole,
+    /// Where the core initializer of the start finds the durable calls that it replays.
+    pub(crate) bootstrap: BootstrapSource,
+}
+
+/// Where the core initializer of a start replays its durable calls from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BootstrapSource {
+    /// From the main history, in its position: the start replays the history from its beginning.
+    Positional,
+    /// From the bootstrap range that the record names, which must hold exactly the durable calls
+    /// of the initializer. `None` when the initializer made no durable call.
+    Recorded(Option<OplogRegion>),
+    /// From the history after the `anchor` entry of a pending update: what an earlier attempt of
+    /// the update recorded, after which the initializer continues live.
+    Attempt { anchor: OplogIndex },
 }
 
 impl ReplayBaseline {
@@ -832,6 +847,7 @@ impl ReplayBaseline {
             snapshot: None,
             skip_through: None,
             role: BaselineRole::InitialFiles,
+            bootstrap: BootstrapSource::Positional,
         }
     }
 
@@ -900,22 +916,31 @@ pub(crate) fn plan_start(
                 snapshot: Some((snapshot.index, SnapshotSource::Automatic)),
                 skip_through: Some(snapshot.index),
                 role,
+                bootstrap: BootstrapSource::Recorded(snapshot.bootstrap.clone()),
             },
         },
-        SelectedBaseline::AssistedPending { snapshot, .. } => StartPlan {
+        SelectedBaseline::AssistedPending { snapshot, head } => StartPlan {
             source: named(snapshot.filesystem_snapshot.as_ref())?,
             replay: ReplayBaseline {
                 snapshot: Some((snapshot.index, SnapshotSource::SnapshotAssistedAutomatic)),
                 skip_through: Some(snapshot.index),
                 role,
+                bootstrap: BootstrapSource::Attempt {
+                    anchor: head.oplog_index,
+                },
             },
         },
-        SelectedBaseline::AssistedPromoted { index, name } => StartPlan {
+        SelectedBaseline::AssistedPromoted {
+            index,
+            name,
+            bootstrap,
+        } => StartPlan {
             source: named(name.as_ref())?,
             replay: ReplayBaseline {
                 snapshot: Some((*index, SnapshotSource::SnapshotAssistedAutomatic)),
                 skip_through: None,
                 role,
+                bootstrap: BootstrapSource::Recorded(bootstrap.clone()),
             },
         },
         SelectedBaseline::ManualPending { head, previous } => StartPlan {
@@ -934,14 +959,18 @@ pub(crate) fn plan_start(
                 }),
                 skip_through: Some(head.oplog_index),
                 role,
+                bootstrap: BootstrapSource::Attempt {
+                    anchor: head.oplog_index,
+                },
             },
         },
-        SelectedBaseline::ManualPromoted { index } => StartPlan {
+        SelectedBaseline::ManualPromoted { index, bootstrap } => StartPlan {
             source: manual(SourceRevision::Before(*index))?,
             replay: ReplayBaseline {
                 snapshot: Some((*index, SnapshotSource::ManualUpdate)),
                 skip_through: None,
                 role,
+                bootstrap: BootstrapSource::Recorded(bootstrap.clone()),
             },
         },
         SelectedBaseline::InitialFiles => StartPlan {
@@ -1321,7 +1350,7 @@ impl StartFilesystem {
                     }
                 }
             }
-            snapshot_selection::SelectedBaseline::ManualPromoted { index } => {
+            snapshot_selection::SelectedBaseline::ManualPromoted { index, .. } => {
                 match parent.oplog.read(*index).await? {
                     OplogEntry::PendingUpdate {
                         description:

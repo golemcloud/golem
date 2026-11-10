@@ -861,7 +861,16 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .await
             .map_err(|error| match interrupt_kind_in(&error) {
                 Some(kind) => WorkerExecutorError::Interrupted { kind },
-                None => self.creation_error(error.into()),
+                None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
+                    // The core initializer of the primary Store diverged from its recorded
+                    // durable calls; the start classifies that as a replay divergence.
+                    Some(divergence @ WorkerExecutorError::UnexpectedOplogEntry { .. })
+                        if self.runtime == OwnerRuntime::Agent =>
+                    {
+                        divergence.clone()
+                    }
+                    _ => self.creation_error(error.into()),
+                },
             })?;
 
         let current_level = store.get_fuel().unwrap_or(0);

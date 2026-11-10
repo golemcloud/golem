@@ -1424,7 +1424,7 @@ fn a_rejected_periodic_record_after_an_assisted_update_uses_the_promoted_record_
         kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
             filesystem_snapshot: Some(name.clone()),
         },
-        bootstrap: None,
+        bootstrap: Some(OplogRegion::from_range(3..=5)),
     });
     if let Some(last) = status.last_automatic_snapshot.as_mut() {
         last.component_revision = revision(3);
@@ -1439,6 +1439,7 @@ fn a_rejected_periodic_record_after_an_assisted_update_uses_the_promoted_record_
             SelectedBaseline::AssistedPromoted {
                 index: OplogIndex::from_u64(7),
                 name: Some(name),
+                bootstrap: Some(OplogRegion::from_range(3..=5)),
             },
             revision(2)
         )
@@ -1467,7 +1468,7 @@ fn a_selection_follows_the_priority_of_the_queue_head_then_the_records_then_the_
     let authoritative = AuthoritativeSnapshot {
         index: OplogIndex::from_u64(3),
         kind: AuthoritativeSnapshotKind::ManualUpdate,
-        bootstrap: None,
+        bootstrap: Some(OplogRegion::from_range(2..=2)),
     };
     let mut manual = with_head(None, true, None, manual_head.clone());
     manual.authoritative_snapshot = Some(authoritative.clone());
@@ -1497,7 +1498,8 @@ fn a_selection_follows_the_priority_of_the_queue_head_then_the_records_then_the_
             ),
             (
                 SelectedBaseline::ManualPromoted {
-                    index: OplogIndex::from_u64(3)
+                    index: OplogIndex::from_u64(3),
+                    bootstrap: Some(OplogRegion::from_range(2..=2)),
                 },
                 revision(1)
             ),

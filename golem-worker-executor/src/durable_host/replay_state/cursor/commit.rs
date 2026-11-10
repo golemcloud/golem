@@ -540,7 +540,7 @@ impl CursorTx<'_> {
         Ok(())
     }
 
-    async fn record_card_events_in_region(
+    pub(in crate::durable_host::replay_state) async fn record_card_events_in_region(
         &mut self,
         region: &OplogRegion,
     ) -> Result<(), UnreadableOplog> {
@@ -705,6 +705,11 @@ impl CursorTx<'_> {
         &mut self,
         event: ReplayEvent,
     ) {
+        // A bootstrap cursor replays only the durable calls of a core initializer; the replay
+        // events of the history belong to the main cursor.
+        if self.cursor.bootstrap.is_some() {
+            return;
+        }
         if let Some((start_idx, entry_idx)) = self.retaining_for
             && !matches!(event, ReplayEvent::ReplayFinished)
         {

@@ -853,6 +853,7 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             })?;
         let function_name = HostFunctionName::Custom(function_name);
         let function_type: DurableFunctionType = function_type.into();
+        ctx.state.refuse_on_bootstrap_cursor(&function_name)?;
         if is_write_side_effect(&function_type) {
             DurableWorkerCtx::check_read_only_allows(
                 ctx,

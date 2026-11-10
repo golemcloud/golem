@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::replay_state::{BootstrapTail, ReplayState};
 use crate::worker::*;
 
 impl<Runtime, Adapter: SandboxFilesystemAdapter> PreparedAgent<Runtime, Adapter> {
@@ -886,7 +887,23 @@ impl RunningWorker {
                 .await);
             }
         };
-        let replays_a_snapshot = replay.snapshot.is_some();
+        // A periodic start replays the core initializer on a strict cursor over the bootstrap
+        // block that its record names, as `(skip_through, target)`; a start without a record
+        // replays it on the main cursor in its position. The other baselines recreate the
+        // initializer's runtime state with the durability suppression of snapshot loading.
+        let bootstrap_block = match (&replay.role, &replay.bootstrap) {
+            (
+                start_outcome::BaselineRole::Periodic(_),
+                filesystem_snapshots::BootstrapSource::Recorded(range),
+            ) => Some(match range {
+                Some(range) => (range.start.previous(), range.end),
+                None => (OplogIndex::INITIAL, OplogIndex::INITIAL),
+            }),
+            _ => None,
+        };
+        let observes_bootstrap = bootstrap_block.is_some()
+            || replay.bootstrap == filesystem_snapshots::BootstrapSource::Positional;
+        let suppresses_initializer = replay.snapshot.is_some() && !observes_bootstrap;
         let reconstruction_generation_handle =
             match reconstruction_generation_handle(&reconstructing) {
                 Ok(generation_handle) => generation_handle,
@@ -1042,11 +1059,42 @@ impl RunningWorker {
                 );
             }
         };
-        if replays_a_snapshot {
+        if suppresses_initializer {
             // Core initializers run before load-snapshot, but their recorded host calls are
             // already inside the skipped snapshot history. Recreate that runtime state with
             // the same durability suppression as snapshot loading, without consuming the tail.
             context.begin_call_snapshotting_function();
+        }
+        if observes_bootstrap {
+            let cursor = match bootstrap_block {
+                Some((skip_through, target)) => match ReplayState::new_for_bootstrap(
+                    parent.owned_agent_id.clone(),
+                    parent.oplog.clone(),
+                    parent.owner_execution().tool_operations(),
+                    &worker_metadata.last_known_status.deleted_regions,
+                    skip_through,
+                    target,
+                    BootstrapTail::Strict,
+                )
+                .await
+                {
+                    Ok(cursor) => Some(cursor),
+                    Err(error) => {
+                        drop(context);
+                        return Err(cleanup_reconstructing_agent_filesystem(
+                            reconstructing,
+                            window,
+                            error,
+                        )
+                        .await);
+                    }
+                },
+                None => None,
+            };
+            context
+                .durable_ctx_mut()
+                .enter_bootstrap_phase(cursor)
+                .await;
         }
         let runtime = async {
             let mut hosted = instance_host.instantiate(context, &component).await?;
@@ -1054,14 +1102,45 @@ impl RunningWorker {
             Ok::<_, WorkerExecutorError>(hosted.into_parts())
         }
         .await;
+        // A divergence of the core initializer from its recorded durable calls, inside
+        // `instantiate` or in an unconsumed bootstrap block, is a replay divergence of the start.
+        let runtime = match runtime {
+            Ok((instance, mut store)) => {
+                match store
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .finish_bootstrap_phase()
+                    .await
+                {
+                    Ok(()) => Ok((instance, store)),
+                    Err(error) => {
+                        let diverged =
+                            matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. });
+                        Err((error, diverged))
+                    }
+                }
+            }
+            Err(error) => {
+                let diverged = observes_bootstrap
+                    && matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. });
+                Err((error, diverged))
+            }
+        };
         let (instance, mut store) = match runtime {
             Ok(runtime) => runtime,
-            Err(error) => {
+            Err((error, diverged)) => {
                 return Err(Self::end_failed_start(
                     &parent,
                     &role,
                     pending_update_ref.as_ref(),
-                    start_outcome::RawStartError::Instantiation(&error),
+                    if diverged {
+                        start_outcome::RawStartError::Replay {
+                            error: &error,
+                            diverged: true,
+                        }
+                    } else {
+                        start_outcome::RawStartError::Instantiation(&error)
+                    },
                     async move |error| {
                         cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await
                     },
@@ -1069,7 +1148,7 @@ impl RunningWorker {
                 .await);
             }
         };
-        if replays_a_snapshot {
+        if suppresses_initializer {
             store.data_mut().end_call_snapshotting_function();
         }
         {

@@ -291,11 +291,7 @@ impl ReplayState {
             == ReplayTransitionPhase::Settling as u8
     }
 
-    pub(crate) async fn switch_to_live(
-        &self,
-        linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
-        role: ReplayToLiveRole,
-    ) -> Result<ReplayToLiveOutcome, WorkerExecutorError> {
+    async fn ensure_replay_prefix_consumed(&self) -> Result<(), WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
             state
                 .with_tx(async |tx| {
@@ -310,7 +306,42 @@ impl ReplayState {
                 })
                 .await
         })
-        .await?;
+        .await
+    }
+
+    /// Fails with a divergence when the bootstrap block of this cursor still holds recorded
+    /// entries that the core initializer did not consume.
+    pub(crate) async fn ensure_bootstrap_consumed(&self) -> Result<(), WorkerExecutorError> {
+        self.ensure_replay_prefix_consumed().await?;
+        if self.has_unclaimed_retained_starts() {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "every durable call of the bootstrap block claimed by the core initializer",
+                "unclaimed durable call recorded in the bootstrap block",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn switch_to_live(
+        &self,
+        linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
+        role: ReplayToLiveRole,
+    ) -> Result<ReplayToLiveOutcome, WorkerExecutorError> {
+        self.ensure_replay_prefix_consumed().await?;
+        match self.cursor.bootstrap {
+            Some(BootstrapTail::Strict) => {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "durable call recorded in the bootstrap block",
+                    "core initializer made a durable call after its recorded bootstrap block",
+                ));
+            }
+            Some(BootstrapTail::Live) => {
+                let replay_target = self.switch_cursor_to_live().await?;
+                self.cursor.publish_live();
+                return Ok(ReplayToLiveOutcome::Live { replay_target });
+            }
+            None => {}
+        }
         if role == ReplayToLiveRole::PrimaryAgent {
             let replay_target = self.begin_primary_settling().await?;
             self.finish_settling_to_live(linear_memory, role, replay_target)
