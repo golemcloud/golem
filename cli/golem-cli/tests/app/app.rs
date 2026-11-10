@@ -7607,6 +7607,93 @@ async fn ts_repl_foreground_cli_terminal_control(_tracing: &Tracing) {
 }
 
 #[test]
+async fn manifest_plugins_install_on_deploy_and_uninstall_when_removed(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "plugin-app";
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::FORMAT, "json", cmd::PLUGIN, cmd::LIST])
+        .await;
+    assert!(outputs.success_or_dump());
+    let version = outputs
+        .stdout_json::<serde_json::Value>()
+        .iter()
+        .filter_map(|list| list["plugins"].as_array())
+        .flatten()
+        .find(|entry| entry["plugin"]["name"] == "golem-otlp-exporter")
+        .and_then(|entry| entry["plugin"]["version"].as_str().map(str::to_string))
+        .expect("the server lists the built-in OTLP exporter plugin");
+
+    let write_manifest = |plugins: &str| {
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            formatdoc! {"
+                manifestVersion: {MANIFEST_VERSION}
+                app: {app_name}
+                environments:
+                  local:
+                    server: local
+                    componentPresets: debug
+                components:
+                  {app_name}:rust-main:
+                    templates: rust
+                agents:
+                  CounterAgent:
+                    plugins: {plugins}
+            ", MANIFEST_VERSION = versions::sdk::MANIFEST},
+        )
+        .unwrap();
+    };
+    let installed_plugins = || async {
+        let outputs = ctx
+            .cli([
+                cmd::COMPONENT,
+                cmd::GET,
+                &format!("{app_name}:rust-main"),
+                flag::FORMAT,
+                "json",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        outputs.stdout_json::<serde_json::Value>()[0]["agentTypeProvisionConfigs"]["CounterAgent"]
+            ["plugins"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    write_manifest(&formatdoc! {r#"
+
+                      - name: golem-otlp-exporter
+                        version: "{version}"
+                        parameters:
+                          endpoint: http://127.0.0.1:4318
+    "#});
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    let plugins = installed_plugins().await;
+    assert_eq!(plugins.len(), 1, "{plugins:?}");
+    assert_eq!(plugins[0]["pluginName"], "golem-otlp-exporter");
+    assert_eq!(plugins[0]["pluginVersion"], version.as_str());
+    assert_eq!(
+        plugins[0]["parameters"]["endpoint"],
+        "http://127.0.0.1:4318"
+    );
+
+    write_manifest("[]");
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert_eq!(installed_plugins().await, Vec::<serde_json::Value>::new());
+}
+
+#[test]
 async fn basic_ifs_deploy(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
