@@ -132,6 +132,7 @@ use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::config::DbSqliteConfig;
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::clients::shard_manager::ExecutorEndpoint;
@@ -1262,7 +1263,7 @@ pub async fn bootstrap_and_run_worker_executor<
     BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
 >(
     bootstrap: &BootstrapImpl,
-    golem_config: GolemConfig,
+    mut golem_config: GolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
@@ -1270,6 +1271,9 @@ pub async fn bootstrap_and_run_worker_executor<
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing worker executor");
     golem_config.validate()?;
+    golem_config.golem_issuer = Some(GolemIssuer::configured_or_generated(
+        golem_config.golem_issuer.take(),
+    ));
 
     let memory_snapshot = crate::services::active_agents::memory_probe::default_probe(
         golem_config.memory.system_memory_override,

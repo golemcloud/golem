@@ -17,6 +17,7 @@ use figment::providers::{Format, Toml};
 use golem_common::SafeDisplay;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig};
 use golem_common::model::RetryConfig;
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::shard_manager::{GrpcShardManagerConfig, canonical_advertised_ip};
@@ -83,6 +84,13 @@ mod tests;
 /// The shared global Golem executor configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GolemConfig {
+    /// The installation's Golem issuer: the issuer of the identities of its agents, tools and
+    /// accounts. An https URL on its own host, or a `urn:golem:issuer:<uuid>` value that Golem
+    /// generated. Without it, the executor generates a value at start and logs a warning, and from
+    /// then on this field holds the generated value. Every worker service and executor of one
+    /// installation must use the same value.
+    #[serde(default)]
+    pub golem_issuer: Option<GolemIssuer>,
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
@@ -165,6 +173,10 @@ impl SafeDisplay for GolemConfig {
 
         let mut result = String::new();
 
+        let _ = match &self.golem_issuer {
+            Some(golem_issuer) => writeln!(&mut result, "golem issuer: {golem_issuer}"),
+            None => writeln!(&mut result, "golem issuer: generated at start"),
+        };
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
         let _ = writeln!(
@@ -394,6 +406,7 @@ impl SafeDisplay for GolemConfig {
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
+            golem_issuer: None,
             tracing: TracingConfig::local_dev("worker-executor"),
             tracing_file_name_with_port: true,
             key_value_storage: KeyValueStorageConfig::default(),

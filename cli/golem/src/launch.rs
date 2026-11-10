@@ -51,6 +51,7 @@ pub async fn launch_golem_services(
     config: &GolemServerConfig,
 ) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts, Shutdown)> {
     check_exposure(config)?;
+    let config = &config.with_one_golem_issuer();
 
     // Services build rustls configurations from the process-level provider. A host that embeds
     // this launcher may not install one, and the `golem` binary has already installed it.

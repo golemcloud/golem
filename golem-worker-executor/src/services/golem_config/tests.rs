@@ -787,3 +787,29 @@ fn filesystem_snapshots_enabled_config_hides_the_key() {
         (false, false, true)
     );
 }
+
+#[test]
+fn the_golem_issuer_is_read_from_toml_and_a_plain_http_issuer_is_refused() {
+    use figment::Figment;
+    use figment::providers::{Format, Serialized, Toml};
+
+    let load = |toml: &str| {
+        Figment::new()
+            .merge(Serialized::defaults(GolemConfig::default()))
+            .merge(Toml::string(toml))
+            .extract::<GolemConfig>()
+    };
+
+    assert_eq!(load("").unwrap().golem_issuer, None);
+    assert_eq!(
+        load(r#"golem_issuer = "https://id.acme.example""#)
+            .unwrap()
+            .golem_issuer,
+        Some("https://id.acme.example".parse().unwrap())
+    );
+    let error = load(r#"golem_issuer = "http://id.acme.example""#)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("golem_issuer"), "{error}");
+    assert!(error.contains("http://id.acme.example"), "{error}");
+}
