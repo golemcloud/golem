@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::{
-    AWS_SESSION_TAGS_CLAIM, AWS_STS_AUDIENCE, AgentPrincipal, AwsSessionTags, GolemProofClaim,
-    GolemSubject, IDENTITY_PROOF_LIFETIME_SECONDS, IdentityProofClaims, IdentityProofHeader, Kind,
-    ProofReceiver, ProofSubject, ToolPrincipal,
+    AWS_SESSION_TAGS_CLAIM, AWS_STS_AUDIENCE, AgentPrincipal, AwsSessionTagError, AwsSessionTags,
+    GolemProofClaim, GolemSubject, IDENTITY_PROOF_LIFETIME_SECONDS, IdentityProofClaims,
+    IdentityProofHeader, Kind, ProofReceiver, ProofSubject, ToolPrincipal,
 };
 use crate::base_model::AgentFingerprint;
 use crate::base_model::account::AccountId;
@@ -108,6 +108,7 @@ fn build(input: &Value) -> IdentityProofClaims {
         input["issuedAt"].as_u64().unwrap(),
         text(input, "jti"),
     )
+    .unwrap()
 }
 
 #[test]
@@ -195,7 +196,7 @@ fn a_proof_for_aws_sts_repeats_the_golem_claim_in_session_tags_and_no_other_proo
         assert_eq!(claims.aud, AWS_STS_AUDIENCE, "{name}");
         assert_eq!(
             claims.aws_session_tags,
-            Some(AwsSessionTags::from_golem_claim(&claims.golem)),
+            Some(AwsSessionTags::from_golem_claim(&claims.golem).unwrap()),
             "{name}"
         );
 
@@ -231,13 +232,155 @@ fn a_proof_for_another_receiver_has_no_aws_session_tags_even_for_the_sts_audienc
         &ProofReceiver::Audience(AWS_STS_AUDIENCE.to_string()),
         1,
         "jti",
-    );
+    )
+    .unwrap();
     assert_eq!(claims.aws_session_tags, None);
     assert_eq!(claims.golem.kind(), Kind::Agent);
     assert_eq!(
         ProofReceiver::aws_sts(),
         ProofReceiver::AwsRoleAssumption {
             audience: "sts.amazonaws.com".to_string()
+        }
+    );
+}
+
+fn make_agent(agent_type: &str) -> AgentPrincipal {
+    AgentPrincipal {
+        issuer: "https://golem.example".to_string(),
+        agent_id: Uuid::parse_str("abcdef12-3456-4789-abcd-ef0123456789").unwrap(),
+        fingerprint: AgentFingerprint(
+            Uuid::parse_str("11111111-2222-4333-8444-555555555555").unwrap(),
+        ),
+        agent_type: AgentTypeName(agent_type.to_string()),
+        environment_id: EnvironmentId(
+            Uuid::parse_str("22222222-3333-4444-8555-666666666666").unwrap(),
+        ),
+    }
+}
+
+fn make_tool(name: &str) -> ToolPrincipal {
+    ToolPrincipal {
+        issuer: "https://golem.example".to_string(),
+        environment_id: EnvironmentId(
+            Uuid::parse_str("22222222-3333-4444-8555-666666666666").unwrap(),
+        ),
+        tool_name: ToolName::try_from(name).unwrap(),
+    }
+}
+
+fn claims_for(
+    subject: ProofSubject<'_>,
+    receiver: &ProofReceiver,
+) -> Result<IdentityProofClaims, AwsSessionTagError> {
+    IdentityProofClaims::new(
+        subject,
+        AccountId(Uuid::parse_str("33333333-4444-4555-8666-777777777777").unwrap()),
+        receiver,
+        1,
+        "jti",
+    )
+}
+
+#[test]
+fn an_agent_type_with_a_character_aws_refuses_fails_an_aws_proof_and_builds_for_another_receiver() {
+    for refused in [
+        '<', '>', '&', '"', '\'', '\\', '#', '%', '(', ')', '*', ',', ';', '\n', '\t',
+    ] {
+        let agent = make_agent(&format!("Report{refused}Q3"));
+        let error = claims_for(ProofSubject::Agent(&agent), &ProofReceiver::aws_sts()).unwrap_err();
+        assert_eq!(
+            error,
+            AwsSessionTagError::CharacterRefused {
+                tag: "golem:agent-type",
+                character: refused
+            },
+            "{refused:?}"
+        );
+        assert!(error.to_string().contains("golem:agent-type"));
+
+        let claims = claims_for(
+            ProofSubject::Agent(&agent),
+            &ProofReceiver::Audience("https://other.example".to_string()),
+        )
+        .unwrap();
+        assert_eq!(claims.aws_session_tags, None);
+    }
+}
+
+#[test]
+fn the_characters_that_aws_allows_in_a_tag_value_are_accepted() {
+    for allowed in [
+        "Report Q3",
+        "a_b.c:d/e=f+g-h@i",
+        "Rapport-d\u{e9}t\u{e9}",
+        "\u{5831}\u{544a}",
+        "",
+    ] {
+        let agent = make_agent(allowed);
+        let claims = claims_for(ProofSubject::Agent(&agent), &ProofReceiver::aws_sts()).unwrap();
+        let tags = claims.aws_session_tags.unwrap();
+        assert_eq!(
+            tags.principal_tags.agent_type.unwrap(),
+            [allowed.to_string()]
+        );
+    }
+}
+
+#[test]
+fn a_tag_value_that_begins_with_aws_colon_fails_an_aws_proof() {
+    let agent = make_agent("aws:X");
+    assert_eq!(
+        claims_for(ProofSubject::Agent(&agent), &ProofReceiver::aws_sts()).unwrap_err(),
+        AwsSessionTagError::ReservedPrefix {
+            tag: "golem:agent-type"
+        }
+    );
+    let inside = make_agent("x-aws:X");
+    claims_for(ProofSubject::Agent(&inside), &ProofReceiver::aws_sts()).unwrap();
+}
+
+#[test]
+fn a_300_character_tool_name_fails_an_aws_proof_and_a_256_character_one_passes() {
+    let long = "a".repeat(300);
+    let tool_300 = make_tool(&long);
+    assert_eq!(
+        claims_for(ProofSubject::Tool(&tool_300), &ProofReceiver::aws_sts()).unwrap_err(),
+        AwsSessionTagError::ValueTooLong {
+            tag: "golem:tool",
+            length: 300
+        }
+    );
+    let other = claims_for(
+        ProofSubject::Tool(&tool_300),
+        &ProofReceiver::Audience("https://other.example".to_string()),
+    )
+    .unwrap();
+    assert_eq!(other.aws_session_tags, None);
+
+    let tool_256 = make_tool(&"a".repeat(256));
+    let claims = claims_for(ProofSubject::Tool(&tool_256), &ProofReceiver::aws_sts()).unwrap();
+    assert_eq!(
+        claims
+            .aws_session_tags
+            .unwrap()
+            .principal_tags
+            .tool
+            .unwrap()[0]
+            .len(),
+        256
+    );
+}
+
+#[test]
+fn the_length_limit_counts_characters_not_bytes() {
+    let agent_256 = make_agent(&"\u{e9}".repeat(256));
+    claims_for(ProofSubject::Agent(&agent_256), &ProofReceiver::aws_sts()).unwrap();
+    let agent_257 = make_agent(&"\u{e9}".repeat(257));
+    assert_eq!(
+        claims_for(ProofSubject::Agent(&agent_257), &ProofReceiver::aws_sts()).unwrap_err(),
+        AwsSessionTagError::ValueTooLong {
+            tag: "golem:agent-type",
+            length: 257
         }
     );
 }
