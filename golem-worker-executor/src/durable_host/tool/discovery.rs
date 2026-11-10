@@ -183,7 +183,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                 agent_type_name: agent.agent_type.clone(),
             },
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 ToolBindingOwner::ComponentBaseline { component_id }
             }
         };
@@ -282,7 +282,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                 agent_type_name: agent.agent_type.clone(),
             },
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 ToolBindingOwner::ComponentBaseline { component_id }
             }
         };

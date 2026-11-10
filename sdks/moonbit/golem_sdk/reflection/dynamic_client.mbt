@@ -56,7 +56,7 @@ pub fn DynamicAgentClient::new_phantom(
   type_name : String,
   constructor_value : @model.SchemaValue,
 ) -> CreatedPhantomClient raise ReflectError {
-  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+  let phantom_id = @identity.new_phantom_id()
   let agent_id = ParsedAgentId::create(
     type_name,
     constructor_value,

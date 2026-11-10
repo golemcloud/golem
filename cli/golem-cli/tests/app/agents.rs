@@ -43,7 +43,6 @@ pub(super) async fn streaming_invocation_context() -> TestContext {
             components:
               golem-it:agent-rpc-rust:
                 componentWasm: component.wasm
-                outputWasm: component-final.wasm
                 presets:
                   release: {{}}
 

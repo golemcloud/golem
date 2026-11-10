@@ -31,7 +31,7 @@ use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::{
-    AgentMode, OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig,
+    AgentMode, AgentTarget, OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig,
 };
 use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
@@ -123,7 +123,7 @@ impl CallAgentHandler {
         let agent_response = self
             .worker_service
             .invoke_agent(
-                &agent_id,
+                &AgentTarget::Current(agent_id.clone()),
                 Some(behaviour.method_name.clone()),
                 Some(proto_method_parameters),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,

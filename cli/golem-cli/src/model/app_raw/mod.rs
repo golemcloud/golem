@@ -934,8 +934,6 @@ pub struct ComponentTemplate {
     pub guest_language: Option<GuestLanguage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
     pub dependencies: ComponentDependencies,
     #[serde(
@@ -983,7 +981,6 @@ impl ComponentTemplate {
         ComponentLayerProperties {
             guest_language: self.guest_language,
             component_wasm: self.component_wasm.clone(),
-            output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
             node_http_routers: self.node_http_routers.clone(),
             build_merge_mode: self.build_merge_mode,
@@ -1016,8 +1013,6 @@ pub struct Component {
     pub dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
     pub dependencies: ComponentDependencies,
     #[serde(
@@ -1065,7 +1060,6 @@ impl Component {
         ComponentLayerProperties {
             guest_language: None,
             component_wasm: self.component_wasm.clone(),
-            output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
             node_http_routers: self.node_http_routers.clone(),
             build_merge_mode: self.build_merge_mode,
@@ -1096,8 +1090,6 @@ pub struct ComponentPreset {
     pub default: Option<Marker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
     pub dependencies: ComponentDependencies,
     #[serde(
@@ -1143,7 +1135,6 @@ impl ComponentPreset {
         ComponentLayerProperties {
             guest_language: None,
             component_wasm: self.component_wasm,
-            output_wasm: self.output_wasm,
             dependencies: self.dependencies,
             node_http_routers: self.node_http_routers,
             build_merge_mode: self.build_merge_mode,
@@ -1807,7 +1798,6 @@ pub struct ComponentLayerProperties {
     // Only component templates declare a guest language.
     pub guest_language: Option<GuestLanguage>,
     pub component_wasm: Option<String>,
-    pub output_wasm: Option<String>,
     pub dependencies: ComponentDependencies,
     pub node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     pub build_merge_mode: Option<VecMergeMode>,

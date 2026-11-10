@@ -1,31 +1,35 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 
 app: agent-updates
 
 includes:
 - ../golem-test-components-common.yaml
 
-components:
-  it:agent-update:
-    dir: "."
+componentTemplates:
+  versioned-rust-test-component:
     templates: rust, rust-test-component
     presets:
       debug:
         customCommands:
           copy:
-          - command: cp golem-temp/agents/it_agent_update_debug.wasm ../it_agent_update_v1_debug.wasm
+          - command: cp "{{ cargoTarget }}/wasm32-wasip2/debug/it_agent_update.wasm" ../it_agent_update_v1_debug.wasm
       release:
         customCommands:
           copy:
-          - command: cp golem-temp/agents/it_agent_update_release.wasm ../it_agent_update_v1_release.wasm
+          - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/it_agent_update.wasm" ../it_agent_update_v1_release.wasm
+
+components:
+  it:agent-update:
+    dir: "."
+    templates: versioned-rust-test-component
 
 environments:
   local:

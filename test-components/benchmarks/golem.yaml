@@ -1,12 +1,12 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 
 app: benchmarks
 
@@ -26,7 +26,6 @@ componentTemplates:
           targets:
           - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
-        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
       optimized:
         build:
         - command: cargo build --target wasm32-wasip2 --release
@@ -36,13 +35,18 @@ componentTemplates:
           targets:
           - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
-        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
 
   effect-test-component:
     guestLanguage: effect
-    customCommands:
-      copy:
-      - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+    presets:
+      optimized:
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+      quick:
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
 
 components:
   benchmark:agent-rust:

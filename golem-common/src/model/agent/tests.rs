@@ -31,24 +31,72 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
     let agent = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         test_agent_types().into_values().collect(),
+        Default::default(),
+    );
+    let wrong_export = ComponentMetadata::from_parts(
+        KnownExports {
+            save_snapshot_interface: Some("golem:api/save-snapshot@1.5.0".to_string()),
+            ..Default::default()
+        },
+        vec![],
+        vec![],
         Default::default(),
     );
     let worker_name = "4f8d62ad-9a36-4ddb-a8f2-6ae73fc302d1";
     let external_name = OwnerKind::external_tool_instance_name(&IdempotencyKey::new(
         "external-invocation".to_string(),
     ));
+    let processor_name = OwnerKind::oplog_processor_instance_name(Uuid::nil());
 
-    assert_eq!(
+    for agent_types in [vec![], test_agent_types().into_values().collect()] {
+        let processor = ComponentMetadata::from_parts(
+            KnownExports {
+                oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".to_string()),
+                ..Default::default()
+            },
+            vec![],
+            agent_types,
+            Default::default(),
+        );
+        let resolved = ResolvedOwnerContext::from_authoritative_kind(
+            OwnerKind::OplogProcessor,
+            &processor_name,
+            &processor,
+        )
+        .unwrap();
+        assert_eq!(resolved, ResolvedOwnerContext::OplogProcessor);
+        assert!(resolved.agent().is_none());
+        assert!(
+            processor
+                .owner_plugins(OwnerKind::OplogProcessor, None)
+                .is_none()
+        );
+        assert!(
+            processor
+                .owner_plugins(
+                    OwnerKind::OplogProcessor,
+                    Some(&AgentTypeName("agent-2".to_string()))
+                )
+                .is_none()
+        );
+        assert!(
+            ResolvedOwnerContext::from_authoritative_kind(
+                OwnerKind::ComponentAgent,
+                &processor_name,
+                &processor,
+            )
+            .is_err()
+        );
+    }
+
+    assert!(
         ResolvedOwnerContext::from_authoritative_kind(
             OwnerKind::ComponentAgent,
             worker_name,
             &non_agent,
         )
-        .unwrap(),
-        ResolvedOwnerContext::ComponentWorker,
+        .is_err(),
     );
     let typed = ResolvedOwnerContext::from_authoritative_kind(
         OwnerKind::ComponentAgent,
@@ -66,7 +114,15 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
         .is_err()
     );
 
-    for metadata in [&non_agent, &agent] {
+    for metadata in [&non_agent, &agent, &wrong_export] {
+        assert!(
+            ResolvedOwnerContext::from_authoritative_kind(
+                OwnerKind::OplogProcessor,
+                &processor_name,
+                metadata,
+            )
+            .is_err()
+        );
         assert_eq!(
             ResolvedOwnerContext::from_authoritative_kind(
                 OwnerKind::EphemeralExternalTool,
@@ -119,6 +175,42 @@ fn external_tool_owner_identity_is_stable_and_reserved() {
             .validate_instance_name("caller-controlled")
             .is_err()
     );
+    let processor_name = OwnerKind::oplog_processor_instance_name(Uuid::nil());
+    assert_eq!(
+        processor_name,
+        "~golem-oplog-processor-00000000-0000-0000-0000-000000000000"
+    );
+    assert!(OwnerKind::is_reserved_instance_name(&processor_name));
+    for (kind, own_name, other_name) in [
+        (OwnerKind::OplogProcessor, &processor_name, &name1),
+        (OwnerKind::EphemeralExternalTool, &name1, &processor_name),
+    ] {
+        assert!(kind.validate_instance_name(own_name).is_ok());
+        assert!(kind.validate_instance_name(other_name).is_err());
+        assert!(kind.validate_instance_name("caller-controlled").is_err());
+        assert!(
+            OwnerKind::ComponentAgent
+                .validate_instance_name(own_name)
+                .is_err()
+        );
+    }
+    for (kind, discriminant, json) in [
+        (OwnerKind::ComponentAgent, 0, "\"component-agent\""),
+        (
+            OwnerKind::EphemeralExternalTool,
+            1,
+            "\"ephemeral-external-tool\"",
+        ),
+        (OwnerKind::OplogProcessor, 2, "\"oplog-processor\""),
+    ] {
+        assert_eq!(i32::from(kind), discriminant);
+        assert_eq!(OwnerKind::try_from(discriminant).unwrap(), kind);
+        assert_eq!(serde_json::to_string(&kind).unwrap(), json);
+        assert_eq!(serde_json::from_str::<OwnerKind>(json).unwrap(), kind);
+    }
+    for discriminant in [-1, 3, i32::MAX] {
+        assert!(OwnerKind::try_from(discriminant).is_err());
+    }
 }
 use crate::schema::{
     AgentConstructorSchema, AgentTypeSchema, AutoInjectedKind, BinaryRestrictions, InputSchema,

@@ -215,7 +215,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         entry.path == path && entry.source == AgentConfigSource::Secret
                     })
                 }),
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => self
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => self
                 .owner_component_metadata()
                 .metadata
                 .config_schema()
@@ -397,7 +397,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .expect("Active agent type of agent was not declared in component metadata");
                 (agent_type.config, agent_type.schema)
             }
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 let config_schema = self.owner_component_metadata().metadata.config_schema();
                 (
                     config_schema.declarations.clone(),
@@ -606,6 +606,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     let Some(metadata) = metadata else {
                         return Ok(None);
                     };
+                    let Some(agent_type_name) = &metadata.initial_worker_metadata.agent_type_name
+                    else {
+                        return Ok(None);
+                    };
                     let component_revision = metadata
                         .last_known_status
                         .as_ref()
@@ -620,9 +624,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .agent_types_service()
                         .get(
                             self.owned_agent_id.environment_id,
-                            target_agent_id.component_id,
+                            metadata.initial_worker_metadata.component_id,
                             component_revision,
-                            &agent_type_name,
+                            agent_type_name,
                         )
                         .await?)
                 }

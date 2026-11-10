@@ -1,6 +1,6 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
-manifestVersion: 1.6.0
+# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
+manifestVersion: 2.0.0
 app: git-tool
 
 components:
@@ -9,7 +9,7 @@ components:
     templates: ts
     customCommands:
       copy:
-        - command: cp golem-temp/agents/golem_git_tool.wasm ../git-tool.wasm
+        - command: cp golem-temp/agents/golem_git_tool.preinitialized.wasm ../git-tool.wasm
 
 environments:
   local:

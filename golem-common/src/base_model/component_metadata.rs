@@ -138,8 +138,6 @@ impl Debug for ComponentMetadata {
             .field("known_exports", &self.data.known_exports)
             .field("producers", &self.data.producers)
             .field("memories", &self.data.memories)
-            .field("root_package_name", &self.data.root_package_name)
-            .field("root_package_version", &self.data.root_package_version)
             .field("agent_types", &self.data.agent_types)
             .field("agent_method_streams", &self.data.agent_method_streams)
             .field(
@@ -193,8 +191,6 @@ pub struct ComponentMetadataInnerData {
     pub known_exports: KnownExports,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
-    pub root_package_name: Option<String>,
-    pub root_package_version: Option<String>,
 
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
@@ -236,8 +232,6 @@ crate::declare_structs! {
         pub known_exports: KnownExports,
         pub producers: Vec<Producers>,
         pub memories: Vec<LinearMemory>,
-        pub root_package_name: Option<String>,
-        pub root_package_version: Option<String>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub config_schema: ComponentConfigSchema,
@@ -279,8 +273,6 @@ impl From<ComponentMetadata> for ComponentMetadataDto {
             known_exports: data.known_exports,
             producers: data.producers,
             memories: data.memories,
-            root_package_name: data.root_package_name,
-            root_package_version: data.root_package_version,
             config_schema: data.config_schema,
             component_provision_config: data.component_provision_config,
             agent_types: data
@@ -341,8 +333,6 @@ impl From<ComponentMetadataDto> for ComponentMetadata {
                 known_exports: value.known_exports,
                 producers: value.producers,
                 memories: value.memories,
-                root_package_name: value.root_package_name,
-                root_package_version: value.root_package_version,
                 config_schema: value.config_schema,
                 component_provision_config: value.component_provision_config,
                 agent_types,

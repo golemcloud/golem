@@ -148,25 +148,24 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             leak_sentinel,
         }
     }
-    /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
+    /// Resolves the target so that `environment_id` comes from the
     /// target component's metadata rather than from the caller. This ensures
     /// that auth checks, shard routing, and all downstream code use the
     /// component-authoritative environment.
     async fn canonicalize_owned_agent_id(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        _environment_id: EnvironmentId,
     ) -> Result<OwnedAgentId, RpcError> {
+        let AgentTarget::Current(agent_id) = target;
         let component = self
             .component_service()
-            .get_metadata(owned_agent_id.component_id(), None)
+            .get_metadata(agent_id.component_id, None)
             .await
             .map_err(|e| RpcError::RemoteInternalError {
                 details: format!("Failed to resolve target component metadata: {e}"),
             })?;
-        Ok(OwnedAgentId::new(
-            component.environment_id,
-            &owned_agent_id.agent_id,
-        ))
+        Ok(OwnedAgentId::new(component.environment_id, &agent_id))
     }
 
     async fn validate_method_invocation(
@@ -176,19 +175,29 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         method_parameters: &SchemaValue,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<bool, RpcError> {
+        let mut existing_metadata = None;
         let component_revision = method_validation_revision(freshness_disposition, || async {
-            Ok(Worker::<Ctx>::get_latest_metadata(self, owned_agent_id)
-                .await?
+            existing_metadata = Worker::<Ctx>::get_latest_metadata(self, owned_agent_id).await?;
+            Ok(existing_metadata
+                .as_ref()
                 .map(|metadata| metadata.last_known_status.component_revision))
         })
         .await?;
         let component = self
             .component_service()
-            .get_metadata(owned_agent_id.component_id(), component_revision)
+            .get_metadata(
+                existing_metadata.as_ref().map_or_else(
+                    || owned_agent_id.component_id(),
+                    |metadata| metadata.component_id,
+                ),
+                component_revision,
+            )
             .await?;
-        let parsed_agent_id =
-            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                .map_err(|details| RpcError::ProtocolError { details })?;
+        let parsed_agent_id = match &existing_metadata {
+            Some(metadata) => metadata.parse_agent_id(&component.metadata),
+            None => ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata),
+        }
+        .map_err(|details| RpcError::ProtocolError { details })?;
         validate_agent_method_invocation(
             &component.metadata,
             Some(&parsed_agent_id),
@@ -203,7 +212,8 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn create_demand(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -214,7 +224,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
-        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+        let owned_agent_id = &self
+            .canonicalize_owned_agent_id(target, environment_id)
+            .await?;
 
         if self
             .shard_service()
@@ -270,7 +282,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         } else {
             self.remote_rpc
                 .create_demand(
-                    owned_agent_id,
+                    AgentTarget::Current(owned_agent_id.agent_id()),
+                    owned_agent_id.environment_id,
                     method_name,
                     self_created_by,
                     self_agent_id,
@@ -287,7 +300,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn invoke_and_await(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         method_name: String,
@@ -300,7 +314,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
-        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+        let owned_agent_id = &self
+            .canonicalize_owned_agent_id(target, environment_id)
+            .await?;
 
         if freshness_disposition == InvocationFreshnessDisposition::KnownFresh
             && idempotency_key.is_none()
@@ -385,7 +401,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         } else {
             self.remote_rpc
                 .invoke_and_await(
-                    owned_agent_id,
+                    AgentTarget::Current(owned_agent_id.agent_id()),
+                    owned_agent_id.environment_id,
                     Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
                     freshness_disposition,
                     method_name,
@@ -404,7 +421,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn invoke_and_await_streaming(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: IdempotencyKey,
         method_name: String,
         method_parameters: ProtoSchemaValue,
@@ -421,7 +439,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<DurableRpcInvocationResult, RpcError> {
-        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+        let owned_agent_id = &self
+            .canonicalize_owned_agent_id(target, environment_id)
+            .await?;
         if self
             .shard_service()
             .check_worker(&owned_agent_id.agent_id)
@@ -430,7 +450,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             return self
                 .remote_rpc
                 .invoke_and_await_streaming(
-                    owned_agent_id,
+                    AgentTarget::Current(owned_agent_id.agent_id()),
+                    owned_agent_id.environment_id,
                     idempotency_key,
                     method_name,
                     method_parameters,
@@ -489,17 +510,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let status = worker.get_last_known_status().await;
         let component = self
             .component_service()
-            .get_metadata(
-                owned_agent_id.component_id(),
-                Some(status.component_revision),
-            )
+            .get_metadata(worker.component_id(), Some(status.component_revision))
             .await?;
         let input_encoded_len = method_parameters.encoded_len();
         let input = decode_invocation_input(method_parameters)
             .map_err(|details| RpcError::ProtocolError { details })?;
-        let parsed_agent_id =
-            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                .map_err(|details| RpcError::ProtocolError { details })?;
+        let parsed_agent_id = worker
+            .get_initial_worker_metadata()
+            .parse_agent_id(&component.metadata)
+            .map_err(|details| RpcError::ProtocolError { details })?;
         if !validate_agent_method_invocation(
             &component.metadata,
             Some(&parsed_agent_id),
@@ -773,7 +792,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn invoke(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         method_name: String,
@@ -785,7 +805,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
-        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+        let owned_agent_id = &self
+            .canonicalize_owned_agent_id(target, environment_id)
+            .await?;
 
         if freshness_disposition == InvocationFreshnessDisposition::KnownFresh
             && idempotency_key.is_none()
@@ -866,7 +888,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         } else {
             self.remote_rpc
                 .invoke(
-                    owned_agent_id,
+                    AgentTarget::Current(owned_agent_id.agent_id()),
+                    owned_agent_id.environment_id,
                     Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
                     freshness_disposition,
                     method_name,

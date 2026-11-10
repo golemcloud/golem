@@ -99,8 +99,6 @@ fn component_metadata_helpers_use_exact_known_export_names() {
             tool_middleware_guest_interface: None,
         },
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::new(),
     );
@@ -148,8 +146,6 @@ fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         Vec::new(),
-        None,
-        None,
         Vec::new(),
         BTreeMap::from([(
             agent_type.clone(),
@@ -193,8 +189,6 @@ fn component_metadata_grpc_roundtrip_preserves_shared_memory_flag() {
             maximum: Some(2 * LinearMemory::PAGE_SIZE),
             shared: true,
         }],
-        None,
-        None,
         Vec::new(),
         BTreeMap::new(),
     );
@@ -286,8 +280,6 @@ fn metadata_with_tool() -> ComponentMetadata {
             ..KnownExports::default()
         },
         Vec::new(),
-        None,
-        None,
         Vec::new(),
         BTreeMap::new(),
         BTreeMap::from([(
@@ -439,8 +431,6 @@ fn component_metadata_response_pairs_declarations_with_optional_type_ids() {
     let metadata = ComponentMetadata::from_parts_with_tools(
         KnownExports::default(),
         vec![],
-        Some("example".to_string()),
-        None,
         vec![unallocated_agent.clone(), allocated_agent.clone()],
         BTreeMap::new(),
         tools,
@@ -473,6 +463,8 @@ fn component_metadata_response_pairs_declarations_with_optional_type_ids() {
     );
 
     let json = serde_json::to_value(&response).unwrap();
+    assert!(json.get("rootPackageName").is_none());
+    assert!(json.get("rootPackageVersion").is_none());
     assert_eq!(json["agentTypes"][0]["typeId"], serde_json::Value::Null);
     assert_eq!(json["agentTypes"][1]["typeId"], 73);
     assert_eq!(
@@ -487,6 +479,8 @@ fn component_metadata_response_pairs_declarations_with_optional_type_ids() {
     assert!(json.get("agentTypeIds").is_none());
     assert!(json.get("toolTypeIds").is_none());
     let poem_json = response.to_json().unwrap();
+    assert!(poem_json.get("rootPackageName").is_none());
+    assert!(poem_json.get("rootPackageVersion").is_none());
     assert_eq!(poem_json["agentTypes"], json["agentTypes"]);
     assert_eq!(poem_json["tools"]["grep"]["typeId"], 211);
     assert_eq!(

@@ -541,27 +541,26 @@ fn ephemeral_replay_is_only_for_typed_owner_initialization() {
     )));
     assert!(should_replay_invocation(AgentMode::Ephemeral, &agent, 0));
     assert!(!should_replay_invocation(AgentMode::Ephemeral, &agent, 1));
-    for owner in [
-        ResolvedOwnerContext::ComponentWorker,
-        ResolvedOwnerContext::ComponentBaseline,
-    ] {
-        for replayed in [0, 1, 3] {
-            assert!(!should_replay_invocation(
-                AgentMode::Ephemeral,
-                &owner,
-                replayed
-            ));
-        }
+    for replayed in [0, 1, 3] {
+        assert!(!should_replay_invocation(
+            AgentMode::Ephemeral,
+            &ResolvedOwnerContext::ComponentBaseline,
+            replayed
+        ));
     }
-    for owner in [agent, ResolvedOwnerContext::ComponentWorker] {
-        for replayed in [0, 1, 3] {
-            assert!(should_replay_invocation(
-                AgentMode::Durable,
-                &owner,
-                replayed
-            ));
-        }
+    for replayed in [0, 1, 3] {
+        assert!(should_replay_invocation(
+            AgentMode::Durable,
+            &agent,
+            replayed
+        ));
+        assert!(should_replay_invocation(
+            AgentMode::Durable,
+            &ResolvedOwnerContext::OplogProcessor,
+            replayed
+        ));
     }
+    assert!(ResolvedOwnerContext::OplogProcessor.agent().is_none());
 }
 
 #[test]

@@ -20,7 +20,7 @@ use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::card::EffectiveSurface;
 use golem_common::model::card::StoredCard;
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
@@ -157,12 +157,11 @@ impl AgentConfig {
 
     pub(crate) fn enrich_env(
         worker_env: &mut Vec<(String, String)>,
-        agent_id: &AgentId,
+        component_id: ComponentId,
+        agent_name: String,
         agent_type: &Option<AgentTypeName>,
         target_component_revision: ComponentRevision,
     ) {
-        let agent_name = agent_id.agent_id.clone();
-        let component_id = &agent_id.component_id;
         let component_revision = target_component_revision.to_string();
 
         Self::remove_dynamic_vars(worker_env);

@@ -1,7 +1,5 @@
 # Build with `golem -A middleware.golem.yaml -Y build --step build`.
-# The CLI metadata extractor currently requires agent or ordinary tool exports,
-# so middleware-only components cannot yet use its add-metadata/deploy steps.
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 app: effect-golem-middleware-integration-test
 environments:
   local:
@@ -21,7 +19,6 @@ componentTemplates:
         module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
         into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
     componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
-    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
 components:
   effect-golem:tool-middleware:
     dir: components/tool-middleware

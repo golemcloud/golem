@@ -102,6 +102,9 @@ impl Fixture {
         let metadata = AgentMetadata {
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_id: identity.agent_id.clone(),
+            component_id: identity.agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             env: vec![],
             environment_id: identity.environment_id,
             created_by: account,
@@ -116,6 +119,9 @@ impl Fixture {
         };
         let create = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
             agent_id: identity.agent_id.clone(),
+            component_id: identity.agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_mode: AgentMode::Durable,
             component_revision: golem_common::model::component::ComponentRevision::INITIAL,
