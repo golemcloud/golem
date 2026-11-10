@@ -20,7 +20,8 @@
 //! The gate weighs two quantities against the usable ceiling:
 //!
 //! * Measured RSS from the [`MemoryProbe`] (cgroup `memory.current` on a
-//!   constrained pod) — what is resident right now.
+//!   constrained pod, less the page cache and slab that the kernel can
+//!   reclaim) — what is resident right now.
 //! * The total linear memory *granted* to live workers — what they could fault
 //!   in at any moment.
 //!
