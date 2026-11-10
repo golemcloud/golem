@@ -111,6 +111,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_context_stack,
             principal,
             InvocationFreshnessDisposition::MayExist,
+            CreateIntent::UNKEYED_INVOCATION,
         )
         .await
     }
@@ -124,6 +125,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
+        create_intent: CreateIntent,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -139,6 +141,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context_stack,
                 principal,
                 freshness_disposition,
+                create_intent,
             )
             .await
     }
@@ -193,6 +196,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
         mut freshness_disposition: InvocationFreshnessDisposition,
+        create_intent: CreateIntent,
     ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -208,6 +212,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context_stack,
                 principal.clone(),
                 freshness_disposition,
+                create_intent.clone(),
             )
             .await?;
             if worker.agent_mode() != AgentMode::Ephemeral {
@@ -316,6 +321,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_context_stack,
             principal,
             freshness_disposition,
+            CreateIntent::UNKEYED_INVOCATION,
         )
         .await?;
         Self::start_if_needed(worker.clone()).await?;
@@ -503,9 +509,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
+        create_intent: CreateIntent,
     ) -> Result<(), WorkerExecutorError> {
         loop {
             let worker = self.clone();
+            let create_intent = create_intent.clone();
             let worker_env = worker_env.clone();
             let worker_agent_config = worker_agent_config.clone();
             let parent = parent.clone();
@@ -538,6 +546,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &invocation_context_stack,
                     freshness_disposition,
                     creation_mode,
+                    &create_intent,
                 )
                 .await;
                 worker
@@ -1204,6 +1213,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context: &InvocationContextStack,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
+        create_intent: &CreateIntent,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         // Captured once, here, and cached for the life of the oplog. One live oplog is one
         // ownership generation. Re-reading the epoch per write would only let a losing executor
@@ -1343,13 +1353,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
-                    create_request: CreateRequest::new(
-                        if agent_id.as_ref().is_some_and(|id| id.phantom_id.is_some()) {
-                            CreateRequestKind::Phantom
-                        } else {
-                            CreateRequestKind::GetOrCreate
-                        },
-                        None,
+                    create_request: create_intent.request(
+                        agent_id.as_ref().and_then(|id| id.phantom_id),
                         principal.clone(),
                         &invocation_context
                             .clone()

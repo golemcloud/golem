@@ -248,6 +248,57 @@ pub(crate) enum WorkerCreationMode {
     OplogProcessor,
 }
 
+/// What a caller asks for when it may create an owner. Only the request that actually writes the
+/// Create entry is recorded; a caller that finds the owner existing records nothing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CreateIntent {
+    /// The owner is created as a side effect of an invocation. The invocation's idempotency key
+    /// identifies the create only for an owner whose phantom ID is derived from that key.
+    Invocation {
+        idempotency_key: Option<IdempotencyKey>,
+    },
+    /// An explicit create request.
+    Create {
+        exclusive: bool,
+        idempotency_key: Option<IdempotencyKey>,
+    },
+}
+
+impl CreateIntent {
+    pub const UNKEYED_INVOCATION: Self = Self::Invocation {
+        idempotency_key: None,
+    };
+
+    fn request(
+        &self,
+        phantom_id: Option<Uuid>,
+        principal: Principal,
+        invocation_context: &InvocationContextStack,
+    ) -> CreateRequest {
+        let (kind, idempotency_key) = match self {
+            Self::Invocation { idempotency_key } if phantom_id.is_some() => (
+                CreateRequestKind::Phantom,
+                idempotency_key
+                    .clone()
+                    .filter(|key| phantom_id == Some(ephemeral_invocation_phantom_id(key))),
+            ),
+            Self::Invocation { .. } => (CreateRequestKind::GetOrCreate, None),
+            Self::Create {
+                idempotency_key, ..
+            } if phantom_id.is_some() => (CreateRequestKind::Phantom, idempotency_key.clone()),
+            Self::Create {
+                exclusive: true,
+                idempotency_key,
+            } => (CreateRequestKind::Exclusive, idempotency_key.clone()),
+            Self::Create {
+                exclusive: false,
+                idempotency_key,
+            } => (CreateRequestKind::GetOrCreate, idempotency_key.clone()),
+        };
+        CreateRequest::new(kind, idempotency_key, principal, invocation_context)
+    }
+}
+
 impl WorkerCreationMode {
     fn owner_kind(self) -> OwnerKind {
         match self {

@@ -22,6 +22,7 @@ use super::{
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
     from_proto_invocation_context, golem,
 };
+use crate::worker::CreateIntent;
 use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition};
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -178,6 +179,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             principal,
             freshness_disposition,
+            CreateIntent::Create {
+                exclusive: !request.ignore_already_existing,
+                idempotency_key: request.idempotency_key.clone().map(Into::into),
+            },
         )
         .await?;
 

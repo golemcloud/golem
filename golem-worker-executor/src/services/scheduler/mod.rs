@@ -18,7 +18,7 @@ use crate::services::oplog::{ArchiveWait, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::{ExactExistingDelivery, WorkerActivator};
 use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError};
-use crate::worker::{INACTIVE_EPHEMERAL_AGENT_ERROR, Worker};
+use crate::worker::{CreateIntent, INACTIVE_EPHEMERAL_AGENT_ERROR, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -188,6 +188,9 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
                 worker_parent,
                 &InvocationContextStack::fresh(),
                 worker_creation_principal,
+                CreateIntent::Invocation {
+                    idempotency_key: invocation.idempotency_key().cloned(),
+                },
             )
             .await?;
 

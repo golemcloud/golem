@@ -42,8 +42,8 @@ use crate::services::{
     key_value, oplog, promise, rdbms, scheduler, shard_manager, worker, worker_activator,
     worker_enumeration, worker_fork,
 };
-use crate::worker::Worker;
 use crate::worker::invocation::validate_agent_method_invocation;
+use crate::worker::{CreateIntent, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::StreamExt;
