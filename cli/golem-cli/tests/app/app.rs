@@ -6660,6 +6660,78 @@ async fn post_build_guest_bridge_scan_rejects_duplicate_agent(_tracing: &Tracing
 }
 
 #[test]
+async fn agent_name_bridge_matcher_rejects_agent_defined_by_two_components(_tracing: &Tracing) {
+    for bridge_mode in ["external", "internal"] {
+        let ctx = TestContext::new();
+        let placeholder_wasm = placeholder_component_wasm(&ctx);
+        let extracted_agent_types = fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap();
+        let bar_agent_types = serde_json::to_string(
+            &serde_json::from_str::<Vec<JsonValue>>(&extracted_agent_types)
+                .unwrap()
+                .into_iter()
+                .filter(|agent_type| agent_type["type_name"] == "BarAgent")
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        fs::create_dir_all(ctx.cwd_path_join("golem-temp/extracted-component-metadata")).unwrap();
+        for component in ["consumer", "producer"] {
+            let component_name = format!("app:{component}");
+            let final_wasm = ctx.cwd_path_join(format!("{component}-final.wasm"));
+            copy_placeholder_wasm(&placeholder_wasm, &final_wasm);
+            seed_extracted_metadata(&ctx, &component_name, &final_wasm, &bar_agent_types);
+            seed_extraction_marker(&ctx, &component_name);
+        }
+
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            formatdoc! {r#"
+                manifestVersion: {MANIFEST_VERSION}
+
+                app: duplicate-agent-name-matcher
+
+                environments:
+                  local:
+                    server: local
+
+                components:
+                  app:consumer:
+                    componentWasm: {placeholder_wasm}
+                    outputWasm: consumer-final.wasm
+
+                  app:producer:
+                    componentWasm: {placeholder_wasm}
+                    outputWasm: producer-final.wasm
+
+                bridge:
+                  rust:
+                    {bridge_mode}:
+                      agents: BarAgent
+                      outputDir: bridge
+            "#,
+                MANIFEST_VERSION = versions::sdk::MANIFEST,
+                placeholder_wasm = placeholder_wasm.display(),
+            },
+        )
+        .unwrap();
+
+        let outputs = ctx
+            .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+            .await;
+        assert!(!outputs.success_or_dump(), "bridge mode: {bridge_mode}");
+        assert!(
+            outputs.stdout_contains(
+                "BarAgent is defined by multiple components: app:consumer, app:producer"
+            ),
+            "bridge mode: {bridge_mode}"
+        );
+    }
+}
+
+#[test]
 async fn unselected_external_bridge_output_dir_does_not_block_selected_guest_bridge(
     _tracing: &Tracing,
 ) {
