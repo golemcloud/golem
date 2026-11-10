@@ -40,8 +40,6 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
             ..Default::default()
         },
         vec![],
-        None,
-        None,
         vec![],
         Default::default(),
     );
@@ -58,8 +56,6 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
                 ..Default::default()
             },
             vec![],
-            None,
-            None,
             agent_types,
             Default::default(),
         );

@@ -14086,8 +14086,6 @@ fn wallet_test_component(
                 ..Default::default()
             },
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             Default::default(),
         ),

@@ -572,8 +572,6 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
                 ..Default::default()
             },
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
         )
