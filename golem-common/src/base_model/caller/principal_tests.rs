@@ -96,6 +96,9 @@ fn pairs_that_differ_in_case_trailing_slash_or_normalization_are_different_princ
     let subject = "\u{e9}l\u{e8}ve";
     let principal = user(issuer, subject);
     assert!(principal.equals(&user(issuer, subject)));
+    let own_ref = principal.principal_ref().unwrap();
+    assert!(principal.equals_ref(&own_ref));
+    assert!(principal.equals_ref(&PrincipalRef::new(Pair::new(issuer, subject))));
 
     let variants = [
         user("https://Login.acme.example", subject),
@@ -107,6 +110,11 @@ fn pairs_that_differ_in_case_trailing_slash_or_normalization_are_different_princ
         assert!(!principal.equals(variant), "{variant:?}");
         assert!(!variant.equals(&principal), "{variant:?}");
         assert_ne!(principal.principal_ref(), variant.principal_ref());
+        // The comparison against a stored reference is as exact as the pair comparison.
+        let variant_ref = variant.principal_ref().unwrap();
+        assert!(!principal.equals_ref(&variant_ref), "{variant:?}");
+        assert!(variant.equals_ref(&variant_ref), "{variant:?}");
+        assert!(!variant.equals_ref(&own_ref), "{variant:?}");
         assert_ne!(
             principal.principal_ref().unwrap().to_string(),
             variant.principal_ref().unwrap().to_string()
@@ -127,6 +135,20 @@ fn anonymous_equals_nothing_not_even_anonymous() {
     assert!(!anonymous.equals(&someone));
     assert!(!someone.equals(&anonymous));
     assert!(someone.equals(&someone));
+
+    // No reference matches an anonymous principal, including one with empty parts.
+    let references = [
+        PrincipalRef::new(Pair::new("", "")),
+        PrincipalRef::new(Pair::new("https://login.acme.example", "u-123")),
+        PrincipalRef::new(Pair::new("https://login.acme.example", "")),
+        PrincipalRef::new(Pair::new("", "u-123")),
+        PrincipalRef::new(Pair::new("anonymous", "anonymous")),
+    ];
+    for reference in &references {
+        assert!(!anonymous.equals_ref(reference), "{reference:?}");
+    }
+    assert!(someone.equals_ref(&references[1]));
+    assert!(!someone.equals_ref(&references[0]));
 }
 
 #[test]
@@ -219,6 +241,45 @@ fn subjects_of_different_kinds_never_collide() {
     ];
     let texts: BTreeSet<String> = subjects.iter().map(|s| s.to_string()).collect();
     assert_eq!(texts.len(), subjects.len(), "{texts:?}");
+    // The agent's ID is the tool's environment ID, and the tool name is the agent's fingerprint
+    // text, a valid tool name. Without the kind prefix both would print `<id>/<name>`.
+    let shared_id = uuid(ENVIRONMENT);
+    let name_id = uuid("abcdef12-3456-4789-abcd-ef0123456789");
+    let agent_subject = GolemSubject::Agent {
+        agent_id: shared_id,
+        fingerprint: AgentFingerprint(name_id),
+    };
+    let tool_subject = GolemSubject::Tool {
+        environment_id: EnvironmentId(shared_id),
+        tool_name: ToolName::try_from(name_id.to_string().as_str()).unwrap(),
+    };
+    assert_ne!(agent_subject.to_string(), tool_subject.to_string());
+    assert_eq!(
+        GolemSubject::from_str(&tool_subject.to_string()),
+        Ok(tool_subject.clone())
+    );
+    assert_eq!(
+        GolemSubject::from_str(&agent_subject.to_string()),
+        Ok(agent_subject.clone())
+    );
+
+    let mut same_id_agent = agent(FINGERPRINT);
+    same_id_agent.agent_id = shared_id;
+    same_id_agent.fingerprint = AgentFingerprint(name_id);
+    let same_text_tool = tool(&name_id.to_string());
+    let (agent_principal, tool_principal) = (
+        Principal::Agent(same_id_agent),
+        Principal::Tool(same_text_tool),
+    );
+    assert_ne!(agent_principal.pair(), tool_principal.pair());
+    assert_ne!(
+        agent_principal.principal_ref(),
+        tool_principal.principal_ref()
+    );
+    assert!(!agent_principal.equals(&tool_principal));
+    assert!(!tool_principal.equals(&agent_principal));
+    assert!(!agent_principal.equals_ref(&tool_principal.principal_ref().unwrap()));
+
     for subject in &subjects {
         let parsed = GolemSubject::from_str(&subject.to_string()).unwrap();
         assert_eq!(parsed.kind(), subject.kind());
@@ -471,9 +532,77 @@ fn collect_field_names(value: &Value, names: &mut BTreeSet<String>) {
     }
 }
 
+/// Reads every field of every struct reachable from a `Caller`, with no `..` and no wildcard
+/// arm. A new field or variant stops this from compiling: add it here, and extend the allow-list
+/// of serialized names in the test below, only after checking that it holds no credential.
+fn visit_every_field(caller: &Caller) {
+    let Caller {
+        original,
+        immediate,
+        tokens,
+    } = caller;
+    for principal in [original, immediate] {
+        match principal {
+            Principal::User(user) => {
+                let UserPrincipal {
+                    pair,
+                    claims: _,
+                    authenticated_at: _,
+                } = user;
+                let Pair {
+                    issuer: _,
+                    subject: _,
+                } = pair;
+            }
+            Principal::Account(account) => {
+                let AccountPrincipal {
+                    issuer: _,
+                    account_id: _,
+                    authentication,
+                } = account;
+                match authentication {
+                    AccountAuthentication::ApiToken
+                    | AccountAuthentication::BootstrapToken
+                    | AccountAuthentication::SignIn => {}
+                }
+            }
+            Principal::Agent(agent) => {
+                let AgentPrincipal {
+                    issuer: _,
+                    agent_id: _,
+                    fingerprint: _,
+                    agent_type: _,
+                    environment_id: _,
+                } = agent;
+            }
+            Principal::Tool(tool) => {
+                let ToolPrincipal {
+                    issuer: _,
+                    environment_id: _,
+                    tool_name: _,
+                } = tool;
+            }
+            Principal::Anonymous => {}
+        }
+    }
+    for token in tokens {
+        let TokenProvenance { id: _, maker } = token;
+        // `PrincipalRef` wraps a private `Pair`, so it is read through its accessor, which
+        // returns the same `Pair` that is destructured above.
+        if let Some(maker) = maker {
+            let Pair {
+                issuer: _,
+                subject: _,
+            } = maker.pair();
+        }
+    }
+}
+
 #[test]
 fn a_serialized_caller_has_no_token_value_cookie_key_or_proof_field() {
     let maker = PrincipalRef::new(Pair::new("https://login.acme.example", "u-456"));
+    // Every `Option` is `Some` in at least one caller, so that a field that is skipped when
+    // empty still shows up in the serialized form.
     let callers = [
         Caller {
             original: user_with(
@@ -505,6 +634,9 @@ fn a_serialized_caller_has_no_token_value_cookie_key_or_proof_field() {
             tokens: Vec::new(),
         },
     ];
+    for caller in &callers {
+        visit_every_field(caller);
+    }
 
     let mut names = BTreeSet::new();
     for caller in &callers {
