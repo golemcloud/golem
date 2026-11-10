@@ -1256,6 +1256,7 @@ impl AppCommandHandler {
                 &tool_grant_plan.resolved_grants,
                 &tool_middleware_grant_plan.resolved,
                 config.full_diff,
+                config.stage,
             )
             .await
             .map_err(DeployError::PrepareError)?
@@ -1382,6 +1383,7 @@ impl AppCommandHandler {
         resolved_tool_grants: &ResolvedToolGrants,
         resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
         full_diff: bool,
+        stage_only: bool,
     ) -> anyhow::Result<Option<(DeployDiff, DeploymentVersion)>> {
         log_action("Preparing", "deployment");
         let _indent = LogIndent::new();
@@ -1552,7 +1554,8 @@ impl AppCommandHandler {
             bail!("Tool publication plan contains conflicts");
         }
 
-        if deploy_diff.has_apply_work() {
+        // A run that only stages does not deploy, so the server does not check its version.
+        if !stage_only && deploy_diff.has_apply_work() {
             self.reject_existing_deployment_version(&deploy_diff.environment, &deployment_version)
                 .await?;
         }

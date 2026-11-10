@@ -123,6 +123,25 @@ async fn deploy_rejects_an_existing_version_before_it_changes_the_staging_area()
 
 #[test]
 #[timeout("10 minutes")]
+async fn stage_accepts_an_existing_version() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    deploy_app_with_api_deployments(&mut ctx, true).await;
+
+    write_manifest(&ctx, "v1.0.0", true, false);
+    assert!(
+        ctx.cli([cmd::DEPLOY, "--stage", flag::YES])
+            .await
+            .success_or_dump()
+    );
+
+    let plan = ctx.cli([cmd::DEPLOY, "--plan"]).await;
+    assert!(!plan.success(), "plan must report the version conflict");
+    assert!(output_contains(&plan, STAGE_IS_DIFFERENT));
+}
+
+#[test]
+#[timeout("10 minutes")]
 async fn deploy_succeeds_when_the_staging_area_deleted_entities_of_the_current_deployment() {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
