@@ -58,15 +58,20 @@ impl ReplayState {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
         let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
-        let (completion_markers, stream_observations, transaction_markers, start_invocation_ids) =
-            Self::scan_completion_markers(
-                &oplog,
-                metadata_floor,
-                last_oplog_index,
-                &skipped_regions,
-                &mut tool_attachment_reconstruction,
-            )
-            .await?;
+        let ScannedRecoveryMetadata {
+            completion_markers,
+            stream_observations,
+            transaction_markers,
+            start_invocation_ids,
+            invocation_finishes,
+        } = Self::scan_completion_markers(
+            &oplog,
+            metadata_floor,
+            last_oplog_index,
+            &skipped_regions,
+            &mut tool_attachment_reconstruction,
+        )
+        .await?;
         crate::metrics::workers::record_replay_metadata_scan(
             if metadata_floor == OplogIndex::INITIAL {
                 "initial"
@@ -87,6 +92,7 @@ impl ReplayState {
             delivery_failure: std::sync::Mutex::new(None),
             stream_observations: std::sync::Mutex::new(stream_observations),
             start_invocation_ids: std::sync::Mutex::new(start_invocation_ids),
+            invocation_finishes: std::sync::Mutex::new(invocation_finishes),
             position: PublishedPosition {
                 last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
                 last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -142,7 +148,8 @@ impl ReplayState {
         })
     }
 
-    /// Scans retained history for delivery, transaction, stream and attachment recovery metadata.
+    /// Scans retained history for delivery, transaction, stream, invocation-boundary and
+    /// attachment recovery metadata.
     /// Exactly one visible `CompletionDelivered` or `CompletionDiscarded` may reference a
     /// `Start`; duplicates or a conflicting pair are oplog corruption.
     pub(in crate::durable_host::replay_state) async fn scan_completion_markers(
@@ -151,20 +158,13 @@ impl ReplayState {
         to: OplogIndex,
         skipped_regions: &DeletedRegions,
         attachments: &mut ToolAttachmentReconstruction,
-    ) -> Result<
-        (
-            CompletionMarkers,
-            StreamObservationPositions,
-            TransactionMarkers,
-            StartsByInvocationId,
-        ),
-        WorkerExecutorError,
-    > {
+    ) -> Result<ScannedRecoveryMetadata, WorkerExecutorError> {
         const CHUNK_SIZE: u64 = 1024;
         let mut markers = CompletionMarkers::default();
         let mut stream_observations = StreamObservationPositions::new();
         let mut transaction_markers = TransactionMarkers::new();
         let mut start_invocation_ids = StartsByInvocationId::new();
+        let mut invocation_finishes = InvocationFinishes::new();
         let mut next = from;
         while next <= to {
             let available = u64::from(to) - u64::from(next) + 1;
@@ -390,6 +390,10 @@ impl ReplayState {
                         }
                         None
                     }
+                    OplogEntry::AgentInvocationFinished { .. } => {
+                        invocation_finishes.insert(marker_idx);
+                        None
+                    }
                     OplogEntry::CompletionDelivered { start_index, .. } => {
                         Some((start_index, CompletionMarker::Delivered(marker_idx)))
                     }
@@ -495,12 +499,32 @@ impl ReplayState {
                 WorkerExecutorError::runtime(format!("invalid attachment history: {error:?}"))
             })?;
         attachments.index_logical_observations();
-        Ok((
-            markers,
+        Ok(ScannedRecoveryMetadata {
+            completion_markers: markers,
             stream_observations,
             transaction_markers,
             start_invocation_ids,
-        ))
+            invocation_finishes,
+        })
+    }
+
+    /// The first visible `AgentInvocationFinished` after the cursor and before `index`. Reads
+    /// only the scanned invocation finishes, never the oplog.
+    pub(in crate::durable_host::replay_state) fn invocation_finish_before(
+        &self,
+        index: OplogIndex,
+    ) -> Option<OplogIndex> {
+        let after_cursor = self.cursor.last_replayed_index().next();
+        if after_cursor >= index {
+            return None;
+        }
+        self.cursor
+            .invocation_finishes
+            .lock()
+            .unwrap()
+            .range(after_cursor..index)
+            .next()
+            .copied()
     }
 
     pub(crate) fn transaction_marker(
@@ -553,7 +577,8 @@ impl ReplayState {
     /// Sets the replay target. This is a phase-boundary operation (e.g. refreshing the target
     /// before replay resumes); it must not race with concurrent cursor advances.
     ///
-    /// The completion-marker map is kept in sync with the visible prefix `[.., target]`:
+    /// The completion-marker map and the other scanned recovery metadata, including the
+    /// invocation finishes, are kept in sync with the visible prefix `[.., target]`:
     ///
     /// - Growing the target makes a previously invisible oplog range visible, so the newly
     ///   visible range `(old_target, new_target]` is scanned for completion-delivery markers
@@ -600,12 +625,19 @@ impl ReplayState {
                         entries.retain(|index, _| *index <= new_target);
                         !entries.is_empty()
                     });
+                    cursor.invocation_finishes.lock().unwrap().retain(|index| *index <= new_target);
                     cursor.tool_attachment_reconstruction.lock().unwrap()
                         .truncate(new_target);
                 }
                 std::cmp::Ordering::Greater => {
                     let mut attachments = cursor.tool_attachment_reconstruction.lock().unwrap().clone();
-                    let (additions, stream_observations, transaction_markers, start_invocation_ids) = Self::scan_completion_markers(
+                    let ScannedRecoveryMetadata {
+                        completion_markers: additions,
+                        stream_observations,
+                        transaction_markers,
+                        start_invocation_ids,
+                        invocation_finishes,
+                    } = Self::scan_completion_markers(
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
@@ -649,6 +681,7 @@ impl ReplayState {
                             current.entry(owner).or_default().extend(entries);
                         }
                     }
+                    cursor.invocation_finishes.lock().unwrap().extend(invocation_finishes);
                     let mut current = cursor.tool_attachment_reconstruction.lock().unwrap();
                     current.starts.extend(attachments.starts);
                     current.accepted.extend(attachments.accepted);
