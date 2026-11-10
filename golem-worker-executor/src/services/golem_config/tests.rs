@@ -813,3 +813,132 @@ fn the_golem_issuer_is_read_from_toml_and_a_plain_http_issuer_is_refused() {
     assert!(error.contains("golem_issuer"), "{error}");
     assert!(error.contains("http://id.acme.example"), "{error}");
 }
+
+fn with_captured_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let sink = Sink(Arc::new(Mutex::new(Vec::new())));
+    let writer = sink.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, f);
+    let logs = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    (result, logs)
+}
+
+fn warning_count(logs: &str) -> usize {
+    logs.lines()
+        .filter(|line| line.contains("WARN") && line.contains("No Golem issuer is configured"))
+        .count()
+}
+
+#[test]
+fn resolve_golem_issuer_generates_once_and_warns_once() {
+    let mut config = GolemConfig::default();
+    let ((first, second), logs) = with_captured_logs(|| {
+        let first = config.resolve_golem_issuer();
+        let second = config.resolve_golem_issuer();
+        (first, second)
+    });
+    assert!(first.is_generated());
+    assert_eq!(first, second);
+    assert_eq!(config.golem_issuer, Some(first));
+    assert_eq!(warning_count(&logs), 1, "{logs}");
+}
+
+#[test]
+fn resolve_golem_issuer_keeps_a_configured_value_without_a_warning() {
+    let configured: golem_common::model::golem_issuer::GolemIssuer =
+        "https://id.acme.example".parse().unwrap();
+    let mut config = GolemConfig {
+        golem_issuer: Some(configured.clone()),
+        ..GolemConfig::default()
+    };
+    let (resolved, logs) = with_captured_logs(|| config.resolve_golem_issuer());
+    assert_eq!(resolved, configured);
+    assert_eq!(config.golem_issuer, Some(configured));
+    assert_eq!(warning_count(&logs), 0, "{logs}");
+}
+
+#[test]
+fn the_golem_issuer_is_read_through_the_loader_from_toml_and_the_environment() {
+    use figment::Jail;
+    use figment::providers::{Format, Toml};
+    use golem_common::config::env_config_provider;
+
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        let from_toml = super::make_config_loader()
+            .default_figment()
+            .merge(Toml::string(
+                r#"golem_issuer = "https://id.acme.example/golem""#,
+            ))
+            .extract::<GolemConfig>()?;
+        assert_eq!(
+            from_toml.golem_issuer,
+            Some("https://id.acme.example/golem".parse().unwrap())
+        );
+
+        jail.set_env("GOLEM__GOLEM_ISSUER", "https://id.acme.example");
+        let from_env = super::make_config_loader()
+            .default_figment()
+            .merge(env_config_provider())
+            .extract::<GolemConfig>()?;
+        assert_eq!(
+            from_env.golem_issuer,
+            Some("https://id.acme.example".parse().unwrap())
+        );
+
+        jail.set_env("GOLEM__GOLEM_ISSUER", "http://id.acme.example");
+        let error = super::make_config_loader()
+            .default_figment()
+            .merge(env_config_provider())
+            .extract::<GolemConfig>()
+            .expect_err("a plain http issuer must not load")
+            .to_string();
+        assert!(error.to_lowercase().contains("golem_issuer"), "{error}");
+        Ok(())
+    });
+}
+
+#[test]
+fn an_empty_or_blank_golem_issuer_counts_as_not_set() {
+    use figment::Jail;
+    use figment::providers::{Format, Toml};
+    use golem_common::config::env_config_provider;
+
+    for value in ["", "   "] {
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env("GOLEM__GOLEM_ISSUER", value);
+            let config = super::make_config_loader()
+                .default_figment()
+                .merge(env_config_provider())
+                .extract::<GolemConfig>()?;
+            assert_eq!(config.golem_issuer, None, "env value {value:?}");
+            Ok(())
+        });
+    }
+    let config = super::make_config_loader()
+        .default_figment()
+        .merge(Toml::string(r#"golem_issuer = """#))
+        .extract::<GolemConfig>()
+        .unwrap();
+    assert_eq!(config.golem_issuer, None);
+}
