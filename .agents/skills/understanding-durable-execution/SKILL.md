@@ -1751,7 +1751,9 @@ delivery gate; replay waits for the recorded marker before resolving the future.
 across invocations records its marker in the invocation that consumes it. While an
 `AgentInvocationFinished` lies between the cursor and that marker, the marker wait parks its
 passive progress wait, so the invocation that recorded the `End` can settle and the consuming
-invocation can replay. Its cursor operations stay active. Completing the
+invocation can replay. Its cursor operations stay active. The wait finds that finish in
+`invocation_finishes`, which the recovery metadata scan builds and keeps in step with the replay
+target, so the wait adds no oplog reads. Completing the
 host channel without this boundary can wake the POST continuation early and exchange the import
 ordinals of concurrent response-body consumers. Response trailers share the same
 `HttpFutureDelivery` observer state. Transmission readers returned by request and response

@@ -6126,6 +6126,277 @@ async fn completion_delivery_marker_in_same_invocation_stays_active() {
 }
 
 #[test]
+#[test_r::timeout("60s")]
+async fn delivery_waits_sharing_a_later_invocation_boundary_park_without_oplog_reads() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    // Invocation A records `CALLS` completed calls and then a tail longer than one read chunk
+    // before it finishes. Invocation B records every delivery marker.
+    const CALLS: u64 = 16;
+    const TAIL: u64 = 2500;
+    let start_of = |call: u64| OplogIndex::from_u64(3 + 2 * call);
+    let mut entries = vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        unpinned_invocation_started(),
+    ];
+    for call in 0..CALLS {
+        entries.push(start_now());
+        entries.push(end_for(start_of(call).as_u64(), call));
+    }
+    entries.extend((0..TAIL).map(|_| remove_retry_policy()));
+    entries.push(invocation_finished());
+    let finish = OplogIndex::from_u64(entries.len() as u64);
+    entries.push(unpinned_invocation_started());
+    let marker_of = |call: u64| OplogIndex::from_u64(finish.as_u64() + 2 + call);
+    entries.extend((0..CALLS).map(|call| delivered_for(start_of(call).as_u64())));
+    entries.push(invocation_finished());
+    let (rs, oplog) = replay_state_and_oplog_over(entries).await;
+
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation A starts");
+    for _ in 0..CALLS {
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        rs.await_resolution(handle).await.unwrap();
+    }
+    assert_eq!(rs.invocation_finish_before(marker_of(0)), Some(finish));
+
+    let tracker = TailWorkTracker::new();
+    let activities = (0..CALLS).map(|_| tracker.activity()).collect::<Vec<_>>();
+    let mut deliveries = (0..CALLS)
+        .map(|call| {
+            Box::pin(rs.await_completion_delivery(
+                start_of(call),
+                marker_of(call),
+                Some(&activities[call as usize]),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let reads_before_waits = oplog.reads.lock().unwrap().len();
+    for _ in 0..3 {
+        for delivery in &mut deliveries {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(5), delivery.as_mut())
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    assert_eq!(
+        tracker.active_count(),
+        0,
+        "every wait for a marker after the invocation finish parks"
+    );
+    let cursor = rs.last_replayed_index();
+    let read_while_waiting = oplog.reads.lock().unwrap()[reads_before_waits..]
+        .iter()
+        .copied()
+        .filter(|index| index.as_u64() > cursor.as_u64() + CHUNK_SIZE)
+        .collect::<Vec<_>>();
+    assert!(
+        read_while_waiting.is_empty(),
+        "the waits read the oplog beyond the cursor chunk to find their boundary: {} reads",
+        read_while_waiting.len()
+    );
+
+    for _ in 0..TAIL {
+        let (_, entry) = rs.get_oplog_entry(None).await.unwrap();
+        assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    }
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    assert_eq!(rs.invocation_finish_before(marker_of(0)), None);
+    for delivery in &mut deliveries {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), delivery.as_mut())
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(
+        tracker.active_count(),
+        CALLS as usize,
+        "every wait is active once its marker belongs to the current invocation"
+    );
+
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation B starts");
+    for delivery in deliveries {
+        delivery.await.unwrap().acknowledge();
+    }
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    drop(activities);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn delivery_wait_behind_a_deleted_invocation_finish_stays_active() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    // A deleted region hides the invocation boundary at 5..=6, so the marker at 8 belongs to the
+    // invocation that recorded the End at 4.
+    let entries = vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+        invocation_finished(),
+        unpinned_invocation_started(),
+        remove_retry_policy(),
+        delivered_for(3),
+        invocation_finished(),
+    ];
+    let marker = OplogIndex::from_u64(8);
+    let visible = replay_state_over(entries.clone()).await;
+    assert_eq!(
+        visible.invocation_finish_before(marker),
+        Some(OplogIndex::from_u64(5))
+    );
+
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in entries {
+        oplog.add(entry).await.unwrap();
+    }
+    let rs = test_replay_state(
+        test_agent_id(),
+        oplog as Arc<dyn Oplog>,
+        DeletedRegions::from_regions([OplogRegion::from_range(5..=6)]),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rs.invocation_finish_before(marker), None);
+
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation starts");
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut delivery =
+        Box::pin(rs.await_completion_delivery(OplogIndex::from_u64(3), marker, Some(&activity)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), delivery.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "a deleted invocation finish must not park the wait"
+    );
+
+    let (_, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    delivery.await.unwrap().acknowledge();
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    let (rs, oplog) = replay_state_and_oplog_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+        invocation_finished(),
+        unpinned_invocation_started(),
+        delivered_for(3),
+        invocation_finished(),
+    ])
+    .await;
+    let finish = OplogIndex::from_u64(5);
+    let marker = OplogIndex::from_u64(7);
+    assert_eq!(rs.invocation_finish_before(marker), Some(finish));
+
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    assert_eq!(
+        rs.invocation_finish_before(marker),
+        None,
+        "a finish after the replay target is not visible"
+    );
+    rs.set_replay_target(finish).await.unwrap();
+    assert_eq!(rs.invocation_finish_before(marker), Some(finish));
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(8)).await.unwrap();
+    assert_eq!(rs.invocation_finish_before(marker), Some(finish));
+
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation A starts");
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut delivery =
+        Box::pin(rs.await_completion_delivery(OplogIndex::from_u64(3), marker, Some(&activity)));
+    let reads = oplog.reads.lock().unwrap().len();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), delivery.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        0,
+        "the rediscovered finish parks the wait"
+    );
+    assert!(
+        oplog.reads.lock().unwrap()[reads..]
+            .iter()
+            .all(|index| *index <= finish),
+        "the wait read past the invocation finish"
+    );
+
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation B starts");
+    delivery.await.unwrap().acknowledge();
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[test]
 async fn replay_delivery_barriers_preserve_adjacent_callback_order() {
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {

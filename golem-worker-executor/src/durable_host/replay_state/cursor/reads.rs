@@ -119,31 +119,6 @@ impl CursorTx<'_> {
         }
     }
 
-    /// The first visible `AgentInvocationFinished` after the cursor and before `index`.
-    pub(in crate::durable_host::replay_state) async fn invocation_finish_before(
-        &self,
-        index: OplogIndex,
-    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
-        let next = self.cursor.last_replayed_index().next();
-        let end = index.min(self.cursor.replay_target().next());
-        let finish = self
-            .cursor
-            .scan_oplog(
-                next,
-                end,
-                &self.st.skipped_regions,
-                self.st.skipped_regions.find_next_deleted_region(next),
-                OplogIndex::NONE,
-                |entry, _, _| matches!(entry, OplogEntry::AgentInvocationFinished { .. }),
-                |_, _, _| true,
-            )
-            .await?;
-        Ok(match finish {
-            OplogEntryLookupResult::Found { index, .. } => Some(index),
-            OplogEntryLookupResult::NotFound { .. } => None,
-        })
-    }
-
     /// [`Self::try_get_oplog_entry`] with the invocation-boundary tolerance for live-only
     /// abandoned durable-call records enabled: never-claimed `Start`s (and the `End`/`Cancelled`
     /// terminals closing them) are drained into `abandoned` instead of being handed to the
