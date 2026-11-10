@@ -121,7 +121,7 @@ Each case gives:
 ## Consumers
 
 - Rust (the source of truth): `pair/tests.rs`, `subject/tests.rs`, `identity_proof/tests.rs` and
-  `conversion_from_1_6_tests.rs` in `golem-common/src/base_model/caller/`.
+  `tests.rs` (the 1.6 conversion vectors) in `golem-common/src/base_model/caller/`.
 
 When the format changes, change these files in the same commit; the Rust tests fail until both
 agree.

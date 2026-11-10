@@ -35,4 +35,4 @@ pub use principal::*;
 pub use subject::*;
 
 #[cfg(test)]
-mod conversion_from_1_6_tests;
+mod tests;
