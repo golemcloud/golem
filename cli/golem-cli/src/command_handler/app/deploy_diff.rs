@@ -23,11 +23,12 @@ use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::http_api::HttpApiDeploymentDeployProperties;
 use crate::model::masking::MaskingConfig;
 use crate::model::mcp::McpDeploymentDeployProperties;
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
     CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
+    DeploymentRevision,
 };
 use golem_common::model::diff;
 use golem_common::model::diff::Diffable;
@@ -99,7 +100,6 @@ pub struct DeployDiff {
     pub deployable_manifest: DeployableManifest,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
-    #[allow(unused)] // NOTE: for debug logs
     pub current_deployment: Option<DeploymentSummary>,
     pub diffable_current_deployment: diff::Deployment,
     pub current_deployment_hash: diff::Hash,
@@ -342,106 +342,12 @@ impl DeployDiff {
             })
     }
 
-    pub fn current_component_identity(
-        &self,
-        component_name: &ComponentName,
-    ) -> &DeploymentPlanComponentEntry {
+    /// The revision of the current deployment, which the planner reads the current entities from.
+    pub fn current_deployment_summary_revision(&self) -> anyhow::Result<DeploymentRevision> {
         self.current_deployment
             .as_ref()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected component {}  not found in current deployment, no deployment",
-                    component_name
-                )
-            })
-            .components
-            .iter()
-            .find(|component| &component.name == component_name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected component {} not found in current deployment",
-                    component_name
-                )
-            })
-    }
-
-    pub fn current_http_api_deployment_identity(
-        &self,
-        domain: &Domain,
-    ) -> &DeploymentPlanHttpApiDeploymentEntry {
-        self.current_deployment
-            .as_ref()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected HTTP API deployment {} not found in deployment plan, no deployment",
-                    domain
-                )
-            })
-            .http_api_deployments
-            .iter()
-            .find(|dep| &dep.domain == domain)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected HTTP API deployment {} not found in current deployment",
-                    domain
-                )
-            })
-    }
-
-    pub fn current_mcp_deployment_identity(
-        &self,
-        domain: &Domain,
-    ) -> &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry {
-        self.current_deployment
-            .as_ref()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected MCP deployment {} not found in deployment plan, no deployment",
-                    domain
-                )
-            })
-            .mcp_deployments
-            .iter()
-            .find(|dep| &dep.domain == domain)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected MCP deployment {} not found in current deployment",
-                    domain
-                )
-            })
-    }
-
-    pub fn component_identity(
-        &self,
-        kind: DeployDiffKind,
-        component_name: &ComponentName,
-    ) -> &DeploymentPlanComponentEntry {
-        match kind {
-            DeployDiffKind::Stage => self.staged_component_identity(component_name),
-            DeployDiffKind::Current => self.current_component_identity(component_name),
-        }
-    }
-
-    pub fn http_api_deployment_identity(
-        &self,
-        kind: DeployDiffKind,
-        domain: &Domain,
-    ) -> &DeploymentPlanHttpApiDeploymentEntry {
-        match kind {
-            DeployDiffKind::Stage => self.staged_http_api_deployment_identity(domain),
-            DeployDiffKind::Current => self.current_http_api_deployment_identity(domain),
-        }
-    }
-
-    pub fn mcp_deployment_identity(
-        &self,
-        kind: DeployDiffKind,
-        domain: &Domain,
-    ) -> &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry {
-        match kind {
-            DeployDiffKind::Stage => self.staged_mcp_deployment_identity(domain),
-            DeployDiffKind::Current => self.current_mcp_deployment_identity(domain),
-        }
+            .map(|deployment| deployment.deployment_revision)
+            .ok_or_else(|| anyhow!("Illegal state: the environment has no current deployment"))
     }
 
     pub fn add_details(
