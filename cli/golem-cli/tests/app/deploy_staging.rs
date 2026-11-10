@@ -138,6 +138,10 @@ async fn stage_accepts_an_existing_version() {
     let plan = ctx.cli([cmd::DEPLOY, "--plan"]).await;
     assert!(!plan.success(), "plan must report the version conflict");
     assert!(output_contains(&plan, STAGE_IS_DIFFERENT));
+    assert!(output_contains(
+        &plan,
+        "Deployment version v1.0.0 already exists in the environment"
+    ));
 }
 
 #[test]
