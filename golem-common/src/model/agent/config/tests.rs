@@ -25,8 +25,6 @@ fn enrich_component_baseline_config_uses_component_schema_without_agent_type() {
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         Vec::new(),
-        None,
-        None,
         Vec::new(),
         BTreeMap::new(),
     )

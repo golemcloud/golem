@@ -1,4 +1,4 @@
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 
 app: snapshot-sqlite-effect
 
@@ -8,9 +8,15 @@ includes:
 componentTemplates:
   effect-test-component:
     guestLanguage: effect
-    customCommands:
-      copy:
-        - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+    presets:
+      optimized:
+        customCommands:
+          copy:
+            - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+      quick:
+        customCommands:
+          copy:
+            - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
 
 components:
   golem-it:snapshot-sqlite-effect:

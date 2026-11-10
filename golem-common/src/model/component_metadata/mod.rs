@@ -70,16 +70,12 @@ impl ComponentMetadata {
     pub fn from_parts(
         known_exports: KnownExports,
         memories: Vec<LinearMemory>,
-        root_package_name: Option<String>,
-        root_package_version: Option<String>,
         agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> Self {
         Self::from_parts_with_tools(
             known_exports,
             memories,
-            root_package_name,
-            root_package_version,
             agent_types,
             agent_type_provision_configs,
             BTreeMap::new(),
@@ -89,8 +85,6 @@ impl ComponentMetadata {
     pub fn from_parts_with_tools(
         known_exports: KnownExports,
         memories: Vec<LinearMemory>,
-        root_package_name: Option<String>,
-        root_package_version: Option<String>,
         agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
         tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
@@ -98,8 +92,6 @@ impl ComponentMetadata {
         Self::from_parts_with_tools_and_middlewares(
             known_exports,
             memories,
-            root_package_name,
-            root_package_version,
             agent_types,
             agent_type_provision_configs,
             tools,
@@ -110,8 +102,6 @@ impl ComponentMetadata {
     pub fn from_parts_with_tools_and_middlewares(
         known_exports: KnownExports,
         memories: Vec<LinearMemory>,
-        root_package_name: Option<String>,
-        root_package_version: Option<String>,
         agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
         tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
@@ -122,8 +112,6 @@ impl ComponentMetadata {
                 known_exports,
                 producers: vec![],
                 memories,
-                root_package_name,
-                root_package_version,
                 config_schema: ComponentConfigSchema::default(),
                 component_provision_config: ComponentProvisionConfig::default(),
                 agent_method_streams: Self::derive_agent_method_streams(&agent_types),
@@ -150,8 +138,6 @@ impl ComponentMetadata {
                 known_exports: data.known_exports.clone(),
                 producers: data.producers.clone(),
                 memories: data.memories.clone(),
-                root_package_name: data.root_package_name.clone(),
-                root_package_version: data.root_package_version.clone(),
                 config_schema: data.config_schema.clone(),
                 component_provision_config: data.component_provision_config.clone(),
                 agent_types: data.agent_types.clone(),
@@ -186,8 +172,6 @@ impl ComponentMetadata {
                 known_exports: data.known_exports.clone(),
                 producers: data.producers.clone(),
                 memories: data.memories.clone(),
-                root_package_name: data.root_package_name.clone(),
-                root_package_version: data.root_package_version.clone(),
                 config_schema: data.config_schema.clone(),
                 component_provision_config: data.component_provision_config.clone(),
                 agent_types: data.agent_types.clone(),
@@ -234,14 +218,6 @@ impl ComponentMetadata {
 
     pub fn known_exports(&self) -> &KnownExports {
         &self.data.known_exports
-    }
-
-    pub fn root_package_name(&self) -> &Option<String> {
-        &self.data.root_package_name
-    }
-
-    pub fn root_package_version(&self) -> &Option<String> {
-        &self.data.root_package_version
     }
 
     pub fn agent_types(&self) -> &[AgentTypeSchema] {
@@ -478,8 +454,6 @@ pub struct RawComponentMetadata {
     pub known_exports: KnownExports,
     pub producers: Vec<IntrospectionProducers>,
     pub memories: Vec<LinearMemory>,
-    pub root_package_name: Option<String>,
-    pub root_package_version: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

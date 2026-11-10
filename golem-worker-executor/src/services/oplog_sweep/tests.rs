@@ -941,8 +941,6 @@ impl ComponentService for FixedEnvironment {
             metadata: ComponentMetadata::from_parts(
                 Default::default(),
                 vec![],
-                None,
-                None,
                 vec![],
                 BTreeMap::new(),
             ),

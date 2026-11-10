@@ -869,8 +869,6 @@ fn component_metadata_displays_tools_middlewares_and_files() {
         metadata: ComponentMetadata::from_parts_with_tools_and_middlewares(
             Default::default(),
             vec![],
-            None,
-            None,
             vec![],
             BTreeMap::new(),
             sample.tools.clone(),
@@ -1082,7 +1080,6 @@ fn sample_component_view() -> crate::model::component::ComponentView {
     let mut component = crate::model::component::ComponentView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
         component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-        component_version: Some("1.0.0".to_string()),
         component_revision: 1,
         component_size: 0,
         created_at: fixed_datetime(),
@@ -3901,8 +3898,6 @@ type AgentTransitionFields = (
     crate::model::agent::RawAgentId,
     golem_common::model::component::ComponentRevision,
     golem_common::model::component::ComponentRevision,
-    Option<String>,
-    Option<String>,
 );
 
 /// Shared field generator for the two identical revision-transition metas
@@ -3913,58 +3908,44 @@ fn arb_agent_transition_fields() -> BoxedStrategy<AgentTransitionFields> {
         arb_small_string(),
         arb_small_u64(),
         arb_small_u64(),
-        proptest::option::of(arb_small_string()),
-        proptest::option::of(arb_small_string()),
     )
-        .prop_map(
-            |(component_name, agent_id, from_revision, revision, from_version, version)| {
-                (
-                    golem_common::model::component::ComponentName(component_name),
-                    crate::model::agent::RawAgentId(agent_id),
-                    golem_common::model::component::ComponentRevision::new(from_revision)
-                        .expect("generated revision should be valid"),
-                    golem_common::model::component::ComponentRevision::new(revision)
-                        .expect("generated revision should be valid"),
-                    from_version,
-                    version,
-                )
-            },
-        )
+        .prop_map(|(component_name, agent_id, from_revision, revision)| {
+            (
+                golem_common::model::component::ComponentName(component_name),
+                crate::model::agent::RawAgentId(agent_id),
+                golem_common::model::component::ComponentRevision::new(from_revision)
+                    .expect("generated revision should be valid"),
+                golem_common::model::component::ComponentRevision::new(revision)
+                    .expect("generated revision should be valid"),
+            )
+        })
         .boxed()
 }
 
 fn arb_agent_update_meta() -> BoxedStrategy<crate::model::deploy::AgentUpdateMeta> {
     arb_agent_transition_fields()
-        .prop_map(
-            |(component_name, agent_id, from_revision, revision, from_version, version)| {
-                crate::model::deploy::AgentUpdateMeta {
-                    component_name,
-                    agent_id,
-                    from_revision,
-                    revision,
-                    from_version,
-                    version,
-                }
-            },
-        )
+        .prop_map(|(component_name, agent_id, from_revision, revision)| {
+            crate::model::deploy::AgentUpdateMeta {
+                component_name,
+                agent_id,
+                from_revision,
+                revision,
+            }
+        })
         .boxed()
 }
 
 fn arb_agent_redeployment_meta()
 -> BoxedStrategy<crate::model::agent::action_result::AgentRedeploymentMeta> {
     arb_agent_transition_fields()
-        .prop_map(
-            |(component_name, agent_id, from_revision, revision, from_version, version)| {
-                crate::model::agent::action_result::AgentRedeploymentMeta {
-                    component_name,
-                    agent_id,
-                    from_revision,
-                    revision,
-                    from_version,
-                    version,
-                }
-            },
-        )
+        .prop_map(|(component_name, agent_id, from_revision, revision)| {
+            crate::model::agent::action_result::AgentRedeploymentMeta {
+                component_name,
+                agent_id,
+                from_revision,
+                revision,
+            }
+        })
         .boxed()
 }
 
@@ -5279,7 +5260,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             arb_component_layer_id(),
             proptest::option::of(arb_small_string()),
             proptest::option::of(arb_small_string()),
-            proptest::option::of(arb_small_string()),
             arb_vec_merge_mode(),
             proptest::collection::vec(arb_manifest_build_command(), 1..3),
             arb_map_merge_mode(),
@@ -5310,7 +5290,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                 second_layer_id,
                 selection,
                 component_wasm,
-                output_wasm,
                 _build_mode,
                 build,
                 _custom_commands_mode,
@@ -5366,9 +5345,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             properties
                 .component_wasm
                 .apply_layer(&second_layer_id, selection, component_wasm);
-            properties
-                .output_wasm
-                .apply_layer(&second_layer_id, selection, output_wasm);
             properties.build.apply_layer(
                 &layer_id,
                 selection,
@@ -5718,7 +5694,6 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
     (
         arb_small_string(),
         arb_uuid(),
-        proptest::option::of(arb_small_string()),
         arb_small_u64(),
         arb_small_u64(),
         Just(fixed_datetime()),
@@ -5736,7 +5711,6 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
             |(
                 component_name,
                 component_id,
-                component_version,
                 component_revision,
                 component_size,
                 created_at,
@@ -5765,7 +5739,6 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
                 crate::model::component::ComponentView {
                     component_name: golem_common::model::component::ComponentName(component_name),
                     component_id: golem_common::model::component::ComponentId(component_id),
-                    component_version,
                     component_revision,
                     component_size,
                     created_at,

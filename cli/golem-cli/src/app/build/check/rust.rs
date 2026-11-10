@@ -592,7 +592,7 @@ mod test {
         // redirected/shared CARGO_TARGET_DIR it can be the directory that holds the
         // golem-cli binary itself (and every other component's build), so cleaning it
         // would delete unrelated artifacts. The per-component wasm files are already
-        // cleaned via `componentWasm`, `outputWasm`, and the build `targets`.
+        // cleaned via `componentWasm` and the build `targets`.
         assert!(!template_source.contains("- \"{{ cargoTarget }}\""));
     }
 

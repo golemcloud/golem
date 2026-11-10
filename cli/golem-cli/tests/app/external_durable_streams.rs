@@ -577,10 +577,8 @@ async fn external_durable_streams_golem_gateway_e2e() {
         components:
           golem-it:external-durable-streams:
             componentWasm: external-durable-streams.wasm
-            outputWasm: external-durable-streams-final.wasm
           golem-it:agent-sdk-rust:
             componentWasm: agent-sdk-rust.wasm
-            outputWasm: agent-sdk-rust-final.wasm
         httpApi:
           deployments:
             local:
@@ -812,7 +810,6 @@ async fn external_durable_streams_reference_server_e2e() {
         components:
           golem-it:external-durable-streams:
             componentWasm: external-durable-streams.wasm
-            outputWasm: external-durable-streams-final.wasm
     "#, version = versions::sdk::MANIFEST},
     )
     .unwrap();

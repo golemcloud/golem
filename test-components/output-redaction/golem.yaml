@@ -1,15 +1,19 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
-manifestVersion: 1.6.0
+# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
+manifestVersion: 2.0.0
 app: output-redaction
+
+componentTemplates:
+  output-redaction-rust:
+    templates: rust
+    customCommands:
+      copy:
+        - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/golem_output_redaction.wasm" ../golem_output_redaction_release.wasm
 
 components:
   golem:output-redaction:
     dir: "."
-    templates: rust
-    customCommands:
-      copy:
-        - command: cp golem-temp/agents/golem_output_redaction_release.wasm ../golem_output_redaction_release.wasm
+    templates: output-redaction-rust
 
 environments:
   local:
