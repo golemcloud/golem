@@ -4493,6 +4493,11 @@ impl TestCaseBuilder {
             status
                 .pending_invocations
                 .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
+            if status.current_idempotency_key.as_ref() != Some(&idempotency_key) {
+                status
+                    .invocation_results
+                    .insert(idempotency_key.clone(), status.oplog_idx);
+            }
             status.cancelled_idempotency_key = Some(idempotency_key);
             status
         })

@@ -1075,6 +1075,7 @@ enum InvocationResult {
     Cached {
         result: Result<AgentInvocationOutput, FailedInvocationResult>,
     },
+    Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
     },

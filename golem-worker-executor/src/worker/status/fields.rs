@@ -670,6 +670,9 @@ pub(crate) fn fold_invocation_result_entries(
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
+                if current_idempotency_key.as_ref() != Some(idempotency_key) {
+                    observe_result(idempotency_key, *oplog_idx);
+                }
                 *cancelled_idempotency_key = Some(idempotency_key.clone());
             }
             OplogEntry::Error {

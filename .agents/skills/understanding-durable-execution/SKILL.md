@@ -138,8 +138,12 @@ changes, and the entry was future at the last one, so delivery adds a durable ta
 before `AgentInvocationStarted` must still be recovered. Token cancellation validates the
 incarnation-bound receipt and recorded scheduling owner, commits pending removal before removing
 the wake, and shares the instance mutex with the committed pending-to-started transition. If
-cancellation wins, selected-but-not-started work is skipped without a result; if start wins,
-cancellation returns false. A delayed wake cannot recreate cancelled work.
+cancellation wins, selected-but-not-started work is skipped without executing. The
+`CancelPendingInvocation` entry retains the key in invocation-result membership, so a same-key
+schedule retry cannot restore the pending entry, even after restart or recent-index eviction.
+Result lookup reports cancellation rather than a successful execution. Cancelling an invocation
+that is no longer pending does not replace its completed result. If start wins, token cancellation
+returns false. A delayed wake cannot recreate cancelled work.
 An ephemeral target is created at schedule time (`create_demand`, then `schedule_invocation`), so
 its pending entry is committed like a durable target's. Its first start waits for the due wake; an
 ephemeral wake that finds the agent inactive is acknowledged. Ephemeral targets are not in

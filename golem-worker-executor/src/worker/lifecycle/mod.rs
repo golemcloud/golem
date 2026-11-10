@@ -1086,6 +1086,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
+        let status = self.get_repaired_status().await?;
+        if !status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&idempotency_key))
+        {
+            return Ok(());
+        }
+
         self.add_and_commit_oplog_internal(
             &instance_guard,
             OplogEntry::cancel_pending_invocation(idempotency_key),
