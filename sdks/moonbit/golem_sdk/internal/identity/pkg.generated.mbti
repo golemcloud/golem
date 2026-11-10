@@ -1,0 +1,40 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/internal/identity"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/agent/host",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+}
+
+// Values
+pub fn new_phantom_id() -> @schema.Uuid
+
+pub fn parse(String) -> Parsed raise @common.AgentError
+
+// Errors
+
+// Types and methods
+pub struct Constructor {
+  type_name : String
+  input : @types.SchemaValueTree
+  phantom_id : @types.Uuid?
+}
+pub fn Constructor::agent_id(Self) -> String raise @common.AgentError
+pub fn Constructor::connect(Self, Array[@common.TypedAgentConfigValue]) -> @host.WasmRpc
+pub fn Constructor::from_value(String, @schema_model.SchemaValue, @schema.Uuid?) -> Self raise @schema_model.SchemaModelError
+pub fn Constructor::from_wire(String, @types.SchemaValueTree, @schema.Uuid?) -> Self
+pub fn Constructor::try_connect(Self, Array[@common.TypedAgentConfigValue]) -> @host.WasmRpc raise @host.RpcError
+
+pub struct Parsed {
+  type_name : String
+  input : @types.TypedSchemaValue
+  phantom_id : @schema.Uuid?
+}
+pub fn Parsed::constructor_value(Self) -> @schema_model.SchemaValue raise @schema_model.SchemaModelError
+
+// Type aliases
+
+// Traits

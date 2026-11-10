@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::agent::OwnerKind;
 
 /// An implementation of the `OplogProcessorPlugin` trait that runs a single instance of each
 /// used plugin on each worker executor node.
@@ -123,7 +124,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         number_of_shards: usize,
     ) -> AgentId {
         if force_in_shard.is_empty() || number_of_shards == 0 {
-            let agent_name = Uuid::new_v4().to_string();
+            let agent_name = OwnerKind::oplog_processor_instance_name(Uuid::new_v4());
             AgentId {
                 component_id,
                 agent_id: agent_name,
@@ -132,7 +133,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
             let mut current = Uuid::new_v4().to_u128_le();
             loop {
                 let uuid = Uuid::from_u128_le(current);
-                let agent_name = uuid.to_string();
+                let agent_name = OwnerKind::oplog_processor_instance_name(uuid);
                 let agent_id = AgentId {
                     component_id,
                     agent_id: agent_name,
@@ -186,35 +187,28 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
 
         if is_local {
             // Local path: activate and invoke directly
-            let target_owned = OwnedAgentId::new(worker_metadata.environment_id, target_agent_id);
-
-            let worker = self
-                .worker_activator
-                .get_or_create_running(
-                    &target_owned,
-                    None,
-                    Vec::new(),
-                    Some(running_plugin.component_revision),
-                    None,
-                    &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
-                )
-                .await?;
-
+            let target_owned = OwnedAgentId::new(
+                running_plugin.owned_agent_id.environment_id,
+                target_agent_id,
+            );
             let account_id = worker_metadata.created_by;
-            let _result = worker
-                .invoke(AgentInvocation::ProcessOplogEntries {
-                    idempotency_key,
-                    account_id,
-                    config: running_plugin
-                        .configuration
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                    metadata: worker_metadata.into(),
-                    first_entry_index: initial_oplog_index,
-                    entries,
-                })
+            self.worker_activator
+                .enqueue_oplog_processor(
+                    &target_owned,
+                    running_plugin.component_revision,
+                    AgentInvocation::ProcessOplogEntries {
+                        idempotency_key,
+                        account_id,
+                        config: running_plugin
+                            .configuration
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                        metadata: worker_metadata.into(),
+                        first_entry_index: initial_oplog_index,
+                        entries,
+                    },
+                )
                 .await?;
         } else {
             // Remote path: route through worker service to the executor

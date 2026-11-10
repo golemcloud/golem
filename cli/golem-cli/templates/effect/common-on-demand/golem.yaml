@@ -35,7 +35,6 @@ componentTemplates:
         - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
-        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
       quick:
         build:
         - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
@@ -64,7 +63,6 @@ componentTemplates:
           module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
-        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
 customCommands:
   effect-npm-install:
   - command: npm install

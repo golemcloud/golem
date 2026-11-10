@@ -25,8 +25,6 @@ fn enrich_component_baseline_config_uses_component_schema_without_agent_type() {
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         Vec::new(),
-        None,
-        None,
         Vec::new(),
         BTreeMap::new(),
     )
@@ -49,17 +47,22 @@ fn enrich_component_baseline_config_uses_component_schema_without_agent_type() {
         Default::default(),
     );
 
-    let enriched = UntypedAgentConfigEntry {
-        path: vec!["baseline".to_string(), "value".to_string()],
-        value: SchemaValue::String("configured".to_string()),
-    }
-    .enrich_with_type(&metadata, OwnerKind::EphemeralExternalTool, None)
-    .expect("component-baseline config must not require an agent type");
+    for owner_kind in [OwnerKind::EphemeralExternalTool, OwnerKind::OplogProcessor] {
+        let enriched = UntypedAgentConfigEntry {
+            path: vec!["baseline".to_string(), "value".to_string()],
+            value: SchemaValue::String("configured".to_string()),
+        }
+        .enrich_with_type(&metadata, owner_kind, None)
+        .expect("component-baseline config must not require an agent type");
 
-    assert_eq!(enriched.value.root_type(), &SchemaType::ref_to(type_id));
-    assert_eq!(
-        enriched.value.value(),
-        &SchemaValue::String("configured".to_string())
-    );
-    assert_eq!(enriched.value.graph().defs.len(), 1);
+        assert_eq!(
+            enriched.value.root_type(),
+            &SchemaType::ref_to(type_id.clone())
+        );
+        assert_eq!(
+            enriched.value.value(),
+            &SchemaValue::String("configured".to_string())
+        );
+        assert_eq!(enriched.value.graph().defs.len(), 1);
+    }
 }

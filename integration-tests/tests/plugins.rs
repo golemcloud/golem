@@ -18,6 +18,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use bytes::Bytes;
 use golem_client::api::RegistryServiceClient;
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::base64::Base64;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{
@@ -495,6 +496,57 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     // E2: Verify oplog entries exist for the worker
     let oplog = user.get_oplog(&worker_id, OplogIndex::from_u64(0)).await?;
     assert!(!oplog.is_empty(), "Worker oplog should not be empty");
+
+    // The first dispatch resolves a local target through the real per-executor plugin service.
+    // Its persisted identity must be the processor owner, not an untyped component agent.
+    let targets = find_plugin_workers(&user, &plugin_component.id).await;
+    assert!(
+        !targets.is_empty(),
+        "the plugin must have a persisted target"
+    );
+    for target in &targets {
+        let metadata = user.get_worker_metadata(target).await?;
+        assert_eq!(metadata.owner_kind, OwnerKind::OplogProcessor);
+        let target_oplog = user.get_oplog(target, OplogIndex::INITIAL).await?;
+        let PublicOplogEntry::Create(parameters) = &target_oplog[0].entry else {
+            panic!("processor target has no Create entry")
+        };
+        assert_eq!(parameters.owner_kind, OwnerKind::OplogProcessor);
+        assert_eq!(parameters.agent_mode, AgentMode::Durable);
+        assert!(target_oplog.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(parameters)
+                if matches!(parameters.invocation,
+                    golem_common::model::oplog::PublicAgentInvocation::ProcessOplogEntries(_))
+        )));
+        assert!(
+            !target_oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(parameters)
+                    if matches!(parameters.invocation,
+                        golem_common::model::oplog::PublicAgentInvocation::AgentInitialization(_))
+            )),
+            "processor dispatch must not run an agent constructor"
+        );
+    }
+    let checkpoint_targets: HashSet<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::OplogProcessorCheckpoint(parameters) => {
+                Some(&parameters.target_agent_id)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !checkpoint_targets.is_empty(),
+        "the source must persist its delivery target"
+    );
+    assert!(
+        checkpoint_targets
+            .iter()
+            .all(|target| targets.contains(target))
+    );
 
     Ok(())
 }

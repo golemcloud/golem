@@ -53,6 +53,9 @@ impl ServiceFixture {
         let account = AccountId::new();
         let metadata = AgentMetadata {
             agent_id: owner.agent_id.clone(),
+            component_id: owner.agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             owner_kind: OwnerKind::ComponentAgent,
             env: vec![],
             environment_id: owner.environment_id,
@@ -68,6 +71,9 @@ impl ServiceFixture {
         };
         let create = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
             agent_id: owner.agent_id.clone(),
+            component_id: owner.agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             owner_kind: OwnerKind::ComponentAgent,
             agent_mode: AgentMode::Durable,
             component_revision: ComponentRevision::INITIAL,

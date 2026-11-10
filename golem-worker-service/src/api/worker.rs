@@ -24,7 +24,9 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
 use golem_common::model::agent::ParsedAgentId;
-use golem_common::model::agent::{AgentCreationRequest, AgentMetadataDto, RevertWorkerTarget};
+use golem_common::model::agent::{
+    AgentCreationRequest, AgentMetadataDto, AgentTarget, RevertWorkerTarget,
+};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
@@ -126,7 +128,7 @@ impl WorkerApi {
         let (component_revision, _created_at) = self
             .worker_service
             .create_with_component(
-                &agent_id,
+                &AgentTarget::Current(agent_id.clone()),
                 component,
                 env,
                 request.config,
@@ -1330,8 +1332,6 @@ mod tests {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![test_agent_type(mode)],
                 std::collections::BTreeMap::new(),
             ),

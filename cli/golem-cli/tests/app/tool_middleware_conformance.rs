@@ -778,8 +778,6 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
             cmd::BUILD,
             "conformance:typescript-consumer",
             "--step",
-            "add-metadata",
-            "--step",
             "gen-bridge",
         ])
         .await;
@@ -787,15 +785,22 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
     let generated = std::fs::read_to_string(ctx.cwd_path_join("golem-temp/bridge-sdk/ts/internal/compat-leaf-tool-guest-client/compat-leaf-tool-guest-client.ts")).unwrap();
     assert!(generated.contains("async refresh_again("), "{generated}");
     assert!(!generated.contains("async refresh("), "{generated}");
-    std::fs::remove_file(ctx.cwd_path_join("golem-temp/agents/conformance_adapter_release.wasm"))
-        .unwrap();
+    std::fs::remove_file(ctx.component_wasm("conformance:adapter", None).await).unwrap();
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::BUILD,
+            "conformance:adapter",
+            "--step",
+            "build",
+        ])
+        .await;
+    assert!(output.success_or_dump());
     let output = ctx
         .cli([
             flag::YES,
             cmd::BUILD,
             "conformance:typescript-consumer",
-            "--step",
-            "add-metadata",
             "--step",
             "gen-bridge",
         ])

@@ -133,7 +133,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
     ) -> StartupComponentChargeRequirement {
         let metadata = self.get_latest_worker_metadata().await;
-        let component_id = self.owned_agent_id.component_id();
+        let component_id = metadata.component_id;
         let current_revision = metadata.last_known_status.component_revision;
         let current_size = metadata.last_known_status.component_size;
 
@@ -226,7 +226,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> (ComponentId, ComponentRevision, u64) {
         let metadata = self.get_latest_worker_metadata().await;
         (
-            self.owned_agent_id.component_id(),
+            metadata.component_id,
             metadata.last_known_status.component_revision,
             metadata.last_known_status.component_size,
         )

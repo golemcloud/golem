@@ -36,11 +36,10 @@ use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{

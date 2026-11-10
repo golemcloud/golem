@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::identity::parse_agent_id;
 use crate::agentic::{
     agent_registry, get_principal, get_resolved_agent, register_initialized_agent,
 };
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
 use crate::{
