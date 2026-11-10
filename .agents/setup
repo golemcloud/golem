@@ -37,10 +37,10 @@ packages=(
     clang
     cmake
     curl
+    default-jdk-headless
     jq
     libssl-dev
     lld
-    openjdk-17-jdk-headless
     pkg-config
     redis-server
     xz-utils
