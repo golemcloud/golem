@@ -37,13 +37,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             store.as_context().data().durable_ctx().state.replay_state
                 .install_entity_replay_progress(&status, new_target).await?;
 
-            store
-                .as_context()
-                .data()
-                .durable_ctx()
+            // The target's core initializer appended the part of its bootstrap block after the
+            // old target live. It belongs to the target, so the main cursor skips it.
+            let durable_ctx = store.as_context().data().durable_ctx();
+            let old_target = durable_ctx.state.replay_state.replay_target();
+            let skip = durable_ctx
+                .bootstrap_range()
+                .filter(|range| range.end > old_target)
+                .map(|range| OplogRegion {
+                    start: range.start.max(old_target.next()),
+                    end: range.end,
+                });
+            durable_ctx
                 .state
                 .replay_state
-                .set_replay_target(new_target, None)
+                .set_replay_target(new_target, skip)
                 .await?;
         }
 
@@ -542,6 +550,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// The bootstrap range of this generation, which a `Snapshot` entry names.
     pub(crate) fn bootstrap_range(&self) -> Option<OplogRegion> {
         self.state.bootstrap_range.clone()
+    }
+
+    /// Whether the core initializer runs on a bootstrap cursor of a pending snapshot-assisted
+    /// update that is not finalized. The main cursor of such a start has not replayed the source
+    /// tail yet, so the agent authority is the one that the start reconstructed: the calls of the
+    /// initializer neither synchronize with the owner wallet nor wait for the update to finalize.
+    pub(in crate::durable_host) fn bootstrap_uses_reconstructed_authority(&self) -> bool {
+        self.state
+            .bootstrap
+            .as_ref()
+            .is_some_and(|phase| phase.main.is_some())
+            && self.state.automatic_update_unsettled
+            && matches!(
+                &self.state.baseline_role,
+                BaselineRole::AssistedPending(head)
+                    if matches!(
+                        head.kind,
+                        golem_common::model::PendingUpdateKind::SnapshotAssistedAutomatic(_)
+                    )
+            )
     }
 }
 

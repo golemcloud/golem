@@ -960,6 +960,10 @@ impl RunningWorker {
             }
         };
         let initializer = replay.initializer_replay(horizon);
+        let bootstrap_regions = replay.bootstrap_skipped_regions(
+            &worker_metadata.last_known_status.skipped_regions,
+            &worker_metadata.last_known_status.deleted_regions,
+        );
         drop(wallet_installation_guard);
         {
             let mut lifecycle = parent.instance.lock().await;
@@ -1054,45 +1058,40 @@ impl RunningWorker {
         };
         // A start replays the core initializer on a bootstrap cursor over the durable calls that
         // its baseline names, or on the main cursor in its position; either way the bootstrap
-        // phase observes the range of those calls. A snapshot-assisted update recreates the
-        // initializer's runtime state with the durability suppression of snapshot loading.
-        if initializer == InitializerReplay::Suppressed {
-            context.begin_call_snapshotting_function();
-        } else {
-            let cursor = match initializer {
-                InitializerReplay::Bootstrap {
-                    skip_through,
-                    target,
-                    tail,
-                } => match ReplayState::new_for_bootstrap(
-                    parent.owned_agent_id.clone(),
-                    parent.oplog.clone(),
-                    parent.owner_execution().tool_operations(),
-                    &worker_metadata.last_known_status.deleted_regions,
-                    skip_through,
-                    target,
-                    tail,
-                )
-                .await
-                {
-                    Ok(cursor) => Some(cursor),
-                    Err(error) => {
-                        drop(context);
-                        return Err(cleanup_reconstructing_agent_filesystem(
-                            reconstructing,
-                            window,
-                            error,
-                        )
-                        .await);
-                    }
-                },
-                InitializerReplay::Positional | InitializerReplay::Suppressed => None,
-            };
-            context
-                .durable_ctx_mut()
-                .enter_bootstrap_phase(cursor)
-                .await;
-        }
+        // phase observes the range of those calls.
+        let cursor = match initializer {
+            InitializerReplay::Bootstrap {
+                skip_through,
+                target,
+                tail,
+            } => match ReplayState::new_for_bootstrap(
+                parent.owned_agent_id.clone(),
+                parent.oplog.clone(),
+                parent.owner_execution().tool_operations(),
+                &bootstrap_regions,
+                skip_through,
+                target,
+                tail,
+            )
+            .await
+            {
+                Ok(cursor) => Some(cursor),
+                Err(error) => {
+                    drop(context);
+                    return Err(cleanup_reconstructing_agent_filesystem(
+                        reconstructing,
+                        window,
+                        error,
+                    )
+                    .await);
+                }
+            },
+            InitializerReplay::Positional => None,
+        };
+        context
+            .durable_ctx_mut()
+            .enter_bootstrap_phase(cursor)
+            .await;
         let runtime = async {
             let mut hosted = instance_host.instantiate(context, &component).await?;
             instance_host.reconcile_linear_memories(&mut hosted).await?;
@@ -1118,8 +1117,7 @@ impl RunningWorker {
                 }
             }
             Err(error) => {
-                let diverged = initializer != InitializerReplay::Suppressed
-                    && matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. });
+                let diverged = matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. });
                 Err((error, diverged))
             }
         };
@@ -1145,9 +1143,6 @@ impl RunningWorker {
                 .await);
             }
         };
-        if initializer == InitializerReplay::Suppressed {
-            store.data_mut().end_call_snapshotting_function();
-        }
         {
             let (active_agent, generation) = entity_generation;
             let establishment = parent.interrupt_establishment_tail.lock().unwrap().clone();

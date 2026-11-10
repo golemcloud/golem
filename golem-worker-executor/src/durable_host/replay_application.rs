@@ -81,6 +81,16 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
         } else {
             None
         };
+        // A snapshot-assisted update names the bootstrap block of its target in its outcome.
+        let bootstrap = pending_update
+            .as_ref()
+            .filter(|update| {
+                matches!(
+                    update.description,
+                    UpdateDescription::SnapshotAssistedAutomatic { .. }
+                )
+            })
+            .and_then(|_| ctx.state.bootstrap_range.clone());
         let local_predecessor = ctx.state.replay_applications.back().cloned();
         let predecessor = order.tail.upgrade();
         let initial_installed_revision = ctx.state.component_metadata.revision;
@@ -259,7 +269,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                                 crate::worker::start_outcome::success_details_of(
                                     &pending.reference,
                                 ),
-                                None,
+                                bootstrap,
                                 captured_owner.clone(),
                                 futures::future::ready(Ok(boundary.clone())).boxed(),
                             )

@@ -6344,16 +6344,22 @@ async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
     let marker = OplogIndex::from_u64(7);
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
-    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(4), None)
+        .await
+        .unwrap();
     assert_eq!(
         rs.invocation_finish_before(marker),
         None,
         "a finish after the replay target is not visible"
     );
-    rs.set_replay_target(finish).await.unwrap();
+    rs.set_replay_target(finish, None).await.unwrap();
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
-    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
-    rs.set_replay_target(OplogIndex::from_u64(8)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(4), None)
+        .await
+        .unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(8), None)
+        .await
+        .unwrap();
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
     rs.get_oplog_entry_agent_invocation_started()

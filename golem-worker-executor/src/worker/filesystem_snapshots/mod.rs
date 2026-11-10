@@ -853,24 +853,17 @@ pub(crate) enum InitializerReplay {
         target: OplogIndex,
         tail: BootstrapTail,
     },
-    /// With the durability suppression of snapshot loading, which neither appends nor consumes
-    /// entries. The starts of snapshot-assisted updates recreate the runtime state of the
-    /// initializer this way.
-    Suppressed,
 }
 
 impl ReplayBaseline {
     /// How the core initializer of the start replays its durable calls, with `horizon` the last
-    /// entry of the history when the start installs its cursor. A periodic or promoted manual
-    /// record replays the bootstrap range that it names on a strict cursor; a pending
-    /// snapshot-based update replays what its earlier attempts recorded after its anchor and then
-    /// continues live.
+    /// entry of the history when the start installs its cursor. A periodic or promoted record
+    /// replays the bootstrap range that it names on a strict cursor; a pending snapshot-based or
+    /// snapshot-assisted update replays what its earlier attempts recorded after its anchor and
+    /// then continues live.
     pub(crate) fn initializer_replay(&self, horizon: OplogIndex) -> InitializerReplay {
-        match (&self.role, &self.bootstrap) {
-            (
-                BaselineRole::Periodic(_) | BaselineRole::ManualPromoted,
-                BootstrapSource::Recorded(range),
-            ) => {
+        match &self.bootstrap {
+            BootstrapSource::Recorded(range) => {
                 let (skip_through, target) = match range {
                     Some(range) => (range.start.previous(), range.end),
                     None => (OplogIndex::INITIAL, OplogIndex::INITIAL),
@@ -881,29 +874,42 @@ impl ReplayBaseline {
                     tail: BootstrapTail::Strict,
                 }
             }
-            (BaselineRole::ManualPending(_), BootstrapSource::Attempt { anchor }) => {
-                InitializerReplay::Bootstrap {
-                    skip_through: *anchor,
-                    target: horizon,
-                    tail: BootstrapTail::Live,
-                }
-            }
-            (_, BootstrapSource::Positional) => InitializerReplay::Positional,
-            _ => InitializerReplay::Suppressed,
+            BootstrapSource::Attempt { anchor } => InitializerReplay::Bootstrap {
+                skip_through: *anchor,
+                target: horizon,
+                tail: BootstrapTail::Live,
+            },
+            BootstrapSource::Positional => InitializerReplay::Positional,
         }
     }
 
-    /// The history after the anchor of a pending snapshot-based update up to `horizon`: what
-    /// earlier attempts of the update recorded. It belongs to the target revision, so the main
-    /// cursor of the start skips it and the bootstrap cursor replays it.
+    /// The history after the anchor of a pending snapshot-based or snapshot-assisted update up to
+    /// `horizon`: what earlier attempts of the update recorded. It belongs to the target revision,
+    /// so the main cursor of the start skips it and the bootstrap cursor replays it. The anchor
+    /// of a snapshot-assisted update is its strategy entry, which a start writes only while the
+    /// update is at the head of the queue, after the outcome of every update before it.
     pub(crate) fn attempt_region(&self, horizon: OplogIndex) -> Option<OplogRegion> {
-        match (&self.role, &self.bootstrap) {
-            (BaselineRole::ManualPending(_), BootstrapSource::Attempt { anchor })
-                if *anchor < horizon =>
-            {
+        match &self.bootstrap {
+            BootstrapSource::Attempt { anchor } if *anchor < horizon => {
                 Some(OplogRegion::from_index_range(anchor.next()..=horizon))
             }
             _ => None,
+        }
+    }
+
+    /// The history that the bootstrap cursor of the start skips besides its `skip_through`
+    /// prefix. A recorded range lies inside the history that the status skips for the snapshot
+    /// or update that names it, so a strict cursor skips only the deleted regions. The live cursor
+    /// of a pending update also skips what the status skips after the anchor: the history of the
+    /// updates before it in the queue, such as a failed attempt of an earlier update.
+    pub(crate) fn bootstrap_skipped_regions(
+        &self,
+        status_skipped: &DeletedRegions,
+        status_deleted: &DeletedRegions,
+    ) -> DeletedRegions {
+        match &self.bootstrap {
+            BootstrapSource::Attempt { .. } => self.skipped_regions(status_skipped),
+            BootstrapSource::Recorded(_) | BootstrapSource::Positional => status_deleted.clone(),
         }
     }
 
