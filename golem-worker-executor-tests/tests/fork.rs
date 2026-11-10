@@ -630,9 +630,12 @@ impl WorkerProxy for LocalResumeProxy {
         source: &AgentId,
         target: &AgentId,
         cut: &OplogIndex,
+        principal: Principal,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
-        self.inner.fork_worker(source, target, cut, auth).await
+        self.inner
+            .fork_worker(source, target, cut, principal, auth)
+            .await
     }
 
     async fn revert(

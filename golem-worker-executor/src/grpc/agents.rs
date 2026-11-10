@@ -24,6 +24,7 @@ use super::{
 };
 use crate::worker::CreateIntent;
 use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition};
+use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -326,6 +327,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_target_agent_id.agent_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
                 &auth_ctx,
+                CreateRequest::new(
+                    CreateRequestKind::Fork,
+                    None,
+                    extract_principal(&request.principal),
+                    &InvocationContextStack::fresh(),
+                ),
             )
             .await?;
 

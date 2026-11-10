@@ -20,13 +20,16 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRejection, ForkStreamSlotRequest, ForkStreamSlotResponse, ForkStreamSlotSuccess,
     fork_stream_slot_rejection::Reason, fork_stream_slot_response,
 };
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, Principal};
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, StreamExportFork, StreamExportForkInitializedRecord,
     StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionExpiryPolicy,
     StreamSessionRecord,
 };
-use golem_common::model::oplog::{DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry};
+use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::{
+    CreateRequest, CreateRequestKind, DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry,
+};
 use golem_common::model::{
     AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp,
 };
@@ -120,6 +123,16 @@ async fn execute<Ctx: WorkerCtx>(
         .ok_or_else(|| WorkerExecutorError::invalid_request("missing auth context"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
+    let fork_request = CreateRequest::new(
+        CreateRequestKind::Fork,
+        None,
+        request
+            .principal
+            .clone()
+            .and_then(|principal| principal.try_into().ok())
+            .unwrap_or_else(Principal::anonymous),
+        &InvocationContextStack::fresh(),
+    );
     let source = OwnedAgentId::new(environment_id, &source_id);
     let target = OwnedAgentId::new(environment_id, &target_id);
     if source_id.component_id != target_id.component_id || source == target {
@@ -246,6 +259,7 @@ async fn execute<Ctx: WorkerCtx>(
             hash,
             &candidate,
             request.max_copied_bytes,
+            &fork_request,
         )
         .await?;
         // A source without the snapshot of the baseline holds no reservation.
@@ -307,6 +321,7 @@ async fn execute<Ctx: WorkerCtx>(
                 hash,
                 &candidate,
                 request.max_copied_bytes,
+                &fork_request,
             )
             .await?;
             if let Some(refused) = source_baseline_refusal(
@@ -560,6 +575,7 @@ async fn stage<Ctx: WorkerCtx>(
     hash: [u8; 32],
     candidate: &Candidate,
     max_bytes: u64,
+    fork_request: &CreateRequest,
 ) -> Result<
     (
         std::sync::Arc<dyn crate::services::oplog::Oplog>,
@@ -581,6 +597,7 @@ async fn stage<Ctx: WorkerCtx>(
             Some((candidate.selected, candidate.retained_through)),
             Some(max_bytes),
             Some(candidate),
+            fork_request,
         )
         .await
         .map_err(|error| {

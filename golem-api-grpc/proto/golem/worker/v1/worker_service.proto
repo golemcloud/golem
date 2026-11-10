@@ -98,6 +98,8 @@ message ForkWorkerRequest {
   golem.worker.AgentId target_agent_id = 2;
   uint64 oplog_index_cutoff = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  // The principal of the fork target's create request. Absent means the account of auth_ctx.
+  optional golem.component.Principal principal = 5;
 }
 
 message ForkWorkerResponse {

@@ -1530,11 +1530,14 @@ impl WorkerService {
         Ok(())
     }
 
+    /// `principal` is the forking caller the target records; `None` records the account of
+    /// `auth_ctx`.
     pub async fn fork_worker(
         &self,
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        principal: Option<Principal>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let component = self
@@ -1550,6 +1553,11 @@ impl WorkerService {
             AgentResourcePattern::Empty,
         )?;
 
+        let principal = principal.unwrap_or_else(|| {
+            Principal::GolemUser(GolemUserPrincipal {
+                account_id: auth_ctx.account_id(),
+            })
+        });
         self.worker_client
             .fork_worker(
                 source_agent_id,
@@ -1558,6 +1566,7 @@ impl WorkerService {
                 component.environment_id,
                 component.account_id,
                 component.account_email,
+                principal,
                 auth_ctx,
             )
             .await?;
@@ -4712,6 +4721,7 @@ mod tests {
             _: EnvironmentId,
             _: AccountId,
             _: AccountEmail,
+            _: Principal,
             _: AuthCtx,
         ) -> WorkerResult<()> {
             self.effects.lock().unwrap().push("fork");
@@ -5532,6 +5542,7 @@ mod tests {
                 &agent_id,
                 &fork_target,
                 OplogIndex::from_u64(4),
+                None,
                 auth_ctx.clone(),
             )
             .await

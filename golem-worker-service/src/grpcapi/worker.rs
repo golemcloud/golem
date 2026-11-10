@@ -906,9 +906,20 @@ impl WorkerGrpcApi {
         let source_agent_id = validate_protobuf_agent_id(request.source_agent_id)?;
         let target_agent_id = validate_protobuf_agent_id(request.target_agent_id)?;
         let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
+        let principal = request
+            .principal
+            .map(golem_common::model::agent::Principal::try_from)
+            .transpose()
+            .map_err(|e| bad_request_error(format!("failed converting principal: {e}")))?;
 
         self.worker_service
-            .fork_worker(&source_agent_id, &target_agent_id, oplog_idx, auth)
+            .fork_worker(
+                &source_agent_id,
+                &target_agent_id,
+                oplog_idx,
+                principal,
+                auth,
+            )
             .await?;
 
         Ok(())
