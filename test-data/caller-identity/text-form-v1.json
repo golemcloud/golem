@@ -126,6 +126,18 @@
       "issuer": "",
       "subject": "",
       "text": "(\"\",\"\")"
+    },
+    {
+      "name": "every printable ascii character, including & < > quote backslash and slash",
+      "issuer": "https://login.acme.example",
+      "subject": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+      "text": "(\"https://login.acme.example\",\" !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\")"
+    },
+    {
+      "name": "every c1 control character is written as itself",
+      "issuer": "https://login.acme.example",
+      "subject": "",
+      "text": "(\"https://login.acme.example\",\"\")"
     }
   ],
   "reject": [
@@ -268,6 +280,34 @@
     {
       "name": "backslash at the end of the input",
       "text": "(\"a\",\"\\"
+    },
+    {
+      "name": "unicode escape of a letter above U+00FF",
+      "text": "(\"a\",\"\\u0100\")"
+    },
+    {
+      "name": "unicode escape of the line separator",
+      "text": "(\"a\",\"\\u2028\")"
+    },
+    {
+      "name": "unicode escape of the paragraph separator",
+      "text": "(\"a\",\"\\u2029\")"
+    },
+    {
+      "name": "unicode escape of U+FFFF",
+      "text": "(\"a\",\"\\uffff\")"
+    },
+    {
+      "name": "escaped lone high surrogate",
+      "text": "(\"a\",\"\\ud800\")"
+    },
+    {
+      "name": "escaped lone low surrogate",
+      "text": "(\"a\",\"\\udfff\")"
+    },
+    {
+      "name": "escaped high surrogate followed by a plain letter",
+      "text": "(\"a\",\"\\ud83dx\")"
     }
   ]
 }

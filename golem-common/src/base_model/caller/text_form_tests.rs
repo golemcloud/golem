@@ -120,7 +120,8 @@ fn text_form_parser_refuses_every_golden_non_canonical_text() {
 #[test]
 fn text_form_parser_accepts_a_unicode_escape_only_where_the_printer_writes_one() {
     let short_escapes = [0x08u32, 0x09, 0x0a, 0x0c, 0x0d];
-    for code in 0u32..0x100 {
+    // Every UTF-16 code unit, surrogates included: no escape above U+001F is ever written.
+    for code in 0u32..0x10000 {
         let lowercase = format!("(\"i\",\"\\u{code:04x}\")");
         let uppercase = format!("(\"i\",\"\\u{code:04X}\")");
         let printed = code < 0x20 && !short_escapes.contains(&code);

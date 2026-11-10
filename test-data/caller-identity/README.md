@@ -17,6 +17,8 @@ A pair is `("<issuer>","<subject>")`, with no spaces. Each string is escaped as 
 A parser accepts only that spelling, so two texts are equal exactly when their pairs are equal.
 It refuses, for example, `\/`, `\u0062`, uppercase hex, a raw control character, spaces and an
 unquoted `*`.
+The refused spellings include the escape of any character from U+0020 up (such as `\u0026`,
+`\u0100` or `\u2028`) and every escaped surrogate, lone or paired.
 
 - `roundTrip`: each `issuer` and `subject` prints as exactly `text`, and `text` parses back to
   them.
