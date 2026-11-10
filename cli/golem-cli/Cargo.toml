@@ -166,3 +166,4 @@ wat = { workspace = true }
 lenient_bool = { workspace = true }
 serde_json = { workspace = true }
 shadow-rs = { workspace = true }
+toml = { workspace = true }

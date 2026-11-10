@@ -130,6 +130,9 @@ pub mod rust_dep {
     pub const LOG: &str = "0.4.29";
     pub const SERDE: &str = "1";
     pub const SERDE_JSON: &str = "1";
+    pub const WIT_BINDGEN_GIT: &str = env!("GOLEM_RUST_WIT_BINDGEN_GIT");
+    pub const WIT_BINDGEN_REV: &str = env!("GOLEM_RUST_WIT_BINDGEN_REV");
+    pub const WIT_BINDGEN_VERSION: &str = env!("GOLEM_RUST_WIT_BINDGEN_VERSION");
 }
 
 pub mod scala_dep {
