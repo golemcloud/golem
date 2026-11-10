@@ -345,3 +345,6 @@ pub struct Caller {
     pub immediate: Principal,
     pub tokens: Vec<TokenProvenance>,
 }
+
+#[cfg(test)]
+mod tests;

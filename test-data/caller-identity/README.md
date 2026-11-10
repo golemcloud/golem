@@ -76,8 +76,8 @@ The vectors fix the header and the claim set, not a signature.
 
 ## Consumers
 
-- Rust (the source of truth): `text_form_tests.rs`, `principal_tests.rs` and
-  `identity_proof_tests.rs` in `golem-common/src/base_model/caller/`.
+- Rust (the source of truth): `pair/tests.rs`, `subject/tests.rs` and
+  `identity_proof/tests.rs` in `golem-common/src/base_model/caller/`.
 
 When the format changes, change these files in the same commit; the Rust tests fail until both
 agree.

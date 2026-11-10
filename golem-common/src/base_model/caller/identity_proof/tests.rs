@@ -14,12 +14,13 @@
 
 use super::{
     AWS_SESSION_TAGS_CLAIM, AWS_STS_AUDIENCE, AgentPrincipal, AwsSessionTagError, AwsSessionTags,
-    GolemProofClaim, GolemSubject, IDENTITY_PROOF_LIFETIME_SECONDS, IdentityProofClaims,
-    IdentityProofHeader, Kind, ProofReceiver, ProofSubject, ToolPrincipal,
+    GolemProofClaim, IDENTITY_PROOF_LIFETIME_SECONDS, IdentityProofClaims, IdentityProofHeader,
+    Kind, ProofReceiver, ProofSubject, ToolPrincipal,
 };
 use crate::base_model::AgentFingerprint;
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
+use crate::base_model::caller::GolemSubject;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
 use serde_json::Value;

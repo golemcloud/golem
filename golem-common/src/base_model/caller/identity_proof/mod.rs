@@ -319,3 +319,6 @@ pub struct AwsPrincipalTags {
     )]
     pub tool: Option<[String; 1]>,
 }
+
+#[cfg(test)]
+mod tests;

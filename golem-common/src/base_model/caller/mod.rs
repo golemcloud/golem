@@ -33,12 +33,3 @@ pub use identity_proof::*;
 pub use pair::*;
 pub use principal::*;
 pub use subject::*;
-
-#[cfg(test)]
-mod identity_proof_tests;
-
-#[cfg(test)]
-mod principal_tests;
-
-#[cfg(test)]
-mod text_form_tests;
