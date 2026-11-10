@@ -21,7 +21,9 @@ use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 /// The signature algorithm of every identity proof. AWS STS and SPIFFE JWT-SVID do not accept
 /// EdDSA, and ES256 keeps proofs short.
@@ -208,7 +210,7 @@ pub enum AwsSessionTagError {
     )]
     ValueTooLong { tag: &'static str, length: usize },
     #[error(
-        "the AWS session tag {tag} has a value with the character {character:?}, which AWS refuses (letters, numbers, spaces and _ . : / = + - @ are allowed)"
+        "the AWS session tag {tag} has a value with the character {character:?}, which AWS refuses (letters, separators, numbers and _ . : / = + - @ are allowed)"
     )]
     CharacterRefused { tag: &'static str, character: char },
     #[error("the AWS session tag {tag} has a value that begins with aws:, which AWS reserves")]
@@ -219,11 +221,11 @@ impl AwsSessionTags {
     /// The session tags that repeat the values of a `golem` claim.
     ///
     /// Every tag value is checked against the rules that the AWS documentation states: at most
-    /// 256 characters ("Passing session tags in AWS STS"); letters, numbers, spaces and
-    /// `_ . : / = + - @` only, and no `aws:` prefix ("Rules for tagging in IAM and AWS STS").
-    /// "Letters" and "numbers" are read as the Unicode letters and numbers (`char::is_alphanumeric`)
-    /// and "spaces" as U+0020 only. The pages do not say more, so the real-AWS test of the
-    /// 1.5 plan decides the final form of these rules.
+    /// 256 characters ("Passing session tags in AWS STS"); only the characters of the pattern
+    /// `[\p{L}\p{Z}\p{N}_.:/=+\-@]*` that the AWS STS API reference gives for `Tag` values (Unicode
+    /// letters, separators and numbers by general category, and `_ . : / = + - @`); and no `aws:`
+    /// prefix ("Rules for tagging in IAM and AWS STS"). The real-AWS test of the 1.5 plan decides
+    /// whether these rules are final.
     pub fn from_golem_claim(golem: &GolemProofClaim) -> Result<Self, AwsSessionTagError> {
         let (environment, account, agent_type, tool) = match golem {
             GolemProofClaim::Agent {
@@ -258,14 +260,30 @@ impl AwsSessionTags {
     }
 }
 
+/// The characters of a tag value, as the AWS STS API reference writes them for `Tag`:
+/// `[\p{L}\p{Z}\p{N}_.:/=+\-@]*` (https://docs.aws.amazon.com/STS/latest/APIReference/API_Tag.html).
+const AWS_TAG_VALUE_CHARACTER_CLASS: &str = r"[\p{L}\p{Z}\p{N}_.:/=+\-@]";
+
+static AWS_TAG_VALUE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!("^{AWS_TAG_VALUE_CHARACTER_CLASS}*$")).expect("the AWS tag value pattern")
+});
+
+static AWS_TAG_VALUE_CHARACTER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!("^{AWS_TAG_VALUE_CHARACTER_CLASS}$"))
+        .expect("the AWS tag character pattern")
+});
+
 fn check_tag_value(tag: &'static str, value: String) -> Result<String, AwsSessionTagError> {
     let length = value.chars().count();
     if length > AWS_SESSION_TAG_VALUE_MAX_CHARACTERS {
         return Err(AwsSessionTagError::ValueTooLong { tag, length });
     }
-    if let Some(character) = value.chars().find(|c| {
-        !(c.is_alphanumeric() || matches!(c, ' ' | '_' | '.' | ':' | '/' | '=' | '+' | '-' | '@'))
-    }) {
+    if !AWS_TAG_VALUE_PATTERN.is_match(&value) {
+        // The pattern refuses at least one character, so the search finds it.
+        let character = value
+            .chars()
+            .find(|c| !AWS_TAG_VALUE_CHARACTER_PATTERN.is_match(c.encode_utf8(&mut [0; 4])))
+            .unwrap_or(' ');
         return Err(AwsSessionTagError::CharacterRefused { tag, character });
     }
     if value.starts_with(AWS_RESERVED_TAG_PREFIX) {
