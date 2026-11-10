@@ -1495,6 +1495,25 @@ impl TestContext {
         self.working_dir.join(path)
     }
 
+    async fn component_wasm(&self, component_name: &str, preset: Option<&str>) -> PathBuf {
+        let mut args = vec!["component", "manifest-trace", "-F", "json"];
+        if let Some(preset) = preset {
+            args.extend(["-P", preset]);
+        }
+        let output = self.cli(args).await;
+        assert!(output.success_or_dump());
+        let trace = output
+            .stdout_json::<serde_json::Value>()
+            .into_iter()
+            .find(|trace| trace["componentName"] == component_name)
+            .unwrap_or_else(|| panic!("missing manifest trace for {component_name}"));
+        self.cwd_path_join(
+            trace["properties"]["componentWasm"]["value"]
+                .as_str()
+                .unwrap(),
+        )
+    }
+
     fn test_data_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         crate_path().join("test-data").join(path)
     }
