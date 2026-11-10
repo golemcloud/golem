@@ -42,8 +42,8 @@ pub struct MemorySnapshot {
     /// OOM-kill.
     pub limit_bytes: u64,
     /// Currently-resident bytes: on Linux, cgroup `memory.current` (touched
-    /// pages, lagging but exact) less the page cache and slab that the kernel
-    /// can reclaim; process RSS otherwise.
+    /// pages, lagging but exact) less the clean page cache that the kernel can
+    /// drop; process RSS otherwise.
     pub current_bytes: u64,
 }
 
@@ -319,11 +319,16 @@ impl MemoryProbe for CgroupV2Probe {
 /// Counted as usage, the cache of agent file I/O fills the admission budget and refuses every
 /// agent start, although no agent memory grew.
 ///
-/// This counts the file pages on the LRU lists that are clean and not mapped, and the
-/// reclaimable slab (dentries and inodes). Mapped pages back running code, and dirty and
-/// writeback pages need I/O before the kernel can drop them, so these stay counted as usage.
-/// Shared memory is on the anonymous LRU lists and stays counted as well, because without swap
-/// the kernel cannot reclaim it.
+/// This counts only the file pages on the LRU lists that are clean and not mapped: the kernel
+/// drops these without I/O before it OOM-kills the cgroup. Everything else stays counted as
+/// usage:
+///
+/// - anonymous memory, and shared memory, which is on the anonymous LRU lists and which the
+///   kernel cannot reclaim without swap. Memory that Wasmtime maps from a memfd is shared memory;
+/// - mapped file pages, such as code that Wasmtime maps from a compiled module file;
+/// - dirty and writeback file pages, which need I/O before the kernel can drop them;
+/// - kernel memory, including the reclaimable slab: the dentries and inodes of open files stay
+///   pinned, so the kernel cannot always free it.
 #[cfg(any(target_os = "linux", test))]
 fn reclaimable_bytes(memory_stat: &str) -> u64 {
     let mut inactive_file = 0u64;
@@ -331,7 +336,6 @@ fn reclaimable_bytes(memory_stat: &str) -> u64 {
     let mut file_mapped = 0u64;
     let mut file_dirty = 0u64;
     let mut file_writeback = 0u64;
-    let mut slab_reclaimable = 0u64;
     for line in memory_stat.lines() {
         let mut fields = line.split_ascii_whitespace();
         let (Some(key), Some(value), None) = (fields.next(), fields.next(), fields.next()) else {
@@ -346,7 +350,6 @@ fn reclaimable_bytes(memory_stat: &str) -> u64 {
             "file_mapped" => file_mapped = value,
             "file_dirty" => file_dirty = value,
             "file_writeback" => file_writeback = value,
-            "slab_reclaimable" => slab_reclaimable = value,
             _ => {}
         }
     }
@@ -356,7 +359,6 @@ fn reclaimable_bytes(memory_stat: &str) -> u64 {
     inactive_file
         .saturating_add(active_file)
         .saturating_sub(pinned_file_pages)
-        .saturating_add(slab_reclaimable)
 }
 
 /// Constructs the best available probe.
@@ -629,12 +631,12 @@ mod tests {
     }
 
     #[test]
-    fn reclaimable_bytes_are_the_clean_unmapped_file_pages_and_the_reclaimable_slab() {
+    fn reclaimable_bytes_are_the_clean_unmapped_file_pages() {
         let file_pages = 9 * GIB + GIB;
         let mapped_dirty_and_writeback = 128 * MIB + 64 * MIB + 32 * MIB;
         assert_eq!(
             reclaimable_bytes(&memory_stat_after_file_writes()),
-            file_pages - mapped_dirty_and_writeback + 192 * MIB
+            file_pages - mapped_dirty_and_writeback
         );
     }
 
@@ -647,8 +649,8 @@ mod tests {
 
     #[test]
     fn reclaimable_bytes_never_count_more_file_pages_than_the_lru_lists_hold() {
-        let stat = "inactive_file 100\nactive_file 0\nfile_mapped 300\nslab_reclaimable 7\n";
-        assert_eq!(reclaimable_bytes(stat), 7);
+        let stat = "inactive_file 100\nactive_file 0\nfile_mapped 300\n";
+        assert_eq!(reclaimable_bytes(stat), 0);
     }
 
     #[cfg(target_os = "linux")]
