@@ -22,8 +22,9 @@ use super::{
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
     from_proto_invocation_context, golem,
 };
-use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::{Principal, ScheduleId};
+use golem_common::model::agent::{
+    AgentTarget, InvocationFreshnessDisposition, Principal, ScheduleId,
+};
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -85,7 +86,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<AgentFingerprint, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
+        let owned_agent_id = self
+            .canonicalize_agent_target(
+                owned_agent_id.environment_id,
+                &AgentTarget::Current(owned_agent_id.agent_id),
+            )
+            .await?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;

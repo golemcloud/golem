@@ -5,37 +5,32 @@
 pub fn ParsedAgentId::create(
   type_name : String,
   constructor_value : @model.SchemaValue,
-  phantom_id? : @schema.Uuid? = None,
+  phantom_id~ : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
-  let wire = @model.schema_value_to_wit(constructor_value) catch {
+  let prepared = @identity.Constructor::from_value(
+    type_name, constructor_value, phantom_id,
+  ) catch {
     error => raise Schema("failed to encode constructor value: \{repr(error)}")
   }
-  match
-    @agentHost.make_agent_id(
-      type_name,
-      wire,
-      phantom_id.map(@schema.Uuid::to_wit),
-    ) {
-    Ok(value) => { value, }
-    Err(error) => raise Identity(agent_error_message(error))
+  let value = prepared.agent_id() catch {
+    error => raise Identity(agent_error_message(error))
   }
+  { value, }
 }
 
 ///|
 pub fn ParsedAgentId::parts(
   self : ParsedAgentId,
 ) -> ParsedAgentIdParts raise ReflectError {
-  match @agentHost.parse_agent_id(self.value) {
-    Ok((type_name, constructor_input, phantom_id)) => {
-      let typed = @model_host.typed_schema_value_from_wit(constructor_input) catch {
-        error => raise Schema("failed to decode agent ID: \{repr(error)}")
-      }
-      {
-        type_name,
-        constructor_value: typed.value,
-        phantom_id: phantom_id.map(@schema.Uuid::from_wit),
-      }
-    }
-    Err(error) => raise Identity(agent_error_message(error))
+  let parsed = @identity.parse(self.value) catch {
+    error => raise Identity(agent_error_message(error))
+  }
+  let constructor_value = parsed.constructor_value() catch {
+    error => raise Schema("failed to decode agent ID: \{repr(error)}")
+  }
+  {
+    type_name: parsed.type_name,
+    constructor_value,
+    phantom_id: parsed.phantom_id,
   }
 }

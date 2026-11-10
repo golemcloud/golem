@@ -21,5 +21,11 @@
 /// refused upgrade, a retryable rejection, or a connection error.
 pub(all) suberror BridgeError {
   BridgeError(String)
-  Unreachable(endpoint~ : String, window_ms~ : Int, last_cause~ : String)
+  Unreachable(endpoint~ : String, window_ms~ : Int32, last_cause~ : String)
 } derive(Debug, Eq)
+
+///|
+pub extend BridgeError with Debug::{to_repr}
+
+///|
+pub extend BridgeError with Eq::{equal, not_equal}

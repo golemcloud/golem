@@ -11,7 +11,7 @@ import {
   "golemcloud/golem_sdk/schema_model_host" @model_host,
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/math",
-  "moonbitlang/core/strconv",
+  "moonbitlang/core/string",
 }
 
 supported_targets = "+wasm"

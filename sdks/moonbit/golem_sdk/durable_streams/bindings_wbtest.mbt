@@ -1,21 +1,21 @@
 ///|
-extern "wasm" fn set_host_mode(mode : Int) = "golem:test" "set-durable-stream-host-mode"
+extern "wasm" fn set_host_mode(mode : Int32) = "golem:test" "set-durable-stream-host-mode"
 
 ///|
 #owned(value)
-extern "wasm" fn string_pointer(value : String) -> Int =
+extern "wasm" fn string_pointer(value : String) -> Int32 =
   #|(func (param i32) (result i32) local.get 0)
 
 ///|
 #owned(value)
-extern "wasm" fn bytes_pointer(value : Bytes) -> Int =
+extern "wasm" fn bytes_pointer(value : Bytes) -> Int32 =
   #|(func (param i32) (result i32) local.get 0)
 
 ///|
-extern "wasm" fn reply_string(pointer : Int, length : Int) = "golem:test" "durable-stream-reply-string"
+extern "wasm" fn reply_string(pointer : Int32, length : Int32) = "golem:test" "durable-stream-reply-string"
 
 ///|
-extern "wasm" fn resource_stat(handle : Int, field : Int) -> Int = "golem:test" "durable-stream-resource-stat"
+extern "wasm" fn resource_stat(handle : Int32, field : Int32) -> Int32 = "golem:test" "durable-stream-resource-stat"
 
 ///|
 fn reply(value : String) -> Unit {
@@ -29,7 +29,7 @@ test "native reads reuse descriptor and lower independent checkpoint tokens afte
   run_async(async fn() {
     let count = resource_stat(0, 0)
     let secret = @types.Secret::Secret(77)
-    let reader : Reader[Int] = json_reader(
+    let reader : Reader[Int32] = json_reader(
       "https://example.test/stream",
       offset="now",
       transport=SSE,
@@ -67,7 +67,7 @@ test "resource constructors capture borrowed secret once and explicit retries re
     let readers_before = resource_stat(0, 0)
     let writers_before = resource_stat(0, 1)
     let secret = @types.Secret::Secret(77)
-    let reader : Reader[Int] = json_reader(
+    let reader : Reader[Int32] = json_reader(
       "https://example.test/stream",
       offset="now",
       auth=secret,
@@ -143,7 +143,7 @@ test "append resource ABI preserves optional offsets and drops after close-only 
     set_host_mode(mode)
     run_async(async fn() {
       let secret = @types.Secret::Secret(77)
-      let writer : Writer[Int] = json_writer(
+      let writer : Writer[Int32] = json_writer(
         "https://example.test/stream",
         producer_id="producer",
         epoch=9007199254740991,
@@ -183,8 +183,8 @@ test "append resource ABI preserves optional offsets and drops after close-only 
 ///|
 test "distinct reader handles release on unstarted native stream drop and final payload" {
   run_async(async fn() {
-    let first : Reader[Int] = json_reader("https://example.test/first")
-    let second : Reader[Int] = json_reader("https://example.test/second")
+    let first : Reader[Int32] = json_reader("https://example.test/first")
+    let second : Reader[Int32] = json_reader("https://example.test/second")
     let @durable-streams.DurableStreamReader(handle1) = first.resource.unwrap()
     let @durable-streams.DurableStreamReader(handle2) = second.resource.unwrap()
     assert_true(handle1 != handle2)

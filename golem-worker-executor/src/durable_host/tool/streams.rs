@@ -33,7 +33,7 @@ use golem_common::schema::TypedSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use wasmtime::component::{Accessor, AccessorTask};
+use wasmtime::component::Accessor;
 
 pub(super) struct MaterializeResponse {
     pub streams: StreamSession,
@@ -43,8 +43,11 @@ pub(super) struct MaterializeResponse {
     pub activity: TailActivity,
 }
 
-impl<Ctx: WorkerCtx> AccessorTask<Ctx> for MaterializeResponse {
-    async fn run(self, _accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+impl MaterializeResponse {
+    pub(super) async fn run<Ctx: WorkerCtx>(
+        self,
+        _accessor: &Accessor<Ctx>,
+    ) -> wasmtime::Result<()> {
         let Self {
             streams,
             revision,

@@ -244,6 +244,17 @@ pub const PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH: &str = "install-recipient-
 pub(crate) enum WorkerCreationMode {
     ComponentAgent,
     EphemeralExternalTool,
+    OplogProcessor,
+}
+
+impl WorkerCreationMode {
+    fn owner_kind(self) -> OwnerKind {
+        match self {
+            Self::ComponentAgent => OwnerKind::ComponentAgent,
+            Self::EphemeralExternalTool => OwnerKind::EphemeralExternalTool,
+            Self::OplogProcessor => OwnerKind::OplogProcessor,
+        }
+    }
 }
 
 /// Resolved read-only `AgentMethod` invocation data needed to build the
@@ -708,7 +719,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) fn component_id(&self) -> ComponentId {
-        self.owned_agent_id.component_id()
+        self.initial_worker_metadata.component_id
     }
 
     pub fn owner_execution(&self) -> Arc<OwnerExecution> {

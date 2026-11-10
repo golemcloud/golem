@@ -42,7 +42,7 @@ async fn build(ctx: &mut TestContext) {
 }
 
 async fn assert_provider_has_no_secret_imports(ctx: &TestContext) {
-    let component = ctx.cwd_path_join("golem-temp/agents/chunk_f_provider_release.wasm");
+    let component = ctx.component_wasm("chunk-f:provider", None).await;
     let output = tokio::process::Command::new("wasm-tools")
         .args(["component", "wit"])
         .arg(component)

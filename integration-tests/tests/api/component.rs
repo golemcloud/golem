@@ -163,7 +163,9 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     assert_eq!(
         component
             .metadata
-            .agent_type_config(&AgentTypeName("CounterAgent".to_string()))
+            .agent_type_provision_configs
+            .get(&AgentTypeName("CounterAgent".to_string()))
+            .map(|config| config.config.as_slice())
             .unwrap_or_default()
             .iter()
             .map(|e| (e.path.clone(), e.value.value().clone()))
@@ -202,7 +204,9 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     assert_eq!(
         updated_component
             .metadata
-            .agent_type_config(&AgentTypeName("CounterAgent".to_string()))
+            .agent_type_provision_configs
+            .get(&AgentTypeName("CounterAgent".to_string()))
+            .map(|config| config.config.as_slice())
             .unwrap_or_default()
             .iter()
             .map(|e| (e.path.clone(), e.value.value().clone()))
@@ -248,11 +252,11 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
     assert!(
         component
             .metadata
-            .agent_type_provision_configs()
+            .agent_type_provision_configs
             .contains_key(&AgentTypeName("CounterAgent".to_string()))
     );
 
-    let mut other_agent = component.metadata.agent_types()[0].clone();
+    let mut other_agent = component.metadata.agent_types[0].declaration.clone();
     other_agent.type_name = AgentTypeName("OtherAgent".to_string());
     other_agent.description = "Constructs the agent OtherAgent".to_string();
 
@@ -291,22 +295,22 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
     assert_eq!(
         updated_component
             .metadata
-            .agent_types()
+            .agent_types
             .iter()
-            .map(|agent_type| agent_type.type_name.0.as_str())
+            .map(|agent_type| agent_type.declaration.type_name.0.as_str())
             .collect::<Vec<_>>(),
         vec!["OtherAgent"]
     );
     assert!(
         updated_component
             .metadata
-            .agent_type_provision_configs()
+            .agent_type_provision_configs
             .contains_key(&AgentTypeName("OtherAgent".to_string()))
     );
     assert!(
         !updated_component
             .metadata
-            .agent_type_provision_configs()
+            .agent_type_provision_configs
             .contains_key(&AgentTypeName("CounterAgent".to_string()))
     );
 
@@ -327,7 +331,7 @@ async fn component_update_rejects_new_agent_type_without_initial_permissions(
         .store()
         .await?;
 
-    let mut new_agent = component.metadata.agent_types()[0].clone();
+    let mut new_agent = component.metadata.agent_types[0].declaration.clone();
     new_agent.type_name = AgentTypeName("OtherAgent".to_string());
     new_agent.description = "Constructs the agent OtherAgent".to_string();
 
@@ -338,7 +342,10 @@ async fn component_update_rejects_new_agent_type_without_initial_permissions(
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
-                agent_types: Some(vec![component.metadata.agent_types()[0].clone(), new_agent]),
+                agent_types: Some(vec![
+                    component.metadata.agent_types[0].declaration.clone(),
+                    new_agent,
+                ]),
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("OtherAgent".to_string()),
                     AgentTypeProvisionConfigUpdate::default(),
@@ -417,7 +424,9 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
     assert_eq!(
         updated_component
             .metadata
-            .agent_type_config(&AgentTypeName("CounterAgent".to_string()))
+            .agent_type_provision_configs
+            .get(&AgentTypeName("CounterAgent".to_string()))
+            .map(|config| config.config.as_slice())
             .unwrap_or_default()
             .iter()
             .map(|e| (e.path.clone(), e.value.value().clone()))
@@ -430,7 +439,9 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
     assert_eq!(
         updated_component
             .metadata
-            .agent_type_env(&AgentTypeName("CounterAgent".to_string()))
+            .agent_type_provision_configs
+            .get(&AgentTypeName("CounterAgent".to_string()))
+            .map(|config| &config.env)
             .cloned()
             .unwrap_or_default(),
         BTreeMap::from([("updated-env".to_string(), "updated-value".to_string())])
@@ -693,7 +704,9 @@ async fn create_component_with_plugins_and_update_installations(
 
     let all_plugins = component
         .metadata
-        .agent_type_plugins(&AgentTypeName("Repository".to_string()))
+        .agent_type_provision_configs
+        .get(&AgentTypeName("Repository".to_string()))
+        .map(|config| config.plugins.as_slice())
         .unwrap_or_default();
     assert_eq!(all_plugins.len(), 1);
 
@@ -737,7 +750,9 @@ async fn create_component_with_plugins_and_update_installations(
 
     let all_plugins_v2 = component_v2
         .metadata
-        .agent_type_plugins(&AgentTypeName("Repository".to_string()))
+        .agent_type_provision_configs
+        .get(&AgentTypeName("Repository".to_string()))
+        .map(|config| config.plugins.as_slice())
         .unwrap_or_default();
     assert_eq!(all_plugins_v2.len(), 1);
 
@@ -779,7 +794,9 @@ async fn create_component_with_plugins_and_update_installations(
 
     let all_plugins_v3 = component_v3
         .metadata
-        .agent_type_plugins(&AgentTypeName("Repository".to_string()))
+        .agent_type_provision_configs
+        .get(&AgentTypeName("Repository".to_string()))
+        .map(|config| config.plugins.as_slice())
         .unwrap_or_default();
     assert_eq!(all_plugins_v3.len(), 0);
 
@@ -865,7 +882,9 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
 
     let all_updated_plugins = updated_component
         .metadata
-        .agent_type_plugins(&AgentTypeName("Repository".to_string()))
+        .agent_type_provision_configs
+        .get(&AgentTypeName("Repository".to_string()))
+        .map(|config| config.plugins.as_slice())
         .unwrap_or_default();
     assert_eq!(all_updated_plugins.len(), 1);
 
@@ -899,7 +918,9 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
 
     let all_files = component
         .metadata
-        .agent_type_files(&AgentTypeName("FileReadWrite".to_string()))
+        .agent_type_provision_configs
+        .get(&AgentTypeName("FileReadWrite".to_string()))
+        .map(|config| config.files.as_slice())
         .unwrap_or_default();
 
     assert_eq!(all_files.len(), 1);
@@ -1013,8 +1034,13 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         .await?;
 
     assert_eq!(
-        component.metadata.agent_types(),
-        std::slice::from_ref(&agent_type_schema)
+        component
+            .metadata
+            .agent_types
+            .iter()
+            .map(|agent_type| &agent_type.declaration)
+            .collect::<Vec<_>>(),
+        vec![&agent_type_schema]
     );
 
     let deployment = user.deploy_environment(env.id).await?;
@@ -1026,6 +1052,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     assert_eq!(
         agent_types.values,
         vec![DeployedRegisteredAgentType {
+            type_id: agent_types.values[0].type_id,
             agent_type: agent_type_schema.clone(),
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: component.id,

@@ -5,7 +5,7 @@ priv enum Items {
 }
 
 ///|
-fn Items::length(self : Items) -> Int {
+fn Items::length(self : Items) -> Int32 {
   match self {
     JsonItems(items) => items.length()
     ByteItems(items) => items.length()
@@ -16,7 +16,7 @@ fn Items::length(self : Items) -> Int {
 priv struct PendingBatch {
   batch : @durable-streams.DurableStreamBatch
   items : Items
-  mut index : Int
+  mut index : Int32
 }
 
 ///|
@@ -27,7 +27,7 @@ pub struct Reader[T] {
   priv mut resource : @durable-streams.DurableStreamReader?
   priv mode : @durable-streams.DurableStreamMode
   priv live_transport : Transport
-  priv decode : (Items, Int) -> T raise
+  priv decode : (Items, Int32) -> T raise
   priv retry : Retry
   priv idle_delay_ms : UInt64
   priv mut pending : PendingBatch?
@@ -46,13 +46,13 @@ pub struct Reader[T] {
 fn[T] make_reader(
   url : String,
   mode : @durable-streams.DurableStreamMode,
-  decode : (Items, Int) -> T raise,
+  decode : (Items, Int32) -> T raise,
   offset : String,
   cursor : String?,
   transport : Transport,
   auth : @types.Secret?,
   timeout_ms : UInt64,
-  max_retries : Int,
+  max_retries : Int32,
   idle_delay_ms : UInt64,
 ) -> Reader[T] raise {
   check_timeout(timeout_ms)
@@ -88,13 +88,13 @@ fn[T] make_reader(
 /// string-encoded Int64/UInt64). Use json_reader_with_codec for another encoding.
 pub fn[T : @json.FromJson] json_reader(
   url : String,
-  offset? : String = "-1",
+  offset~ : String = "-1",
   cursor? : String,
-  transport? : Transport = LONG_POLL,
+  transport~ : Transport = LONG_POLL,
   auth? : @types.Secret,
-  timeout_ms? : UInt64 = 30000,
-  max_retries? : Int = 8,
-  idle_delay_ms? : UInt64 = 100,
+  timeout_ms~ : UInt64 = 30000,
+  max_retries~ : Int32 = 8,
+  idle_delay_ms~ : UInt64 = 100,
 ) -> Reader[T] raise {
   json_reader_with_codec(
     url,
@@ -115,13 +115,13 @@ pub fn[T : @json.FromJson] json_reader(
 pub fn[T] json_reader_with_codec(
   url : String,
   decode : (String) -> T raise,
-  offset? : String = "-1",
+  offset~ : String = "-1",
   cursor? : String,
-  transport? : Transport = LONG_POLL,
+  transport~ : Transport = LONG_POLL,
   auth? : @types.Secret,
-  timeout_ms? : UInt64 = 30000,
-  max_retries? : Int = 8,
-  idle_delay_ms? : UInt64 = 100,
+  timeout_ms~ : UInt64 = 30000,
+  max_retries~ : Int32 = 8,
+  idle_delay_ms~ : UInt64 = 100,
 ) -> Reader[T] raise {
   make_reader(
     url,
@@ -146,13 +146,13 @@ pub fn[T] json_reader_with_codec(
 /// A byte sequence; remote append and transport batch boundaries are not items.
 pub fn byte_reader(
   url : String,
-  offset? : String = "-1",
+  offset~ : String = "-1",
   cursor? : String,
-  transport? : Transport = LONG_POLL,
+  transport~ : Transport = LONG_POLL,
   auth? : @types.Secret,
-  timeout_ms? : UInt64 = 30000,
-  max_retries? : Int = 8,
-  idle_delay_ms? : UInt64 = 100,
+  timeout_ms~ : UInt64 = 30000,
+  max_retries~ : Int32 = 8,
+  idle_delay_ms~ : UInt64 = 100,
 ) -> Reader[Byte] raise {
   make_reader(
     url,
@@ -242,7 +242,7 @@ pub fn[T] Reader::close(self : Reader[T]) -> Unit {
 }
 
 ///|
-async fn[T] Reader::pull(self : Reader[T], from_stream? : Bool = false) -> T? {
+async fn[T] Reader::pull(self : Reader[T], from_stream~ : Bool = false) -> T? {
   self.lock.acquire()
   defer {
     if self.closed {

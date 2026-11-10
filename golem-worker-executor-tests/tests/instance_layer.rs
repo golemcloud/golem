@@ -1060,7 +1060,8 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
                 let agent_type = ctx.parsed_agent_id().unwrap().agent_type;
                 let expected_changed = ctx.component_metadata()
                     .metadata.agent_type_initial_permission_card(&agent_type)
-                    != target.metadata.agent_type_initial_permission_card(&agent_type);
+                    != target.metadata.agent_type_provision_configs.get(&agent_type)
+                        .map(|config| &config.initial_permissions);
                 let (_, historical_before, canonical_before, _) = ctx.test_replay_application_state();
                 let fetches_before = outage.metadata_fetches().len();
                 if refuse_admission {

@@ -44,6 +44,7 @@ use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::AgentVerb;
@@ -289,7 +290,8 @@ pub(super) async fn activate_rpc_target(
 ) -> Result<Box<dyn RpcDemand>, Error> {
     let demand = rpc
         .create_demand(
-            remote_agent_id,
+            AgentTarget::Current(remote_agent_id.agent_id()),
+            remote_agent_id.environment_id,
             method_name,
             created_by,
             agent_id,

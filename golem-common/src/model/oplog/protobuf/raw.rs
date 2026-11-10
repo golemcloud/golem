@@ -114,8 +114,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary>
     }
 }
 
-/// Chained conversion: proto → `PublicOplogEntry` → domain `OplogEntry`.
-impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for OplogEntry {
+/// Public protobuf entries supply observations, not authoritative Create metadata.
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry>
+    for crate::model::oplog::OplogEnrichmentEntry
+{
     type Error = String;
 
     fn try_from(value: golem_api_grpc::proto::golem::worker::OplogEntry) -> Result<Self, String> {
@@ -372,6 +374,9 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         let entry = match value {
             OplogEntry::Create { parameters, .. } => {
                 let CreateParameters {
+                    component_id,
+                    agent_type_name,
+                    canonical_key,
                     agent_id,
                     owner_kind,
                     agent_mode,
@@ -388,6 +393,9 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     instance_id,
                 } = *parameters;
                 Entry::Create(RawCreateParameters {
+                    component_id: Some(component_id.into()),
+                    agent_type_name: agent_type_name.map(|name| name.0),
+                    canonical_key,
                     agent_id: Some(agent_id.into()),
                     owner_kind: owner_kind.into(),
                     agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
@@ -1019,6 +1027,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::Create {
                     timestamp,
                     parameters: Box::new(CreateParameters {
+                        component_id: p.component_id.ok_or("Missing component_id")?.try_into()?,
+                        agent_type_name: p.agent_type_name.map(crate::model::agent::AgentTypeName),
+                        canonical_key: p.canonical_key,
                         agent_id,
                         owner_kind,
                         agent_mode,

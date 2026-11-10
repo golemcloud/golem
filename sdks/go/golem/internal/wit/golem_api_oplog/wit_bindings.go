@@ -232,6 +232,7 @@ type LocalAgentConfigEntry struct {
 const (
 	OwnerKindComponentAgent        uint8 = 0
 	OwnerKindEphemeralExternalTool uint8 = 1
+	OwnerKindOplogProcessor        uint8 = 2
 )
 
 type OwnerKind = uint8

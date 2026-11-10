@@ -183,6 +183,7 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredAgentType> for Re
         value: golem_api_grpc::proto::golem::registry::RegisteredAgentType,
     ) -> Result<Self, Self::Error> {
         Ok(RegisteredAgentType {
+            type_id: value.type_id.try_into()?,
             agent_type: value
                 .agent_type
                 .ok_or_else(|| "Missing agent_type field".to_string())?
@@ -198,6 +199,7 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredAgentType> for Re
 impl From<RegisteredAgentType> for golem_api_grpc::proto::golem::registry::RegisteredAgentType {
     fn from(value: RegisteredAgentType) -> Self {
         Self {
+            type_id: value.type_id.into(),
             agent_type: Some(value.agent_type.into()),
             implemented_by: Some(value.implemented_by.into()),
         }

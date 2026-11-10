@@ -60,11 +60,12 @@ use golem_common::base_model::durable_stream::{
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
-    AgentError as ModelAgentError, AgentInvocationMode, AgentPrincipal,
+    AgentError as ModelAgentError, AgentInvocationMode, AgentPrincipal, AgentTarget,
     InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::{
@@ -137,7 +138,8 @@ pub trait Rpc: Send + Sync {
 
     async fn create_demand(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -151,7 +153,8 @@ pub trait Rpc: Send + Sync {
 
     async fn invoke_and_await(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         method_name: String,
@@ -167,7 +170,8 @@ pub trait Rpc: Send + Sync {
 
     async fn invoke_and_await_streaming(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: IdempotencyKey,
         _method_name: String,
         _method_parameters: ProtoSchemaValue,
@@ -217,7 +221,8 @@ pub trait Rpc: Send + Sync {
 
     async fn invoke(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         method_name: String,

@@ -29,7 +29,7 @@ fn __golem_middleware_tool_concat_globals(
 ///
 fn __golem_middleware_tool_rebase_node(
   node : @tool.CommandNodeDef,
-  offset : Int,
+  offset : Int32,
 ) -> @tool.CommandNodeDef {
   {
     name: node.name,

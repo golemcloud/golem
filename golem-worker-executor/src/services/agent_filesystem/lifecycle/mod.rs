@@ -499,6 +499,9 @@ pub(crate) enum Error {
         refusal: BlobRefusal,
         source: FilesystemStorageError,
     },
+    /// The initial-file declarations or their sources are invalid. Retrying the same
+    /// declarations and content cannot repair them.
+    InitialFileFailed(FilesystemStorageError),
     /// An install of initial files found something other than what the old declarations left at a
     /// path. The install changed nothing, and the generation stays valid.
     InitialFileConflict(Box<InitialFileConflict>),
@@ -515,6 +518,7 @@ impl Display for Error {
             Self::Sandbox(error)
             | Self::InitialFileUnavailable(error)
             | Self::InitialFileRefused { source: error, .. }
+            | Self::InitialFileFailed(error)
             | Self::AgentQuota(error)
             | Self::PhysicalCapacity(error) => Display::fmt(error, formatter),
             Self::InitialFileConflict(error) => Display::fmt(error, formatter),

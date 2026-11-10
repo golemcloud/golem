@@ -433,18 +433,12 @@ impl ComponentCommandHandler {
                 .agent_handler()
                 .redeploy_component_agents(&component.component_name, &component.id)
                 .await?;
-            let version = component.metadata.root_package_version().clone();
             for (agent_id, from_revision) in result.succeeded {
-                let from_version = self
-                    .component_version_at(&component.id, from_revision)
-                    .await;
                 agents.push(AgentRedeploymentMeta {
                     component_name: component.component_name.clone(),
                     agent_id,
                     from_revision,
                     revision: component.revision,
-                    from_version,
-                    version: version.clone(),
                 });
             }
             errors.extend(result.errors);
@@ -1936,7 +1930,7 @@ impl ComponentCommandHandler {
         let tools = extracted_metadata.tools;
         let tool_middlewares = extracted_metadata.tool_middlewares;
         let component = app_ctx.application().component(component_name);
-        let wasm_path = component.final_wasm();
+        let wasm_path = component.wasm();
 
         let mapping = agent_types
             .iter()
@@ -2638,7 +2632,7 @@ impl ComponentCommandHandler {
             .map_err(UpdateStagedComponentError::Other)?;
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let changed_files = component_stager
-            .changed_files(current_component.metadata.tool_middlewares())
+            .changed_files(&current_component.metadata.tool_middlewares)
             .await
             .map_err(UpdateStagedComponentError::Other)?;
 
@@ -2687,7 +2681,7 @@ impl ComponentCommandHandler {
                     tool_middleware_provision_config_updates: component_stager
                         .tool_middleware_provision_config_updates_if_changed(
                             &changed_files,
-                            current_component.metadata.tool_middlewares(),
+                            &current_component.metadata.tool_middlewares,
                         )
                         .await
                         .map_err(UpdateStagedComponentError::Other)?,
@@ -2737,19 +2731,6 @@ impl ComponentCommandHandler {
                 },
             )
             .await
-    }
-
-    /// Best-effort, cached lookup of a component's user-facing release version string at a given
-    /// revision. Returns `None` if the revision can't be fetched or has no version set.
-    pub async fn component_version_at(
-        &self,
-        component_id: &ComponentId,
-        revision: ComponentRevision,
-    ) -> Option<String> {
-        self.get_component_revision_by_id(component_id, revision)
-            .await
-            .ok()
-            .and_then(|component| component.metadata.root_package_version().clone())
     }
 
     pub async fn get_component_revision_by_id(

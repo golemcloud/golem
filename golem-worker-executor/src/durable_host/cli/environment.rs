@@ -22,7 +22,6 @@ use crate::services::HasWorker;
 use crate::services::oplog::OplogOps;
 use crate::worker::merge_agent_env_with_default_env;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::AgentId;
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::oplog::host_functions::WasiCliEnvironmentGetEnvironment;
 use golem_common::model::oplog::{
@@ -47,8 +46,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .agent_type_provision_config()
                 .map(|c| c.env.clone())
                 .unwrap_or_default(),
-            golem_common::model::agent::ResolvedOwnerContext::ComponentWorker
-            | golem_common::model::agent::ResolvedOwnerContext::ComponentBaseline => self
+            golem_common::model::agent::ResolvedOwnerContext::ComponentBaseline
+            | golem_common::model::agent::ResolvedOwnerContext::OplogProcessor => self
                 .owner_component_metadata()
                 .metadata
                 .component_provision_config()
@@ -71,15 +70,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         AgentConfig::enrich_env(
             &mut env,
-            &AgentId {
-                component_id: self.owned_agent_id.component_id(),
-                agent_id: current_agent_name,
-            },
-            &self
-                .state
-                .owner_context
-                .agent()
-                .map(|id| id.agent_type.clone()),
+            worker_metadata.component_id,
+            current_agent_name,
+            &worker_metadata.agent_type_name,
             self.owner_component_metadata().revision,
         );
 

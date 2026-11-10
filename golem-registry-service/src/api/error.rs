@@ -1189,6 +1189,9 @@ impl From<DeploymentWriteError> for ApiError {
             DeploymentWriteError::ConcurrentDeployment => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
+            DeploymentWriteError::TypeIdSpaceExhausted => {
+                Self::bad_request(api::error_code::LIMIT_EXCEEDED, error)
+            }
             DeploymentWriteError::NoOpDeployment => {
                 Self::conflict(api::error_code::DEPLOYMENT_NOOP, error)
             }

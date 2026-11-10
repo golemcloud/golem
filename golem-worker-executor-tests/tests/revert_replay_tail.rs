@@ -130,7 +130,9 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
     let caller = agent_id!("GolemHostApi", "revert-index-caller");
     let card = component
         .metadata
-        .agent_type_initial_permission_card(&caller.agent_type)
+        .agent_type_provision_configs
+        .get(&caller.agent_type)
+        .map(|config| &config.initial_permissions)
         .cloned()
         .expect("initial permission card");
     *authority.0.write().unwrap() = Some(StoredCard::Polymorphic(card));

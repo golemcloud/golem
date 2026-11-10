@@ -534,6 +534,17 @@ fn full_success() -> String {
 }
 
 fn assert_call_local_recovery(run: &RecoveredRun) {
+    let transmissions = partition_starts(&run.oplog, "http::types::request::body-transmission");
+    assert!(!transmissions.ended.is_empty());
+    for start in transmissions.ended {
+        assert!(
+            run.oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CompletionDelivered(delivered) if delivered.start_index == start
+            )),
+            "the guest-observed upload result must retain its delivery boundary at {start}"
+        );
+    }
     assert_eq!(
         jump_count(&run.oplog),
         0,
@@ -562,6 +573,435 @@ fn assert_call_local_recovery(run: &RecoveredRun) {
         vec![expected_request_body(), expected_request_body()],
         "the re-issued POST carries the request body byte-identically"
     );
+}
+
+async fn reconstruct_upload_completion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    http_tests: &PrecompiledComponent,
+    method: &str,
+    retain_reader: bool,
+) -> anyhow::Result<()> {
+    let cancel = method == "cancel_upload_completion";
+    let recipient = method == "retain_response_after_cancelling_recipient_completion";
+    let retain = method == "retain_response_after_cancelling_completion" || recipient;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let received = requests.clone();
+    let posted = requests.clone();
+    let (permission, release) = watch::channel(false);
+    let http_server = spawn(async move {
+        let router = Router::new()
+            .route(
+                "/",
+                post(move |body: Bytes| {
+                    posted.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        assert_eq!(body.as_ref(), b"test-body");
+                        "uploaded"
+                    }
+                }),
+            )
+            .route(
+                "/upload",
+                post(move |body: Bytes| {
+                    received.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        assert_eq!(
+                            body.as_ref(),
+                            if cancel {
+                                b"cancel-upload".as_slice()
+                            } else {
+                                b""
+                            }
+                        );
+                        "uploaded"
+                    }
+                }),
+            )
+            .route(
+                "/upload-cancel-permission",
+                get(move || {
+                    let mut release = release.clone();
+                    async move {
+                        release.wait_for(|ready| *ready).await.unwrap();
+                        "drop-now"
+                    }
+                }),
+            );
+        axum::serve(listener, router).await.unwrap();
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let expected = if cancel {
+        "cancelled-upload"
+    } else if retain {
+        "200 uploaded;retained-response"
+    } else {
+        "transferred=Ok(())"
+    };
+    let result = {
+        let parameters = if retain {
+            data_value!(retain_reader)
+        } else {
+            data_value!()
+        };
+        let invocation = executor.invoke_and_await_agent(&component, &agent_id, method, parameters);
+        tokio::pin!(invocation);
+        if cancel {
+            tokio::select! {
+            entries = wait_for_oplog(&executor, &worker_id, "a completed upload before dropping its reader", |entries| {
+                !partition_starts(entries, "http::types::request::body-transmission").ended.is_empty()
+            }) => { entries?; },
+            result = &mut invocation => panic!("the upload reader must remain alive until its End: {result:?}"),
+            }
+            permission.send_replace(true);
+        }
+        timeout(Duration::from_secs(60), &mut invocation)
+            .await??
+            .into_typed::<String>()?
+    };
+    assert_eq!(result, expected);
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let uploads = partition_starts(&oplog, "http::types::request::body-transmission");
+    if retain {
+        assert_eq!(
+            uploads.counts(),
+            (0, 0, 0),
+            "polling a completion blocked on an unconsumed response must not start durable transmission work"
+        );
+    } else {
+        assert!(!uploads.ended.is_empty());
+        assert!(uploads.incomplete.is_empty());
+    }
+    if cancel {
+        assert!(oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDiscarded(discarded) if uploads.ended.contains(&discarded.start_index)
+        )), "dropping a demanded, completed upload must record its discard");
+        assert!(!oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDelivered(delivered) if uploads.ended.contains(&delivered.start_index)
+        )), "cancelling the read must not deliver its upload result");
+    } else if !retain {
+        assert_eq!(
+            uploads.ended.len(),
+            3,
+            "the source and both recipients complete durably"
+        );
+        let deliveries = oplog.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDelivered(delivered) if uploads.ended.contains(&delivered.start_index)
+        )).count();
+        assert_eq!(deliveries, 1, "only the final recipient reaches the guest");
+        assert!(!oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDiscarded(discarded) if uploads.ended.contains(&discarded.start_index)
+        )), "host transfer is not a guest discard");
+    }
+    // Reconstruct while the response (and optionally its reader) is still guest-owned.
+    let executor = if retain {
+        drop(executor);
+        start(deps, &context).await?
+    } else {
+        executor
+    };
+    let expected = if retain {
+        let released = timeout(
+            Duration::from_secs(60),
+            executor.invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "release_retained_response",
+                data_value!(),
+            ),
+        )
+        .await??
+        .into_typed::<String>()?;
+        assert_eq!(released, "released-response");
+        "released-response"
+    } else {
+        expected
+    };
+    if recipient {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let uploads = partition_starts(&oplog, "http::types::request::body-transmission");
+        assert_eq!(
+            uploads.counts(),
+            (0, 1, 0),
+            "the demanded recipient completes durably after its source is released"
+        );
+        let deliveries = oplog.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDelivered(delivered) if uploads.ended.contains(&delivered.start_index)
+        )).count();
+        assert_eq!(
+            deliveries,
+            usize::from(retain_reader),
+            "only a retained recipient reader receives a durable completion after source release"
+        );
+        let discards = oplog.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDiscarded(discarded) if uploads.ended.contains(&discarded.start_index)
+        )).count();
+        assert_eq!(
+            discards,
+            usize::from(!retain_reader),
+            "the dropped recipient records discard rather than guest delivery"
+        );
+    }
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    http_server.abort();
+    let _ = http_server.await;
+    let executor = start(deps, &context).await?;
+    let stored = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "stored_full_response",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(stored, expected);
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "reconstruction must not resend the completed upload"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("90s")]
+async fn upload_future_reconstructs_after_host_transfer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    reconstruct_upload_completion(
+        last_unique_id,
+        deps,
+        http_tests,
+        "transfer_upload_completion",
+        false,
+    )
+    .await
+}
+
+#[test]
+#[test_r::timeout("3m")]
+async fn upload_future_reconstructs_after_host_transfer_in_custom_operation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    reconstruct_upload_completion(
+        last_unique_id,
+        deps,
+        http_tests,
+        "transfer_upload_completion_in_custom_operation",
+        false,
+    )
+    .await
+}
+
+#[test]
+#[test_r::timeout("3m")]
+async fn response_completion_reader_drop_allows_resource_to_outlive_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    for retain_reader in [false, true] {
+        reconstruct_upload_completion(
+            last_unique_id,
+            deps,
+            http_tests,
+            "retain_response_after_cancelling_completion",
+            retain_reader,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("3m")]
+async fn recipient_completion_reader_drop_allows_source_to_outlive_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    for retain_reader in [false, true] {
+        reconstruct_upload_completion(
+            last_unique_id,
+            deps,
+            http_tests,
+            "retain_response_after_cancelling_recipient_completion",
+            retain_reader,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("90s")]
+async fn upload_future_cancellation_reconstructs_without_delivery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    reconstruct_upload_completion(
+        last_unique_id,
+        deps,
+        http_tests,
+        "cancel_upload_completion",
+        false,
+    )
+    .await
+}
+
+#[test]
+#[test_r::timeout("3m")]
+async fn retained_upload_reader_reconstructs_after_delivery_in_later_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let received = requests.clone();
+    let http_server = spawn(async move {
+        let router = Router::new().route(
+            "/upload",
+            post(move |body: Bytes| {
+                received.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    assert!(body.is_empty());
+                    "uploaded"
+                }
+            }),
+        );
+        axum::serve(listener, router).await.unwrap();
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+
+    let retained = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "retain_completed_upload_reader",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(retained, "retained-upload=200");
+    let consumed = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "consume_retained_upload_reader",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(consumed, "consumed-upload=Ok(())");
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let uploads = partition_starts(&oplog, "http::types::request::body-transmission");
+    assert_eq!(uploads.counts(), (0, 1, 0));
+    let upload = uploads.ended[0];
+    let position = |matches: &dyn Fn(&PublicOplogEntry) -> bool| {
+        oplog
+            .iter()
+            .find(|entry| matches(&entry.entry))
+            .map(|entry| entry.oplog_index)
+    };
+    let end =
+        position(&|entry| matches!(entry, PublicOplogEntry::End(end) if end.start_index == upload))
+            .expect("the upload completes durably");
+    let delivered = position(&|entry| {
+        matches!(entry, PublicOplogEntry::CompletionDelivered(delivered) if delivered.start_index == upload)
+    })
+    .expect("the later invocation observes the upload result");
+    let retaining_finish = oplog
+        .iter()
+        .find(|entry| {
+            entry.oplog_index > upload
+                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+        })
+        .expect("the retaining invocation finishes")
+        .oplog_index;
+    assert!(
+        end < retaining_finish && retaining_finish < delivered,
+        "the upload End belongs to the retaining invocation and its delivery to the consuming one"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    let _ = http_server.await;
+    let executor = start(deps, &context).await?;
+    let stored = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "stored_full_response",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(stored, "consumed-upload=Ok(())");
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "reconstruction must not resend the completed upload"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
 }
 
 #[test]

@@ -6,7 +6,7 @@ module agent-sdk-go
 go 1.27.1
 
 require (
-	github.com/golemcloud/golem/sdks/go/core v0.0.0
+	github.com/golemcloud/golem/sdks/go/core v0.1.2
 	github.com/golemcloud/golem/sdks/go/golem v0.0.0
 )
 

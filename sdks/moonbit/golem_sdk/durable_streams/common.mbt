@@ -21,14 +21,14 @@ pub suberror DurableStreamError {
 
 ///|
 priv struct Retry {
-  max_retries : Int
-  mut failures : Int
+  max_retries : Int32
+  mut failures : Int32
   mut backoff_ms : UInt64
   mut terminal : HostError?
 }
 
 ///|
-fn Retry::new(max_retries : Int) -> Retry raise {
+fn Retry::new(max_retries : Int32) -> Retry raise {
   guard max_retries >= 0 else {
     raise DurableStreamError::InvalidState("max_retries must be nonnegative")
   }

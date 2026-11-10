@@ -538,8 +538,3 @@ pub async fn MoonBitToolStreamingCaller::declared_error_completion(
   }
   stdout_terminal + ":" + result_terminal
 }
-
-///|
-fn main {
-
-}

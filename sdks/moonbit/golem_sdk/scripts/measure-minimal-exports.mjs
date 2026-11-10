@@ -6,7 +6,7 @@ import { performance } from "node:perf_hooks";
 const [wasm, expected, agents, tools] = process.argv.slice(2);
 const module = new WebAssembly.Module(fs.readFileSync(wasm));
 const exports = WebAssembly.Module.exports(module).map(e => e.name);
-assert.deepEqual(exports.filter(e => e !== "memory" && e !== "_start").sort(), JSON.parse(expected).sort());
+assert.deepEqual(exports.filter(e => e !== "memory").sort(), JSON.parse(expected).sort());
 let instance;
 let context = 0;
 let snapshot;
@@ -16,6 +16,7 @@ const streamBytes = Uint8Array.from([0, 1, 63, 64, 65, 4096, 65537].flatMap(size
 let streamOffset = 0, streamWrites = 0, streamFinishes = 0, streamDrops = 0;
 const imports = {};
 for (const entry of WebAssembly.Module.imports(module)) {
+  assert.notEqual(entry.module, "wasi_snapshot_preview1", "components must not import Preview1");
   imports[entry.module] ??= {};
   assert.equal(entry.kind, "function");
   imports[entry.module][entry.name] = (...args) => {
@@ -26,7 +27,7 @@ for (const entry of WebAssembly.Module.imports(module)) {
     if (entry.name === "[subtask-drop]") return;
     if (entry.module === "golem:tool/streams@0.1.0") {
       const view = new DataView(instance.exports.memory.buffer);
-      if (entry.name === "[async-lower][method]tool-stdout-writer.write") {
+      if (entry.name === "[async-lower][method]tool-output-writer.write") {
         const bytes = new Uint8Array(instance.exports.memory.buffer, args[1], args[2]);
         assert.deepEqual(bytes, streamBytes.subarray(streamOffset, streamOffset + bytes.length));
         streamOffset += bytes.length;
@@ -34,12 +35,12 @@ for (const entry of WebAssembly.Module.imports(module)) {
         view.setUint32(args[3], 0, true);
         return 2;
       }
-      if (entry.name === "[async-lower][method]tool-stdout-writer.finish") {
+      if (entry.name === "[async-lower][method]tool-output-writer.finish") {
         streamFinishes++;
         view.setUint32(args[1], 0, true);
         return 2;
       }
-      if (entry.name === "[resource-drop]tool-stdout-writer") { streamDrops++; return; }
+      if (entry.name === "[resource-drop]tool-output-writer") { streamDrops++; return; }
     }
     if (entry.name === "[task-return]save") {
       snapshot = {length: args[1], mime: Buffer.from(instance.exports.memory.buffer, args[2], args[3] * 2).toString("utf16le")};
@@ -64,9 +65,10 @@ for (const entry of WebAssembly.Module.imports(module)) {
     throw new Error(`unexpected host call ${entry.module}#${entry.name}`);
   };
 }
+// A foreign library runs fn init through its Wasm start section. Discovery below
+// must observe registration without calling an executable entry point.
 instance = new WebAssembly.Instance(module, imports);
 const e = instance.exports;
-e._start();
 const discover = (name, count) => {
   const ptr = e[name]();
   const view = new DataView(e.memory.buffer);
@@ -154,7 +156,7 @@ const invoke = (commandName = "ping") => {
   put(args + 36, value); put(args + 40, 1);
   put(value, 13); // empty record-value
   put(value + 8, emptyLists[4]);
-  put(args + 64, 3); // anonymous principal
+  put(args + 72, 3); // anonymous principal, after stdout and stderr
   if (commandName === "burst") {
     put(args + 56, 1); put(args + 60, 77);
     streamOffset = streamWrites = streamFinishes = streamDrops = 0;

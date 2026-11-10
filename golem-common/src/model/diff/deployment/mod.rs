@@ -24,8 +24,8 @@ use crate::model::diff::{BTreeMapDiff, Diffable};
 use crate::model::json::NormalizedJsonValue;
 use crate::model::mcp_import::McpImport;
 use crate::model::tool::{
-    CompiledToolBinding, ConfigKeyScope, RegisteredTool, SecretKeyScope, ToolBindingInput,
-    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
+    ToolName, ToolProvisionConfig, ToolRegistration, ToolSource,
 };
 use crate::model::tool_middleware::{
     RegisteredToolMiddleware, ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
@@ -164,7 +164,7 @@ impl Diffable for McpImport {
 }
 
 pub fn remote_tool_deployments(
-    registered_tools: impl IntoIterator<Item = RegisteredTool>,
+    registered_tools: impl IntoIterator<Item = ToolRegistration>,
     bindings: impl IntoIterator<Item = CompiledToolBinding>,
     environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
     agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,

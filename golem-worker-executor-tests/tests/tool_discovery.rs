@@ -165,50 +165,54 @@ fn registered_tool(
     component_id: ComponentId,
     component_revision: ComponentRevision,
     deployment_revision: DeploymentRevision,
+    type_id: u32,
 ) -> RegisteredTool {
     RegisteredTool {
-        deployment_revision,
-        release_id: None,
-        definition: Tool {
-            version: "1.0.0".to_string(),
-            requires_filesystem: false,
-            commands: CommandTree {
-                nodes: vec![CommandNode {
-                    name: name.to_string(),
-                    aliases: vec![format!("{name}-alias")],
-                    doc: Doc {
-                        summary: format!("Summary for {name}"),
-                        ..Default::default()
-                    },
-                    globals: Globals::default(),
-                    subcommands: Vec::new(),
-                    body: Some(CommandBody {
-                        positionals: Positionals::default(),
-                        options: Vec::new(),
-                        flags: Vec::new(),
-                        constraints: Vec::new(),
-                        stdin: None,
-                        stdout: None,
-                        stderr: None,
-                        result: None,
-                        errors: Vec::new(),
-                        annotations: None,
-                    }),
-                }],
+        type_id: golem_common::model::type_id::TypeId::try_from(type_id).unwrap(),
+        registration: golem_common::model::tool::ToolRegistration {
+            deployment_revision,
+            release_id: None,
+            definition: Tool {
+                version: "1.0.0".to_string(),
+                requires_filesystem: false,
+                commands: CommandTree {
+                    nodes: vec![CommandNode {
+                        name: name.to_string(),
+                        aliases: vec![format!("{name}-alias")],
+                        doc: Doc {
+                            summary: format!("Summary for {name}"),
+                            ..Default::default()
+                        },
+                        globals: Globals::default(),
+                        subcommands: Vec::new(),
+                        body: Some(CommandBody {
+                            positionals: Positionals::default(),
+                            options: Vec::new(),
+                            flags: Vec::new(),
+                            constraints: Vec::new(),
+                            stdin: None,
+                            stdout: None,
+                            stderr: None,
+                            result: None,
+                            errors: Vec::new(),
+                            annotations: None,
+                        }),
+                    }],
+                },
+                schema: SchemaGraph::empty(),
             },
-            schema: SchemaGraph::empty(),
+            provision: ToolProvisionConfig::default(),
+            component_bindings: Default::default(),
+            source: ToolSource::Component {
+                component_id,
+                component_revision,
+                component_name: ComponentName("tool-component".to_string()),
+            },
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("test@golem"),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: Default::default(),
         },
-        provision: ToolProvisionConfig::default(),
-        component_bindings: Default::default(),
-        source: ToolSource::Component {
-            component_id,
-            component_revision,
-            component_name: ComponentName("tool-component".to_string()),
-        },
-        owner_account_id: AccountId::new(),
-        owner_account_email: AccountEmail::new("test@golem"),
-        metadata_version: "0.1.0".to_string(),
-        metadata_digest: Default::default(),
     }
 }
 
@@ -217,6 +221,7 @@ fn binding(
     tool_name: &ToolName,
     tool: &RegisteredTool,
 ) -> CompiledToolBinding {
+    let tool = &tool.registration;
     CompiledToolBinding {
         deployment_revision: tool.deployment_revision,
         release_id: tool.release_id,
@@ -247,13 +252,15 @@ pub(crate) fn deployment_state(
     let deployment_revision = DeploymentRevision::try_from(deployment_revision).unwrap();
     let registered_tools = tools
         .iter()
-        .map(|(name, component_id, _)| {
+        .enumerate()
+        .map(|(index, (name, component_id, _))| {
             let name = ToolName::try_from(*name).unwrap();
             let tool = registered_tool(
                 name.as_str(),
                 *component_id,
                 component_revision,
                 deployment_revision,
+                u32::try_from(index + 1).unwrap(),
             );
             (name, tool)
         })
@@ -331,7 +338,10 @@ fn add_missing_component_middleware(
         metadata_version: "0.1.0".to_string(),
         metadata_digest: Default::default(),
     };
-    let effective_definition = deployment.registered_tools[tool_name].definition.clone();
+    let effective_definition = deployment.registered_tools[tool_name]
+        .registration
+        .definition
+        .clone();
     let occurrence = CompiledToolMiddlewareOccurrence {
         middleware: registered.clone(),
         parameters: golem_common::schema::TypedSchemaValue::new(
@@ -379,7 +389,10 @@ fn rename_tool_with_middleware(
     let owner = ToolBindingOwner::AgentType {
         agent_type_name: agent_type.clone(),
     };
-    let mut effective_definition = deployment.registered_tools[tool_name].definition.clone();
+    let mut effective_definition = deployment.registered_tools[tool_name]
+        .registration
+        .definition
+        .clone();
     effective_definition.commands.nodes[0].name = presented_name.to_string();
     deployment.tool_middleware_chains.insert(
         owner.clone(),
@@ -715,8 +728,8 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
         .registered_tools
         .get_mut(&tool_name)
         .unwrap();
-    registered.owner_account_id = publisher_account_id;
-    registered.owner_account_email = publisher_account_email.clone();
+    registered.registration.owner_account_id = publisher_account_id;
+    registered.registration.owner_account_email = publisher_account_email.clone();
     let owner = ToolBindingOwner::AgentType {
         agent_type_name: agent_type.clone(),
     };
@@ -774,9 +787,9 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
         .registered_tools
         .get_mut(&tool_name)
         .unwrap();
-    registered.owner_account_id = publisher_account_id;
-    registered.owner_account_email = publisher_account_email.clone();
-    registered.source = host_source.clone();
+    registered.registration.owner_account_id = publisher_account_id;
+    registered.registration.owner_account_email = publisher_account_email.clone();
+    registered.registration.source = host_source.clone();
     let binding = host_deployment
         .tool_bindings
         .get_mut(&owner)

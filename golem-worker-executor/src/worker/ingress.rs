@@ -17,6 +17,29 @@ use chrono::{DateTime, Utc};
 use golem_common::model::{ScheduleId, ScheduledAction};
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) async fn enqueue_oplog_processor<T>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        component_revision: ComponentRevision,
+        invocation: AgentInvocation,
+    ) -> Result<(), WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        if !matches!(invocation, AgentInvocation::ProcessOplogEntries { .. }) {
+            return Err(WorkerExecutorError::invalid_request(
+                "processor admission requires an oplog batch",
+            ));
+        }
+        let worker = deps
+            .active_agents()
+            .get_or_add_oplog_processor(deps, owned_agent_id, component_revision)
+            .await?;
+        Self::start_if_needed(worker.clone()).await?;
+        worker.invoke(invocation).await?;
+        Ok(())
+    }
+
     /// Invocation entry point. Returns `Finished(...)` on read-only cache hit,
     /// otherwise `Pending(subscription)`. `Arc<Self>` is needed to spawn the
     /// detached observer that fills the read-only cache on completion.
@@ -24,9 +47,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
-        if !matches!(invocation, AgentInvocation::ExternalTool { .. }) {
-            self.ensure_component_agent_ingress("regular invocation")?;
-        }
+        self.ensure_invocation_owner(&invocation)?;
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
         // Classification uses the in-memory component snapshot - no metadata
@@ -184,6 +205,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        if self.initial_worker_metadata.owner_kind == OwnerKind::OplogProcessor {
+            return Err(WorkerExecutorError::invalid_request(
+                "external tool invocation is not supported for an oplog processor owner",
+            ));
+        }
         if self.initial_worker_metadata.fingerprint != expected_fingerprint {
             return Err(WorkerExecutorError::invalid_request(
                 "external tool invocation owner fingerprint does not match",
@@ -269,13 +295,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let component_revision = self.state_actor.status().await.component_revision;
             let component = self
                 .component_service()
-                .get_metadata(self.owned_agent_id.component_id(), Some(component_revision))
+                .get_metadata(self.component_id(), Some(component_revision))
                 .await?;
             let owner = match &self.owner_context {
                 ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                     agent_type_name: agent.agent_type.clone(),
                 },
-                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                     ToolBindingOwner::ComponentBaseline {
                         component_id: component.id,
                     }
@@ -351,6 +377,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation: AgentInvocation,
         mut admission: Option<tokio::sync::oneshot::Sender<read_only_cache::AdmissionSignal>>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        self.ensure_invocation_owner(&invocation)?;
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
         // Fast path: read-only Await coalescing.
@@ -740,11 +767,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         if self.initial_worker_metadata.owner_kind != OwnerKind::ComponentAgent {
             return Err(WorkerExecutorError::invalid_request(format!(
-                "{operation} is not supported for an external tool owner"
+                "{operation} requires an agent owner"
             )));
         }
         Ok(())
     }
+
+    fn ensure_invocation_owner(
+        &self,
+        invocation: &AgentInvocation,
+    ) -> Result<(), WorkerExecutorError> {
+        let kind = self.initial_worker_metadata.owner_kind;
+        let allowed = match invocation {
+            AgentInvocation::ProcessOplogEntries { .. } => kind == OwnerKind::OplogProcessor,
+            AgentInvocation::AgentInitialization { .. } | AgentInvocation::AgentMethod { .. } => {
+                kind == OwnerKind::ComponentAgent
+            }
+            AgentInvocation::ExternalTool { .. } => kind != OwnerKind::OplogProcessor,
+            AgentInvocation::ManualUpdate { .. }
+            | AgentInvocation::LoadSnapshot { .. }
+            | AgentInvocation::SaveSnapshot { .. } => kind != OwnerKind::EphemeralExternalTool,
+        };
+        if !allowed {
+            return Err(WorkerExecutorError::invalid_request(
+                "invocation is not supported for this execution owner kind",
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
         self.state_actor.status().await.pending_invocations.clone()
     }
@@ -896,6 +947,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         read_only_cache_effect: read_only_cache::InvocationEffect,
         not_before: Option<Timestamp>,
     ) -> Result<(Option<u64>, Option<OplogIndex>), WorkerExecutorError> {
+        self.ensure_invocation_owner(&invocation)?;
         // Carried on the span so the two sides of the hand-off share a searchable
         // key: the execution runs in its own trace, linked rather than nested, so
         // `idempotency_key` is what joins them. Left unset rather than empty when

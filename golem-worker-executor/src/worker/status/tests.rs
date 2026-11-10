@@ -4146,6 +4146,9 @@ impl TestCaseBuilder {
                 oplog_entry: OplogEntry::create(Box::new(
                     golem_common::model::oplog::CreateParameters {
                         agent_id: owned_agent_id.agent_id(),
+                        component_id: owned_agent_id.agent_id.component_id,
+                        agent_type_name: None,
+                        canonical_key: None,
                         owner_kind: OwnerKind::ComponentAgent,
                         agent_mode: AgentMode::Durable,
                         component_revision,

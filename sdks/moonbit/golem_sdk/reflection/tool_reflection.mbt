@@ -341,7 +341,10 @@ pub fn ToolType::from_registered(
 }
 
 ///|
-fn tool_schema_at(tool : ToolType, root : Int) -> SchemaRef raise ReflectError {
+fn tool_schema_at(
+  tool : ToolType,
+  root : Int32,
+) -> SchemaRef raise ReflectError {
   guard tool.decoded.roots.get(root) is Some(selected) else {
     raise Schema("tool schema root index \{root} is out of range")
   }
@@ -426,7 +429,7 @@ pub fn ToolType::command(
 ) -> ToolCommand raise ReflectError {
   let nodes = self.definition.commands.nodes
   let mut index = 0
-  let indices : Array[Int] = [0]
+  let indices : Array[Int32] = [0]
   let canonical : Array[String] = []
   for segment in path {
     let next = nodes[index].subcommands
@@ -895,7 +898,7 @@ fn ToolCommand::decode_error(
 pub fn ToolCommand::start_value(
   self : ToolCommand,
   input : @model.SchemaValue,
-  stdin? : @async-core.Stream[Byte]? = None,
+  stdin~ : @async-core.Stream[Byte]? = None,
 ) -> Result[ReflectedToolInvocation, @tool.ToolError[ReflectedToolCustomError]] {
   let body = match self.body {
     Some(body) => body
@@ -959,7 +962,7 @@ pub fn ToolCommand::start_value(
 pub async fn ToolCommand::invoke_value(
   self : ToolCommand,
   input : @model.SchemaValue,
-  stdin? : @async-core.Stream[Byte]? = None,
+  stdin~ : @async-core.Stream[Byte]? = None,
 ) -> Result[@model.SchemaValue?, @tool.ToolError[ReflectedToolCustomError]] {
   let body = match self.body {
     Some(body) => body
@@ -1005,7 +1008,7 @@ pub async fn ToolCommand::invoke_value(
 pub async fn ToolCommand::invoke_json(
   self : ToolCommand,
   input : Json,
-  stdin? : @async-core.Stream[Byte]? = None,
+  stdin~ : @async-core.Stream[Byte]? = None,
 ) -> Result[Json?, @tool.ToolError[ReflectedToolCustomError]] {
   let packed = match self.pack_json(input) {
     Ok(value) => value
@@ -1034,7 +1037,7 @@ pub async fn ToolCommand::invoke_json(
 pub fn ToolCommand::trigger_value(
   self : ToolCommand,
   input : @model.SchemaValue,
-  stdin? : @async-core.Stream[Byte]? = None,
+  stdin~ : @async-core.Stream[Byte]? = None,
 ) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]] {
   let body = match self.body {
     Some(body) => body
@@ -1077,7 +1080,7 @@ pub fn ToolCommand::trigger_value(
 pub fn ToolCommand::trigger_json(
   self : ToolCommand,
   input : Json,
-  stdin? : @async-core.Stream[Byte]? = None,
+  stdin~ : @async-core.Stream[Byte]? = None,
 ) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]] {
   match self.pack_json(input) {
     Ok(value) => self.trigger_value(value, stdin~)
@@ -1146,7 +1149,7 @@ pub async fn DynamicToolClient::invoke_value(
   self : DynamicToolClient,
   path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin? : @async-core.Stream[Byte]? = None,
+  stdin~ : @async-core.Stream[Byte]? = None,
 ) -> Result[@tool.InvocationResult, @tool.ToolError[ReflectedToolCustomError]] {
   let client = match @tool.ToolClient::try_new(self.name) {
     Ok(client) => client
@@ -1164,9 +1167,9 @@ pub fn DynamicToolClient::start_value(
   self : DynamicToolClient,
   path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin? : @async-core.Stream[Byte]? = None,
-  stdout? : Bool = false,
-  stderr? : Bool = false,
+  stdin~ : @async-core.Stream[Byte]? = None,
+  stdout~ : Bool = false,
+  stderr~ : Bool = false,
 ) -> Result[
   @tool.ToolInvocation[ReflectedToolCustomError],
   @tool.ToolError[ReflectedToolCustomError],
@@ -1211,7 +1214,7 @@ pub fn DynamicToolClient::trigger_value(
   self : DynamicToolClient,
   path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin? : @async-core.Stream[Byte]? = None,
+  stdin~ : @async-core.Stream[Byte]? = None,
 ) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]] {
   let client = match @tool.ToolClient::try_new(self.name) {
     Ok(client) => client

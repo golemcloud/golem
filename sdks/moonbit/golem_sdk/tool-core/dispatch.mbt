@@ -1,7 +1,7 @@
 ///|
 pub fn decode_invocation_input(
   input : @types.TypedSchemaValue,
-  arity : Int,
+  arity : Int32,
   context : String,
 ) -> Array[@model.SchemaValue] raise @types.ToolError {
   decode_invocation_input_with_resource_drops(
@@ -15,7 +15,7 @@ pub fn decode_invocation_input(
 ///|
 fn decode_invocation_input_with_resource_drops(
   input : @types.TypedSchemaValue,
-  arity : Int,
+  arity : Int32,
   context : String,
   drops : @model.SchemaValueResourceDrops,
 ) -> Array[@model.SchemaValue] raise @types.ToolError {
@@ -49,7 +49,7 @@ fn decode_invocation_input_with_resource_drops(
 ///|
 fn validate_invocation_input_graph(
   graph : @model.SchemaGraph,
-  arity : Int,
+  arity : Int32,
   context : String,
 ) -> Unit raise @types.ToolError {
   if @model.validate_graph(graph).length() > 0 {
@@ -76,7 +76,7 @@ fn resolved_record_field_count(
   graph : @model.SchemaGraph,
   type_ : @model.SchemaType,
   visited : Map[String, Unit],
-) -> Int? {
+) -> Int32? {
   match type_.body {
     @model.SchemaTypeBody::Record(fields) => Some(fields.length())
     @model.SchemaTypeBody::Ref(id) =>
@@ -411,7 +411,7 @@ fn record_field_index(
   graph : @model.SchemaGraph,
   type_ : @model.SchemaType,
   field_name : String,
-) -> Int? {
+) -> Int32? {
   match resolve_type(graph, type_) {
     Some(type_) =>
       match type_.body {
@@ -443,7 +443,7 @@ fn resolve_type(
 ///|
 pub fn[T : @schema.FromSchema] decode_param(
   fields : Array[@model.SchemaValue],
-  index : Int,
+  index : Int32,
   context : String,
 ) -> T raise @types.ToolError {
   decode_param_with_resource_drops(
@@ -457,7 +457,7 @@ pub fn[T : @schema.FromSchema] decode_param(
 ///|
 fn[T : @schema.FromSchema] decode_param_with_resource_drops(
   fields : Array[@model.SchemaValue],
-  index : Int,
+  index : Int32,
   context : String,
   drops : @model.SchemaValueResourceDrops,
 ) -> T raise @types.ToolError {
@@ -497,17 +497,12 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(
         "failed building tool result schema: \{error}",
       )
   }
+  errdefer typed.value.release_resources(@model_host.resource_drops())
   @model.typed_schema_value_to_wit_async(typed) catch {
-    @async-core.Cancelled::Cancelled as error => {
-      typed.value.release_resources(@model_host.resource_drops())
-      raise error
-    }
-    e => {
-      typed.value.release_resources(@model_host.resource_drops())
+    e =>
       raise @types.ToolError::InvalidResult(
         "failed serializing tool result: \{Repr(e)}",
       )
-    }
   }
 }
 
@@ -524,7 +519,6 @@ pub async fn[T : @schema.WireSchema + @schema.IntoWire] encode_wire_result(
   errdefer @schema.release_wire(value)
   let graph = @schema.wire_schema((@schema.type_tag() : @schema.TypeTag[T]))
   let value = @schema.into_wire_async(value) catch {
-    @async-core.Cancelled::Cancelled as error => raise error
     error => raise @types.ToolError::InvalidResult(repr(error))
   }
   { graph, value, }
@@ -613,16 +607,11 @@ pub async fn[T : @schema.IntoSchema] invocation_result_value_with_outputs(
 pub async fn encode_error_payload(
   payload : @model.TypedSchemaValue,
 ) -> @types.TypedSchemaValue {
+  errdefer payload.value.release_resources(@model_host.resource_drops())
   @model.typed_schema_value_to_wit_async(payload) catch {
-    @async-core.Cancelled::Cancelled as error => {
-      payload.value.release_resources(@model_host.resource_drops())
-      raise error
-    }
-    error => {
-      payload.value.release_resources(@model_host.resource_drops())
+    error =>
       raise @types.ToolError::InvalidResult(
         "failed serializing custom tool error: \{Repr(error)}",
       )
-    }
   }
 }

@@ -17,7 +17,9 @@ use super::authorize_environment_permission;
 use super::deployment_context::DeploymentContext;
 use super::router_file_index::prepare_router_file_indexes;
 use crate::repo::deployment::DeploymentRepo;
-use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
+use crate::repo::model::deployment::{
+    DeployRepoError, DeploymentRevisionCreationRecord, PreparedAgentType,
+};
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::deploy_validation_error::format_validation_errors;
@@ -43,7 +45,6 @@ use crate::services::tool_middleware_release::{
 };
 use crate::services::tool_release::{ToolReleaseError, ToolReleaseService};
 use futures::TryFutureExt;
-use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
@@ -73,6 +74,8 @@ pub enum DeploymentWriteError {
     EnvironmentNotYetDeployed,
     #[error("Concurrent deployment attempt")]
     ConcurrentDeployment,
+    #[error("Environment type ID space exhausted")]
+    TypeIdSpaceExhausted,
     #[error("Duplicate router initial-file target path")]
     DuplicateRouterFileTarget,
     #[error("Requested deployment would not have any changes compared to current deployment")]
@@ -117,6 +120,7 @@ impl SafeDisplay for DeploymentWriteError {
             Self::DeploymentHashMismatch { .. } => self.to_string(),
             Self::DeploymentValidationFailed(_) => self.to_string(),
             Self::ConcurrentDeployment => self.to_string(),
+            Self::TypeIdSpaceExhausted => self.to_string(),
             Self::DuplicateRouterFileTarget => self.to_string(),
             Self::VersionAlreadyExists { .. } => self.to_string(),
             Self::NoOpDeployment => self.to_string(),
@@ -823,7 +827,7 @@ impl DeploymentWriteService {
             deployment_context
                 .registered_agent_types
                 .into_values()
-                .map(DeployedRegisteredAgentType::from)
+                .map(PreparedAgentType::from)
                 .collect(),
             compiled_tools,
             mcp_imports,
@@ -877,6 +881,7 @@ impl DeploymentWriteService {
                 DeployRepoError::ConcurrentModification => {
                     DeploymentWriteError::ConcurrentDeployment
                 }
+                DeployRepoError::TypeIdSpaceExhausted => DeploymentWriteError::TypeIdSpaceExhausted,
                 DeployRepoError::VersionAlreadyExists { version } => {
                     DeploymentWriteError::VersionAlreadyExists { version }
                 }

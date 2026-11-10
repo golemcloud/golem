@@ -818,7 +818,7 @@ pub(in crate::durable_host) fn payload_download_failure(
 /// a written failed update, a skipped or a rejected record end the start with `Restart`, an
 /// internal retry signal that records no interruption. A failed write ends it with the error of
 /// the write, a lost shard with `ShardLost`, and an error of the table with the error that
-/// `start_outcome::update_point_error` gives for it.
+/// `start_outcome::component_startup_error` gives for it.
 pub(crate) async fn perform_at_update_point<Ctx: WorkerCtx>(
     worker: &Arc<Worker<Ctx>>,
     action: start_outcome::StartAction,
@@ -847,7 +847,7 @@ pub(crate) async fn perform_at_update_point<Ctx: WorkerCtx>(
             worker.reject_periodic(index);
             restart
         }
-        start_outcome::StartAction::Error(error) => start_outcome::update_point_error(error),
+        start_outcome::StartAction::Error(error) => start_outcome::component_startup_error(error),
         start_outcome::StartAction::ShardLost => WorkerExecutorError::Interrupted {
             kind: InterruptKind::ShardLost,
         },

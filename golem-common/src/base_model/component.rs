@@ -15,7 +15,7 @@
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentFileContentHash;
 use crate::base_model::application::ApplicationId;
-use crate::base_model::component_metadata::ComponentMetadata;
+use crate::base_model::component_metadata::ComponentMetadataDto;
 use crate::base_model::diff;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -126,7 +126,7 @@ declare_structs! {
         pub application_id: ApplicationId,
         pub account_id: AccountId,
         pub component_size: u64,
-        pub metadata: ComponentMetadata,
+        pub metadata: ComponentMetadataDto,
         pub created_at: chrono::DateTime<chrono::Utc>,
         pub wasm_hash: diff::Hash,
     }

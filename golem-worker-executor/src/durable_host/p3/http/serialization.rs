@@ -23,7 +23,7 @@ use golem_common::model::oplog::payload::types::{
 use http::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
 use wasmtime::component::{Accessor, Resource};
-use wasmtime_wasi_http::p3::WasiHttp;
+use wasmtime_wasi_http::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::types;
 use wasmtime_wasi_http::p3::bindings::http::types::{
     ErrorCode, Fields, Method, Request, Response, Scheme,
@@ -107,7 +107,7 @@ pub(super) fn serialize_response_headers<Ctx: WorkerCtx, U: Send>(
 }
 
 pub(super) fn copy_fields(
-    view: &mut wasmtime_wasi_http::p3::WasiHttpCtxView<'_>,
+    view: &mut wasmtime_wasi_http::WasiHttpCtxView<'_>,
     fields: Resource<Fields>,
 ) -> HttpResult<HashMap<String, Vec<Vec<u8>>>> {
     let entries =

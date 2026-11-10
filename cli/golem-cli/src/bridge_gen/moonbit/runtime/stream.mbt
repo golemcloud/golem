@@ -8,6 +8,12 @@ pub(all) struct AgentBinary {
 } derive(Debug, Eq)
 
 ///|
+pub extend AgentBinary with Debug::{to_repr}
+
+///|
+pub extend AgentBinary with Eq::{equal, not_equal}
+
+///|
 pub struct AgentStream[T] {
   next_impl : async () -> T?
   cancel_impl : async (String) -> Unit
@@ -20,7 +26,7 @@ pub struct AgentStream[T] {
 ///|
 pub fn[T] AgentStream::from_next(
   next : async () -> T?,
-  on_cancel? : async (String) -> Unit = fn(_) { () },
+  on_cancel~ : async (String) -> Unit = fn(_) { () },
 ) -> AgentStream[T] {
   {
     next_impl: next,

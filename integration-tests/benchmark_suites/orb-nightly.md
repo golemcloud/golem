@@ -13,6 +13,11 @@ run from the same runner and suite. The publisher stores compact median history 
 summary-only file per run; raw samples remain in the local timestamped artifact.
 Before building, it cleans the Cargo target directory and removes leftover benchmark Postgres
 containers and unused Docker volumes so every run starts with enough disk space and a fresh database.
+Spawned benchmark contexts clear the shared blob directory before starting their services. Each
+context uses a fresh database, so it cannot use the previous context's components or compilation
+cache. Clearing those files bounds disk use across the suite without clearing caches during
+measurements. The nightly wrapper restores generated benchmark and streaming-caller lockfiles on
+both success and failure.
 Failed or partial runs are never published. Publishing is idempotent, and non-fast-forward races
 are retried from a fresh `benchmark-results` checkout.
 

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { makeAgentId, parseAgentId } from 'golem:agent/host@2.0.0';
 import { Uuid } from './uuid';
-import { Uuid as RawUuid, type SchemaValueTree } from 'golem:core/types@2.0.0';
-import { SchemaValue, schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
+import { type SchemaValueTree } from 'golem:core/types@2.0.0';
+import { SchemaValue, schemaValueFromWit } from './internal/schema-model';
+import { createAgentIdString, decodeAgentIdWire } from './internal/agentIdentity';
 import { DynamicAgentClient, type DynamicAgentClientSurface } from './dynamicClient';
 import type { ScopeCard } from './host/permissions';
 
@@ -49,15 +49,6 @@ export interface ParsedAgentIdParts {
   readonly typeName: string;
   readonly constructorValue: SchemaValue;
   readonly phantomId?: Uuid;
-}
-
-function createAgentIdString(
-  agentTypeName: string,
-  parameters: SchemaValue,
-  phantomId?: RawUuid,
-): string {
-  const normalized = phantomId ? Uuid.from(phantomId) : undefined;
-  return makeAgentId(agentTypeName, schemaValueToWit(parameters), normalized);
 }
 
 /**
@@ -107,8 +98,7 @@ export class ParsedAgentId {
   /** @internal Identity decoding for generated invocation and snapshot dispatch. */
   parsedWire(): [string, SchemaValueTree, Uuid | undefined] {
     if (!this.wireCache) {
-      const [typeName, parameters, phantomId] = parseAgentId(this.value);
-      this.wireCache = [typeName, parameters.value, phantomId ? Uuid.from(phantomId) : undefined];
+      this.wireCache = decodeAgentIdWire(this.value);
     }
     return this.wireCache;
   }

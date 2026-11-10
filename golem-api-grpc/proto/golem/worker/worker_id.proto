@@ -12,4 +12,5 @@ message AgentId {
 enum OwnerKind {
   COMPONENT_AGENT = 0;
   EPHEMERAL_EXTERNAL_TOOL = 1;
+  OPLOG_PROCESSOR = 2;
 }

@@ -101,6 +101,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} starting replay from component revision {}",
             owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
+        let worker = invocation_queue
+            .upgrade()
+            .expect("worker must remain alive while creating its context");
         if let crate::workerctx::WorkerCtxExecutable::Component(component) = &executable {
             if component.revision != worker_config.component_revision_for_replay {
                 return Err(WorkerExecutorError::runtime(format!(
@@ -108,7 +111,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     component.revision, worker_config.component_revision_for_replay
                 )));
             }
-            if runtime == OwnerRuntime::Agent && component.id != owned_agent_id.component_id() {
+            if runtime == OwnerRuntime::Agent && component.id != worker.component_id() {
                 return Err(WorkerExecutorError::runtime(
                     "Primary Store executable must be the owner component",
                 ));
@@ -231,7 +234,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                     component_metadata
                         .metadata
                         .component_provision_config()
@@ -268,16 +271,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             config.agent_sockets.enabled,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
-        let mut wasi_http = WasiHttpCtx::new();
-        wasi_http.connection_pool = http_connection_pool.clone();
+        let wasi_http = WasiHttpCtx::new();
         let http_hooks = DurableHttpHooks {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
         let (replay_state, owner_wallet) = owner_execution.replay_and_wallet().await?;
-        let worker = invocation_queue
-            .upgrade()
-            .expect("worker must remain alive while creating its context");
         let published_authority_generation = worker.published_authority_generation();
         let tail_work = match &runtime {
             OwnerRuntime::Agent => owner_execution.primary_tail_work_tracker(),
@@ -491,7 +490,7 @@ impl PrivateDurableWorkerState {
             }
             (
                 OwnerRuntime::Agent,
-                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline,
+                ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor,
             ) => component_baseline_effective_surface_from_wallet(
                 &component_metadata,
                 &owned_agent_id,
@@ -513,7 +512,7 @@ impl PrivateDurableWorkerState {
             }
             (
                 OwnerRuntime::Entity(_),
-                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline,
+                ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor,
             ) => component_baseline_effective_surface_from_wallet(
                 owner_component_metadata
                     .as_deref()
@@ -565,7 +564,7 @@ impl PrivateDurableWorkerState {
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
             open_p3_http_responses: HashMap::new(),
-            pending_p3_http_request_transmissions: HashMap::new(),
+            p3_http_transmissions: Default::default(),
             open_websocket_connections: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashSet::new(),

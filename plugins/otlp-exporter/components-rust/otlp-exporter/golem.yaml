@@ -1,9 +1,12 @@
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
+
+componentTemplates:
+  otlp-exporter-rust:
+    templates: rust
+    customCommands:
+      copy:
+        - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/otlp_exporter.wasm" "{{ appRootDir }}/../otlp-exporter.wasm"
 
 components:
   otlp:exporter:
-    templates: rust
-
-customCommands:
-  copy:
-    - command: cp ../../golem-temp/agents/otlp_exporter_release.wasm ../../../otlp-exporter.wasm
+    templates: otlp-exporter-rust

@@ -20,8 +20,11 @@ use crate::Tracing;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentConfigEntryDto, AgentMode, InvocationFreshnessDisposition};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentMode, AgentTarget, InvocationFreshnessDisposition,
+};
 use golem_common::model::component::ComponentDto;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
@@ -220,7 +223,8 @@ impl Rpc for HoldFirstSchedule {
 
     async fn create_demand(
         &self,
-        agent: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         method: &str,
         created_by: AccountId,
         caller: &AgentId,
@@ -236,14 +240,25 @@ impl Rpc for HoldFirstSchedule {
         }
         self.inner
             .create_demand(
-                agent, method, created_by, caller, env, stack, config, auth, key, freshness,
+                target,
+                environment_id,
+                method,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
+                key,
+                freshness,
             )
             .await
     }
 
     async fn invoke_and_await(
         &self,
-        agent: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         method: String,
@@ -258,7 +273,18 @@ impl Rpc for HoldFirstSchedule {
     ) -> Result<SchemaValue, RpcError> {
         self.inner
             .invoke_and_await(
-                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+                target,
+                environment_id,
+                key,
+                freshness,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
                 card,
             )
             .await
@@ -266,7 +292,8 @@ impl Rpc for HoldFirstSchedule {
 
     async fn invoke(
         &self,
-        agent: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         method: String,
@@ -280,7 +307,18 @@ impl Rpc for HoldFirstSchedule {
     ) -> Result<(), RpcError> {
         self.inner
             .invoke(
-                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+                target,
+                environment_id,
+                key,
+                freshness,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
             )
             .await
     }

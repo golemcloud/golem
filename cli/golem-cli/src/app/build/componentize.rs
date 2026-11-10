@@ -35,18 +35,25 @@ pub async fn build_components(
                 component_name.as_str().log_color_highlight(),
             ),
         );
-        return Ok(());
+    } else {
+        log_action(
+            "Building",
+            format!("{}", component_name.as_str().log_color_highlight()),
+        );
+        let _indent = LogIndent::new();
+
+        for build_step in build_commands {
+            execute_build_command(ctx, component_name, &build_step).await?;
+        }
     }
 
-    log_action(
-        "Building",
-        format!("{}", component_name.as_str().log_color_highlight()),
+    let component = ctx.application().component(component_name);
+    let wasm = component.wasm();
+    anyhow::ensure!(
+        wasm.is_file(),
+        "Component WASM is not a file: {}",
+        wasm.display()
     );
-    let _indent = LogIndent::new();
-
-    for build_step in build_commands {
-        execute_build_command(ctx, component_name, &build_step).await?;
-    }
 
     Ok(())
 }

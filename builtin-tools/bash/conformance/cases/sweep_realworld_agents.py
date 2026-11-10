@@ -123,7 +123,7 @@ for _label, _cmd in (
     ("files minus test_ prefix", 'find /testbed -type f -name "*.py" | grep -v "test_" | sort'),
     ("files minus pycache and tests sorted", 'find /testbed -type f -name "*.py" | grep -v "__pycache__" | grep -v "test_" | sort'),
     ("files minus pycache and tests with head", 'find /testbed -type f -name "*.py" | grep -v "__pycache__" | grep -v "test_" | sort | head -2'),
-    ("files grep -i", 'find /testbed -type f -name "*.py" | grep -i "CORE"'),
+    ("files grep -i", 'find /testbed -type f -name "*.py" | sort | grep -i "CORE"'),
     ("files grep -i with alternation", 'find /testbed -type f -name "*.py" | grep -i "core\\|util" | sort'),
     ("files grep -i with no match or true", 'find /testbed -type f -name "*.py" | grep -i "nomatch" || true'),
     ("files grep -i then grep -v", 'find /testbed -type f -name "*.py" | grep -i "test" | grep -v utils | sort'),

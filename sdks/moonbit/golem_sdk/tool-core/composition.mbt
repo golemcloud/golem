@@ -404,10 +404,10 @@ fn resolve_value_is_body(
 ///|
 fn normalize_command(
   commands : Array[CommandNodeDef],
-  index : Int,
+  index : Int32,
   inherited : Array[EffectiveGlobal],
-  visited : Map[Int, Unit],
-  stack : Map[Int, Unit],
+  visited : Map[Int32, Unit],
+  stack : Map[Int32, Unit],
 ) -> Unit raise ToolBuildError {
   guard index >= 0 && index < commands.length() else {
     raise InvalidCommandTree("command index \{index} is out of bounds")
@@ -451,7 +451,7 @@ pub fn ToolDef::normalize_inherited_globals(
 }
 
 ///|
-fn shift_node(node : CommandNodeDef, offset : Int) -> CommandNodeDef {
+fn shift_node(node : CommandNodeDef, offset : Int32) -> CommandNodeDef {
   { ..node, subcommands: node.subcommands.map(index => index + offset), }
 }
 

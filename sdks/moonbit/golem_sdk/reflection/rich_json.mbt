@@ -1,5 +1,5 @@
 ///|
-fn days_from_civil(year : Int, month : Int, day : Int) -> Int {
+fn days_from_civil(year : Int32, month : Int32, day : Int32) -> Int32 {
   let y = if month <= 2 { year - 1 } else { year }
   let era = if y >= 0 { y / 400 } else { (y - 399) / 400 }
   let yoe = y - era * 400
@@ -10,7 +10,7 @@ fn days_from_civil(year : Int, month : Int, day : Int) -> Int {
 }
 
 ///|
-fn civil_from_days(days : Int) -> (Int, Int, Int) {
+fn civil_from_days(days : Int32) -> (Int32, Int32, Int32) {
   let z = days + 719468
   let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 }
   let doe = z - era * 146097

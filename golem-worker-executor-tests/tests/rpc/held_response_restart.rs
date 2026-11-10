@@ -1,6 +1,9 @@
 use super::*;
-use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentTarget, InvocationFreshnessDisposition,
+};
 use golem_common::model::card::ScopeCard;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand};
 use pretty_assertions::assert_eq;
@@ -76,7 +79,8 @@ impl Rpc for HoldResponseRpc {
 
     async fn create_demand(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         method: &str,
         created_by: AccountId,
         caller: &AgentId,
@@ -89,14 +93,25 @@ impl Rpc for HoldResponseRpc {
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         self.inner
             .create_demand(
-                agent, method, created_by, caller, env, stack, config, auth, key, freshness,
+                agent,
+                environment_id,
+                method,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
+                key,
+                freshness,
             )
             .await
     }
 
     async fn invoke_and_await(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         method: String,
@@ -117,7 +132,18 @@ impl Rpc for HoldResponseRpc {
         let result = self
             .inner
             .invoke_and_await(
-                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+                agent,
+                environment_id,
+                key,
+                freshness,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
                 card,
             )
             .await;
@@ -130,7 +156,8 @@ impl Rpc for HoldResponseRpc {
 
     async fn invoke(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         method: String,
@@ -144,7 +171,18 @@ impl Rpc for HoldResponseRpc {
     ) -> Result<(), RpcError> {
         self.inner
             .invoke(
-                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+                agent,
+                environment_id,
+                key,
+                freshness,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
             )
             .await
     }
