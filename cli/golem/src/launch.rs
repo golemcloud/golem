@@ -20,6 +20,7 @@ use crate::well_known_secrets::{
     accounts_with_well_known_token, check_exposure, revoke_well_known_token,
 };
 use anyhow::Context;
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_component_compilation_service::config::ServerConfig as ComponentCompilationServiceConfig;
 use golem_registry_service::RegistryService;
 use golem_registry_service::config::{ComponentCompilationConfig, RegistryServiceConfig};
@@ -51,7 +52,8 @@ pub async fn launch_golem_services(
     config: &GolemServerConfig,
 ) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts, Shutdown)> {
     check_exposure(config)?;
-    let config = &config.with_one_golem_issuer();
+    // The one place that resolves the installation's issuer: both services take it as an argument.
+    let golem_issuer = GolemIssuer::configured_or_generated(config.golem_issuer.clone());
 
     // Services build rustls configurations from the process-level provider. A host that embeds
     // this launcher may not install one, and the `golem` binary has already installed it.
@@ -103,7 +105,8 @@ pub async fn launch_golem_services(
         "Golem server is starting, requests are answered with 503 Service Unavailable until it is ready"
     );
 
-    let started_components = start_components(config, &startup_progress, &mut join_set).await?;
+    let started_components =
+        start_components(config, &golem_issuer, &startup_progress, &mut join_set).await?;
 
     if accounts_with_well_known_token(config).is_empty()
         && revoke_well_known_token(&started_components.registry_service.endpoint).await?
@@ -150,6 +153,7 @@ async fn write_startup_ports_file(path: &Path, ports: &StartupPorts) -> anyhow::
 
 async fn start_components(
     config: &GolemServerConfig,
+    golem_issuer: &GolemIssuer,
     startup_progress: &StartupProgress,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
@@ -175,13 +179,19 @@ async fn start_components(
         run_shard_manager(shard_manager_config(config, &registry_service), join_set).await?;
 
     let worker_service = run_worker_service(
-        worker_service_config(config, &shard_manager, &registry_service),
+        worker_service_config(config, golem_issuer, &shard_manager, &registry_service),
         join_set,
     )
     .await?;
 
     let worker_executor = run_worker_executor(
-        worker_executor_config(config, &shard_manager, &registry_service, &worker_service),
+        worker_executor_config(
+            config,
+            golem_issuer,
+            &shard_manager,
+            &registry_service,
+            &worker_service,
+        ),
         join_set,
     )
     .await?;
@@ -221,10 +231,12 @@ fn shard_manager_config(
 
 fn worker_service_config(
     config: &GolemServerConfig,
+    golem_issuer: &GolemIssuer,
     shard_manager: &golem_shard_manager::RunDetails,
     registry_service: &golem_registry_service::SingleExecutableRunDetails,
 ) -> WorkerServiceConfig {
     let mut config = config.worker_service.clone();
+    config.golem_issuer = Some(golem_issuer.clone());
     config.shard_manager.host = INTERNAL_HOST.to_string();
     config.shard_manager.port = shard_manager.grpc_port;
     config.registry_service.host = INTERNAL_HOST.to_string();
@@ -234,11 +246,13 @@ fn worker_service_config(
 
 fn worker_executor_config(
     config: &GolemServerConfig,
+    golem_issuer: &GolemIssuer,
     shard_manager: &golem_shard_manager::RunDetails,
     registry_service: &golem_registry_service::SingleExecutableRunDetails,
     worker_service: &golem_worker_service::TrafficReadyEndpoints,
 ) -> WorkerExecutorConfig {
     let mut config = config.worker_executor.clone();
+    config.golem_issuer = Some(golem_issuer.clone());
     config.shard_manager.host = INTERNAL_HOST.to_string();
     config.shard_manager.port = shard_manager.grpc_port;
     config.registry_service.host = INTERNAL_HOST.to_string();
@@ -314,4 +328,55 @@ async fn run_worker_service(
         .start_endpoints(join_set, None)
         .instrument(span)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_worker_service::ingress::TrustedIngress;
+    use poem::{EndpointExt, endpoint::make_sync};
+    use test_r::test;
+
+    fn endpoint() -> poem::endpoint::BoxEndpoint<'static> {
+        make_sync(|_| poem::Response::default()).boxed()
+    }
+
+    #[test]
+    fn the_worker_service_and_the_executor_are_built_with_the_issuer_they_are_given() {
+        let config = GolemServerConfig::for_data_dir(Path::new("/data")).unwrap();
+        assert_eq!(config.worker_service.golem_issuer, None);
+        assert_eq!(config.worker_executor.golem_issuer, None);
+
+        let issuer: GolemIssuer = "https://id.acme.example".parse().unwrap();
+        let shard_manager = golem_shard_manager::RunDetails {
+            http_port: 1,
+            grpc_port: 2,
+            leadership: None,
+            stop: None,
+        };
+        let registry_service = golem_registry_service::SingleExecutableRunDetails {
+            grpc_port: 3,
+            endpoint: endpoint(),
+        };
+        let worker_service = golem_worker_service::TrafficReadyEndpoints {
+            grpc_port: 4,
+            custom_request_port: 5,
+            mcp_port: 6,
+            api_endpoint: endpoint(),
+            public_endpoint: endpoint(),
+            trusted_ingress: TrustedIngress::default(),
+        };
+
+        let service_config =
+            worker_service_config(&config, &issuer, &shard_manager, &registry_service);
+        let executor_config = worker_executor_config(
+            &config,
+            &issuer,
+            &shard_manager,
+            &registry_service,
+            &worker_service,
+        );
+        assert_eq!(service_config.golem_issuer, Some(issuer.clone()));
+        assert_eq!(executor_config.golem_issuer, Some(issuer));
+    }
 }

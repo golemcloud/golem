@@ -149,8 +149,11 @@ pub struct GolemServerConfig {
     pub ports_file: Option<PathBuf>,
     /// The installation's Golem issuer, for the worker service and the executor: an https URL on
     /// its own host, or a `urn:golem:issuer:<uuid>` value that Golem generated. Without it, each
-    /// start generates a new value and logs a warning.
-    #[serde(default)]
+    /// start generates a new value and logs a warning. An empty value counts as not set.
+    #[serde(
+        default,
+        deserialize_with = "golem_common::model::golem_issuer::deserialize_setting"
+    )]
     pub golem_issuer: Option<GolemIssuer>,
     pub router: RouterConfig,
     pub registry_service: RegistryServiceConfig,
@@ -434,17 +437,6 @@ impl GolemServerConfig {
 }
 
 impl GolemServerConfig {
-    /// A copy in which the worker service and the executor have the same Golem issuer: the
-    /// configured one, or one that this call generates, with a warning.
-    pub fn with_one_golem_issuer(&self) -> Self {
-        let golem_issuer = GolemIssuer::configured_or_generated(self.golem_issuer.clone());
-        let mut config = self.clone();
-        config.golem_issuer = Some(golem_issuer.clone());
-        config.worker_service.golem_issuer = Some(golem_issuer.clone());
-        config.worker_executor.golem_issuer = Some(golem_issuer);
-        config
-    }
-
     /// The config key and the address of every setting that selects where listeners bind: the
     /// main API, and each service, whose listeners all bind its `bind_address`.
     pub fn listener_addresses(&self) -> Vec<(&'static str, String)> {
@@ -2250,11 +2242,7 @@ mod tests {
             jail.set_env("GOLEM__GOLEM_ISSUER", "https://id.acme.example");
             let config = load(None, &run_args_with_data_dir("/data")).unwrap();
             let issuer: GolemIssuer = "https://id.acme.example".parse().unwrap();
-            assert_eq!(config.golem_issuer, Some(issuer.clone()));
-
-            let config = config.with_one_golem_issuer();
-            assert_eq!(config.worker_service.golem_issuer, Some(issuer.clone()));
-            assert_eq!(config.worker_executor.golem_issuer, Some(issuer));
+            assert_eq!(config.golem_issuer, Some(issuer));
 
             jail.set_env("GOLEM__GOLEM_ISSUER", "http://id.acme.example");
             let error = jail_error(load(None, &run_args_with_data_dir("/data")));
@@ -2264,18 +2252,16 @@ mod tests {
     }
 
     #[test]
-    fn without_a_golem_issuer_both_services_get_the_same_generated_one() {
-        let config = GolemServerConfig::for_data_dir(Path::new("/data")).unwrap();
-        assert_eq!(config.golem_issuer, None);
-
-        let config = config.with_one_golem_issuer();
-        let issuer = config
-            .worker_service
-            .golem_issuer
-            .clone()
-            .expect("the worker service has no Golem issuer");
-        assert!(issuer.is_generated(), "{issuer}");
-        assert_eq!(config.worker_executor.golem_issuer, Some(issuer));
+    fn an_empty_or_blank_golem_issuer_counts_as_not_set() {
+        for value in ["", "   "] {
+            Jail::expect_with(|jail| {
+                jail.set_env("GOLEM__GOLEM_ISSUER", value);
+                let config = load(None, &run_args_with_data_dir("/data")).unwrap();
+                assert_eq!(config.golem_issuer, None);
+                assert!(GolemIssuer::configured_or_generated(config.golem_issuer).is_generated());
+                Ok(())
+            });
+        }
     }
 
     #[test]
