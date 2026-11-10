@@ -508,7 +508,10 @@ pub struct Worker<Ctx: WorkerCtx> {
     unload_cleanup: StdMutex<Option<invocation_loop::UnloadCleanup>>,
     resolved: OnceCell<ResolvedWorkerData<Ctx>>,
     initialization_complete: AtomicBool,
-    initialization_request: StdMutex<Option<(InvocationContextStack, Principal)>>,
+    /// Set while a construction attempt that committed Create has not published the worker. A
+    /// retry then reloads that incarnation instead of creating another one, an ephemeral retry is
+    /// not treated as a reconstruction, and the unresolved worker stays cached.
+    unpublished_create: AtomicBool,
 }
 
 /// Metadata-dependent worker fields installed atomically after acquisition resolves.
@@ -735,7 +738,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) fn can_discard_unresolved(&self) -> bool {
         self.instance.try_lock().is_ok_and(|instance| {
             matches!(&*instance, WorkerInstance::Unresolved)
-                && self.initialization_request.lock().unwrap().is_none()
+                && !self.unpublished_create.load(Ordering::Acquire)
         })
     }
 

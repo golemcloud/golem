@@ -472,7 +472,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             unload_cleanup: StdMutex::new(None),
             resolved: OnceCell::new(),
             initialization_complete: AtomicBool::new(false),
-            initialization_request: StdMutex::new(None),
+            unpublished_create: AtomicBool::new(false),
         })
     }
     /// Joins final cleanup after the caller has fenced and stopped the runtime. Unlike the
@@ -526,14 +526,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .lock_lifecycle(&worker.owned_agent_id.agent_id)
                     .await;
-                let freshness_disposition =
-                    if worker.initialization_request.lock().unwrap().is_some() {
-                        // A failed attempt committed Create. Even a KnownFresh request must reload
-                        // that incarnation rather than create another one.
-                        InvocationFreshnessDisposition::MayExist
-                    } else {
-                        freshness_disposition
-                    };
+                let freshness_disposition = if worker.unpublished_create.load(Ordering::Acquire) {
+                    // A failed attempt committed Create. Even a KnownFresh request must reload
+                    // that incarnation rather than create another one.
+                    InvocationFreshnessDisposition::MayExist
+                } else {
+                    freshness_disposition
+                };
                 let metadata = Self::get_or_create_worker_metadata(
                     &worker.deps,
                     &mut lifecycle,
@@ -549,13 +548,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &create_intent,
                 )
                 .await;
-                worker
-                    .finish_construction(
-                        start,
-                        metadata,
-                        Some((invocation_context_stack, principal)),
-                    )
-                    .await
+                worker.finish_construction(start, metadata).await
             }
             .boxed();
             let (started, result) = self.initialize_with(build).await;
@@ -575,7 +568,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(crate) async fn ensure_existing_with_fingerprint(
         self: &Arc<Self>,
-        principal: Principal,
+        _principal: Principal,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         // Existing-only acquisition resolves identity, not execution readiness. Deletion
@@ -612,13 +605,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     WorkerExecutorError::worker_not_found(worker.owned_agent_id.agent_id())
                 })
             });
-            worker
-                .finish_construction(
-                    start,
-                    metadata,
-                    Some((InvocationContextStack::fresh(), principal)),
-                )
-                .await
+            worker.finish_construction(start, metadata).await
         }
         .boxed();
         self.initialize_with(build).await.1
@@ -650,7 +637,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         let mut instance = worker.instance.lock().await;
                         *instance = match result {
                             Ok(instance) => {
-                                worker.initialization_request.lock().unwrap().take();
+                                worker.unpublished_create.store(false, Ordering::Release);
                                 worker
                                     .initialization_complete
                                     .store(true, Ordering::Release);
@@ -716,7 +703,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         start: std::time::Instant,
         metadata: Result<GetOrCreateWorkerResult, WorkerExecutorError>,
-        initialization: Option<(InvocationContextStack, Principal)>,
     ) -> Result<WorkerInstance, WorkerExecutorError> {
         let mut metadata = match metadata {
             Ok(result) => result,
@@ -731,22 +717,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.deps.extra_deps(),
         );
         let construction_oplog = metadata.oplog.clone();
-        let (worker, reconstructed_ephemeral) =
-            match self.prepare_worker_data(metadata, initialization).await {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    // The caller retains the cold lifecycle guard until all attempt-owned actors,
-                    // transfers and monitors have exited. Persisted data belongs to the next retry.
-                    let error = match construction_oplog.stop_and_wait().await {
-                        Ok(()) => error,
-                        Err(cleanup_error) => WorkerExecutorError::runtime(format!(
-                            "{error}; failed to stop construction work: {cleanup_error}"
-                        )),
-                    };
-                    crate::metrics::wasm::record_create_worker_failure(&error);
-                    return Err(error);
-                }
-            };
+        let (worker, reconstructed_ephemeral) = match self.prepare_worker_data(metadata).await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                // The caller retains the cold lifecycle guard until all attempt-owned actors,
+                // transfers and monitors have exited. Persisted data belongs to the next retry.
+                let error = match construction_oplog.stop_and_wait().await {
+                    Ok(()) => error,
+                    Err(cleanup_error) => WorkerExecutorError::runtime(format!(
+                        "{error}; failed to stop construction work: {cleanup_error}"
+                    )),
+                };
+                crate::metrics::wasm::record_create_worker_failure(&error);
+                return Err(error);
+            }
+        };
         assert!(
             self.resolved.set(worker).is_ok(),
             "Worker initialized twice"
@@ -760,7 +745,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(in crate::worker) async fn prepare_worker_data(
         self: &Arc<Self>,
         metadata: GetOrCreateWorkerResult,
-        initialization: Option<(InvocationContextStack, Principal)>,
     ) -> Result<(ResolvedWorkerData<Ctx>, bool), WorkerExecutorError> {
         let deps = &self.deps;
         let owned_agent_id = self.owned_agent_id.clone();
@@ -779,18 +763,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // An unpublished local creation has never admitted a guest invocation. Retrying that
         // same creation is not reconstruction of a previously running ephemeral agent.
         let reconstructed_ephemeral =
-            reconstructed_ephemeral && self.initialization_request.lock().unwrap().is_none();
-        let initialization = {
-            let mut request = self.initialization_request.lock().unwrap();
-            if newly_created {
-                // Retain provenance only after this request actually created the incarnation.
-                *request = initialization;
-                request.clone()
-            } else {
-                request.clone().or(initialization)
-            }
-        };
+            reconstructed_ephemeral && !self.unpublished_create.load(Ordering::Acquire);
         if newly_created {
+            self.unpublished_create.store(true, Ordering::Release);
             let initial_status = current_status.load_full().as_ref().clone();
             deps.worker_service()
                 .update_cached_status(
@@ -1002,13 +977,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         assert!(last_oplog_idx >= OplogIndex::INITIAL);
 
-        // A crash may leave only Create. The initialization reservation excludes ordinary
-        // invocation admission; the status actor still performs the persisted dedupe.
-        if let (Some(agent_id), Some((invocation_context, principal))) =
-            (worker.owner_context.agent(), initialization)
+        // A crash may leave only Create. The initialization runs with the identity of the request
+        // that created the agent, whichever request loads it now. The initialization reservation
+        // excludes ordinary invocation admission; the status actor still performs the persisted
+        // dedupe.
+        if let Some(agent_id) = worker.owner_context.agent()
             && last_oplog_idx <= OplogIndex::from_u64(2)
             && !reconstructed_ephemeral
         {
+            let create_request = &worker.initial_worker_metadata.create_request;
+            let invocation_context = create_request.invocation_context();
+            let principal = create_request.principal.clone();
             let idempotency_key = self.initialization_idempotency_key();
             let (_, entry) = self
                 .pending_invocation_entry(
