@@ -2601,18 +2601,32 @@ impl AppCommandHandler {
                 .collect::<Vec<_>>()
         };
 
+        let environment_id = &deploy_diff.environment.environment_id;
+
         let component_details = stream::iter(component_names)
             .map(|component_name| {
                 let component_name = ComponentName(component_name);
-                let component_identity = deploy_diff.component_identity(kind, &component_name);
-                async {
+                let component_handler = &component_handler;
+                let limiter = &limiter;
+                async move {
                     let _permit = limiter.acquire().await?;
-                    let component = component_handler
-                        .get_component_revision_by_id(
-                            &component_identity.id,
-                            component_identity.revision,
-                        )
-                        .await?;
+                    let component = match kind {
+                        DeployDiffKind::Stage => {
+                            let identity = deploy_diff.staged_component_identity(&component_name);
+                            component_handler
+                                .get_component_revision_by_id(&identity.id, identity.revision)
+                                .await?
+                        }
+                        DeployDiffKind::Current => {
+                            component_handler
+                                .get_component_in_deployment(
+                                    environment_id,
+                                    deploy_diff.current_deployment_summary_revision()?,
+                                    &component_name,
+                                )
+                                .await?
+                        }
+                    };
                     Ok::<_, anyhow::Error>((component_name, component))
                 }
             })
@@ -2657,15 +2671,30 @@ impl AppCommandHandler {
         let http_api_deployment_details = stream::iter(http_domains)
             .map(|domain| {
                 let domain = Domain(domain);
-                let deployment_identity = deploy_diff.http_api_deployment_identity(kind, &domain);
-                async {
+                let http_api_deployment_handler = &http_api_deployment_handler;
+                let limiter = &limiter;
+                async move {
                     let _permit = limiter.acquire().await?;
-                    let deployment = http_api_deployment_handler
-                        .get_http_api_deployment_revision_by_id(
-                            &deployment_identity.id,
-                            deployment_identity.revision,
-                        )
-                        .await?;
+                    let deployment = match kind {
+                        DeployDiffKind::Stage => {
+                            let identity = deploy_diff.staged_http_api_deployment_identity(&domain);
+                            http_api_deployment_handler
+                                .get_http_api_deployment_revision_by_id(
+                                    &identity.id,
+                                    identity.revision,
+                                )
+                                .await?
+                        }
+                        DeployDiffKind::Current => {
+                            http_api_deployment_handler
+                                .get_http_api_deployment_in_deployment(
+                                    environment_id,
+                                    deploy_diff.current_deployment_summary_revision()?,
+                                    &domain,
+                                )
+                                .await?
+                        }
+                    };
                     Ok::<_, anyhow::Error>((domain, deployment))
                 }
             })
@@ -2708,15 +2737,27 @@ impl AppCommandHandler {
         let mcp_deployment_details = stream::iter(mcp_domains)
             .map(|domain| {
                 let domain = Domain(domain);
-                let deployment_identity = deploy_diff.mcp_deployment_identity(kind, &domain);
-                async {
+                let mcp_deployment_handler = &mcp_deployment_handler;
+                let limiter = &limiter;
+                async move {
                     let _permit = limiter.acquire().await?;
-                    let deployment = mcp_deployment_handler
-                        .get_mcp_deployment_revision_by_id(
-                            &deployment_identity.id,
-                            deployment_identity.revision,
-                        )
-                        .await?;
+                    let deployment = match kind {
+                        DeployDiffKind::Stage => {
+                            let identity = deploy_diff.staged_mcp_deployment_identity(&domain);
+                            mcp_deployment_handler
+                                .get_mcp_deployment_revision_by_id(&identity.id, identity.revision)
+                                .await?
+                        }
+                        DeployDiffKind::Current => {
+                            mcp_deployment_handler
+                                .get_mcp_deployment_in_deployment(
+                                    environment_id,
+                                    deploy_diff.current_deployment_summary_revision()?,
+                                    &domain,
+                                )
+                                .await?
+                        }
+                    };
                     Ok::<_, anyhow::Error>((domain, deployment))
                 }
             })
@@ -2856,6 +2897,9 @@ impl AppCommandHandler {
     ) -> anyhow::Result<RollbackDiff> {
         let parallelism = self.ctx.http_parallelism();
         let limiter = Arc::new(tokio::sync::Semaphore::new(parallelism));
+        let environment_id = &rollback_diff.environment.environment_id;
+        let target_deployment_revision = rollback_diff.target_deployment.deployment_revision;
+        let current_deployment_revision = rollback_diff.current_deployment.deployment_revision;
 
         let component_identities = if full_diff {
             rollback_diff
@@ -2911,23 +2955,30 @@ impl AppCommandHandler {
                 let ctx = self.ctx.clone();
                 let limiter = limiter.clone();
                 async move {
-                    let get = async |identity: Option<&DeploymentPlanComponentEntry>| match identity
-                    {
-                        Some(identity) => {
-                            let _permit = limiter.acquire().await?;
-                            Ok::<_, anyhow::Error>(Some(
-                                ctx.component_handler()
-                                    .get_component_revision_by_id(&identity.id, identity.revision)
-                                    .await?,
-                            ))
-                        }
-                        None => Ok::<_, anyhow::Error>(None),
-                    };
+                    let get =
+                        async |identity: Option<&DeploymentPlanComponentEntry>,
+                               deployment_revision: DeploymentRevision| {
+                            match identity {
+                                Some(identity) => {
+                                    let _permit = limiter.acquire().await?;
+                                    Ok::<_, anyhow::Error>(Some(
+                                        ctx.component_handler()
+                                            .get_component_in_deployment(
+                                                environment_id,
+                                                deployment_revision,
+                                                &identity.name,
+                                            )
+                                            .await?,
+                                    ))
+                                }
+                                None => Ok::<_, anyhow::Error>(None),
+                            }
+                        };
 
                     Ok::<_, anyhow::Error>(RollbackEntityDetails {
+                        new: get(details.new, target_deployment_revision).await?,
+                        current: get(details.current, current_deployment_revision).await?,
                         name: details.name,
-                        new: get(details.new).await?,
-                        current: get(details.current).await?,
                     })
                 }
             })
@@ -2988,27 +3039,30 @@ impl AppCommandHandler {
                 let ctx = self.ctx.clone();
                 let limiter = limiter.clone();
                 async move {
-                    let get = async |identity: Option<&DeploymentPlanHttpApiDeploymentEntry>| {
-                        match identity {
-                            Some(identity) => {
-                                let _permit = limiter.acquire().await?;
-                                Ok::<_, anyhow::Error>(Some(
-                                    ctx.api_deployment_handler()
-                                        .get_http_api_deployment_revision_by_id(
-                                            &identity.id,
-                                            identity.revision,
-                                        )
-                                        .await?,
-                                ))
+                    let get =
+                        async |identity: Option<&DeploymentPlanHttpApiDeploymentEntry>,
+                               deployment_revision: DeploymentRevision| {
+                            match identity {
+                                Some(identity) => {
+                                    let _permit = limiter.acquire().await?;
+                                    Ok::<_, anyhow::Error>(Some(
+                                        ctx.api_deployment_handler()
+                                            .get_http_api_deployment_in_deployment(
+                                                environment_id,
+                                                deployment_revision,
+                                                &identity.domain,
+                                            )
+                                            .await?,
+                                    ))
+                                }
+                                None => Ok::<_, anyhow::Error>(None),
                             }
-                            None => Ok::<_, anyhow::Error>(None),
-                        }
-                    };
+                        };
 
                     Ok::<_, anyhow::Error>(RollbackEntityDetails {
+                        new: get(details.new, target_deployment_revision).await?,
+                        current: get(details.current, current_deployment_revision).await?,
                         name: details.name,
-                        new: get(details.new).await?,
-                        current: get(details.current).await?,
                     })
                 }
             })
@@ -3069,29 +3123,32 @@ impl AppCommandHandler {
                 let ctx = self.ctx.clone();
                 let limiter = limiter.clone();
                 async move {
-                    let get = async |identity: Option<
-                        &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry,
-                    >| {
-                        match identity {
-                            Some(identity) => {
-                                let _permit = limiter.acquire().await?;
-                                Ok::<_, anyhow::Error>(Some(
-                                    ctx.api_deployment_handler()
-                                        .get_mcp_deployment_revision_by_id(
-                                            &identity.id,
-                                            identity.revision,
-                                        )
-                                        .await?,
-                                ))
+                    let get =
+                        async |identity: Option<
+                            &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry,
+                        >,
+                               deployment_revision: DeploymentRevision| {
+                            match identity {
+                                Some(identity) => {
+                                    let _permit = limiter.acquire().await?;
+                                    Ok::<_, anyhow::Error>(Some(
+                                        ctx.api_deployment_handler()
+                                            .get_mcp_deployment_in_deployment(
+                                                environment_id,
+                                                deployment_revision,
+                                                &identity.domain,
+                                            )
+                                            .await?,
+                                    ))
+                                }
+                                None => Ok::<_, anyhow::Error>(None),
                             }
-                            None => Ok::<_, anyhow::Error>(None),
-                        }
-                    };
+                        };
 
                     Ok::<_, anyhow::Error>(RollbackEntityDetails {
+                        new: get(details.new, target_deployment_revision).await?,
+                        current: get(details.current, current_deployment_revision).await?,
                         name: details.name,
-                        new: get(details.new).await?,
-                        current: get(details.current).await?,
                     })
                 }
             })
