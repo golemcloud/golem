@@ -35,6 +35,9 @@ pub use principal::*;
 pub use subject::*;
 
 #[cfg(test)]
+mod conversion_from_1_6_tests;
+
+#[cfg(test)]
 mod identity_proof_tests;
 
 #[cfg(test)]

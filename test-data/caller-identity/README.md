@@ -60,10 +60,43 @@ and there are no transitive tag keys. No other proof carries this claim.
 
 The vectors fix the header and the claim set, not a signature.
 
+## `conversion-from-1.6-v1.json`: 1.6 principals
+
+A 1.6 principal reaches 2.0 only inside the bridge export: in an agent's SDK snapshot envelope,
+and as the agent's recorded init principal. The bridge and each 2.0 SDK convert it to a reference,
+or to no reference, as these vectors say. No shared code implements the conversion.
+
+Each case gives:
+
+- `principal`: the 1.6 principal in the JSON form that the Rust, TypeScript, Effect, MoonBit and
+  Scala SDKs write into their 1.6 snapshot envelopes: `{"tag": ..., "val": ...}`, with camelCase
+  field names, every UUID as a lowercase string with hyphens, and the OIDC `claims` as a JSON
+  string. The Go SDK writes another form, so it translates its own form first.
+- `loginMapping`: the external login of the principal's account, or `null`. A GitHub login is
+  `{"provider": "github", "externalId": ..., "login": ...}`, with the numeric GitHub user ID as
+  decimal text and the login name. Any other login is `{"provider": "oidc", "issuer": ...,
+  "subject": ...}`.
+- `importedAgent`: for an `agent` principal, the 2.0 agent ID that the bridge's ID mapping gives
+  and the imported agent's fingerprint, or `null` when the agent did not carry over.
+- `expected`: the `kind` and the `pair` (in the text form above) of the reference, or `null` for
+  no reference.
+
+`golemIssuer` is the installation's Golem issuer. The conversion:
+
+| 1.6 principal | Reference |
+|---|---|
+| `oidc` | kind `user`, the token's `issuer` and `sub` exactly as written, never the email |
+| `golem-user` with an external login mapping | kind `user`, the person pair of the mapping: for GitHub `("https://github.com","<numeric GitHub user ID>")`, never the login name |
+| `golem-user` without a mapping | kind `account`, `("<Golem issuer>","account:<account-id>")` |
+| `agent` | kind `agent`, `("<Golem issuer>","agent:<2.0 agent ID>/<fingerprint>")` |
+| `agent` that did not carry over | no reference |
+| `anonymous` | no reference |
+
 ## Consumers
 
-- Rust (the source of truth): `text_form_tests.rs`, `principal_tests.rs` and
-  `identity_proof_tests.rs` in `golem-common/src/base_model/caller/`.
+- Rust (the source of truth): `text_form_tests.rs`, `principal_tests.rs`,
+  `identity_proof_tests.rs` and `conversion_from_1_6_tests.rs` in
+  `golem-common/src/base_model/caller/`.
 
 When the format changes, change these files in the same commit; the Rust tests fail until both
 agree.

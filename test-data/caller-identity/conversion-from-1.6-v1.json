@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "golemIssuer": "https://id.golem.acme.example",
+  "cases": [
+    {
+      "name": "oidc: the token's issuer and sub, never the email",
+      "principal": {
+        "tag": "oidc",
+        "val": {
+          "sub": "248289761001",
+          "issuer": "https://login.acme.example",
+          "email": "ana@acme.example",
+          "name": "Ana",
+          "emailVerified": true,
+          "givenName": null,
+          "familyName": null,
+          "picture": null,
+          "preferredUsername": "ana",
+          "claims": "{\"sub\":\"248289761001\",\"email\":\"ana@acme.example\",\"groups\":[\"finance\"]}"
+        }
+      },
+      "loginMapping": null,
+      "importedAgent": null,
+      "expected": {
+        "kind": "user",
+        "pair": "(\"https://login.acme.example\",\"248289761001\")"
+      }
+    },
+    {
+      "name": "oidc: the issuer and sub exactly as written, with a trailing slash and upper case",
+      "principal": {
+        "tag": "oidc",
+        "val": {
+          "sub": "Ana.Example",
+          "issuer": "https://login.acme.example/",
+          "email": null,
+          "name": null,
+          "emailVerified": true,
+          "givenName": null,
+          "familyName": null,
+          "picture": null,
+          "preferredUsername": null,
+          "claims": "{\"sub\":\"Ana.Example\"}"
+        }
+      },
+      "loginMapping": null,
+      "importedAgent": null,
+      "expected": {
+        "kind": "user",
+        "pair": "(\"https://login.acme.example/\",\"Ana.Example\")"
+      }
+    },
+    {
+      "name": "golem-user with an external login mapping: the person pair of the mapping",
+      "principal": {
+        "tag": "golem-user",
+        "val": {
+          "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+        }
+      },
+      "loginMapping": {
+        "provider": "oidc",
+        "issuer": "https://login.acme.example",
+        "subject": "248289761001"
+      },
+      "importedAgent": null,
+      "expected": {
+        "kind": "user",
+        "pair": "(\"https://login.acme.example\",\"248289761001\")"
+      }
+    },
+    {
+      "name": "golem-user with a GitHub mapping: the numeric GitHub user ID, never the login name",
+      "principal": {
+        "tag": "golem-user",
+        "val": {
+          "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+        }
+      },
+      "loginMapping": {
+        "provider": "github",
+        "externalId": "583231",
+        "login": "octocat"
+      },
+      "importedAgent": null,
+      "expected": {
+        "kind": "user",
+        "pair": "(\"https://github.com\",\"583231\")"
+      }
+    },
+    {
+      "name": "golem-user without a mapping: the account pair, with the account ID",
+      "principal": {
+        "tag": "golem-user",
+        "val": {
+          "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+        }
+      },
+      "loginMapping": null,
+      "importedAgent": null,
+      "expected": {
+        "kind": "account",
+        "pair": "(\"https://id.golem.acme.example\",\"account:3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\")"
+      }
+    },
+    {
+      "name": "agent: the 2.0 agent ID and the imported agent's fingerprint",
+      "principal": {
+        "tag": "agent",
+        "val": {
+          "componentId": "7d8e9fa0-b1c2-4d3e-8f4a-5b6c7d8e9f0a",
+          "agentId": "report-writer(7)"
+        }
+      },
+      "loginMapping": null,
+      "importedAgent": {
+        "agentId": "0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10",
+        "fingerprint": "9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f"
+      },
+      "expected": {
+        "kind": "agent",
+        "pair": "(\"https://id.golem.acme.example\",\"agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f\")"
+      }
+    },
+    {
+      "name": "agent that did not carry over: no reference",
+      "principal": {
+        "tag": "agent",
+        "val": {
+          "componentId": "7d8e9fa0-b1c2-4d3e-8f4a-5b6c7d8e9f0a",
+          "agentId": "report-writer(7)"
+        }
+      },
+      "loginMapping": null,
+      "importedAgent": null,
+      "expected": null
+    },
+    {
+      "name": "anonymous: no reference",
+      "principal": {
+        "tag": "anonymous"
+      },
+      "loginMapping": null,
+      "importedAgent": null,
+      "expected": null
+    }
+  ]
+}
