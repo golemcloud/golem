@@ -99,6 +99,31 @@ On update, omitting `--name`, `--lower-positive`, or `--lower-negative` preserve
 
 Every successful update creates a replacement managed card and revokes the previous card and all its descendants, even when only the share name changes. Deleting the share revokes its managed card and descendants without replacement.
 
+### Share the deployment of an environment
+
+To plan and deploy an application to another account's environment with `golem deploy`, the recipient needs these grants on the environment:
+
+| Verb                   | What `golem deploy` uses it for                                                                                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `view`                 | Find the environment.                                                                                                                                            |
+| `view-deployment-plan` | Read the staging area and the summary of a deployment.                                                                                                           |
+| `view-deployment`      | Read the entities of the current deployment and of a rollback target, and find a deployment by its version. `golem deploy --plan` needs it too. |
+| `deploy`               | Deploy the staged changes, and roll back to an earlier deployment.                                                                                               |
+
+The recipient also needs the grants of each entity that the deployment creates, updates or deletes, for example `create`, `update`, `delete` and `view` on `component`, `environment.http-api-deployment` and `environment.mcp-deployment`.
+
+```shell copy
+golem account permission-share new deployer@example.com shop-deployers \
+  --lower-positive 'environment(owner@example.com/shop/prod) @ deployer@example.com : view :' \
+  --lower-positive 'environment(owner@example.com/shop/prod) @ deployer@example.com : view-deployment-plan :' \
+  --lower-positive 'environment(owner@example.com/shop/prod) @ deployer@example.com : view-deployment :' \
+  --lower-positive 'environment(owner@example.com/shop/prod) @ deployer@example.com : deploy :' \
+  --lower-positive 'component(owner@example.com/shop/prod/*) @ deployer@example.com : view : *' \
+  --lower-positive 'component(owner@example.com/shop/prod/*) @ deployer@example.com : create : *'
+```
+
+Without `view-deployment`, `golem deploy` fails while it prepares the deployment. The server then reports the current deployment as not found, or refuses to list the deployments of the environment.
+
 ## Inspect and revoke cards
 
 List all managed card kinds owned by the selected account:
