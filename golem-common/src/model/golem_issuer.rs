@@ -251,7 +251,15 @@ fn check_host(text: &str, host: &str) -> Result<String, GolemIssuerError> {
             )),
         };
     }
-    Ok(lower)
+
+    // The URL parser also checks the host as a domain name (for example, the punycode of an
+    // `xn--` label). Whatever it refuses, or writes differently, is not an issuer.
+    match url::Host::parse(&lower) {
+        Ok(url::Host::Domain(written)) if written == lower => Ok(lower),
+        _ => Err(invalid(
+            "the host is not a valid domain name (punycode in an xn-- label must be valid)",
+        )),
+    }
 }
 
 fn check_port(text: &str, port: &str) -> Result<u16, GolemIssuerError> {
@@ -593,6 +601,36 @@ mod tests {
         assert_eq!(host.len(), 253);
         let text = format!("https://{host}");
         assert!(text.parse::<GolemIssuer>().is_ok());
+    }
+
+    #[test]
+    fn a_host_the_url_parser_refuses_is_not_an_issuer() {
+        for text in [
+            "https://xn--a.example",
+            "https://xn--abc.example",
+            "https://xn--ab",
+            "https://xn--bcher-kvb.example",
+            "https://xn--ssa.example",
+            "https://xn--1ug.example",
+            "https://xn--a.xn--b",
+        ] {
+            let error = text
+                .parse::<GolemIssuer>()
+                .expect_err(&format!("{text:?} was accepted"));
+            assert!(
+                matches!(error, GolemIssuerError::InvalidHost { .. }),
+                "{text:?}: {error}"
+            );
+            assert!(error.to_string().contains("punycode"), "{text:?}: {error}");
+        }
+        for text in [
+            "https://xn--bcher-kva.example",
+            "https://id.acme.example",
+            "https://xn--80ak6aa92e.com",
+            "https://a.xn--bcher-kva.example",
+        ] {
+            assert!(text.parse::<GolemIssuer>().is_ok(), "{text:?}");
+        }
     }
 
     #[test]
