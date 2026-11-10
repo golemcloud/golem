@@ -23141,6 +23141,8 @@ components:
           $ref: '#/components/schemas/PublicSnapshotData'
         filesystemSnapshot:
           type: string
+        bootstrap:
+          $ref: '#/components/schemas/OplogRegion'
       required:
       - timestamp
       - data
@@ -23267,6 +23269,8 @@ components:
             $ref: '#/components/schemas/PluginInstallationDescription'
         snapshotAssistedDetails:
           $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
+        bootstrap:
+          $ref: '#/components/schemas/OplogRegion'
       required:
       - timestamp
       - targetRevision

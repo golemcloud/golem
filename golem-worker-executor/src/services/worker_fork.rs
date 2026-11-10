@@ -1587,6 +1587,7 @@ mod tests {
                 snapshot_index: index(snapshot),
                 snapshot_revision: revision(1),
                 filesystem_snapshot: name,
+                snapshot_bootstrap: None,
             },
             Some(index(admission)),
         )
@@ -1618,7 +1619,7 @@ mod tests {
     }
 
     fn succeeded(target: u64) -> OplogEntry {
-        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None)
+        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None, None)
     }
 
     /// The updates of the prefix `entries` from oplog index 2, with the regions in `deleted`.

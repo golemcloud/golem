@@ -2617,6 +2617,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 source_revision_start_index: OplogIndex::INITIAL,
                 snapshot_index: OplogIndex::from_u64(2),
             }),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            }),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp: timestamp(),
@@ -2714,16 +2718,22 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             data: raw_snapshot(),
             filesystem_snapshot: Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9".to_string()),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            }),
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: json_snapshot(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: multipart_snapshot(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }),
         PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
             timestamp: timestamp(),

@@ -184,6 +184,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        bootstrap: bootstrap.map(oplog_region_to_wit),
     } }
     FailedUpdate { record FailedUpdateParams => FailedUpdateParameters {
         timestamp: timestamp.into(),
@@ -271,6 +272,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
                     timestamp,
                     data,
                     filesystem_snapshot,
+                    bootstrap,
                 })) => Ok({
                     let (snapshot_bytes, mime_type) = match data {
                         PublicSnapshotData::Raw(RawSnapshotData { data, mime_type }) => {
@@ -289,6 +291,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
                             mime_type,
                         },
                         filesystem_snapshot,
+                        bootstrap: bootstrap.map(oplog_region_to_wit),
                     })
                 }) }
     OplogProcessorCheckpoint { record OplogProcessorCheckpointParams => OplogProcessorCheckpointParameters {

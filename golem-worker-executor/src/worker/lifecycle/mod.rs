@@ -624,6 +624,7 @@ mod tests {
                     index: OplogIndex::from_u64(4),
                     component_revision: ComponentRevision::new(2).unwrap(),
                     filesystem_snapshot: None,
+                    bootstrap: None,
                 },
             })),
         });
@@ -866,6 +867,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Some(linear_memory.current_bytes()),
                 new_active_plugins,
                 snapshot_assisted_details,
+                None,
             );
             *growth = Arc::new(PendingMemoryGrowth::default());
             self.state_actor

@@ -44,6 +44,7 @@ fn selected(name: Option<&FilesystemSnapshotName>) -> UsableAutomaticSnapshot {
         index: OplogIndex::from_u64(10),
         component_revision: golem_common::model::component::ComponentRevision::INITIAL,
         filesystem_snapshot: name.cloned(),
+        bootstrap: None,
     }
 }
 
@@ -298,6 +299,7 @@ fn record(index: u64, name: Option<&FilesystemSnapshotName>) -> UsableAutomaticS
         index: OplogIndex::from_u64(index),
         component_revision: ComponentRevision::new(2).unwrap(),
         filesystem_snapshot: name.cloned(),
+        bootstrap: None,
     }
 }
 
@@ -333,6 +335,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
         kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
             filesystem_snapshot: None,
         },
+        bootstrap: None,
     };
     let plan = |source, snapshot, skip_through, role| StartPlan {
         source,
@@ -475,6 +478,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 previous: Some(AuthoritativeSnapshot {
                     index: index(5),
                     kind: AuthoritativeSnapshotKind::ManualUpdate,
+                    bootstrap: None,
                 }),
             },
             Some(&update),
@@ -1700,6 +1704,7 @@ async fn update_retention_keeps_the_record_of_a_successful_assisted_update_and_c
             kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                 filesystem_snapshot: Some(assisted.clone()),
             },
+            bootstrap: None,
         }),
         ..Default::default()
     };
@@ -1720,6 +1725,7 @@ fn snapshot_record(name: Option<&FilesystemSnapshotName>) -> OplogEntry {
         active_cards: Vec::new(),
         wallet_generation: 0,
         filesystem_snapshot: name.cloned(),
+        bootstrap: None,
     }
 }
 
@@ -1747,6 +1753,7 @@ fn assisted_strategy_record(snapshot: u64, name: Option<&FilesystemSnapshotName>
             snapshot_index: OplogIndex::from_u64(snapshot),
             snapshot_revision: ComponentRevision::INITIAL,
             filesystem_snapshot: name.cloned(),
+            snapshot_bootstrap: None,
         },
         Some(OplogIndex::from_u64(snapshot + 1)),
     )
@@ -1767,6 +1774,7 @@ fn assisted_success() -> OplogEntry {
         10,
         None,
         std::collections::HashSet::new(),
+        None,
         None,
     )
 }

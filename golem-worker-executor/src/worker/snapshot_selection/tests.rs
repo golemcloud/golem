@@ -16,6 +16,7 @@ use super::*;
 use golem_common::model::SuccessfulUpdateRecord;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::FilesystemSnapshotName;
+use golem_common::model::regions::OplogRegion;
 use test_r::test;
 
 fn revision(value: u64) -> ComponentRevision {
@@ -40,12 +41,14 @@ fn status(
                 (Some(name), true) => SnapshotFiles::Confirmed(name),
                 (last, _) => SnapshotFiles::named(last),
             },
+            bootstrap: None,
         }),
         previous_usable_automatic_snapshot: previous.map(|filesystem_snapshot| {
             UsableAutomaticSnapshot {
                 index: OplogIndex::from_u64(5),
                 component_revision: revision(2),
                 filesystem_snapshot,
+                bootstrap: None,
             }
         }),
         ..Default::default()
@@ -104,6 +107,7 @@ fn a_confirmed_last_entry_is_selected() {
             index: OplogIndex::from_u64(10),
             component_revision: revision(2),
             filesystem_snapshot: Some(name),
+            bootstrap: None,
         })
     );
 }
@@ -369,12 +373,14 @@ fn the_names_in_use_are_the_candidate_successful_pending_and_authoritative_names
             kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                 filesystem_snapshot: Some(assisted.clone()),
             },
+            bootstrap: None,
         }),
         last_automatic_snapshot: Some(AutomaticSnapshot {
             index: OplogIndex::from_u64(13),
             timestamp: Timestamp::from(2_000),
             component_revision: revision(2),
             files: SnapshotFiles::Confirmed(last.clone()),
+            bootstrap: None,
         }),
         ..status.clone()
     };
@@ -450,6 +456,7 @@ fn the_names_in_use_give_each_name_of_the_status_once_in_the_order_of_their_text
             kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                 filesystem_snapshot: Some(fifth.clone()),
             },
+            bootstrap: None,
         }),
         ..status(Some(first), true, Some(Some(second)))
     };
@@ -487,11 +494,13 @@ fn a_new_snapshot_entry_moves_the_candidates_and_an_older_rejection_drops_out() 
             timestamp: Timestamp::from(2_000),
             component_revision: revision(2),
             files: SnapshotFiles::Unconfirmed(FilesystemSnapshotName::periodic()),
+            bootstrap: None,
         }),
         previous_usable_automatic_snapshot: Some(UsableAutomaticSnapshot {
             index: OplogIndex::from_u64(10),
             component_revision: revision(2),
             filesystem_snapshot: Some(name),
+            bootstrap: None,
         }),
         ..before.clone()
     };
@@ -510,11 +519,13 @@ fn the_rejections_in_memory_keep_at_most_the_candidates_after_a_new_snapshot_ent
             timestamp: Timestamp::from(2_000),
             component_revision: revision(2),
             files: SnapshotFiles::Unconfirmed(FilesystemSnapshotName::periodic()),
+            bootstrap: None,
         }),
         previous_usable_automatic_snapshot: Some(UsableAutomaticSnapshot {
             index: OplogIndex::from_u64(10),
             component_revision: revision(2),
             filesystem_snapshot: Some(name),
+            bootstrap: None,
         }),
         ..before.clone()
     };
@@ -551,11 +562,13 @@ fn a_rejected_record_that_reuses_a_name_falls_back_to_the_record_before_it() {
             timestamp: Timestamp::from(2_000),
             component_revision: revision(2),
             files: SnapshotFiles::Confirmed(name.clone()),
+            bootstrap: None,
         }),
         previous_usable_automatic_snapshot: Some(UsableAutomaticSnapshot {
             index: OplogIndex::from_u64(10),
             component_revision: revision(2),
             filesystem_snapshot: Some(name.clone()),
+            bootstrap: None,
         }),
         ..shared
     };
@@ -572,6 +585,7 @@ fn a_rejected_record_that_reuses_a_name_falls_back_to_the_record_before_it() {
             index: OplogIndex::from_u64(10),
             component_revision: revision(2),
             filesystem_snapshot: Some(name),
+            bootstrap: None,
         })
     );
 }
@@ -594,6 +608,7 @@ fn a_start_selection_skips_unavailable_entries_only_for_the_start() {
         index: OplogIndex::from_u64(5),
         component_revision: revision(2),
         filesystem_snapshot: Some(FilesystemSnapshotName::periodic()),
+        bootstrap: None,
     });
     let exclusions = SnapshotExclusions::default();
     assert_eq!(exclusions.persisted_rejections(), None);
@@ -891,6 +906,7 @@ fn assisted_strategy(snapshot_index: u64, name: Option<FilesystemSnapshotName>) 
             snapshot_index: OplogIndex::from_u64(snapshot_index),
             snapshot_revision: revision(2),
             filesystem_snapshot: name,
+            snapshot_bootstrap: None,
         },
         admission_index: OplogIndex::from_u64(6),
     }
@@ -916,6 +932,55 @@ fn an_assisted_strategy_selects_a_snapshot_taken_after_the_admission() {
     assert_eq!(
         decide_start(&status, &none, true),
         assisted_strategy(10, Some(name))
+    );
+}
+
+/// The strategy freezes the bootstrap range of the record it selects, also of a fallback record.
+#[test]
+fn an_assisted_strategy_freezes_the_bootstrap_range_of_the_selected_record() {
+    let last_range =
+        OplogRegion::from_index_range(OplogIndex::from_u64(7)..=OplogIndex::from_u64(9));
+    let previous_range =
+        OplogRegion::from_index_range(OplogIndex::from_u64(2)..=OplogIndex::from_u64(3));
+    let with_ranges = |confirmed| {
+        let mut status = with_head(
+            Some(FilesystemSnapshotName::periodic()),
+            confirmed,
+            Some(None),
+            unselected(6, 3),
+        );
+        status.last_automatic_snapshot.as_mut().unwrap().bootstrap = Some(last_range.clone());
+        status
+            .previous_usable_automatic_snapshot
+            .as_mut()
+            .unwrap()
+            .bootstrap = Some(previous_range.clone());
+        status
+    };
+    let selected_range = |decision| match decision {
+        StartDecision::PersistStrategy {
+            description:
+                UpdateDescription::SnapshotAssistedAutomatic {
+                    snapshot_index,
+                    snapshot_bootstrap,
+                    ..
+                },
+            ..
+        } => Some((snapshot_index, snapshot_bootstrap)),
+        _ => None,
+    };
+    let none = SnapshotExclusions::default();
+
+    assert_eq!(
+        [true, false].map(|confirmed| selected_range(decide_start(
+            &with_ranges(confirmed),
+            &none,
+            true
+        ))),
+        [
+            Some((OplogIndex::from_u64(10), Some(last_range.clone()))),
+            Some((OplogIndex::from_u64(5), Some(previous_range.clone()))),
+        ]
     );
 }
 
@@ -1096,6 +1161,7 @@ fn a_record_whose_snapshot_a_failed_update_lost_is_never_selected_again() {
         index: OplogIndex::from_u64(5),
         component_revision: revision(2),
         filesystem_snapshot: None,
+        bootstrap: None,
     };
 
     assert_eq!(
@@ -1155,6 +1221,7 @@ fn record_at(index: u64, name: Option<FilesystemSnapshotName>) -> UsableAutomati
         index: OplogIndex::from_u64(index),
         component_revision: revision(2),
         filesystem_snapshot: name,
+        bootstrap: None,
     }
 }
 
@@ -1357,6 +1424,7 @@ fn a_rejected_periodic_record_after_an_assisted_update_uses_the_promoted_record_
         kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
             filesystem_snapshot: Some(name.clone()),
         },
+        bootstrap: None,
     });
     if let Some(last) = status.last_automatic_snapshot.as_mut() {
         last.component_revision = revision(3);
@@ -1399,6 +1467,7 @@ fn a_selection_follows_the_priority_of_the_queue_head_then_the_records_then_the_
     let authoritative = AuthoritativeSnapshot {
         index: OplogIndex::from_u64(3),
         kind: AuthoritativeSnapshotKind::ManualUpdate,
+        bootstrap: None,
     };
     let mut manual = with_head(None, true, None, manual_head.clone());
     manual.authoritative_snapshot = Some(authoritative.clone());

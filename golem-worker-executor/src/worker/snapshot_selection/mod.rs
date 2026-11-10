@@ -264,6 +264,7 @@ fn strategy(
             snapshot_index: snapshot.index,
             snapshot_revision: snapshot.component_revision,
             filesystem_snapshot: snapshot.filesystem_snapshot,
+            snapshot_bootstrap: snapshot.bootstrap,
         },
         None => UpdateDescription::Automatic {
             target_revision: head.target_revision,
@@ -543,6 +544,7 @@ fn authoritative_baseline(status: &AgentStatusRecord) -> SelectedBaseline {
         Some(AuthoritativeSnapshot {
             index,
             kind: AuthoritativeSnapshotKind::ManualUpdate,
+            ..
         }) => SelectedBaseline::ManualPromoted { index: *index },
         Some(AuthoritativeSnapshot {
             index,
@@ -550,6 +552,7 @@ fn authoritative_baseline(status: &AgentStatusRecord) -> SelectedBaseline {
                 AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                     filesystem_snapshot,
                 },
+            ..
         }) => SelectedBaseline::AssistedPromoted {
             index: *index,
             name: filesystem_snapshot.clone(),

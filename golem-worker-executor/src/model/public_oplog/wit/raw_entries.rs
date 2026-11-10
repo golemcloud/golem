@@ -231,6 +231,7 @@ before (value) {}
             )
         })
         .transpose()?,
+        bootstrap: params.bootstrap.map(oplog_region_from_wit),
     } }
     FailedUpdate { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -356,6 +357,7 @@ before (value) {}
         .filesystem_snapshot
         .map(|name| name.parse())
         .transpose()?,
+        bootstrap: params.bootstrap.map(oplog_region_from_wit),
     } }
     OplogProcessorCheckpoint { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -671,6 +673,7 @@ before (value) {}
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        bootstrap: bootstrap.map(oplog_region_to_wit),
     } }
     FailedUpdate { record (snapshot_fault) => FailedUpdateParameters {
         timestamp: timestamp.into(),
@@ -765,6 +768,7 @@ before (value) {}
         .collect::<Result<Vec<_>, _>>()?,
         wallet_generation: wallet_generation,
         filesystem_snapshot: filesystem_snapshot.map(String::from),
+        bootstrap: bootstrap.map(oplog_region_to_wit),
     } }
     OplogProcessorCheckpoint { record () => RawOplogProcessorCheckpointParameters {
         timestamp: timestamp.into(),

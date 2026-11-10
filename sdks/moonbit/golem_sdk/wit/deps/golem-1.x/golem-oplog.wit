@@ -535,7 +535,9 @@ interface oplog {
         target-revision: component-revision,
         new-component-size: u64,
         new-active-plugins: list<plugin-installation-description>,
-        snapshot-assisted-details: option<snapshot-assisted-update-details>
+        snapshot-assisted-details: option<snapshot-assisted-update-details>,
+        /// The entries of the durable calls that the target revision's initializer made, if any
+        bootstrap: option<oplog-region>,
     }
 
     record snapshot-assisted-update-details {
@@ -645,6 +647,8 @@ interface oplog {
         data: snapshot-data,
         /// The filesystem snapshot taken with the application snapshot, if any
         filesystem-snapshot: option<string>,
+        /// The entries of the durable calls that the running revision's initializer made, if any
+        bootstrap: option<oplog-region>,
     }
 
     /// The store holds the named filesystem snapshot from this point
@@ -895,6 +899,8 @@ interface oplog {
         snapshot-revision: component-revision,
         /// The filesystem snapshot of the selected record, if it has one
         filesystem-snapshot: option<string>,
+        /// The bootstrap range of the selected record, if it has one
+        snapshot-bootstrap: option<oplog-region>,
     }
 
     record raw-snapshot-based-update {
@@ -915,7 +921,9 @@ interface oplog {
         target-revision: component-revision,
         new-component-size: u64,
         new-active-plugins: list<environment-plugin-grant-id>,
-        snapshot-assisted-details: option<snapshot-assisted-update-details>
+        snapshot-assisted-details: option<snapshot-assisted-update-details>,
+        /// The entries of the durable calls that the target revision's initializer made, if any
+        bootstrap: option<oplog-region>,
     }
 
     record resource-type-id {
@@ -958,6 +966,8 @@ interface oplog {
         active-cards: list<list<u8>>,
         wallet-generation: u64,
         filesystem-snapshot: option<string>,
+        /// The entries of the durable calls that the running revision's initializer made, if any
+        bootstrap: option<oplog-region>,
     }
 
     record raw-oplog-processor-checkpoint-parameters {

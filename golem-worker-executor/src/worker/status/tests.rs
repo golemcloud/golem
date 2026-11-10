@@ -393,6 +393,7 @@ fn successful_update_resets_total_linear_memory_size() {
                 Some(32),
                 HashSet::new(),
                 None,
+                None,
             ),
         ),
         (OplogIndex::from_u64(3), OplogEntry::grow_memory(8)),
@@ -2076,6 +2077,7 @@ fn revert_validation_preserves_jump_while_removing_crossed_snapshot_baseline() {
                 None,
                 Default::default(),
                 None,
+                None,
             ),
         ),
     ]);
@@ -2132,6 +2134,7 @@ fn revert_validation_removes_only_crossed_assisted_promotion() {
         None,
         Default::default(),
         Some(details),
+        None,
     );
     let dropped_update = OplogRegion::from_range(3..=4);
 
@@ -2491,6 +2494,7 @@ fn a_successful_update_without_a_pending_update_has_no_name_and_no_baseline() {
             100,
             None,
             HashSet::new(),
+            None,
             None,
         ),
     )]);
@@ -2895,6 +2899,7 @@ async fn a_new_snapshot_keeps_a_confirmed_candidate_as_the_previous_usable_snaps
             index: OplogIndex::from_u64(2),
             component_revision: ComponentRevision::new(1).unwrap(),
             filesystem_snapshot: Some(first),
+            bootstrap: None,
         })
     );
     run_test_case(test_case).await;
@@ -2914,6 +2919,7 @@ async fn a_new_snapshot_keeps_a_candidate_without_a_name_as_the_previous_usable_
             index: OplogIndex::from_u64(2),
             component_revision: ComponentRevision::new(1).unwrap(),
             filesystem_snapshot: None,
+            bootstrap: None,
         })
     );
     run_test_case(test_case).await;
@@ -3004,6 +3010,7 @@ async fn a_record_that_reuses_the_name_of_the_candidate_keeps_that_candidate_as_
             index: OplogIndex::from_u64(2),
             component_revision: ComponentRevision::new(1).unwrap(),
             filesystem_snapshot: Some(name),
+            bootstrap: None,
         })
     );
     run_test_case(test_case).await;
@@ -3176,6 +3183,7 @@ fn assisted_update(
         snapshot_index: OplogIndex::from_u64(snapshot_index),
         snapshot_revision: ComponentRevision::new(source_component_revision).unwrap(),
         filesystem_snapshot: None,
+        snapshot_bootstrap: None,
     }
 }
 
@@ -3206,6 +3214,7 @@ async fn automatic_strategy_refines_admission_in_place_and_freezes_selection() {
                 index: OplogIndex::from_u64(3),
                 component_revision: ComponentRevision::new(1).unwrap(),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         )
     );
@@ -3277,6 +3286,7 @@ async fn snapshot_assisted_selection_survives_outcome_revert_and_checkpoint_fold
         index: OplogIndex::from_u64(2),
         component_revision: ComponentRevision::new(1).unwrap(),
         filesystem_snapshot: None,
+        bootstrap: None,
     });
     assert_eq!(
         Some(snapshot_assisted_pending_details(&expected.pending_updates[0]).2),
@@ -3372,6 +3382,7 @@ async fn snapshot_assisted_selection_survives_successful_outcome_revert() {
             index: OplogIndex::from_u64(2),
             component_revision: source_revision,
             filesystem_snapshot: None,
+            bootstrap: None,
         }
     );
     run_test_case(test_case).await;
@@ -3444,6 +3455,7 @@ async fn snapshot_assisted_selection_freezes_source_revision_start_index() {
             index: OplogIndex::from_u64(4),
             component_revision: ComponentRevision::new(2).unwrap(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }
     );
     run_test_case(test_case).await;
@@ -3484,6 +3496,7 @@ async fn successful_snapshot_assisted_update_promotes_only_selected_snapshot_pre
             kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                 filesystem_snapshot: None,
             },
+            bootstrap: None,
         })
     );
     assert!(status.skipped_regions.is_in_deleted_region(snapshot_index));
@@ -4311,6 +4324,7 @@ impl TestCaseBuilder {
                 active_cards: Vec::new(),
                 wallet_generation: 0,
                 filesystem_snapshot: filesystem_snapshot.clone(),
+                bootstrap: None,
             },
             move |mut status| {
                 if let Some(last) = &status.last_automatic_snapshot
@@ -4320,6 +4334,7 @@ impl TestCaseBuilder {
                         index: last.index,
                         component_revision: last.component_revision,
                         filesystem_snapshot: last.files.name().cloned(),
+                        bootstrap: None,
                     });
                 }
                 status.last_automatic_snapshot = Some(AutomaticSnapshot {
@@ -4327,6 +4342,7 @@ impl TestCaseBuilder {
                     timestamp,
                     component_revision: status.component_revision,
                     files: SnapshotFiles::named(filesystem_snapshot.clone()),
+                    bootstrap: None,
                 });
                 status
             },
@@ -4573,6 +4589,7 @@ impl TestCaseBuilder {
             None,
             new_active_plugins.clone(),
             None,
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -4637,6 +4654,7 @@ impl TestCaseBuilder {
                 status.authoritative_snapshot = applied_update.map(|au| AuthoritativeSnapshot {
                     index: au.oplog_index,
                     kind: AuthoritativeSnapshotKind::ManualUpdate,
+                    bootstrap: None,
                 });
             };
 
@@ -4673,6 +4691,7 @@ impl TestCaseBuilder {
             None,
             HashSet::new(),
             Some(details.clone()),
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -4694,6 +4713,7 @@ impl TestCaseBuilder {
                 kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                     filesystem_snapshot: None,
                 },
+                bootstrap: None,
             });
             status.skipped_regions.add(OplogRegion::from_index_range(
                 OplogIndex::INITIAL.next()..=snapshot_index,
@@ -5651,6 +5671,7 @@ fn successful_update_drops_old_grant_retains_new() {
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::from([new_grant]),
                 snapshot_assisted_details: None,
+                bootstrap: None,
             },
         ),
         (
@@ -7180,6 +7201,7 @@ fn update_fields_snapshot(filesystem_snapshot: Option<FilesystemSnapshotName>) -
         active_cards: Vec::new(),
         wallet_generation: 0,
         filesystem_snapshot,
+        bootstrap: None,
     }
 }
 
@@ -7254,6 +7276,7 @@ fn update_fields_after_snapshot_entries_keep_one_candidate_and_its_usable_predec
             timestamp: Timestamp::from(1_000),
             component_revision: ComponentRevision::new(3).unwrap(),
             files: SnapshotFiles::Unconfirmed(second),
+            bootstrap: None,
         })
     );
     assert_eq!(
@@ -7262,6 +7285,7 @@ fn update_fields_after_snapshot_entries_keep_one_candidate_and_its_usable_predec
             index: OplogIndex::from_u64(2),
             component_revision: ComponentRevision::new(3).unwrap(),
             filesystem_snapshot: Some(first),
+            bootstrap: None,
         })
     );
 }
@@ -7294,6 +7318,7 @@ fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_sn
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::new(),
                 snapshot_assisted_details: None,
+                bootstrap: None,
             },
         ),
     ]);
@@ -7317,6 +7342,112 @@ fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_sn
         Some(OplogIndex::from_u64(4))
     );
     assert_eq!(fields.successful_updates.len(), 1);
+}
+
+#[test]
+fn update_fields_carry_the_bootstrap_ranges_of_snapshots_and_snapshot_based_updates() {
+    let snapshot_bootstrap = OplogRegion {
+        start: OplogIndex::from_u64(3),
+        end: OplogIndex::from_u64(7),
+    };
+    let update_bootstrap = OplogRegion {
+        start: OplogIndex::from_u64(11),
+        end: OplogIndex::from_u64(12),
+    };
+    let snapshot_with_bootstrap = OplogEntry::Snapshot {
+        timestamp: Timestamp::from(1_000),
+        data: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        active_cards: Vec::new(),
+        wallet_generation: 0,
+        filesystem_snapshot: None,
+        bootstrap: Some(snapshot_bootstrap.clone()),
+    };
+
+    let fields = empty_update_fields()
+        .after(
+            OplogIndex::from_u64(8),
+            &snapshot_with_bootstrap,
+            &super::update_queue::UpdateStep::Unchanged,
+        )
+        .unwrap();
+    assert_eq!(
+        fields
+            .last_automatic_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.bootstrap.clone()),
+        Some(Some(snapshot_bootstrap.clone()))
+    );
+
+    let fields = fields
+        .after(
+            OplogIndex::from_u64(9),
+            &update_fields_snapshot(None),
+            &super::update_queue::UpdateStep::Unchanged,
+        )
+        .unwrap();
+    assert_eq!(
+        fields
+            .last_automatic_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.bootstrap.clone()),
+        Some(None)
+    );
+    assert_eq!(
+        fields.previous_usable_automatic_snapshot,
+        Some(UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(8),
+            component_revision: ComponentRevision::new(3).unwrap(),
+            filesystem_snapshot: None,
+            bootstrap: Some(snapshot_bootstrap),
+        })
+    );
+
+    let target = ComponentRevision::new(4).unwrap();
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::from_u64(10),
+            OplogEntry::PendingUpdate {
+                timestamp: Timestamp::from(2_000),
+                description: UpdateDescription::SnapshotBased {
+                    target_revision: target,
+                    payload: OplogPayload::Inline(Box::new(vec![])),
+                    mime_type: "application/octet-stream".to_string(),
+                    filesystem_snapshot: None,
+                },
+                update_attempt_index: None,
+            },
+        ),
+        (
+            OplogIndex::from_u64(13),
+            OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::from(3_000),
+                target_revision: target,
+                new_component_size: 20,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
+                bootstrap: Some(update_bootstrap.clone()),
+            },
+        ),
+    ]);
+    let regions = fold_regions(&AgentStatusRecord::default(), &entries);
+    let fields = super::calculate_update_fields(
+        empty_update_fields(),
+        &regions.deleted,
+        &regions.steps,
+        &entries,
+    )
+    .unwrap();
+
+    assert_eq!(
+        fields.authoritative_snapshot,
+        Some(AuthoritativeSnapshot {
+            index: OplogIndex::from_u64(10),
+            kind: AuthoritativeSnapshotKind::ManualUpdate,
+            bootstrap: Some(update_bootstrap),
+        })
+    );
 }
 
 #[test]
@@ -7431,6 +7562,7 @@ mod region_fold {
                 snapshot_index: idx(snapshot),
                 snapshot_revision: revision(source),
                 filesystem_snapshot,
+                snapshot_bootstrap: None,
             },
             Some(idx(admission)),
         )
@@ -7466,7 +7598,7 @@ mod region_fold {
     }
 
     pub(super) fn succeeded(target: u64) -> OplogEntry {
-        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None)
+        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None, None)
     }
 
     pub(super) fn revert(start: u64, end: u64) -> OplogEntry {
@@ -7612,6 +7744,7 @@ mod region_fold {
                 kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                     filesystem_snapshot: Some(name.clone()),
                 },
+                bootstrap: None,
             })
         );
         assert_eq!(status.component_revision, revision(2));
@@ -7635,6 +7768,61 @@ mod region_fold {
             (vec![region(2, 2)], None)
         );
         assert_eq!(names_in_use(&status), Box::from([name]));
+    }
+
+    #[test]
+    fn an_assisted_update_keeps_the_selected_record_range_and_promotes_the_update_range() {
+        let selected_range = region(21, 23);
+        let update_range = region(31, 37);
+        let snapshot = OplogEntry::Snapshot {
+            timestamp: Timestamp::from(1_000),
+            data: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+            active_cards: Vec::new(),
+            wallet_generation: 0,
+            filesystem_snapshot: None,
+            bootstrap: Some(selected_range.clone()),
+        };
+        let strategy = OplogEntry::pending_update(
+            UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision: revision(2),
+                source_component_revision: revision(1),
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: idx(2),
+                snapshot_revision: revision(1),
+                filesystem_snapshot: None,
+                snapshot_bootstrap: Some(selected_range.clone()),
+            },
+            Some(idx(3)),
+        );
+        let pending = [(2, snapshot), (3, automatic_admission(2)), (4, strategy)];
+
+        let status = fold_status(entries(pending.clone()));
+        assert!(matches!(
+            status.pending_updates.front(),
+            Some(PendingUpdateRef {
+                kind: PendingUpdateKind::SnapshotAssistedAutomatic(selection),
+                ..
+            }) if selection.snapshot.bootstrap == Some(selected_range.clone())
+        ));
+
+        let status = fold_status(entries(pending.into_iter().chain([(
+            5,
+            OplogEntry::successful_update(
+                revision(2),
+                10,
+                None,
+                HashSet::new(),
+                None,
+                Some(update_range.clone()),
+            ),
+        )])));
+        assert_eq!(
+            status
+                .authoritative_snapshot
+                .map(|snapshot| (snapshot.index, snapshot.bootstrap)),
+            Some((idx(2), Some(update_range)))
+        );
     }
 
     #[test]
@@ -7720,7 +7908,14 @@ mod region_fold {
             (4, plain_strategy(2, 3)),
             (
                 5,
-                OplogEntry::successful_update(revision(2), 10, None, HashSet::new(), Some(details)),
+                OplogEntry::successful_update(
+                    revision(2),
+                    10,
+                    None,
+                    HashSet::new(),
+                    Some(details),
+                    None,
+                ),
             ),
         ]));
 
@@ -7841,6 +8036,7 @@ mod region_fold {
                     index: idx(2),
                     component_revision: revision(1),
                     filesystem_snapshot: None,
+                    bootstrap: None,
                 },
             }
         ));

@@ -43,6 +43,7 @@ fn strategy(target: u64, admission: u64, snapshot: u64) -> OplogEntry {
             snapshot_index: idx(snapshot),
             snapshot_revision: revision(1),
             filesystem_snapshot: Some(FilesystemSnapshotName::periodic()),
+            snapshot_bootstrap: None,
         },
         Some(idx(admission)),
     )
@@ -78,7 +79,7 @@ fn failed(target: u64, attempt: Option<u64>) -> OplogEntry {
 }
 
 fn succeeded(target: u64) -> OplogEntry {
-    OplogEntry::successful_update(revision(target), 10, None, Default::default(), None)
+    OplogEntry::successful_update(revision(target), 10, None, Default::default(), None, None)
 }
 
 /// The queue and the steps after `entries`, from `queue`, with no entry deleted.
@@ -314,6 +315,7 @@ fn of_seeds_the_queue_and_the_manual_admissions_from_a_checkpoint_status() {
                 index: idx(4),
                 component_revision: revision(1),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         })),
     };
@@ -366,6 +368,7 @@ fn only_an_unrefined_automatic_admission_is_an_unselected_automatic_update() {
                 index: idx(7),
                 component_revision: revision(2),
                 filesystem_snapshot,
+                bootstrap: None,
             },
         }))
     };

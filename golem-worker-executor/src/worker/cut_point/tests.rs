@@ -117,6 +117,7 @@ fn snapshot_assisted_update(revision: u64) -> UpdateDescription {
         snapshot_index: idx(2),
         snapshot_revision: ComponentRevision::new(revision - 1).unwrap(),
         filesystem_snapshot: None,
+        snapshot_bootstrap: None,
     }
 }
 
@@ -132,6 +133,7 @@ fn successful_snapshot_update_boundary_is_validated() {
                 100,
                 None,
                 Default::default(),
+                None,
                 None,
             ),
         ),
@@ -196,6 +198,7 @@ fn assisted_update_outcome_can_be_removed_while_request_is_retained() {
             None,
             Default::default(),
             None,
+            None,
         ),
         OplogEntry::failed_update(
             ComponentRevision::new(2).unwrap(),
@@ -250,6 +253,7 @@ fn automatic_and_deleted_snapshot_updates_do_not_grant_an_exception() {
                 None,
                 Default::default(),
                 None,
+                None,
             ),
         ),
         (idx(5), OplogEntry::pending_update(automatic.clone(), None)),
@@ -260,6 +264,7 @@ fn automatic_and_deleted_snapshot_updates_do_not_grant_an_exception() {
                 100,
                 None,
                 Default::default(),
+                None,
                 None,
             ),
         ),
@@ -329,6 +334,7 @@ fn a_manual_admission_does_not_change_the_boundaries_of_a_snapshot_based_update(
                 100,
                 None,
                 Default::default(),
+                None,
                 None,
             ),
         ),

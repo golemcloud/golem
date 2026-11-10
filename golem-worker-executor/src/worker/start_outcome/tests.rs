@@ -51,6 +51,7 @@ fn assisted_kind(filesystem_snapshot: Option<FilesystemSnapshotName>) -> Pending
             index: OplogIndex::from_u64(7),
             component_revision: revision(2),
             filesystem_snapshot,
+            bootstrap: None,
         },
     }))
 }
