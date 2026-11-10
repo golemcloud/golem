@@ -7669,13 +7669,9 @@ async fn manifest_plugins_install_on_deploy_and_uninstall_when_removed(_tracing:
             .unwrap_or_default()
     };
 
-    write_manifest(&formatdoc! {r#"
-
-                      - name: golem-otlp-exporter
-                        version: "{version}"
-                        parameters:
-                          endpoint: http://127.0.0.1:4318
-    "#});
+    write_manifest(&format!(
+        r#"[{{ name: golem-otlp-exporter, version: "{version}", parameters: {{ endpoint: "http://127.0.0.1:4318" }} }}]"#
+    ));
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
     let plugins = installed_plugins().await;
