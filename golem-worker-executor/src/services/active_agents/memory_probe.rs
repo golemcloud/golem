@@ -324,25 +324,34 @@ impl MemoryProbe for CgroupV2Probe {
 /// usage:
 ///
 /// - anonymous memory, and shared memory, which is on the anonymous LRU lists and which the
-///   kernel cannot reclaim without swap. Memory that Wasmtime maps from a memfd is shared memory;
-/// - mapped file pages, such as code that Wasmtime maps from a compiled module file;
+///   kernel cannot reclaim without swap;
+/// - mapped file pages, such as the executor binary and its libraries;
 /// - dirty and writeback file pages, which need I/O before the kernel can drop them;
 /// - kernel memory, including the reclaimable slab: the dentries and inodes of open files stay
 ///   pinned, so the kernel cannot always free it.
 ///
-/// When one of the five counters is missing or does not parse, this returns 0, and the probe
+/// `file_mapped` counts mapped shared memory too. Wasmtime keeps the linear-memory image of a
+/// component that it deserializes from bytes in a memfd, so with many components most of
+/// `file_mapped` can be these images, which are not file pages. The mapped file pages are
+/// therefore `file_mapped` less `shmem`. Shared memory that no process maps makes this estimate
+/// low, so some mapped file pages can count as reclaimable. These pages are clean, and the
+/// kernel can unmap and drop them before an OOM kill too, so the result never exceeds the clean
+/// file pages.
+///
+/// When one of the six counters is missing or does not parse, this returns 0, and the probe
 /// reports `memory.current` as it is. A partial read would subtract too much: without
 /// `file_dirty`, for example, dirty pages would count as clean.
 #[cfg(any(target_os = "linux", test))]
 fn reclaimable_bytes(memory_stat: &str) -> u64 {
-    const COUNTERS: [&str; 5] = [
+    const COUNTERS: [&str; 6] = [
         "inactive_file",
         "active_file",
         "file_mapped",
+        "shmem",
         "file_dirty",
         "file_writeback",
     ];
-    let mut values: [Option<u64>; 5] = [None; 5];
+    let mut values: [Option<u64>; 6] = [None; 6];
     for line in memory_stat.lines() {
         let mut fields = line.split_ascii_whitespace();
         let Some(index) = fields
@@ -360,13 +369,15 @@ fn reclaimable_bytes(memory_stat: &str) -> u64 {
         Some(inactive_file),
         Some(active_file),
         Some(file_mapped),
+        Some(shmem),
         Some(file_dirty),
         Some(file_writeback),
     ] = values
     else {
         return 0;
     };
-    let pinned_file_pages = file_mapped
+    let mapped_file_pages = file_mapped.saturating_sub(shmem);
+    let pinned_file_pages = mapped_file_pages
         .saturating_add(file_dirty)
         .saturating_add(file_writeback);
     inactive_file
@@ -638,9 +649,10 @@ mod tests {
         ("pgfault", 123_456),
     ];
 
-    /// The file pages of `MEMORY_STAT_AFTER_FILE_WRITES` less the mapped, dirty and writeback
-    /// pages.
-    const RECLAIMABLE_AFTER_FILE_WRITES: u64 = (9 * GIB + GIB) - (128 * MIB + 64 * MIB + 32 * MIB);
+    /// The file pages of `MEMORY_STAT_AFTER_FILE_WRITES` less the mapped file pages (the mapped
+    /// pages less the shared memory), the dirty and the writeback pages.
+    const RECLAIMABLE_AFTER_FILE_WRITES: u64 =
+        (9 * GIB + GIB) - ((128 * MIB - 16 * MIB) + 64 * MIB + 32 * MIB);
 
     fn memory_stat_after_file_writes() -> String {
         memory_stat_with(|_, value| Some(value.to_string()))
@@ -670,12 +682,29 @@ mod tests {
         assert_eq!(reclaimable_bytes(&stat), RECLAIMABLE_AFTER_FILE_WRITES);
     }
 
+    /// Wasmtime keeps the linear-memory image of a component that it deserializes from bytes in
+    /// a memfd. Its mapped pages count in `file_mapped` and in `shmem`, but they are on the
+    /// anonymous LRU lists, not in the file pages.
+    #[test]
+    fn reclaimable_bytes_do_not_take_mapped_shared_memory_off_the_file_pages() {
+        let image = 256 * MIB;
+        let mapped_binary = 32 * MIB;
+        let written_file = 256 * MIB;
+        let stat = format!(
+            "inactive_file {written_file}\nactive_file 0\nfile_mapped {}\nshmem {image}\n\
+             file_dirty 0\nfile_writeback 0\n",
+            image + mapped_binary
+        );
+        assert_eq!(reclaimable_bytes(&stat), written_file - mapped_binary);
+    }
+
     #[test]
     fn reclaimable_bytes_are_zero_when_a_page_cache_counter_is_missing_or_does_not_parse() {
         for counter in [
             "inactive_file",
             "active_file",
             "file_mapped",
+            "shmem",
             "file_dirty",
             "file_writeback",
         ] {
@@ -697,8 +726,8 @@ mod tests {
 
     #[test]
     fn reclaimable_bytes_never_count_more_file_pages_than_the_lru_lists_hold() {
-        let stat = "inactive_file 100\nactive_file 50\nfile_mapped 120\nfile_dirty 20\n\
-                    file_writeback 20\n";
+        let stat = "inactive_file 100\nactive_file 50\nfile_mapped 120\nshmem 0\n\
+                    file_dirty 20\nfile_writeback 20\n";
         assert_eq!(reclaimable_bytes(stat), 0);
     }
 
