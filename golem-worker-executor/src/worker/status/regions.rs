@@ -42,11 +42,13 @@ pub(crate) struct RegionFold {
 /// updates of `baseline` are not read.
 ///
 /// `Jump` and `Revert` entries add skipped regions. A successful snapshot-based update commits
-/// the history up to and including its `PendingUpdate` entry, and a successful snapshot-assisted
-/// automatic update commits the history up to and including its selected record, both read from
-/// the paired queue element. The override is the history up to and including the `PendingUpdate`
-/// entry of a snapshot-based queue head. Entries in a deleted region change only the manual
-/// admissions of the queue.
+/// the history up to and including its `PendingUpdate` entry and the bootstrap range that its
+/// `SuccessfulUpdate` entry names, and a successful snapshot-assisted automatic update commits
+/// the history up to and including its selected record, both read from the paired queue element.
+/// A failed snapshot-based update commits the history of its attempt, between its `PendingUpdate`
+/// and its `FailedUpdate` entries. The override is the history up to and including the
+/// `PendingUpdate` entry of a snapshot-based queue head. Entries in a deleted region change only
+/// the manual admissions of the queue.
 pub(crate) fn fold_regions_from(
     baseline: &AgentStatusRecord,
     pending_updates: VecDeque<PendingUpdateRef>,
@@ -61,9 +63,9 @@ pub(crate) fn skipped_regions(entries: &BTreeMap<OplogIndex, OplogEntry>) -> Del
 }
 
 /// The skipped regions that a revert which drops `dropped` must respect. The regions of
-/// snapshot-based and snapshot-assisted updates whose outcome is inside `dropped`, and the
-/// override of a snapshot-based queue head inside `dropped`, are left out; jumps and earlier
-/// reverts stay.
+/// snapshot-based and snapshot-assisted updates whose outcome (successful or failed) is inside
+/// `dropped`, and the override of a snapshot-based queue head inside `dropped`, are left out;
+/// jumps and earlier reverts stay.
 pub(crate) fn revert_validation_regions(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     dropped: &OplogRegion,
@@ -137,13 +139,22 @@ fn fold(
     }
     let is_ignored = |index: OplogIndex| ignored.is_some_and(|region| region.contains(index));
 
-    let (queue, skipped, steps) = entries.iter().fold(
+    // The index of the latest outcome of a queue element. The attempts of the element at the
+    // queue head begin only after the outcome of the element before it.
+    let last_outcome = baseline
+        .successful_updates
+        .iter()
+        .filter(|update| update.pending_update.is_some())
+        .map(|update| update.oplog_index)
+        .max();
+    let (queue, skipped, steps, _) = entries.iter().fold(
         (
             UpdateQueue::of(pending_updates, &baseline.pending_invocations),
             DeletedRegionsBuilder::from_regions(committed.into_regions()),
             BTreeMap::new(),
+            last_outcome,
         ),
-        |(queue, mut skipped, mut steps), (index, entry)| {
+        |(queue, mut skipped, mut steps, mut last_outcome), (index, entry)| {
             let is_deleted = deleted.is_in_deleted_region(*index);
             let (queue, step) = match entry {
                 OplogEntry::PendingAgentInvocation { .. } if scope == FoldScope::Regions => {
@@ -159,17 +170,32 @@ fn fold(
                     }
                     _ => {}
                 }
-                if matches!(entry, OplogEntry::SuccessfulUpdate { .. })
-                    && !is_ignored(*index)
-                    && let Some(region) = step.ended().and_then(committed_update_region)
+                if !is_ignored(*index)
+                    && let Some(ended) = step.ended()
                 {
-                    skipped.add(region);
+                    let regions = match entry {
+                        OplogEntry::SuccessfulUpdate { bootstrap, .. } => {
+                            committed_update_regions(ended, bootstrap.as_ref())
+                        }
+                        OplogEntry::FailedUpdate { .. } => {
+                            failed_attempt_region(ended, last_outcome, *index)
+                                .into_iter()
+                                .collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    for region in regions {
+                        skipped.add(region);
+                    }
                 }
+            }
+            if !is_deleted && step.ended().is_some() {
+                last_outcome = Some(*index);
             }
             if scope == FoldScope::Status && step != UpdateStep::Unchanged {
                 steps.insert(*index, step);
             }
-            (queue, skipped, steps)
+            (queue, skipped, steps, last_outcome)
         },
     );
 
@@ -198,15 +224,44 @@ fn fold(
 }
 
 /// The history that a successful update of `applied` makes skipped: the history up to and
-/// including the `PendingUpdate` entry of a snapshot-based update, or the history up to and
-/// including the record that a snapshot-assisted automatic update selected.
-fn committed_update_region(applied: &PendingUpdateRef) -> Option<OplogRegion> {
+/// including the `PendingUpdate` entry of a snapshot-based update and the `bootstrap` range of
+/// its target, or the history up to and including the record that a snapshot-assisted automatic
+/// update selected.
+fn committed_update_regions(
+    applied: &PendingUpdateRef,
+    bootstrap: Option<&OplogRegion>,
+) -> Vec<OplogRegion> {
     match &applied.kind {
-        PendingUpdateKind::Automatic => None,
+        PendingUpdateKind::Automatic => Vec::new(),
         PendingUpdateKind::SnapshotAssistedAutomatic(selection) => {
-            Some(prefix_through(selection.snapshot.index))
+            vec![prefix_through(selection.snapshot.index)]
         }
-        PendingUpdateKind::SnapshotBased { .. } => Some(prefix_through(applied.oplog_index)),
+        PendingUpdateKind::SnapshotBased { .. } => {
+            std::iter::once(prefix_through(applied.oplog_index))
+                .chain(bootstrap.cloned())
+                .collect()
+        }
+    }
+}
+
+/// The history that a failed update of `attempted`, whose `FailedUpdate` entry is at `failed`,
+/// makes skipped: the entries that the attempts of a snapshot-based update recorded before
+/// `failed`, which belong to the target revision. The attempts begin after its `PendingUpdate`
+/// entry and after `last_outcome`, the outcome of the queue element before it, whose history
+/// stays.
+fn failed_attempt_region(
+    attempted: &PendingUpdateRef,
+    last_outcome: Option<OplogIndex>,
+    failed: OplogIndex,
+) -> Option<OplogRegion> {
+    let attempts_after = last_outcome.map_or(attempted.oplog_index, |outcome| {
+        outcome.max(attempted.oplog_index)
+    });
+    match &attempted.kind {
+        PendingUpdateKind::SnapshotBased { .. } if attempts_after.next() < failed => Some(
+            OplogRegion::from_index_range(attempts_after.next()..=failed.previous()),
+        ),
+        _ => None,
     }
 }
 

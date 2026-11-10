@@ -679,7 +679,6 @@ pub(crate) enum BootstrapTail {
     /// The call diverges: the block must hold every durable call of the initializer.
     Strict,
     /// The call continues live and appends after the block.
-    #[cfg_attr(not(test), expect(dead_code))]
     Live,
 }
 

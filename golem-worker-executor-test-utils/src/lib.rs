@@ -61,6 +61,7 @@ use golem_common::model::oplog::{
     types::SerializableEntityBodyExecution, types::SerializableP3HttpBodyChunk,
     types::SerializableToolOperationTerminal,
 };
+use golem_common::model::regions::OplogRegion;
 mod oplog_fixture;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::plan::PlanId;
@@ -3715,6 +3716,7 @@ impl UpdateManagement for TestWorkerCtx {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_succeeded(
@@ -3722,6 +3724,7 @@ impl UpdateManagement for TestWorkerCtx {
                 new_component_size,
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             )
             .await
     }

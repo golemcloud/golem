@@ -648,6 +648,127 @@ async fn a_fallback_to_the_previous_periodic_record_replays_the_bootstrap_range_
     );
 }
 
+/// A periodic or promoted manual record replays the core initializer strictly over the range it
+/// names; a pending snapshot-based update replays what its earlier attempts recorded after its
+/// `PendingUpdate` entry and continues live, and its main cursor skips that history; the
+/// snapshot-assisted roles keep the durability suppression.
+#[test]
+async fn a_start_replays_the_core_initializer_over_the_durable_calls_of_its_baseline() {
+    use golem_common::model::PendingUpdateKind;
+    let index = OplogIndex::from_u64;
+    let manual_head = Arc::new(head(
+        PendingUpdateKind::SnapshotBased {
+            filesystem_snapshot: None,
+        },
+        7,
+    ));
+    let replay = |role, bootstrap| ReplayBaseline {
+        snapshot: None,
+        skip_through: None,
+        role,
+        bootstrap,
+    };
+    let range = |from, to| Some(OplogRegion::from_range(from..=to));
+    let strict = |skip_through, target| InitializerReplay::Bootstrap {
+        skip_through: index(skip_through),
+        target: index(target),
+        tail: BootstrapTail::Strict,
+    };
+    let horizon = index(11);
+    // (baseline, expected initializer replay, expected attempt region)
+    let cases = [
+        (
+            replay(
+                BaselineRole::Periodic(index(20)),
+                BootstrapSource::Recorded(range(3, 5)),
+            ),
+            strict(2, 5),
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::Periodic(index(20)),
+                BootstrapSource::Recorded(None),
+            ),
+            strict(1, 1),
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::ManualPromoted,
+                BootstrapSource::Recorded(range(8, 10)),
+            ),
+            strict(7, 10),
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::ManualPromoted,
+                BootstrapSource::Recorded(None),
+            ),
+            strict(1, 1),
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::ManualPending(manual_head.clone()),
+                BootstrapSource::Attempt { anchor: index(7) },
+            ),
+            InitializerReplay::Bootstrap {
+                skip_through: index(7),
+                target: horizon,
+                tail: BootstrapTail::Live,
+            },
+            range(8, 11),
+        ),
+        (
+            replay(
+                BaselineRole::ManualPending(manual_head.clone()),
+                BootstrapSource::Attempt { anchor: index(11) },
+            ),
+            InitializerReplay::Bootstrap {
+                skip_through: index(11),
+                target: horizon,
+                tail: BootstrapTail::Live,
+            },
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::AssistedPending(manual_head.clone()),
+                BootstrapSource::Attempt { anchor: index(7) },
+            ),
+            InitializerReplay::Suppressed,
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::AssistedPromoted,
+                BootstrapSource::Recorded(range(3, 5)),
+            ),
+            InitializerReplay::Suppressed,
+            None,
+        ),
+        (
+            ReplayBaseline::initial_files(),
+            InitializerReplay::Positional,
+            None,
+        ),
+    ];
+
+    for (baseline, initializer, attempt) in cases {
+        assert_eq!(
+            (
+                baseline.initializer_replay(horizon),
+                baseline.attempt_region(horizon)
+            ),
+            (initializer, attempt),
+            "{:?}",
+            baseline.role
+        );
+    }
+}
+
 #[test]
 async fn the_skipped_regions_of_a_start_skip_the_history_before_a_pending_record_only() {
     let index = OplogIndex::from_u64;

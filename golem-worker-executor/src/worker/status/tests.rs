@@ -2157,6 +2157,203 @@ fn revert_validation_removes_only_crossed_assisted_promotion() {
     assert!(regions_with_overlap.is_in_deleted_region(OplogIndex::from_u64(2)));
 }
 
+/// A snapshot-based update to revision 2 whose `PendingUpdate` entry is at 5, followed by its
+/// outcome at 9.
+fn snapshot_based_update_with_outcome(outcome: OplogEntry) -> BTreeMap<OplogIndex, OplogEntry> {
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: None,
+    };
+    BTreeMap::from([
+        (
+            OplogIndex::from_u64(5),
+            OplogEntry::pending_update(update, None),
+        ),
+        (OplogIndex::from_u64(9), outcome),
+    ])
+}
+
+fn successful_snapshot_based_update(bootstrap: Option<OplogRegion>) -> OplogEntry {
+    OplogEntry::successful_update(
+        ComponentRevision::new(2).unwrap(),
+        100,
+        None,
+        Default::default(),
+        None,
+        bootstrap,
+    )
+}
+
+fn failed_update_to_revision_two() -> OplogEntry {
+    OplogEntry::failed_update(
+        ComponentRevision::new(2).unwrap(),
+        Some("details".to_string()),
+        None,
+        None,
+        None,
+    )
+}
+
+fn skipped_indices(regions: &DeletedRegions) -> Vec<u64> {
+    (1..=10)
+        .filter(|index| regions.is_in_deleted_region(OplogIndex::from_u64(*index)))
+        .collect()
+}
+
+#[test]
+fn a_successful_snapshot_based_update_commits_the_bootstrap_range_of_its_target() {
+    let regions = super::skipped_regions(&snapshot_based_update_with_outcome(
+        successful_snapshot_based_update(Some(OplogRegion::from_range(7..=8))),
+    ));
+
+    assert_eq!(skipped_indices(&regions), vec![2, 3, 4, 5, 7, 8]);
+}
+
+#[test]
+fn a_successful_snapshot_based_update_without_a_bootstrap_range_commits_its_prefix() {
+    let regions = super::skipped_regions(&snapshot_based_update_with_outcome(
+        successful_snapshot_based_update(None),
+    ));
+
+    assert_eq!(skipped_indices(&regions), vec![2, 3, 4, 5]);
+}
+
+#[test]
+fn a_failed_snapshot_based_update_commits_the_history_of_its_attempt() {
+    let regions = super::skipped_regions(&snapshot_based_update_with_outcome(
+        failed_update_to_revision_two(),
+    ));
+
+    assert_eq!(skipped_indices(&regions), vec![6, 7, 8]);
+}
+
+/// An automatic update queued before the snapshot-based update succeeds at 7, after the
+/// snapshot-based `PendingUpdate` entry at 5. The attempts of the snapshot-based update begin only
+/// after 7, so its failure keeps the automatic update's `SuccessfulUpdate` entry and the history
+/// before it.
+#[test]
+fn a_failed_snapshot_based_update_keeps_the_outcome_of_the_update_before_it() {
+    let mut entries = snapshot_based_update_with_outcome(failed_update_to_revision_two());
+    entries.insert(
+        OplogIndex::from_u64(3),
+        OplogEntry::pending_update(
+            UpdateDescription::Automatic {
+                target_revision: ComponentRevision::new(3).unwrap(),
+            },
+            None,
+        ),
+    );
+    entries.insert(
+        OplogIndex::from_u64(7),
+        OplogEntry::successful_update(
+            ComponentRevision::new(3).unwrap(),
+            100,
+            None,
+            Default::default(),
+            None,
+            None,
+        ),
+    );
+
+    assert_eq!(skipped_indices(&super::skipped_regions(&entries)), vec![8]);
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(skipped_indices(&status.skipped_regions), vec![8]);
+    assert_eq!(
+        status.component_revision,
+        ComponentRevision::new(3).unwrap()
+    );
+}
+
+/// A failure at 7 of the manual update invocation at 3, which no `PendingUpdate` paired, ends
+/// no queue element, so the attempts of the snapshot-based update at 5 still begin after 5. The
+/// fold of the skipped regions alone, which does not read the manual invocations, agrees with
+/// the status.
+#[test]
+fn a_failure_that_ends_no_queue_element_does_not_move_the_start_of_the_attempts() {
+    let mut entries = snapshot_based_update_with_outcome(failed_update_to_revision_two());
+    entries.insert(OplogIndex::from_u64(3), region_fold::manual_invocation(9));
+    entries.insert(OplogIndex::from_u64(7), region_fold::failed(9, Some(3)));
+
+    assert_eq!(
+        skipped_indices(&super::skipped_regions(&entries)),
+        vec![6, 7, 8]
+    );
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(skipped_indices(&status.skipped_regions), vec![6, 7, 8]);
+}
+
+#[test]
+fn a_snapshot_based_update_that_fails_right_after_its_entry_commits_nothing() {
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: None,
+    };
+    let regions = super::skipped_regions(&BTreeMap::from([
+        (
+            OplogIndex::from_u64(5),
+            OplogEntry::pending_update(update, None),
+        ),
+        (OplogIndex::from_u64(6), failed_update_to_revision_two()),
+    ]));
+
+    assert!(regions.is_empty());
+}
+
+#[test]
+fn a_failed_automatic_update_commits_nothing() {
+    let update = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+    let regions = super::skipped_regions(&BTreeMap::from([
+        (
+            OplogIndex::from_u64(5),
+            OplogEntry::pending_update(update, None),
+        ),
+        (OplogIndex::from_u64(9), failed_update_to_revision_two()),
+    ]));
+
+    assert!(regions.is_empty());
+}
+
+#[test]
+fn revert_validation_leaves_out_the_regions_of_a_snapshot_based_update_whose_outcome_it_drops() {
+    let successful = snapshot_based_update_with_outcome(successful_snapshot_based_update(Some(
+        OplogRegion::from_range(7..=8),
+    )));
+    let failed = snapshot_based_update_with_outcome(failed_update_to_revision_two());
+
+    let dropping_success =
+        super::revert_validation_regions(&successful, &OplogRegion::from_range(9..=9));
+    let keeping_success =
+        super::revert_validation_regions(&successful, &OplogRegion::from_range(10..=10));
+    let dropping_failure =
+        super::revert_validation_regions(&failed, &OplogRegion::from_range(9..=9));
+    let keeping_failure =
+        super::revert_validation_regions(&failed, &OplogRegion::from_range(10..=10));
+
+    assert!(dropping_success.is_empty());
+    assert_eq!(skipped_indices(&keeping_success), vec![2, 3, 4, 5, 7, 8]);
+    assert!(dropping_failure.is_empty());
+    assert_eq!(skipped_indices(&keeping_failure), vec![6, 7, 8]);
+}
+
 #[test]
 fn prospective_revert_keeps_deletions_from_revert_records_it_drops() {
     let update_two = UpdateDescription::SnapshotBased {

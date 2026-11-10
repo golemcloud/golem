@@ -2,10 +2,18 @@ use golem_rust::{agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 
 /// State that the core initializer derives from host inputs. Language runtimes do this for real
-/// (Go seeds its scheduler's PRNG from `random_get` during `_initialize`); this hash stands in for
-/// that. It is a pure function of the random seed that the initializer reads while the component
-/// is instantiated, so every recovery of the same revision must reproduce it.
-static INITIALIZER_SEED_HASH: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+/// (Go seeds its scheduler's PRNG from `random_get` during `_initialize`); this state stands in
+/// for that. It is a pure function of the random seed and of the environment that the initializer
+/// reads while the component is instantiated, so every recovery of the same revision must
+/// reproduce it.
+static INITIALIZER_STATE: std::sync::OnceLock<InitializerState> = std::sync::OnceLock::new();
+
+struct InitializerState {
+    /// A hash of the random seed.
+    seed_hash: u64,
+    /// The number of environment variables, read through the durable `get-environment` call.
+    environment_size: u32,
+}
 
 #[unsafe(export_name = "_initialize")]
 pub extern "C" fn initialize_snapshot_clock() {
@@ -15,14 +23,26 @@ pub extern "C" fn initialize_snapshot_clock() {
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = std::hash::RandomState::new().build_hasher();
     hasher.write_u32(0x5eed);
-    let _ = INITIALIZER_SEED_HASH.set(hasher.finish());
+    let _ = INITIALIZER_STATE.set(InitializerState {
+        seed_hash: hasher.finish(),
+        environment_size: std::env::vars().count() as u32,
+    });
+}
+
+fn initializer_state() -> &'static InitializerState {
+    INITIALIZER_STATE
+        .get()
+        .expect("the component initializer did not run")
 }
 
 /// The state that the core initializer derived from its random seed.
 fn initializer_seed_hash() -> u64 {
-    *INITIALIZER_SEED_HASH
-        .get()
-        .expect("the component initializer did not run")
+    initializer_state().seed_hash
+}
+
+/// The number of environment variables that the core initializer read.
+fn initializer_environment_size() -> u32 {
+    initializer_state().environment_size
 }
 
 #[agent_definition(snapshotting = "enabled")]
@@ -35,6 +55,8 @@ trait SnapshotCounter {
     fn component_version(&self) -> u32;
     /// The state the core initializer derived from its random seed.
     fn initializer_seed_hash(&self) -> u64;
+    /// The number of environment variables that the core initializer read.
+    fn initializer_environment_size(&self) -> u32;
 }
 
 struct SnapshotCounterImpl {
@@ -63,6 +85,10 @@ impl SnapshotCounter for SnapshotCounterImpl {
 
     fn initializer_seed_hash(&self) -> u64 {
         initializer_seed_hash()
+    }
+
+    fn initializer_environment_size(&self) -> u32 {
+        initializer_environment_size()
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {

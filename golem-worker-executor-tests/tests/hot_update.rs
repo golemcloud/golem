@@ -26,10 +26,12 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    OplogErrorKind, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
+    DurableFunctionType, OplogEntry, OplogErrorKind, OplogIndex, PublicAgentInvocation,
+    PublicOplogEntry,
 };
-use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId, ScanCursor, Timestamp};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
@@ -1248,7 +1250,6 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
         Card, CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
         parse_permission_fields, parse_polymorphic_permission,
     };
-    use golem_common::model::oplog::OplogEntry;
     use golem_schema::model::CardId as SchemaCardId;
     use golem_worker_executor::services::card::CardService;
 
@@ -7595,6 +7596,703 @@ async fn auto_update_on_idle_after_manual_update(
     assert_eq!(count.into_typed::<u32>()?, 2);
     assert_eq!(metadata.component_revision, later.revision);
     assert_eq!(update_counts(&metadata), (0, 2, 0));
+
+    Ok(())
+}
+
+/// The `u64` answer of `method` of the `SnapshotCounter` agent `agent_id`.
+async fn snapshot_counter_u64(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &golem_common::model::agent::ParsedAgentId,
+    method: &str,
+) -> anyhow::Result<u64> {
+    executor
+        .invoke_and_await_agent(component, agent_id, method, data_value!())
+        .await?
+        .into_typed::<u64>()
+}
+
+/// The `u32` answer of `method` of the `SnapshotCounter` agent `agent_id`.
+async fn snapshot_counter_u32(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &golem_common::model::agent::ParsedAgentId,
+    method: &str,
+) -> anyhow::Result<u32> {
+    executor
+        .invoke_and_await_agent(component, agent_id, method, data_value!())
+        .await?
+        .into_typed::<u32>()
+}
+
+/// The function names of the durable calls whose `Start` entries are in `range` of `oplog`.
+fn starts_in(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    range: std::ops::RangeInclusive<OplogIndex>,
+) -> Vec<String> {
+    oplog
+        .iter()
+        .filter(|entry| range.contains(&entry.oplog_index))
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) => Some(params.function_name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The index of the first entry of `oplog` that `matches` accepts.
+fn first_index_of(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    matches: impl Fn(&PublicOplogEntry) -> bool,
+) -> OplogIndex {
+    oplog
+        .iter()
+        .find(|entry| matches(&entry.entry))
+        .expect("the oplog has the entry")
+        .oplog_index
+}
+
+/// The durable calls of the core initializer of agent-counters.
+const INITIALIZER_CALLS: [&str; 3] = [
+    "monotonic_clock::now",
+    "random::insecure_seed::insecure_seed",
+    "cli::environment::get-environment",
+];
+
+/// A snapshot-based update to a target whose core initializer makes durable calls, the
+/// environment read among them. The update appends the calls of the target's initializer after
+/// its `PendingUpdate` entry and names them in the bootstrap range of its `SuccessfulUpdate`
+/// entry; a restart replays them from that range and reproduces the state that the initializer
+/// derived from them.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_snapshot_based_update_runs_a_target_initializer_that_makes_durable_calls(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "initializer-calls");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+
+    let target = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+    let version =
+        snapshot_counter_u32(&executor, &component, &agent_id, "component_version").await?;
+    let count = snapshot_counter_u32(&executor, &component, &agent_id, "increment").await?;
+    let environment_size = snapshot_counter_u32(
+        &executor,
+        &component,
+        &agent_id,
+        "initializer_environment_size",
+    )
+    .await?;
+    let seed_hash =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let seed_hash_after_restart =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    let count_after_restart = snapshot_counter_u32(&executor, &component, &agent_id, "get").await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let pending_update = first_index_of(&oplog, |entry| {
+        matches!(entry, PublicOplogEntry::PendingUpdate(_))
+    });
+    let (successful_update, bootstrap) = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::SuccessfulUpdate(params) => {
+                Some((entry.oplog_index, params.bootstrap.clone()))
+            }
+            _ => None,
+        })
+        .expect("the update succeeded");
+    let bootstrap = bootstrap.expect("the target initializer made durable calls");
+    assert!(
+        pending_update < bootstrap.start && bootstrap.end < successful_update,
+        "the bootstrap range {bootstrap} lies between the update entries {pending_update} and {successful_update}"
+    );
+    assert_eq!(
+        starts_in(&oplog, bootstrap.start..=bootstrap.end),
+        INITIALIZER_CALLS
+    );
+    assert_eq!(version, 2);
+    assert_eq!(count, 2);
+    assert!(environment_size > 0);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    assert_eq!(seed_hash_after_restart, seed_hash);
+    assert_eq!(count_after_restart, 2);
+
+    Ok(())
+}
+
+/// A restart after a snapshot-based update and before the first invocation on the target
+/// recovers from the promoted baseline, and every later recovery reproduces the state that the
+/// target's core initializer derived.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_restart_right_after_a_snapshot_based_update_recovers_the_target_initializer_state(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "restart-after-update");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let target = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let version =
+        snapshot_counter_u32(&executor, &component, &agent_id, "component_version").await?;
+    let count = snapshot_counter_u32(&executor, &component, &agent_id, "get").await?;
+    let seed_hash =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let seed_hash_after_second_restart =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    assert_eq!(version, 2);
+    assert_eq!(count, 1);
+    assert_eq!(seed_hash_after_second_restart, seed_hash);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    Ok(())
+}
+
+/// A periodic snapshot that the generation of a snapshot-based update takes names the bootstrap
+/// range of the target's core initializer, so a recovery loads that snapshot rather than the
+/// baseline of the update, and reproduces the initializer state of the update.
+#[test]
+#[timeout("180s")]
+#[tracing::instrument]
+async fn a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "periodic-after-manual");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+
+    let target = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+    let seed_hash =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    for _ in 0..4 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+    }
+    let successful_update = first_index_of(
+        &executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?,
+        |entry| matches!(entry, PublicOplogEntry::SuccessfulUpdate(_)),
+    );
+    wait_for_snapshot_after(&executor, &worker_id, successful_update).await?;
+    drop(executor);
+
+    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
+    let last_snapshot = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .rfind(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        .expect("the generation of the update took a periodic snapshot")
+        .oplog_index;
+    let mut events = executor.capture_output(&worker_id).await?;
+    let count = snapshot_counter_u32(&executor, &component, &agent_id, "get").await?;
+    let recovery = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                    return Ok(snapshot_index);
+                }
+                Ok(AgentEvent::SnapshotRecoveryFailed {
+                    snapshot_index,
+                    error,
+                    ..
+                }) => return Err(format!("{snapshot_index}: {error}")),
+                _ => {}
+            }
+        }
+        Err("the event stream ended".to_string())
+    })
+    .await?;
+    let seed_hash_after_restart =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    assert!(last_snapshot > successful_update);
+    assert_eq!(recovery, Ok(last_snapshot));
+    assert_eq!(count, 5);
+    assert_eq!(seed_hash_after_restart, seed_hash);
+
+    Ok(())
+}
+
+/// A snapshot-based update whose snapshot cannot be loaded fails after the target's core
+/// initializer appended its durable calls. The source replays its history without those calls,
+/// before and after a restart, and keeps the state that its own initializer derived.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_failed_snapshot_based_update_keeps_the_source_and_its_initializer_state(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(Outage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(FlakyComponentService {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "failed-update");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let seed_hash =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+
+    let target = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    // The start of the update loads the target only after the update entry is committed. The
+    // entry then gives an empty snapshot, which the load of the update refuses after the
+    // target's core initializer ran.
+    let (fetch_entered, release_fetch) = outage.gate_component(target.revision);
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    fetch_entered.await?;
+    let pending_update = first_index_of(
+        &executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?,
+        |entry| matches!(entry, PublicOplogEntry::PendingUpdate(_)),
+    );
+    executor
+        .return_empty_snapshot_payload(&worker_id, pending_update)
+        .await?;
+    release_fetch.send(()).unwrap();
+    let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    let version =
+        snapshot_counter_u32(&executor, &component, &agent_id, "component_version").await?;
+    let seed_hash_after_failure =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let count_after_restart = snapshot_counter_u32(&executor, &component, &agent_id, "get").await?;
+    let seed_hash_after_restart =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    let version_after_restart =
+        snapshot_counter_u32(&executor, &component, &agent_id, "component_version").await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let failed_update = first_index_of(&oplog, |entry| {
+        matches!(entry, PublicOplogEntry::FailedUpdate(_))
+    });
+    let details = failed
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        details,
+        "Manual update failed to load snapshot: Snapshot is empty"
+    );
+    assert_eq!(
+        starts_in(&oplog, pending_update.next()..=failed_update.previous()),
+        INITIALIZER_CALLS,
+        "the attempt recorded the durable calls of the target initializer"
+    );
+    assert_eq!(version, 1);
+    assert_eq!(seed_hash_after_failure, seed_hash);
+    assert_eq!(count_after_restart, 1);
+    assert_eq!(seed_hash_after_restart, seed_hash);
+    assert_eq!(version_after_restart, 1);
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
+
+    Ok(())
+}
+
+/// An executor restart interrupts a snapshot-based update after the target's core initializer
+/// committed its durable calls and before the update succeeded. The next attempt replays those
+/// calls instead of recording new ones, and the bootstrap range of its `SuccessfulUpdate` entry
+/// names the calls of the interrupted attempt.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_calls_on_the_next_attempt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "interrupted-update");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+
+    let target = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    // Holds the first attempt at the End of the last durable call of the target initializer,
+    // after the gate committed the prefix and that End, and before the snapshot load.
+    let mut gate = executor.gate_next_call_end(&worker_id, true).await;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let environment_start = loop {
+        tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
+        let start = gate.start_index();
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        if oplog.iter().any(|entry| {
+            entry.oplog_index == start
+                && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                    if params.function_name == INITIALIZER_CALLS[2])
+        }) {
+            break start;
+        }
+        let next = executor.gate_next_call_end(&worker_id, true).await;
+        drop(gate);
+        gate = next;
+    };
+    let first_attempt = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    gate.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(gate);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+    let version =
+        snapshot_counter_u32(&executor, &component, &agent_id, "component_version").await?;
+    let count = snapshot_counter_u32(&executor, &component, &agent_id, "get").await?;
+    let seed_hash =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let seed_hash_after_restart =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let pending_update = first_index_of(&first_attempt, |entry| {
+        matches!(entry, PublicOplogEntry::PendingUpdate(_))
+    });
+    let first_attempt_tip = first_attempt
+        .last()
+        .expect("the oplog is not empty")
+        .oplog_index;
+    let environment_end = first_index_of(&first_attempt, |entry| match entry {
+        PublicOplogEntry::End(params) => params.start_index == environment_start,
+        _ => false,
+    });
+    let first_attempt_clock_start = first_attempt
+        .iter()
+        .find(|entry| {
+            entry.oplog_index > pending_update
+                && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                    if params.function_name == INITIALIZER_CALLS[0])
+        })
+        .expect("the first attempt called the clock")
+        .oplog_index;
+    assert_eq!(
+        starts_in(&first_attempt, pending_update.next()..=first_attempt_tip),
+        INITIALIZER_CALLS,
+        "the first attempt committed the durable calls of the target initializer"
+    );
+    assert!(
+        !first_attempt.iter().any(|entry| matches!(
+            entry.entry,
+            PublicOplogEntry::SuccessfulUpdate(_) | PublicOplogEntry::FailedUpdate(_)
+        )),
+        "the first attempt was interrupted before its outcome"
+    );
+    assert!(pending_update < first_attempt_clock_start);
+    assert_eq!(environment_end, first_attempt_tip);
+
+    let (successful_update, bootstrap) = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::SuccessfulUpdate(params) => {
+                Some((entry.oplog_index, params.bootstrap.clone()))
+            }
+            _ => None,
+        })
+        .expect("the update succeeded");
+    let bootstrap = bootstrap.expect("the target initializer made durable calls");
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::FailedUpdate(_))),
+        "no attempt of the update failed"
+    );
+    assert_eq!(
+        bootstrap.start, first_attempt_clock_start,
+        "the bootstrap range starts at the first durable call of the interrupted attempt"
+    );
+    assert!(
+        environment_end <= bootstrap.end && bootstrap.end < successful_update,
+        "the bootstrap range {bootstrap} covers every entry of the interrupted attempt up to {environment_end}"
+    );
+    assert_eq!(
+        starts_in(&oplog, pending_update.next()..=successful_update.previous()),
+        INITIALIZER_CALLS,
+        "the next attempt replayed the calls of the interrupted attempt instead of recording new ones"
+    );
+    assert_eq!(
+        starts_in(&oplog, bootstrap.start..=bootstrap.end),
+        INITIALIZER_CALLS
+    );
+    assert_eq!(version, 2);
+    assert_eq!(count, 1);
+    assert_eq!(metadata.component_revision, target.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    assert_eq!(seed_hash_after_restart, seed_hash);
+
+    Ok(())
+}
+
+/// The next attempt of an interrupted snapshot-based update finds a durable call after the first
+/// call of the target initializer that the initializer does not make. The replay of the bootstrap
+/// block diverges, which fails the manual update; the source replays its history without the
+/// attempt and keeps the state that its own initializer derived.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_divergent_bootstrap_block_fails_the_snapshot_based_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "divergent-update");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let seed_hash =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+
+    let target = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    // Holds the first attempt at the End of the first durable call of the target initializer.
+    let mut gate = executor.gate_next_call_end(&worker_id, true).await;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let pending_update = loop {
+        tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
+        let start = gate.start_index();
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let pending_update = oplog
+            .iter()
+            .find(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+            .map(|entry| entry.oplog_index);
+        if let Some(pending_update) = pending_update
+            && start > pending_update
+            && oplog.iter().any(|entry| {
+                entry.oplog_index == start
+                    && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                        if params.function_name == INITIALIZER_CALLS[0])
+            })
+        {
+            break pending_update;
+        }
+        let next = executor.gate_next_call_end(&worker_id, true).await;
+        drop(gate);
+        gate = next;
+    };
+    let foreign = executor
+        .add_and_commit_oplog_entry(
+            &worker_id,
+            OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::WallClockNow,
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: DurableFunctionType::ReadLocal,
+                span_started: None,
+                denial: None,
+            },
+        )
+        .await?;
+    gate.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(gate);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    let version =
+        snapshot_counter_u32(&executor, &component, &agent_id, "component_version").await?;
+    let seed_hash_after_failure =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let count_after_restart = snapshot_counter_u32(&executor, &component, &agent_id, "get").await?;
+    let seed_hash_after_restart =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let failed_update = first_index_of(&oplog, |entry| {
+        matches!(entry, PublicOplogEntry::FailedUpdate(_))
+    });
+    let details = failed
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(
+        details.starts_with("Manual update failed: "),
+        "the divergence failed the manual update: {details}"
+    );
+    assert!(pending_update < foreign && foreign < failed_update);
+    assert_eq!(version, 1);
+    assert_eq!(seed_hash_after_failure, seed_hash);
+    assert_eq!(count_after_restart, 1);
+    assert_eq!(seed_hash_after_restart, seed_hash);
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
 
     Ok(())
 }

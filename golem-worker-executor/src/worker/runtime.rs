@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::replay_state::{BootstrapTail, ReplayState};
+use crate::durable_host::replay_state::ReplayState;
+use crate::worker::filesystem_snapshots::InitializerReplay;
 use crate::worker::*;
 
 impl<Runtime, Adapter: SandboxFilesystemAdapter> PreparedAgent<Runtime, Adapter> {
@@ -887,23 +888,6 @@ impl RunningWorker {
                 .await);
             }
         };
-        // A periodic start replays the core initializer on a strict cursor over the bootstrap
-        // block that its record names, as `(skip_through, target)`; a start without a record
-        // replays it on the main cursor in its position. The other baselines recreate the
-        // initializer's runtime state with the durability suppression of snapshot loading.
-        let bootstrap_block = match (&replay.role, &replay.bootstrap) {
-            (
-                start_outcome::BaselineRole::Periodic(_),
-                filesystem_snapshots::BootstrapSource::Recorded(range),
-            ) => Some(match range {
-                Some(range) => (range.start.previous(), range.end),
-                None => (OplogIndex::INITIAL, OplogIndex::INITIAL),
-            }),
-            _ => None,
-        };
-        let observes_bootstrap = bootstrap_block.is_some()
-            || replay.bootstrap == filesystem_snapshots::BootstrapSource::Positional;
-        let suppresses_initializer = replay.snapshot.is_some() && !observes_bootstrap;
         let reconstruction_generation_handle =
             match reconstruction_generation_handle(&reconstructing) {
                 Ok(generation_handle) => generation_handle,
@@ -937,6 +921,10 @@ impl RunningWorker {
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await?;
             let horizon = parent.oplog.current_oplog_index().await;
+            let mut main_regions = skipped_regions.clone();
+            if let Some(attempt) = replay.attempt_region(horizon) {
+                main_regions.add(attempt);
+            }
             let snapshot_index = replay.snapshot.map(|(index, _)| index);
             let baseline = owner_wallet::WalletBaseline::new(
                 parent.owned_agent_id.clone(),
@@ -951,22 +939,27 @@ impl RunningWorker {
             parent
                 .owner_execution
                 .install_replay_generation_locked(
-                    skipped_regions.clone(),
+                    main_regions.clone(),
                     snapshot_index,
                     baseline,
                     horizon,
                     parent.tasks.clone(),
                     &wallet_installation_guard,
                 )
-                .await
+                .await?;
+            Ok::<_, WorkerExecutorError>((horizon, main_regions))
         }
         .await;
-        if let Err(error) = install_wallet {
-            drop(filesystem_context);
-            return Err(
-                cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
-            );
-        }
+        let (horizon, main_regions) = match install_wallet {
+            Ok(installed) => installed,
+            Err(error) => {
+                drop(filesystem_context);
+                return Err(
+                    cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
+                );
+            }
+        };
+        let initializer = replay.initializer_replay(horizon);
         drop(wallet_installation_guard);
         {
             let mut lifecycle = parent.instance.lock().await;
@@ -1004,7 +997,7 @@ impl RunningWorker {
             filesystem_context,
             linear_memory,
             AgentConfig::new(
-                skipped_regions,
+                main_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
                 worker_metadata.created_by,
@@ -1059,22 +1052,26 @@ impl RunningWorker {
                 );
             }
         };
-        if suppresses_initializer {
-            // Core initializers run before load-snapshot, but their recorded host calls are
-            // already inside the skipped snapshot history. Recreate that runtime state with
-            // the same durability suppression as snapshot loading, without consuming the tail.
+        // A start replays the core initializer on a bootstrap cursor over the durable calls that
+        // its baseline names, or on the main cursor in its position; either way the bootstrap
+        // phase observes the range of those calls. A snapshot-assisted update recreates the
+        // initializer's runtime state with the durability suppression of snapshot loading.
+        if initializer == InitializerReplay::Suppressed {
             context.begin_call_snapshotting_function();
-        }
-        if observes_bootstrap {
-            let cursor = match bootstrap_block {
-                Some((skip_through, target)) => match ReplayState::new_for_bootstrap(
+        } else {
+            let cursor = match initializer {
+                InitializerReplay::Bootstrap {
+                    skip_through,
+                    target,
+                    tail,
+                } => match ReplayState::new_for_bootstrap(
                     parent.owned_agent_id.clone(),
                     parent.oplog.clone(),
                     parent.owner_execution().tool_operations(),
                     &worker_metadata.last_known_status.deleted_regions,
                     skip_through,
                     target,
-                    BootstrapTail::Strict,
+                    tail,
                 )
                 .await
                 {
@@ -1089,7 +1086,7 @@ impl RunningWorker {
                         .await);
                     }
                 },
-                None => None,
+                InitializerReplay::Positional | InitializerReplay::Suppressed => None,
             };
             context
                 .durable_ctx_mut()
@@ -1121,7 +1118,7 @@ impl RunningWorker {
                 }
             }
             Err(error) => {
-                let diverged = observes_bootstrap
+                let diverged = initializer != InitializerReplay::Suppressed
                     && matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. });
                 Err((error, diverged))
             }
@@ -1148,7 +1145,7 @@ impl RunningWorker {
                 .await);
             }
         };
-        if suppresses_initializer {
+        if initializer == InitializerReplay::Suppressed {
             store.data_mut().end_call_snapshotting_function();
         }
         {

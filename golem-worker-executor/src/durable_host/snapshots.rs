@@ -66,6 +66,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .data()
                     .agent_type_provision_config()
                     .cloned();
+                let bootstrap = store.as_context().data().durable_ctx().bootstrap_range();
 
                 store
                     .as_context_mut()
@@ -80,6 +81,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .map(|installation| installation.environment_plugin_grant_id),
                         ),
                         start_outcome::success_details_of(&reference),
+                        bootstrap,
                     )
                     .await?;
                 Ok(None)
@@ -677,6 +679,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
             golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
         >,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         info!("Worker update to {} finished successfully", target_revision);
         let worker = self.public_state.worker();
@@ -687,6 +690,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 new_component_size,
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             )
             .await?;
         Ok(())

@@ -18,6 +18,7 @@
 //! The decisions are plain functions over values, so fast tests can check them.
 
 use super::Worker;
+use crate::durable_host::replay_state::BootstrapTail;
 use crate::filesystem_snapshot::AgentSnapshots;
 use crate::filesystem_snapshot::ChangeDetection as StoreChangeDetection;
 use crate::model::SnapshotSource;
@@ -840,7 +841,72 @@ pub(crate) enum BootstrapSource {
     Attempt { anchor: OplogIndex },
 }
 
+/// How the core initializer of a start replays its durable calls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InitializerReplay {
+    /// On the main cursor, in its position.
+    Positional,
+    /// On a bootstrap cursor that skips the history `1..=skip_through` and replays up to
+    /// `target`; `tail` decides what a durable call after `target` does.
+    Bootstrap {
+        skip_through: OplogIndex,
+        target: OplogIndex,
+        tail: BootstrapTail,
+    },
+    /// With the durability suppression of snapshot loading, which neither appends nor consumes
+    /// entries. The starts of snapshot-assisted updates recreate the runtime state of the
+    /// initializer this way.
+    Suppressed,
+}
+
 impl ReplayBaseline {
+    /// How the core initializer of the start replays its durable calls, with `horizon` the last
+    /// entry of the history when the start installs its cursor. A periodic or promoted manual
+    /// record replays the bootstrap range that it names on a strict cursor; a pending
+    /// snapshot-based update replays what its earlier attempts recorded after its anchor and then
+    /// continues live.
+    pub(crate) fn initializer_replay(&self, horizon: OplogIndex) -> InitializerReplay {
+        match (&self.role, &self.bootstrap) {
+            (
+                BaselineRole::Periodic(_) | BaselineRole::ManualPromoted,
+                BootstrapSource::Recorded(range),
+            ) => {
+                let (skip_through, target) = match range {
+                    Some(range) => (range.start.previous(), range.end),
+                    None => (OplogIndex::INITIAL, OplogIndex::INITIAL),
+                };
+                InitializerReplay::Bootstrap {
+                    skip_through,
+                    target,
+                    tail: BootstrapTail::Strict,
+                }
+            }
+            (BaselineRole::ManualPending(_), BootstrapSource::Attempt { anchor }) => {
+                InitializerReplay::Bootstrap {
+                    skip_through: *anchor,
+                    target: horizon,
+                    tail: BootstrapTail::Live,
+                }
+            }
+            (_, BootstrapSource::Positional) => InitializerReplay::Positional,
+            _ => InitializerReplay::Suppressed,
+        }
+    }
+
+    /// The history after the anchor of a pending snapshot-based update up to `horizon`: what
+    /// earlier attempts of the update recorded. It belongs to the target revision, so the main
+    /// cursor of the start skips it and the bootstrap cursor replays it.
+    pub(crate) fn attempt_region(&self, horizon: OplogIndex) -> Option<OplogRegion> {
+        match (&self.role, &self.bootstrap) {
+            (BaselineRole::ManualPending(_), BootstrapSource::Attempt { anchor })
+                if *anchor < horizon =>
+            {
+                Some(OplogRegion::from_index_range(anchor.next()..=horizon))
+            }
+            _ => None,
+        }
+    }
+
     /// The replay inputs of a start without a record: the initial files and the whole history.
     pub(crate) fn initial_files() -> Self {
         Self {
