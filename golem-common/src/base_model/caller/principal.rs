@@ -18,7 +18,6 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
 use crate::base_model::{AgentFingerprint, Timestamp};
-use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 use std::collections::HashSet;
@@ -208,7 +207,12 @@ impl ToolPrincipal {
 ///
 /// No object in a claim set may repeat a member name. JSON readers disagree on which of two
 /// equal names wins, so a repeated `sub` could name one user to Golem and another to the code
-/// that reads the claims. RFC 7493 (I-JSON) forbids repeated names.
+/// that reads the claims. RFC 7493 (I-JSON) forbids repeated names, and escaped lone surrogates
+/// in names and in values.
+///
+/// Serialize a `Caller` to text with `serde_json::to_string` or `to_writer`. A round trip through
+/// `serde_json::Value` encodes the claims again: it sorts the keys, rounds numbers, fails on
+/// numbers that no `f64` holds, and so loses the exact bytes.
 #[derive(Debug, Clone)]
 pub struct Claims(Box<RawValue>);
 
@@ -225,11 +229,8 @@ impl Claims {
         if !raw.get().starts_with('{') {
             return Err(ClaimsError::NotAnObject);
         }
-        match repeated_name(raw.get()) {
-            Ok(None) => Ok(Self(raw)),
-            Ok(Some(name)) => Err(ClaimsError::DuplicateName(name)),
-            Err(error) => Err(ClaimsError::InvalidJson(error.to_string())),
-        }
+        check_member_names(raw.get())?;
+        Ok(Self(raw))
     }
 
     /// The claim set as JSON text, as Golem received it, without the whitespace around it.
@@ -238,61 +239,66 @@ impl Claims {
     }
 }
 
-/// The first member name that one object in `json` repeats, at any depth. Names are compared
-/// after their escapes are decoded, so `"a/b"` and `"a\/b"` are one name. Values are kept as raw
-/// text, so no number is ever read as a number.
-fn repeated_name(json: &str) -> Result<Option<String>, serde_json::Error> {
-    if json.starts_with('{') || json.starts_with('[') {
-        serde_json::from_str::<RepeatedName>(json).map(|found| found.0)
-    } else {
-        Ok(None)
-    }
+/// One open container of the claim set while `check_member_names` scans it.
+enum Frame {
+    /// An object, with the names seen so far and whether the next string is a member name.
+    Object {
+        names: HashSet<String>,
+        name_next: bool,
+    },
+    Array,
 }
 
-struct RepeatedName(Option<String>);
-
-impl<'de> Deserialize<'de> for RepeatedName {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(RepeatedNameVisitor)
-    }
-}
-
-struct RepeatedNameVisitor;
-
-impl<'de> Visitor<'de> for RepeatedNameVisitor {
-    type Value = RepeatedName;
-
-    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a JSON object or array")
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<RepeatedName, A::Error> {
-        let mut names = HashSet::new();
-        let mut repeated = None;
-        while let Some(name) = map.next_key::<String>()? {
-            let value: &'de RawValue = map.next_value()?;
-            if repeated.is_some() {
-                continue;
+/// Checks that no object in `json` repeats a member name, at any depth, and that no string holds
+/// an escaped lone surrogate. Names are compared after their escapes are decoded, so `"a/b"` and
+/// `"a\/b"` are one name. `json` must already be valid JSON (`RawValue` checked it), so a string
+/// that does not decode is an escaped lone surrogate. Numbers and literals are skipped, never
+/// read as numbers. The scan keeps its own stack of frames, so the Rust stack depth does not
+/// depend on the nesting of the input, and time and memory are linear in its length.
+fn check_member_names(json: &str) -> Result<(), ClaimsError> {
+    let bytes = json.as_bytes();
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => stack.push(Frame::Object {
+                names: HashSet::new(),
+                name_next: true,
+            }),
+            b'[' => stack.push(Frame::Array),
+            b'}' | b']' => {
+                stack.pop();
             }
-            if names.contains(&name) {
-                repeated = Some(name);
-            } else {
-                names.insert(name);
-                repeated = repeated_name(value.get()).map_err(serde::de::Error::custom)?;
+            b',' => {
+                if let Some(Frame::Object { name_next, .. }) = stack.last_mut() {
+                    *name_next = true;
+                }
             }
+            b'"' => {
+                let start = i;
+                i += 1;
+                while bytes[i] != b'"' {
+                    // A backslash escapes the next byte, so skip both.
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                let token = &json[start..=i];
+                let text = serde_json::from_str::<String>(token)
+                    .map_err(|_| ClaimsError::LoneSurrogate)?;
+                if let Some(Frame::Object { names, name_next }) = stack.last_mut()
+                    && *name_next
+                {
+                    *name_next = false;
+                    if names.contains(&text) {
+                        return Err(ClaimsError::DuplicateName(text));
+                    }
+                    names.insert(text);
+                }
+            }
+            _ => {}
         }
-        Ok(RepeatedName(repeated))
+        i += 1;
     }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<RepeatedName, A::Error> {
-        let mut repeated = None;
-        while let Some(value) = seq.next_element::<&'de RawValue>()? {
-            if repeated.is_none() {
-                repeated = repeated_name(value.get()).map_err(serde::de::Error::custom)?;
-            }
-        }
-        Ok(RepeatedName(repeated))
-    }
+    Ok(())
 }
 
 impl Serialize for Claims {
@@ -316,6 +322,8 @@ pub enum ClaimsError {
     NotAnObject,
     #[error("the claim set has the member name {0:?} more than once in one object")]
     DuplicateName(String),
+    #[error("the claim set has an escaped lone surrogate, which RFC 7493 (I-JSON) forbids")]
+    LoneSurrogate,
 }
 
 /// A token that the request presented at the entry point, with its maker. It names the token by

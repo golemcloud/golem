@@ -403,6 +403,56 @@ fn a_claim_set_with_a_duplicate_member_name_is_refused() {
     }
 }
 
+#[test]
+fn a_deeply_nested_claim_set_is_read_without_deep_recursion() {
+    let depth = 100_000;
+    let nested = format!("{{\"d\":{}1{}}}", "[".repeat(depth), "]".repeat(depth));
+    let repeated = format!(
+        "{{\"d\":{}{{\"a\":1,\"a\":2}}{}}}",
+        "[".repeat(depth / 2),
+        "]".repeat(depth / 2)
+    );
+
+    let (read, refused) = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let read = Claims::from_json(nested.clone()).map(|claims| claims.as_json() == nested);
+            let refused = Claims::from_json(repeated).unwrap_err();
+            (read, refused)
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(read, Ok(true));
+    assert_eq!(refused, ClaimsError::DuplicateName("a".to_string()));
+}
+
+#[test]
+fn a_lone_surrogate_is_refused_in_a_name_and_in_a_value() {
+    let bs = '\\';
+    let lone_high = format!("{bs}ud800");
+    let lone_low = format!("{bs}udc00");
+    for json in [
+        format!("{{\"{lone_high}\":1}}"),
+        format!("{{\"a\":\"{lone_high}\"}}"),
+        format!("{{\"a\":[1,[\"{lone_high}\"]]}}"),
+        format!("{{\"a\":[{{\"{lone_high}\":1}}]}}"),
+        format!("{{\"{lone_low}\":1}}"),
+        format!("{{\"a\":\"x{lone_low}\"}}"),
+        format!("{{\"a\":\"{lone_high}x\"}}"),
+    ] {
+        assert_eq!(
+            Claims::from_json(json.clone()).unwrap_err(),
+            ClaimsError::LoneSurrogate,
+            "{json}"
+        );
+    }
+
+    let pair = format!("{bs}ud83d{bs}ude00");
+    let accepted = format!("{{\"{pair}\":\"{pair}\",\"q\":\"{bs}{bs}\"}}");
+    assert_eq!(claims(&accepted).as_json(), accepted);
+}
+
 fn collect_field_names(value: &Value, names: &mut BTreeSet<String>) {
     match value {
         Value::Object(fields) => {
