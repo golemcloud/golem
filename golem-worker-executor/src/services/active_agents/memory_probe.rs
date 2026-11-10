@@ -41,8 +41,9 @@ pub struct MemorySnapshot {
     /// or host RAM otherwise. Reaching this with `current` triggers an
     /// OOM-kill.
     pub limit_bytes: u64,
-    /// Currently-resident bytes: cgroup `memory.current` on Linux (touched
-    /// pages, lagging but exact), process RSS otherwise.
+    /// Currently-resident bytes: on Linux, cgroup `memory.current` (touched
+    /// pages, lagging but exact) less the page cache and slab that the kernel
+    /// can reclaim; process RSS otherwise.
     pub current_bytes: u64,
 }
 
@@ -245,8 +246,9 @@ impl MemoryProbe for FixedProbe {
     }
 }
 
-/// Linux cgroup v2 probe. Reads `memory.max` and `memory.current` from the
-/// process's cgroup.
+/// Linux cgroup v2 probe. Reads `memory.max`, `memory.current` and
+/// `memory.stat` from the process's cgroup, and reports `memory.current` less
+/// the `reclaimable_bytes` of `memory.stat`.
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct CgroupV2Probe {
@@ -298,11 +300,63 @@ impl CgroupV2Probe {
 #[cfg(target_os = "linux")]
 impl MemoryProbe for CgroupV2Probe {
     fn snapshot(&self) -> MemorySnapshot {
+        let current = self.read_u64("memory.current").unwrap_or(0);
+        let reclaimable = std::fs::read_to_string(self.base.join("memory.stat"))
+            .map(|memory_stat| reclaimable_bytes(&memory_stat))
+            .unwrap_or(0);
         MemorySnapshot {
             limit_bytes: self.read_limit(),
-            current_bytes: self.read_u64("memory.current").unwrap_or(0),
+            current_bytes: current.saturating_sub(reclaimable),
         }
     }
+}
+
+/// The bytes of a cgroup's `memory.current` that the kernel reclaims before it OOM-kills the
+/// cgroup, from the cgroup's `memory.stat`.
+///
+/// `memory.current` charges the page cache of every file that the executor reads or writes for
+/// its agents, and the kernel reclaims that cache only when the cgroup reaches `memory.max`.
+/// Counted as usage, the cache of agent file I/O fills the admission budget and refuses every
+/// agent start, although no agent memory grew.
+///
+/// This counts the file pages on the LRU lists that are clean and not mapped, and the
+/// reclaimable slab (dentries and inodes). Mapped pages back running code, and dirty and
+/// writeback pages need I/O before the kernel can drop them, so these stay counted as usage.
+/// Shared memory is on the anonymous LRU lists and stays counted as well, because without swap
+/// the kernel cannot reclaim it.
+#[cfg(any(target_os = "linux", test))]
+fn reclaimable_bytes(memory_stat: &str) -> u64 {
+    let mut inactive_file = 0u64;
+    let mut active_file = 0u64;
+    let mut file_mapped = 0u64;
+    let mut file_dirty = 0u64;
+    let mut file_writeback = 0u64;
+    let mut slab_reclaimable = 0u64;
+    for line in memory_stat.lines() {
+        let mut fields = line.split_ascii_whitespace();
+        let (Some(key), Some(value), None) = (fields.next(), fields.next(), fields.next()) else {
+            continue;
+        };
+        let Ok(value) = value.parse::<u64>() else {
+            continue;
+        };
+        match key {
+            "inactive_file" => inactive_file = value,
+            "active_file" => active_file = value,
+            "file_mapped" => file_mapped = value,
+            "file_dirty" => file_dirty = value,
+            "file_writeback" => file_writeback = value,
+            "slab_reclaimable" => slab_reclaimable = value,
+            _ => {}
+        }
+    }
+    let pinned_file_pages = file_mapped
+        .saturating_add(file_dirty)
+        .saturating_add(file_writeback);
+    inactive_file
+        .saturating_add(active_file)
+        .saturating_sub(pinned_file_pages)
+        .saturating_add(slab_reclaimable)
 }
 
 /// Constructs the best available probe.
@@ -543,6 +597,111 @@ mod tests {
             reads.load(Ordering::Relaxed),
             2,
             "a failed refresh must not be retried before the refresh interval elapses"
+        );
+    }
+
+    const MIB: u64 = 1024 * 1024;
+    const GIB: u64 = 1024 * MIB;
+
+    /// `memory.stat` of a cgroup that wrote about 10 GiB of agent files: most of its
+    /// `memory.current` is page cache.
+    fn memory_stat_after_file_writes() -> String {
+        [
+            ("anon", GIB),
+            ("file", 10 * GIB + 16 * MIB),
+            ("kernel", 256 * MIB),
+            ("shmem", 16 * MIB),
+            ("file_mapped", 128 * MIB),
+            ("file_dirty", 64 * MIB),
+            ("file_writeback", 32 * MIB),
+            ("inactive_anon", 512 * MIB),
+            ("active_anon", 512 * MIB + 16 * MIB),
+            ("inactive_file", 9 * GIB),
+            ("active_file", GIB),
+            ("unevictable", 0),
+            ("slab_reclaimable", 192 * MIB),
+            ("slab_unreclaimable", 32 * MIB),
+            ("pgfault", 123_456),
+        ]
+        .iter()
+        .map(|(key, value)| format!("{key} {value}\n"))
+        .collect()
+    }
+
+    #[test]
+    fn reclaimable_bytes_are_the_clean_unmapped_file_pages_and_the_reclaimable_slab() {
+        let file_pages = 9 * GIB + GIB;
+        let mapped_dirty_and_writeback = 128 * MIB + 64 * MIB + 32 * MIB;
+        assert_eq!(
+            reclaimable_bytes(&memory_stat_after_file_writes()),
+            file_pages - mapped_dirty_and_writeback + 192 * MIB
+        );
+    }
+
+    #[test]
+    fn reclaimable_bytes_skip_lines_that_are_not_a_key_and_a_number() {
+        let stat = "inactive_file not-a-number\nactive_file 1 2\nslab_reclaimable\n\
+                    garbage\nactive_file 4096\n";
+        assert_eq!(reclaimable_bytes(stat), 4096);
+    }
+
+    #[test]
+    fn reclaimable_bytes_never_count_more_file_pages_than_the_lru_lists_hold() {
+        let stat = "inactive_file 100\nactive_file 0\nfile_mapped 300\nslab_reclaimable 7\n";
+        assert_eq!(reclaimable_bytes(stat), 7);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cgroup_dir(files: &[(&str, String)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, content) in files {
+            std::fs::write(dir.path().join(name), content).unwrap();
+        }
+        dir
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_probe_reports_memory_current_less_the_reclaimable_bytes() {
+        let stat = memory_stat_after_file_writes();
+        let current = 12 * GIB;
+        let dir = cgroup_dir(&[
+            ("memory.max", format!("{}\n", 13 * GIB)),
+            ("memory.current", format!("{current}\n")),
+            ("memory.stat", stat.clone()),
+        ]);
+        let probe = CgroupV2Probe {
+            base: dir.path().to_path_buf(),
+            fallback_limit_bytes: 64 * GIB,
+        };
+
+        assert_eq!(
+            probe.snapshot(),
+            MemorySnapshot {
+                limit_bytes: 13 * GIB,
+                current_bytes: current - reclaimable_bytes(&stat),
+            }
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_probe_without_memory_stat_reports_memory_current() {
+        let dir = cgroup_dir(&[
+            ("memory.max", "max\n".to_string()),
+            ("memory.current", format!("{}\n", 3 * GIB)),
+        ]);
+        let probe = CgroupV2Probe {
+            base: dir.path().to_path_buf(),
+            fallback_limit_bytes: 64 * GIB,
+        };
+
+        assert_eq!(
+            probe.snapshot(),
+            MemorySnapshot {
+                limit_bytes: 64 * GIB,
+                current_bytes: 3 * GIB,
+            }
         );
     }
 }
