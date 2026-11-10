@@ -329,30 +329,43 @@ impl MemoryProbe for CgroupV2Probe {
 /// - dirty and writeback file pages, which need I/O before the kernel can drop them;
 /// - kernel memory, including the reclaimable slab: the dentries and inodes of open files stay
 ///   pinned, so the kernel cannot always free it.
+///
+/// When one of the five counters is missing or does not parse, this returns 0, and the probe
+/// reports `memory.current` as it is. A partial read would subtract too much: without
+/// `file_dirty`, for example, dirty pages would count as clean.
 #[cfg(any(target_os = "linux", test))]
 fn reclaimable_bytes(memory_stat: &str) -> u64 {
-    let mut inactive_file = 0u64;
-    let mut active_file = 0u64;
-    let mut file_mapped = 0u64;
-    let mut file_dirty = 0u64;
-    let mut file_writeback = 0u64;
+    const COUNTERS: [&str; 5] = [
+        "inactive_file",
+        "active_file",
+        "file_mapped",
+        "file_dirty",
+        "file_writeback",
+    ];
+    let mut values: [Option<u64>; 5] = [None; 5];
     for line in memory_stat.lines() {
         let mut fields = line.split_ascii_whitespace();
-        let (Some(key), Some(value), None) = (fields.next(), fields.next(), fields.next()) else {
+        let Some(index) = fields
+            .next()
+            .and_then(|key| COUNTERS.iter().position(|counter| *counter == key))
+        else {
             continue;
         };
-        let Ok(value) = value.parse::<u64>() else {
-            continue;
-        };
-        match key {
-            "inactive_file" => inactive_file = value,
-            "active_file" => active_file = value,
-            "file_mapped" => file_mapped = value,
-            "file_dirty" => file_dirty = value,
-            "file_writeback" => file_writeback = value,
-            _ => {}
+        match (fields.next().map(str::parse::<u64>), fields.next()) {
+            (Some(Ok(value)), None) => values[index] = Some(value),
+            _ => return 0,
         }
     }
+    let [
+        Some(inactive_file),
+        Some(active_file),
+        Some(file_mapped),
+        Some(file_dirty),
+        Some(file_writeback),
+    ] = values
+    else {
+        return 0;
+    };
     let pinned_file_pages = file_mapped
         .saturating_add(file_dirty)
         .saturating_add(file_writeback);
@@ -607,49 +620,85 @@ mod tests {
 
     /// `memory.stat` of a cgroup that wrote about 10 GiB of agent files: most of its
     /// `memory.current` is page cache.
+    const MEMORY_STAT_AFTER_FILE_WRITES: [(&str, u64); 15] = [
+        ("anon", GIB),
+        ("file", 10 * GIB + 16 * MIB),
+        ("kernel", 256 * MIB),
+        ("shmem", 16 * MIB),
+        ("file_mapped", 128 * MIB),
+        ("file_dirty", 64 * MIB),
+        ("file_writeback", 32 * MIB),
+        ("inactive_anon", 512 * MIB),
+        ("active_anon", 512 * MIB + 16 * MIB),
+        ("inactive_file", 9 * GIB),
+        ("active_file", GIB),
+        ("unevictable", 0),
+        ("slab_reclaimable", 192 * MIB),
+        ("slab_unreclaimable", 32 * MIB),
+        ("pgfault", 123_456),
+    ];
+
+    /// The file pages of `MEMORY_STAT_AFTER_FILE_WRITES` less the mapped, dirty and writeback
+    /// pages.
+    const RECLAIMABLE_AFTER_FILE_WRITES: u64 = (9 * GIB + GIB) - (128 * MIB + 64 * MIB + 32 * MIB);
+
     fn memory_stat_after_file_writes() -> String {
-        [
-            ("anon", GIB),
-            ("file", 10 * GIB + 16 * MIB),
-            ("kernel", 256 * MIB),
-            ("shmem", 16 * MIB),
-            ("file_mapped", 128 * MIB),
-            ("file_dirty", 64 * MIB),
-            ("file_writeback", 32 * MIB),
-            ("inactive_anon", 512 * MIB),
-            ("active_anon", 512 * MIB + 16 * MIB),
-            ("inactive_file", 9 * GIB),
-            ("active_file", GIB),
-            ("unevictable", 0),
-            ("slab_reclaimable", 192 * MIB),
-            ("slab_unreclaimable", 32 * MIB),
-            ("pgfault", 123_456),
-        ]
-        .iter()
-        .map(|(key, value)| format!("{key} {value}\n"))
-        .collect()
+        memory_stat_with(|_, value| Some(value.to_string()))
+    }
+
+    /// `MEMORY_STAT_AFTER_FILE_WRITES` with the value text of each counter from `value_of`. A
+    /// counter for which `value_of` returns `None` has no line.
+    fn memory_stat_with(value_of: impl Fn(&str, u64) -> Option<String>) -> String {
+        MEMORY_STAT_AFTER_FILE_WRITES
+            .iter()
+            .filter_map(|(key, value)| value_of(key, *value).map(|text| format!("{key} {text}\n")))
+            .collect()
     }
 
     #[test]
     fn reclaimable_bytes_are_the_clean_unmapped_file_pages() {
-        let file_pages = 9 * GIB + GIB;
-        let mapped_dirty_and_writeback = 128 * MIB + 64 * MIB + 32 * MIB;
         assert_eq!(
             reclaimable_bytes(&memory_stat_after_file_writes()),
-            file_pages - mapped_dirty_and_writeback
+            RECLAIMABLE_AFTER_FILE_WRITES
         );
     }
 
     #[test]
-    fn reclaimable_bytes_skip_lines_that_are_not_a_key_and_a_number() {
-        let stat = "inactive_file not-a-number\nactive_file 1 2\nslab_reclaimable\n\
-                    garbage\nactive_file 4096\n";
-        assert_eq!(reclaimable_bytes(stat), 4096);
+    fn reclaimable_bytes_ignore_the_lines_of_other_counters() {
+        let stat = memory_stat_after_file_writes()
+            + "garbage\npgmajfault 1 2\nworkingset_refault_file not-a-number\nslab_reclaimable\n";
+        assert_eq!(reclaimable_bytes(&stat), RECLAIMABLE_AFTER_FILE_WRITES);
+    }
+
+    #[test]
+    fn reclaimable_bytes_are_zero_when_a_page_cache_counter_is_missing_or_does_not_parse() {
+        for counter in [
+            "inactive_file",
+            "active_file",
+            "file_mapped",
+            "file_dirty",
+            "file_writeback",
+        ] {
+            let missing =
+                memory_stat_with(|key, value| (key != counter).then(|| value.to_string()));
+            assert_eq!(reclaimable_bytes(&missing), 0, "without {counter}");
+            for text in ["", "not-a-number", "-1", "1 2"] {
+                let malformed = memory_stat_with(|key, value| {
+                    Some(if key == counter {
+                        text.to_string()
+                    } else {
+                        value.to_string()
+                    })
+                });
+                assert_eq!(reclaimable_bytes(&malformed), 0, "with {counter} {text:?}");
+            }
+        }
     }
 
     #[test]
     fn reclaimable_bytes_never_count_more_file_pages_than_the_lru_lists_hold() {
-        let stat = "inactive_file 100\nactive_file 0\nfile_mapped 300\n";
+        let stat = "inactive_file 100\nactive_file 50\nfile_mapped 120\nfile_dirty 20\n\
+                    file_writeback 20\n";
         assert_eq!(reclaimable_bytes(stat), 0);
     }
 
