@@ -15,8 +15,8 @@
 use super::{
     GetOplogEntryRequest, GetOplogEntryResponse, GetOplogRequest, GetOplogResponse, HasAll,
     HasComponentService, HasOplogService, HasWorkerService, OplogIndex, OwnedSemaphorePermit,
-    ParsedAgentId, PublicOplogPageLimits, SearchOplogRequest, SearchOplogResponse, Status, Stream,
-    UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id,
+    PublicOplogPageLimits, SearchOplogRequest, SearchOplogResponse, Status, Stream, UsesAllDeps,
+    WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id,
     find_component_revision_at, get_public_oplog_entry, get_public_oplog_page, golem, min,
     search_public_oplog_page,
 };
@@ -43,9 +43,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
-        let agent_type_name =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
-
         let component_service = self.component_service();
         let identity = self
             .worker_service()
@@ -57,6 +54,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
         let agent_mode = identity.agent_mode;
+        let agent_type_name = &identity.create_parameters().agent_type_name;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -72,6 +70,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.oplog_service(),
                     &owned_agent_id,
                     agent_mode,
+                    identity.create_parameters().component_id,
+                    identity.create_parameters().owner_kind,
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -95,6 +95,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.oplog_service(),
                     &owned_agent_id,
                     agent_mode,
+                    identity.create_parameters().component_id,
+                    identity.create_parameters().owner_kind,
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
@@ -145,8 +147,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "agent {owned_agent_id} does not exist"
                 ))
             })?;
-        let agent_type_name =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+        let agent_type_name = &identity.create_parameters().agent_type_name;
 
         let component_revision = request
             .component_revision
@@ -167,6 +168,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self.oplog_service(),
             &owned_agent_id,
             identity.agent_mode,
+            identity.create_parameters().component_id,
+            identity.create_parameters().owner_kind,
             agent_type_name.as_ref(),
             OplogIndex::from_u64(request.oplog_index),
             component_revision,
@@ -186,9 +189,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
-        let agent_type_name =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
-
         let component_service = self.component_service();
         let identity = self
             .worker_service()
@@ -200,6 +200,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
         let agent_mode = identity.agent_mode;
+        let agent_type_name = &identity.create_parameters().agent_type_name;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -215,6 +216,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.oplog_service(),
                     &owned_agent_id,
                     agent_mode,
+                    identity.create_parameters().component_id,
+                    identity.create_parameters().owner_kind,
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -238,6 +241,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.oplog_service(),
                     &owned_agent_id,
                     agent_mode,
+                    identity.create_parameters().component_id,
+                    identity.create_parameters().owner_kind,
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,

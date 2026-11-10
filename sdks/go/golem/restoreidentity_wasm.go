@@ -18,7 +18,7 @@ package golem
 import (
 	"errors"
 
-	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/identity"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
@@ -26,10 +26,9 @@ import (
 // type name and its constructor parameters — what initialize needs to bring the
 // agent back during snapshot recovery. Wasm-only: it is a host call.
 func parseRestoreIdentity(agentID string) (string, types.SchemaValueTree, error) {
-	res := host.ParseAgentId(agentID)
-	if res.IsErr() {
-		return "", types.SchemaValueTree{}, errors.New(agentErrorToGo(res.Err()).Error())
+	parsed, failure := identity.Parse(agentID)
+	if failure != nil {
+		return "", types.SchemaValueTree{}, errors.New(agentErrorToGo(failure.AgentError).Error())
 	}
-	t := res.Ok()
-	return t.F0, t.F1.Value, nil
+	return parsed.TypeName, parsed.Constructor.Value, nil
 }

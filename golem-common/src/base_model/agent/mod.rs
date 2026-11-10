@@ -32,7 +32,7 @@ pub mod http_files;
 /// Authoritative kind of an execution owner.
 ///
 /// This is persisted at creation time. In particular, an instance name that
-/// happens to look like an external-tool owner never grants that authority.
+/// happens to use a reserved owner namespace never grants that authority.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
@@ -43,13 +43,16 @@ pub enum OwnerKind {
     #[default]
     ComponentAgent,
     EphemeralExternalTool,
+    OplogProcessor,
 }
 
 impl OwnerKind {
     pub const EXTERNAL_TOOL_INSTANCE_PREFIX: &'static str = "~golem-external-tool-owner-";
+    pub const OPLOG_PROCESSOR_INSTANCE_PREFIX: &'static str = "~golem-oplog-processor-";
 
     pub fn is_reserved_instance_name(name: &str) -> bool {
         name.starts_with(Self::EXTERNAL_TOOL_INSTANCE_PREFIX)
+            || name.starts_with(Self::OPLOG_PROCESSOR_INSTANCE_PREFIX)
     }
 
     /// Derives the stable virtual owner name solely from ordinary request
@@ -63,11 +66,29 @@ impl OwnerKind {
         format!("{}{id}", Self::EXTERNAL_TOOL_INSTANCE_PREFIX)
     }
 
+    pub fn oplog_processor_instance_name(id: Uuid) -> String {
+        format!("{}{id}", Self::OPLOG_PROCESSOR_INSTANCE_PREFIX)
+    }
+
     pub fn validate_instance_name(self, name: &str) -> Result<(), String> {
-        let reserved = Self::is_reserved_instance_name(name);
-        match (self, reserved) {
-            (Self::ComponentAgent, true) => Err("agent instance names in the reserved external-tool owner namespace are not allowed".to_string()),
-            (Self::EphemeralExternalTool, false) => Err("external-tool owner metadata does not agree with its reserved instance name".to_string()),
+        match self {
+            Self::ComponentAgent if Self::is_reserved_instance_name(name) => {
+                Err("agent instance names in reserved owner namespaces are not allowed".to_string())
+            }
+            Self::EphemeralExternalTool
+                if !name.starts_with(Self::EXTERNAL_TOOL_INSTANCE_PREFIX) =>
+            {
+                Err(
+                    "external-tool owner metadata does not agree with its reserved instance name"
+                        .to_string(),
+                )
+            }
+            Self::OplogProcessor if !name.starts_with(Self::OPLOG_PROCESSOR_INSTANCE_PREFIX) => {
+                Err(
+                    "oplog processor owner metadata does not agree with its reserved instance name"
+                        .to_string(),
+                )
+            }
             _ => Ok(()),
         }
     }
@@ -80,6 +101,7 @@ impl TryFrom<i32> for OwnerKind {
         match value {
             0 => Ok(Self::ComponentAgent),
             1 => Ok(Self::EphemeralExternalTool),
+            2 => Ok(Self::OplogProcessor),
             _ => Err(format!("unknown owner kind: {value}")),
         }
     }
@@ -90,6 +112,7 @@ impl From<OwnerKind> for i32 {
         match value {
             OwnerKind::ComponentAgent => 0,
             OwnerKind::EphemeralExternalTool => 1,
+            OwnerKind::OplogProcessor => 2,
         }
     }
 }

@@ -106,7 +106,11 @@ mod tool_attachment_control_tests {
                     serde_json::from_value::<PublicOplogEntry>(json).unwrap(),
                     public
                 );
-                let raw: OplogEntry = public.try_into().unwrap();
+                let crate::model::oplog::OplogEnrichmentEntry::Other(raw) =
+                    public.try_into().unwrap()
+                else {
+                    panic!("expected non-Create projection");
+                };
                 assert_eq!(
                     raw,
                     OplogEntry::ToolAttachmentControl {
@@ -144,7 +148,7 @@ mod tool_attachment_control_tests {
             let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
                 public.clone().try_into().unwrap();
             assert!(PublicOplogEntry::try_from(proto).is_err());
-            assert!(OplogEntry::try_from(public).is_err());
+            assert!(crate::model::oplog::OplogEnrichmentEntry::try_from(public).is_err());
             let proto = golem_api_grpc::proto::golem::worker::RawOplogEntry {
                 timestamp: Some(timestamp.into()),
                 entity_parent_start_index: None,

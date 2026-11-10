@@ -481,7 +481,7 @@ impl WalletSnapshot {
                 target_revision, ..
             } if !skipped => {
                 let metadata = component_service
-                    .get_metadata(owner_id.component_id(), Some(*target_revision))
+                    .get_metadata(self.metadata.id, Some(*target_revision))
                     .await?;
                 if owner_context.agent().is_some() {
                     let card = initial_card(owner_context, &metadata)?;
@@ -520,7 +520,7 @@ fn initial_card(
         ResolvedOwnerContext::Agent(agent_id) => {
             agent_initial_card_from_component_metadata(metadata, agent_id)
         }
-        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+        ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
             Ok(StoredCard::Polymorphic(
                 metadata
                     .metadata
@@ -822,7 +822,7 @@ impl OwnerWallet {
                         let update = prepare_revision_update(
                             RevisionUpdateInputs {
                                 component_service: owner.baseline.component_service.clone(),
-                                component_id: owner.baseline.owner_id.component_id(),
+                                component_id: owner.baseline.metadata.id,
                             },
                             *new_revision,
                             || AgentInputs {

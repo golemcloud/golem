@@ -2436,7 +2436,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         ..attachment_read.clone()
     };
 
-    vec![
+    let mut entries = vec![
         PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
             timestamp: timestamp(),
             attachment: attachment_read
@@ -2819,7 +2819,24 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             update_attempt_index: OplogIndex::from_u64(21),
             description: PublicUpdateDescription::Automatic(Empty {}),
         }),
-    ]
+    ];
+    let create = entries
+        .iter()
+        .find_map(|entry| match entry {
+            PublicOplogEntry::Create(parameters) => Some(parameters.clone()),
+            _ => None,
+        })
+        .unwrap();
+    for owner_kind in [
+        golem_common::model::agent::OwnerKind::EphemeralExternalTool,
+        golem_common::model::agent::OwnerKind::OplogProcessor,
+    ] {
+        entries.push(PublicOplogEntry::Create(CreateParams {
+            owner_kind,
+            ..create.clone()
+        }));
+    }
+    entries
 }
 
 fn arb_build_result() -> OutputDocumentStrategy {

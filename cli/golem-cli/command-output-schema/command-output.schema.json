@@ -5812,7 +5812,7 @@
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
         "agentId": { "$ref": "#/definitions/AgentId" },
-        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool"] },
+        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool", "oplog-processor"] },
         "agentMode": { "$ref": "#/definitions/AgentMode" },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },

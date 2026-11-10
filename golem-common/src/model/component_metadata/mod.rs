@@ -368,6 +368,7 @@ impl ComponentMetadata {
             OwnerKind::EphemeralExternalTool => {
                 Some(self.component_provision_config().plugins.as_slice())
             }
+            OwnerKind::OplogProcessor => None,
         }
     }
 

@@ -866,6 +866,11 @@ fn test_worker_metadata(
     };
 
     let metadata = AgentMetadata {
+        component_id: agent_id.component_id,
+        agent_type_name: Some(golem_common::model::agent::AgentTypeName(
+            "TestPlugin".into(),
+        )),
+        canonical_key: Some(agent_id.agent_id.clone()),
         agent_id,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],

@@ -47,6 +47,12 @@ func TestEveryEntryCaseHasAConstant(t *testing.T) {
 }
 
 func TestEntriesSwitchOnTheCaseConstants(t *testing.T) {
+	for _, kind := range []OwnerKind{OwnerKindComponentAgent, OwnerKindEphemeralExternalTool, OwnerKindOplogProcessor} {
+		e := oplogwit.MakePublicOplogEntryCreate(CreateParameters{OwnerKind: kind})
+		if e.Create().OwnerKind != kind {
+			t.Fatalf("owner kind = %d, want %d", e.Create().OwnerKind, kind)
+		}
+	}
 	e := oplogwit.MakePublicOplogEntryLog(LogParameters{Message: "hello"})
 	switch e.Tag() {
 	case AgentInvocationStarted, Error:

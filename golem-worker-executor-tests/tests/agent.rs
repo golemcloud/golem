@@ -406,6 +406,42 @@ async fn agent_env_inheritance(
     executor.check_oplog_is_queryable(&child_worker_id).await?;
 
     let child_metadata = executor.get_worker_metadata(&child_worker_id).await?;
+    let parent_identity = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(component.environment_id, &worker_id))
+        .await
+        .expect("parent is cached")
+        .get_initial_worker_metadata();
+    let child_identity = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(
+            component.environment_id,
+            &child_worker_id,
+        ))
+        .await
+        .expect("child is cached")
+        .get_initial_worker_metadata();
+    assert_eq!(parent_identity.component_id, component.id);
+    assert_eq!(
+        parent_identity
+            .agent_type_name
+            .as_ref()
+            .map(|name| name.0.as_str()),
+        Some("TestAgent")
+    );
+    assert_eq!(parent_identity.canonical_key, Some(agent_id.to_string()));
+    assert_eq!(child_identity.component_id, component.id);
+    assert_eq!(
+        child_identity
+            .agent_type_name
+            .as_ref()
+            .map(|name| name.0.as_str()),
+        Some("ChildAgent")
+    );
+    assert_eq!(
+        child_identity.canonical_key,
+        Some(child_worker_id.agent_id.clone())
+    );
 
     let mut parent_env_vars = BTreeMap::new();
     let mut child_env_vars = BTreeMap::new();
@@ -894,6 +930,50 @@ async fn create_oplog_entry_persists_durable_agent_mode(
     executor.check_oplog_is_queryable(&worker_id).await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
     assert_eq!(metadata.agent_id, worker_id);
+    let identity = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(component.environment_id, &worker_id))
+        .await
+        .expect("durable agent is cached")
+        .get_initial_worker_metadata();
+    assert_eq!(identity.component_id, component.id);
+    assert_eq!(
+        identity
+            .agent_type_name
+            .as_ref()
+            .map(|name| name.0.as_str()),
+        Some("CounterAgent")
+    );
+    assert_eq!(identity.canonical_key, Some(agent_id.to_string()));
+
+    let phantom_id = golem_common::phantom_agent_id!(
+        "CounterAgent",
+        uuid::Uuid::new_v4(),
+        "phantom-persistence"
+    );
+    let phantom_worker_id = executor.start_agent(&component.id, phantom_id).await?;
+    let phantom_worker = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(
+            component.environment_id,
+            &phantom_worker_id,
+        ))
+        .await
+        .expect("explicitly created durable phantom agent is cached");
+    let phantom_metadata = phantom_worker.get_initial_worker_metadata();
+    assert_eq!(phantom_metadata.component_id, component.id);
+    assert_eq!(phantom_metadata.agent_type_name, identity.agent_type_name);
+    assert_eq!(phantom_metadata.agent_mode, AgentMode::Durable);
+    assert_eq!(phantom_metadata.canonical_key, None);
+    let phantom_oplog = golem_worker_executor::services::HasOplog::oplog(phantom_worker.as_ref());
+    let golem_common::model::oplog::OplogEntry::Create { parameters, .. } =
+        phantom_oplog.read(OplogIndex::INITIAL).await?
+    else {
+        panic!("expected stored Create");
+    };
+    assert_eq!(parameters.component_id, component.id);
+    assert_eq!(parameters.agent_type_name, phantom_metadata.agent_type_name);
+    assert_eq!(parameters.canonical_key, None);
 
     Ok(())
 }
@@ -927,6 +1007,28 @@ async fn create_oplog_entry_persists_ephemeral_agent_mode(
     let worker_id = AgentId::from_agent_id(component.id, &agent_id).map_err(anyhow::Error::msg)?;
 
     // Trigger an invocation so the worker has actually been instantiated and Create persisted.
+    let identity_executor = executor.clone();
+    let component_id = component.id;
+    let identity_checked = executor.probe_next_primary_context(&worker_id, move |ctx| {
+        Box::pin(async move {
+            let identity = identity_executor
+                .active_agents()
+                .try_get(ctx.owned_agent_id())
+                .await
+                .expect("ephemeral agent is cached during context construction")
+                .get_initial_worker_metadata();
+            assert_eq!(identity.component_id, component_id);
+            assert_eq!(
+                identity
+                    .agent_type_name
+                    .as_ref()
+                    .map(|name| name.0.as_str()),
+                Some("EphemeralEchoAgent")
+            );
+            assert_eq!(identity.canonical_key, None);
+            Ok(())
+        })
+    });
     executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -947,6 +1049,46 @@ async fn create_oplog_entry_persists_ephemeral_agent_mode(
         .expect("Expected a Create entry at the start of the oplog");
 
     assert_eq!(create_entry.agent_mode, AgentMode::Ephemeral);
+    identity_checked.await??;
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+async fn explicit_structural_ephemeral_creation_has_no_canonical_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(
+            &context.default_environment_id,
+            constructor_parameter_echo_unnamed,
+        )
+        .store()
+        .await?;
+    let agent_id = agent_id!("EphemeralEchoAgent", "explicit-creation");
+    let worker_id = executor.start_agent(&component.id, agent_id).await?;
+    let worker = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(component.environment_id, &worker_id))
+        .await
+        .expect("explicitly created ephemeral agent is cached");
+    let metadata = worker.get_initial_worker_metadata();
+    assert_eq!(metadata.agent_mode, AgentMode::Ephemeral);
+    let oplog = golem_worker_executor::services::HasOplog::oplog(worker.as_ref());
+    let golem_common::model::oplog::OplogEntry::Create { parameters, .. } =
+        oplog.read(OplogIndex::INITIAL).await?
+    else {
+        panic!("expected stored Create");
+    };
+    assert_eq!(parameters.agent_mode, AgentMode::Ephemeral);
+    assert_eq!(parameters.canonical_key, None);
+    assert_eq!(metadata.canonical_key, None);
     Ok(())
 }
 
@@ -1334,6 +1476,21 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
     let cut = prefix.last().unwrap().oplog_index;
     let target = golem_common::phantom_agent_id!("RpcCounter", uuid::Uuid::new_v4(), "fork-retry");
     let target_id = AgentId::from_agent_id(component.id, &target).map_err(anyhow::Error::msg)?;
+    let source_metadata = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(component.environment_id, &source_id))
+        .await
+        .expect("source is cached")
+        .get_initial_worker_metadata();
+    assert_eq!(source_metadata.component_id, component.id);
+    assert_eq!(
+        source_metadata
+            .agent_type_name
+            .as_ref()
+            .map(|name| name.0.as_str()),
+        Some("RpcCounter")
+    );
+    assert_eq!(source_metadata.canonical_key, Some(source.to_string()));
     let error = executor
         .fork_worker(&source_id, &target.to_string(), cut)
         .await
@@ -1351,6 +1508,18 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
     executor
         .invoke_and_await_agent(&component, &target, "inc_by", data_value!(2u64))
         .await?;
+    let fork_metadata = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(component.environment_id, &target_id))
+        .await
+        .expect("fork is cached")
+        .get_initial_worker_metadata();
+    assert_eq!(fork_metadata.component_id, component.id);
+    assert_eq!(
+        fork_metadata.agent_type_name,
+        source_metadata.agent_type_name
+    );
+    assert_eq!(fork_metadata.canonical_key, None);
     // Retrying after the target has run must not overwrite it with the old prefix.
     executor
         .fork_worker(&source_id, &target.to_string(), cut)
@@ -1376,6 +1545,17 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
         .await?
         .into_typed::<u64>()?;
     assert_eq!(actual, 16);
+    for (id, expected) in [(&source_id, &source_metadata), (&target_id, &fork_metadata)] {
+        let reloaded = executor
+            .active_agents()
+            .try_get(&OwnedAgentId::new(component.environment_id, id))
+            .await
+            .expect("restarted agent is cached")
+            .get_initial_worker_metadata();
+        assert_eq!(reloaded.component_id, expected.component_id);
+        assert_eq!(reloaded.agent_type_name, expected.agent_type_name);
+        assert_eq!(reloaded.canonical_key, expected.canonical_key);
+    }
     let fork_history = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
     let markers = fork_history
         .iter()

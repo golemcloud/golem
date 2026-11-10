@@ -41,6 +41,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_request, invocation_response,
 };
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::card::{CardId, StoredCard};
@@ -787,7 +788,7 @@ impl WorkerGrpcApi {
             );
             self.worker_service
                 .prepare_for_invocation(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     method_name,
                     request.env,
                     config,
@@ -802,7 +803,7 @@ impl WorkerGrpcApi {
         } else if let Some(method_name) = request.method_name {
             self.worker_service
                 .create_for_invocation(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     method_name,
                     request.env,
                     config,
@@ -815,7 +816,7 @@ impl WorkerGrpcApi {
         } else {
             self.worker_service
                 .create(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     request.env,
                     config,
                     request.ignore_already_existing,
@@ -1008,7 +1009,7 @@ impl WorkerGrpcApi {
         let output = self
             .worker_service
             .invoke_agent(
-                &agent_id,
+                &AgentTarget::Current(agent_id),
                 request.method_name,
                 request.method_parameters,
                 request.mode,
