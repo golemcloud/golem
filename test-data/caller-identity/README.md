@@ -17,6 +17,8 @@ A pair is `("<issuer>","<subject>")`, with no spaces. Each string is escaped as 
 A parser accepts only that spelling, so two texts are equal exactly when their pairs are equal.
 It refuses, for example, `\/`, `\u0062`, uppercase hex, a raw control character, spaces and an
 unquoted `*`.
+The refused spellings include the escape of any character from U+0020 up (such as `\u0026`,
+`\u0100` or `\u2028`) and every escaped surrogate, lone or paired.
 
 - `roundTrip`: each `issuer` and `subject` prints as exactly `text`, and `text` parses back to
   them.
@@ -57,6 +59,16 @@ A proof for AWS STS role assumption (`awsRoleAssumption: true`) also repeats the
 `principal_tags`: `golem:environment`, `golem:account`, `golem:kind`, and `golem:agent-type` or
 `golem:tool`. Each tag value is a one-element list, as in the example of the AWS documentation,
 and there are no transitive tag keys. No other proof carries this claim.
+
+The AWS page "Passing session tags in AWS STS" is not consistent on the form of a tag value: its
+example shows a one-element list, while its text says "Each principal tag is a single string
+value" and "You must pass a single value for each session tag". The real-AWS test of the 1.5
+plan decides between the list and the plain string; the vectors follow the example until then.
+
+The builder refuses to make a proof for AWS role assumption when a tag value breaks the rules
+that the AWS pages state: at most 256 characters; only letters, numbers, spaces and
+`_ . : / = + - @`; no `aws:` prefix. A proof for another receiver has no such limit. No vector
+holds a refused value, so the vectors do not change; the tests cover the refusals.
 
 The vectors fix the header and the claim set, not a signature.
 

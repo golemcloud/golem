@@ -20,6 +20,7 @@ use crate::base_model::tool::ToolName;
 use crate::base_model::{AgentFingerprint, Timestamp};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
@@ -203,11 +204,21 @@ impl ToolPrincipal {
 /// The verified claims of a user's sign-in, kept whole: the JSON object exactly as Golem
 /// received it, never cut, reordered or encoded again, so code that reads claims replays
 /// identically.
+///
+/// No object in a claim set may repeat a member name. JSON readers disagree on which of two
+/// equal names wins, so a repeated `sub` could name one user to Golem and another to the code
+/// that reads the claims. RFC 7493 (I-JSON) forbids repeated names, and escaped lone surrogates
+/// in names and in values.
+///
+/// Serialize a `Caller` to text with `serde_json::to_string` or `to_writer`. A round trip through
+/// `serde_json::Value` encodes the claims again: it sorts the keys, rounds numbers, fails on
+/// numbers that no `f64` holds, and so loses the exact bytes.
 #[derive(Debug, Clone)]
 pub struct Claims(Box<RawValue>);
 
 impl Claims {
-    /// Reads a claim set. The text must be one JSON object.
+    /// Reads a claim set. The text must be one JSON object, and no object in it may repeat a
+    /// member name. Whitespace around the object is dropped.
     pub fn from_json(json: String) -> Result<Self, ClaimsError> {
         let raw = RawValue::from_string(json)
             .map_err(|error| ClaimsError::InvalidJson(error.to_string()))?;
@@ -215,17 +226,79 @@ impl Claims {
     }
 
     fn from_raw(raw: Box<RawValue>) -> Result<Self, ClaimsError> {
-        if raw.get().starts_with('{') {
-            Ok(Self(raw))
-        } else {
-            Err(ClaimsError::NotAnObject)
+        if !raw.get().starts_with('{') {
+            return Err(ClaimsError::NotAnObject);
         }
+        check_member_names(raw.get())?;
+        Ok(Self(raw))
     }
 
-    /// The claim set as JSON text, exactly as Golem received it.
+    /// The claim set as JSON text, as Golem received it, without the whitespace around it.
     pub fn as_json(&self) -> &str {
         self.0.get()
     }
+}
+
+/// One open container of the claim set while `check_member_names` scans it.
+enum Frame {
+    /// An object, with the names seen so far and whether the next string is a member name.
+    Object {
+        names: HashSet<String>,
+        name_next: bool,
+    },
+    Array,
+}
+
+/// Checks that no object in `json` repeats a member name, at any depth, and that no string holds
+/// an escaped lone surrogate. Names are compared after their escapes are decoded, so `"a/b"` and
+/// `"a\/b"` are one name. `json` must already be valid JSON (`RawValue` checked it), so a string
+/// that does not decode is an escaped lone surrogate. Numbers and literals are skipped, never
+/// read as numbers. The scan keeps its own stack of frames, so the Rust stack depth does not
+/// depend on the nesting of the input, and time and memory are linear in its length.
+fn check_member_names(json: &str) -> Result<(), ClaimsError> {
+    let bytes = json.as_bytes();
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => stack.push(Frame::Object {
+                names: HashSet::new(),
+                name_next: true,
+            }),
+            b'[' => stack.push(Frame::Array),
+            b'}' | b']' => {
+                stack.pop();
+            }
+            b',' => {
+                if let Some(Frame::Object { name_next, .. }) = stack.last_mut() {
+                    *name_next = true;
+                }
+            }
+            b'"' => {
+                let start = i;
+                i += 1;
+                while bytes[i] != b'"' {
+                    // A backslash escapes the next byte, so skip both.
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                let token = &json[start..=i];
+                let text = serde_json::from_str::<String>(token)
+                    .map_err(|_| ClaimsError::LoneSurrogate)?;
+                if let Some(Frame::Object { names, name_next }) = stack.last_mut()
+                    && *name_next
+                {
+                    *name_next = false;
+                    if names.contains(&text) {
+                        return Err(ClaimsError::DuplicateName(text));
+                    }
+                    names.insert(text);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(())
 }
 
 impl Serialize for Claims {
@@ -247,6 +320,10 @@ pub enum ClaimsError {
     InvalidJson(String),
     #[error("the claim set must be a JSON object")]
     NotAnObject,
+    #[error("the claim set has the member name {0:?} more than once in one object")]
+    DuplicateName(String),
+    #[error("the claim set has an escaped lone surrogate, which RFC 7493 (I-JSON) forbids")]
+    LoneSurrogate,
 }
 
 /// A token that the request presented at the entry point, with its maker. It names the token by
