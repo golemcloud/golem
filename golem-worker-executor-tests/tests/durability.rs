@@ -1641,10 +1641,18 @@ async fn automatic_snapshot_every_2nd_invocation(
         .await?;
 
     // Construction counts as an invocation; align subsequent snapshots with even increments.
-    let initial = executor
-        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
-        .await?;
-    assert_eq!(initial.into_typed::<u32>()?, 0);
+    // This read also captures the state that the core initializer derived from its random seed
+    // while the agent was created. The seed is recorded before the first snapshot, so recovery
+    // from a snapshot must reproduce it by replaying the initializer's recorded host calls.
+    let initializer_seed_hash = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
@@ -1677,6 +1685,17 @@ async fn automatic_snapshot_every_2nd_invocation(
                 PublicOplogEntry::Start(params) if params.function_name == "monotonic_clock::now"
             )),
         "core initializer must record a clock call before the snapshot"
+    );
+    assert!(
+        oplog
+            .iter()
+            .take_while(|entry| !matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+            .any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "random::insecure_seed::insecure_seed"
+            )),
+        "core initializer must record its random seed before the snapshot"
     );
     let snapshot_count = oplog
         .iter()
@@ -1721,6 +1740,19 @@ async fn automatic_snapshot_every_2nd_invocation(
         result_after_restart.into_typed::<u32>()?,
         11,
         "Counter should include the increment replayed after the automatic snapshot"
+    );
+    let initializer_seed_hash_after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(
+        initializer_seed_hash_after_restart, initializer_seed_hash,
+        "snapshot recovery must replay the initializer's recorded random seed"
     );
 
     drop(executor);
