@@ -15,8 +15,6 @@
 use clap::ValueEnum;
 use serde_derive::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
 #[derive(
@@ -27,7 +25,7 @@ use strum_macros::EnumIter;
 pub enum Format {
     Json,
     #[serde(alias = "pretty")]
-    #[clap(alias = "pretty-json")]
+    #[clap(alias = "pretty")]
     PrettyJson,
     Yaml,
     PrettyYaml,
@@ -53,28 +51,6 @@ impl Display for Format {
 impl Format {
     pub fn is_structured(&self) -> bool {
         !matches!(self, Format::Text)
-    }
-}
-
-impl FromStr for Format {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "json" => Ok(Format::Json),
-            "pretty" | "pretty-json" => Ok(Format::PrettyJson),
-            "yaml" => Ok(Format::Yaml),
-            "pretty-yaml" => Ok(Format::PrettyYaml),
-            "toon" => Ok(Format::Toon),
-            "text" => Ok(Format::Text),
-            _ => {
-                let all = Format::iter()
-                    .map(|x| format!("\"{x}\""))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                Err(format!("Unknown format: {s}. Expected one of {all}"))
-            }
-        }
     }
 }
 
