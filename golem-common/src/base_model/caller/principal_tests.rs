@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::{
-    AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, GolemSubject, Kind,
-    Pair, Principal, PrincipalRef, TokenProvenance, ToolPrincipal, UserPrincipal,
+    AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, ClaimsError,
+    GolemSubject, Kind, Pair, Principal, PrincipalRef, TokenProvenance, ToolPrincipal,
+    UserPrincipal,
 };
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
@@ -369,6 +370,37 @@ fn a_claim_set_is_one_json_object() {
 
     let user_with_list_claims = r#"{"user":{"pair":{"issuer":"i","subject":"s"},"claims":[1],"authenticatedAt":"2026-11-09T10:00:00Z"}}"#;
     assert!(serde_json::from_str::<Principal>(user_with_list_claims).is_err());
+}
+
+#[test]
+fn a_claim_set_with_a_duplicate_member_name_is_refused() {
+    for (duplicate, name) in [
+        (r#"{"sub":"alice","sub":"mallory"}"#, "sub"),
+        (r#"{"address":{"city":"Pune","city":"Oslo"}}"#, "city"),
+        (r#"{"groups":[{"id":1},{"id":2,"id":3}]}"#, "id"),
+        (r#"{"a/b":1,"a\/b":2}"#, "a/b"),
+    ] {
+        assert_eq!(
+            Claims::from_json(duplicate.to_string()).unwrap_err(),
+            ClaimsError::DuplicateName(name.to_string()),
+            "{duplicate}"
+        );
+        let user = format!(
+            r#"{{"user":{{"pair":{{"issuer":"i","subject":"s"}},"claims":{duplicate},"authenticatedAt":"2026-11-09T10:00:00Z"}}}}"#
+        );
+        assert!(
+            serde_json::from_str::<Principal>(&user).is_err(),
+            "{duplicate}"
+        );
+    }
+
+    // One name in different objects is not a duplicate, and numbers are never read as numbers.
+    for unique in [
+        r#"{"a":{"x":1},"b":{"x":2},"c":[{"x":3},{"x":4}]}"#,
+        r#"{"x":1e400,"y":123456789012345678901234567890}"#,
+    ] {
+        assert_eq!(claims(unique).as_json(), unique);
+    }
 }
 
 fn collect_field_names(value: &Value, names: &mut BTreeSet<String>) {

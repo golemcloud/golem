@@ -18,8 +18,10 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
 use crate::base_model::{AgentFingerprint, Timestamp};
+use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
@@ -203,11 +205,16 @@ impl ToolPrincipal {
 /// The verified claims of a user's sign-in, kept whole: the JSON object exactly as Golem
 /// received it, never cut, reordered or encoded again, so code that reads claims replays
 /// identically.
+///
+/// No object in a claim set may repeat a member name. JSON readers disagree on which of two
+/// equal names wins, so a repeated `sub` could name one user to Golem and another to the code
+/// that reads the claims. RFC 7493 (I-JSON) forbids repeated names.
 #[derive(Debug, Clone)]
 pub struct Claims(Box<RawValue>);
 
 impl Claims {
-    /// Reads a claim set. The text must be one JSON object.
+    /// Reads a claim set. The text must be one JSON object, and no object in it may repeat a
+    /// member name. Whitespace around the object is dropped.
     pub fn from_json(json: String) -> Result<Self, ClaimsError> {
         let raw = RawValue::from_string(json)
             .map_err(|error| ClaimsError::InvalidJson(error.to_string()))?;
@@ -215,16 +222,76 @@ impl Claims {
     }
 
     fn from_raw(raw: Box<RawValue>) -> Result<Self, ClaimsError> {
-        if raw.get().starts_with('{') {
-            Ok(Self(raw))
-        } else {
-            Err(ClaimsError::NotAnObject)
+        if !raw.get().starts_with('{') {
+            return Err(ClaimsError::NotAnObject);
+        }
+        match repeated_name(raw.get()) {
+            Ok(None) => Ok(Self(raw)),
+            Ok(Some(name)) => Err(ClaimsError::DuplicateName(name)),
+            Err(error) => Err(ClaimsError::InvalidJson(error.to_string())),
         }
     }
 
-    /// The claim set as JSON text, exactly as Golem received it.
+    /// The claim set as JSON text, as Golem received it, without the whitespace around it.
     pub fn as_json(&self) -> &str {
         self.0.get()
+    }
+}
+
+/// The first member name that one object in `json` repeats, at any depth. Names are compared
+/// after their escapes are decoded, so `"a/b"` and `"a\/b"` are one name. Values are kept as raw
+/// text, so no number is ever read as a number.
+fn repeated_name(json: &str) -> Result<Option<String>, serde_json::Error> {
+    if json.starts_with('{') || json.starts_with('[') {
+        serde_json::from_str::<RepeatedName>(json).map(|found| found.0)
+    } else {
+        Ok(None)
+    }
+}
+
+struct RepeatedName(Option<String>);
+
+impl<'de> Deserialize<'de> for RepeatedName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(RepeatedNameVisitor)
+    }
+}
+
+struct RepeatedNameVisitor;
+
+impl<'de> Visitor<'de> for RepeatedNameVisitor {
+    type Value = RepeatedName;
+
+    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON object or array")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<RepeatedName, A::Error> {
+        let mut names = HashSet::new();
+        let mut repeated = None;
+        while let Some(name) = map.next_key::<String>()? {
+            let value: &'de RawValue = map.next_value()?;
+            if repeated.is_some() {
+                continue;
+            }
+            if names.contains(&name) {
+                repeated = Some(name);
+            } else {
+                names.insert(name);
+                repeated = repeated_name(value.get()).map_err(serde::de::Error::custom)?;
+            }
+        }
+        Ok(RepeatedName(repeated))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<RepeatedName, A::Error> {
+        let mut repeated = None;
+        while let Some(value) = seq.next_element::<&'de RawValue>()? {
+            if repeated.is_none() {
+                repeated = repeated_name(value.get()).map_err(serde::de::Error::custom)?;
+            }
+        }
+        Ok(RepeatedName(repeated))
     }
 }
 
@@ -247,6 +314,8 @@ pub enum ClaimsError {
     InvalidJson(String),
     #[error("the claim set must be a JSON object")]
     NotAnObject,
+    #[error("the claim set has the member name {0:?} more than once in one object")]
+    DuplicateName(String),
 }
 
 /// A token that the request presented at the entry point, with its maker. It names the token by
