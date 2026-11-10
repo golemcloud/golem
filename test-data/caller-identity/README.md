@@ -78,20 +78,32 @@ A 1.6 principal reaches 2.0 only inside the bridge export: in an agent's SDK sna
 and as the agent's recorded init principal. The bridge and each 2.0 SDK convert it to a reference,
 or to no reference, as these vectors say. No shared code implements the conversion.
 
+The vectors start from the tag/val form below. The 1.6 server holds its own principals in
+another form, for example `{"type":"GolemUser","accountId":...}` and `{"type":"Anonymous"}`, so
+the 7.6 bridge translates that form to the tag/val form first, as the Go SDK does, and then
+converts.
+
 Each case gives:
 
 - `principal`: the 1.6 principal in the JSON form that the Rust, TypeScript, Effect, MoonBit and
   Scala SDKs write into their 1.6 snapshot envelopes: `{"tag": ..., "val": ...}`, with camelCase
   field names, every UUID as a lowercase string with hyphens, and the OIDC `claims` as a JSON
-  string. The Go SDK writes another form, so it translates its own form first.
-- `loginMapping`: the external login of the principal's account, or `null`. A GitHub login is
-  `{"provider": "github", "externalId": ..., "login": ...}`, with the numeric GitHub user ID as
-  decimal text and the login name. Any other login is `{"provider": "oidc", "issuer": ...,
-  "subject": ...}`.
-- `importedAgent`: for an `agent` principal, the 2.0 agent ID that the bridge's ID mapping gives
-  and the imported agent's fingerprint, or `null` when the agent did not carry over.
-- `expected`: the `kind` and the `pair` (in the text form above) of the reference, or `null` for
-  no reference.
+  string: what 1.6 writes with `serde_json::to_string` of the ID token claims. The Go SDK
+  writes another form, so it translates its own form first. An implementation reads these
+  strings as they are: a UUID in another spelling (upper case, braces, `urn:uuid:`, no
+  hyphens) is not an input.
+- `loginMapping`: the external login of the principal's account, or `null`. 1.6 holds only
+  GitHub logins, written `{"provider": "github", "externalId": ..., "login": ...}`, with the
+  numeric GitHub user ID as canonical decimal text (no sign, no leading zero) and the login
+  name. The other shape, `{"provider": "oidc", "issuer": ..., "subject": ...}`, stands for the
+  person pairs that 7.6 "People" maps to another provider. No other provider is defined. Which
+  mapping wins when an account has several is the decision of the 7.6 plan.
+- `importedAgent`: for an `agent` principal, `{"agentId": ..., "fingerprint": ...}`, or `null`
+  when the agent did not carry over. `agentId` is the 2.0 agent ID that the bridge's ID mapping
+  gives; `fingerprint` is the fingerprint of the agent that the principal names. Both are
+  lowercase UUIDs with hyphens.
+- `expected`: the `kind` of the principal it refers to and the `pair` (in the text form above)
+  of the reference, or `null` for no reference.
 
 `golemIssuer` is the installation's Golem issuer. The conversion:
 

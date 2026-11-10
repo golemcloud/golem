@@ -16,7 +16,7 @@
           "familyName": null,
           "picture": null,
           "preferredUsername": "ana",
-          "claims": "{\"sub\":\"248289761001\",\"email\":\"ana@acme.example\",\"groups\":[\"finance\"]}"
+          "claims": "{\"iss\":\"https://login.acme.example\",\"aud\":[\"golem\"],\"exp\":1893456000,\"iat\":1893452400,\"sub\":\"248289761001\",\"name\":\"Ana\",\"preferred_username\":\"ana\",\"email\":\"ana@acme.example\",\"email_verified\":true}"
         }
       },
       "loginMapping": null,
@@ -27,7 +27,7 @@
       }
     },
     {
-      "name": "oidc: the issuer and sub exactly as written, with a trailing slash and upper case",
+      "name": "oidc: the issuer and sub exactly as written, with a trailing slash and mixed case",
       "principal": {
         "tag": "oidc",
         "val": {
@@ -35,12 +35,12 @@
           "issuer": "https://login.acme.example/",
           "email": null,
           "name": null,
-          "emailVerified": true,
+          "emailVerified": null,
           "givenName": null,
           "familyName": null,
           "picture": null,
           "preferredUsername": null,
-          "claims": "{\"sub\":\"Ana.Example\"}"
+          "claims": "{\"iss\":\"https://login.acme.example/\",\"aud\":[\"golem\"],\"exp\":1893456000,\"iat\":1893452400,\"sub\":\"Ana.Example\"}"
         }
       },
       "loginMapping": null,
@@ -143,6 +143,30 @@
       "loginMapping": null,
       "importedAgent": null,
       "expected": null
+    },
+    {
+      "name": "oidc: a sub with a quote and a backslash, written with escapes in the text form",
+      "principal": {
+        "tag": "oidc",
+        "val": {
+          "sub": "ana\"\\corp",
+          "issuer": "https://login.acme.example",
+          "email": null,
+          "name": null,
+          "emailVerified": null,
+          "givenName": null,
+          "familyName": null,
+          "picture": null,
+          "preferredUsername": null,
+          "claims": "{\"iss\":\"https://login.acme.example\",\"aud\":[\"golem\"],\"exp\":1893456000,\"iat\":1893452400,\"sub\":\"ana\\\"\\\\corp\"}"
+        }
+      },
+      "loginMapping": null,
+      "importedAgent": null,
+      "expected": {
+        "kind": "user",
+        "pair": "(\"https://login.acme.example\",\"ana\\\"\\\\corp\")"
+      }
     }
   ]
 }
