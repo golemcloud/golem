@@ -985,7 +985,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         }
 
         if is_live && !self.state.durability_is_suppressed() {
-            if self.state.entity_execution_mode.is_none() {
+            if matches!(self.state.store_replay_state, StoreReplayState::Primary) {
                 self.state
                     .replay_state
                     .release_retained_starts_at_live_invocation_end()

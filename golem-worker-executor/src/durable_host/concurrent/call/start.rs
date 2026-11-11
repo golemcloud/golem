@@ -326,17 +326,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             requires_agent_authority,
             oplog: ctx.state.oplog.clone(),
             public_state: ctx.public_state.clone(),
-            primary_runtime: ctx.runtime == OwnerRuntime::Agent,
-            replaying_incomplete_entity: ctx
-                .entity_invocation_scope()
-                .is_some_and(|scope| scope.mode() == InvocationExecutionMode::ReplayingIncomplete),
+            store_replay_state: ctx.state.store_replay_state.clone(),
             tool_entity: matches!(
                 ctx.runtime,
                 OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
             ),
             tool_operation: ctx.entity_tool_operation(),
             admission_boundary: None,
-            local_live_tail: ctx.state.local_live_tail(),
             replay_state: ctx.state.replay_state.clone(),
             linear_memory: ctx.linear_memory.clone(),
             execution_scope,

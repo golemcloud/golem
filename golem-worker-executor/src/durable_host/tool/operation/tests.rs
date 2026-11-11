@@ -901,17 +901,20 @@ async fn cancellation_during_capable_attachment_activation_rolls_back_the_batch(
     ));
 
     let local_live_tail = Arc::new(AtomicBool::new(false));
+    let crate::durable_host::StoreReplayState::IncompleteEntityReplay(continuation) =
+        crate::durable_host::StoreReplayState::incomplete_entity_for_test(local_live_tail.clone())
+    else {
+        unreachable!()
+    };
     let activation = tokio::spawn({
         let operation = operation.clone();
-        let local_live_tail = local_live_tail.clone();
         async move {
             crate::durable_host::PendingReplayToLive {
                 replay_target: OplogIndex::from_u64(9),
-                role: crate::durable_host::replay_state::ReplayToLiveRole::NonPrimary,
-                replaying_incomplete_entity: true,
-                tool_entity: true,
-                tool_operation: Some(operation),
-                local_live_tail,
+                finalization: crate::durable_host::LiveFinalization::IncompleteTool {
+                    continuation,
+                    operation,
+                },
                 linear_memory: crate::durable_host::tests::replay_usage_tracker(),
             }
             .finish_at(None)

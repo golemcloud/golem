@@ -1098,7 +1098,7 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
         token.is_live_armed(),
         "the tail-gated token must convert to live-armed after the tail exhausts"
     );
-    assert!(replay_state.is_live());
+    assert!(replay_state.at_replay_tail());
 
     token.delivered();
     // With no cleanup sink the marker append is only settlement-tracked via the drain queue;

@@ -339,7 +339,7 @@ where
         let found = owner.recorded_derivation(start, parent, &created).await?;
         if !found {
             if !executed_live {
-                let replay_exhausted = !ctx.state.replay_state.is_replay();
+                let replay_exhausted = ctx.state.replay_state.at_replay_tail();
                 if !replay_exhausted || ctx.rejects_live_continuation_at_replay_tail() {
                     return Err(anyhow!(
                         "replayed runtime permission-card creation {card_id} is missing its CardDerived audit event"

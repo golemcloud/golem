@@ -483,7 +483,7 @@ async fn completed_custom_invocation_drains_nested_custom_subtree() {
         }
         other => panic!("expected completed custom subtree, got {other:?}"),
     }
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -613,7 +613,7 @@ async fn custom_replay_skips_nested_observational_calls_and_stream_frames_by_ide
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
             if end_idx == OplogIndex::from_u64(8)
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -646,7 +646,7 @@ async fn outer_custom_replay_skips_observational_calls_owned_by_nested_custom_in
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
             if end_idx == OplogIndex::from_u64(7)
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -674,7 +674,7 @@ async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Incomplete
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -705,7 +705,7 @@ async fn delivered_observational_completion_does_not_block_custom_live_fallback(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Incomplete
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -772,7 +772,7 @@ async fn custom_replay_skips_observational_cancellation() {
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
             if end_idx == OplogIndex::from_u64(5)
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -1484,7 +1484,7 @@ async fn held_completed_reconstruction() -> (
 #[test]
 async fn primary_publication_requires_completed_reconstruction_validation() {
     let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
-    let target = replay.switch_cursor_to_live().await.unwrap();
+    let target = replay.exhaust_cursor_replay_prefix().await.unwrap();
     let memory = replay_linear_memory();
 
     let publication = replay
@@ -1508,7 +1508,7 @@ async fn primary_publication_requires_completed_reconstruction_validation() {
     drop(reconstruction);
     assert!(matches!(
         replay
-            .finish_settling_to_live(&memory, ReplayToLiveRole::PrimaryAgent, target)
+            .finish_settling_to_live(&memory, target)
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -1547,7 +1547,7 @@ async fn growing_replay_target_revokes_published_live_state() {
         .await
         .expect("failed to grow replay target");
 
-    assert!(replay.is_replay());
+    assert!(replay.has_replay_remaining());
     assert!(
         !replay.is_live_published(),
         "resuming replay must revoke owner live publication"
@@ -1561,16 +1561,10 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
     let transition = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = linear_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1593,7 +1587,7 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
         transition.await.unwrap().unwrap(),
         ReplayToLiveOutcome::ReplayResumed
     );
-    assert!(replay.is_replay());
+    assert!(replay.has_replay_remaining());
     assert!(!replay.is_live_published());
     assert_eq!(
         linear_memory.reconciliation_grant_bytes(1),
@@ -1605,10 +1599,7 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
     assert_eq!(index, new_target);
     assert!(matches!(entry, OplogEntry::RecoverySucceeded { .. }));
     assert!(matches!(
-        replay
-            .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-            .await
-            .unwrap(),
+        replay.publish_primary_live(&linear_memory).await.unwrap(),
         ReplayToLiveOutcome::Live { .. }
     ));
     assert_eq!(
@@ -1639,16 +1630,10 @@ async fn claim_retried_after_replay_resumed_claims_the_grown_start() {
     let transition = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = linear_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1684,16 +1669,10 @@ async fn replay_finished_is_withheld_while_reconstruction_settles() {
     let transition = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = linear_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1723,7 +1702,7 @@ async fn replay_finished_is_withheld_while_reconstruction_settles() {
 #[test]
 async fn historical_revision_updates_remain_for_root_after_entity_drain() {
     let replay = replay_state_over(vec![remove_retry_policy(), remove_retry_policy()]).await;
-    assert!(replay.is_replay());
+    assert!(replay.has_replay_remaining());
     assert!(!replay.is_live_published());
     let update = ReplayEvent::UpdateReplayed {
         new_revision: golem_common::model::component::ComponentRevision::new(2).unwrap(),
@@ -1742,7 +1721,7 @@ async fn historical_revision_updates_remain_for_root_after_entity_drain() {
     assert!(replay.take_new_replay_events_for(false).is_empty());
     assert_eq!(replay.take_new_replay_events_for(true), vec![update]);
     assert!(replay.take_new_replay_events_for(true).is_empty());
-    assert!(replay.is_replay());
+    assert!(replay.has_replay_remaining());
 }
 
 #[test]
@@ -1765,7 +1744,7 @@ async fn primary_transition_releases_an_incomplete_reconstruction_fence() {
 
     let outcome = tokio::time::timeout(
         Duration::from_secs(1),
-        replay.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent),
+        replay.publish_primary_live(&replay_linear_memory()),
     )
     .await
     .expect("incomplete reconstruction deadlocked the primary transition")
@@ -1822,16 +1801,10 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
 
     let transition = tokio::spawn({
         let replay = replay.clone();
-        async move {
-            replay
-                .switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&replay_linear_memory()).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1874,16 +1847,10 @@ async fn concurrent_same_target_transitions_are_idempotent() {
     let first = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = first_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1892,11 +1859,7 @@ async fn concurrent_same_target_transitions_are_idempotent() {
     let second = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = second_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
 
     drop(reconstruction);
@@ -1917,7 +1880,7 @@ async fn concurrent_same_target_transitions_are_idempotent() {
 #[test]
 async fn old_settler_cannot_publish_a_grown_target() {
     let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
-    let old_target = replay.switch_cursor_to_live().await.unwrap();
+    let old_target = replay.exhaust_cursor_replay_prefix().await.unwrap();
     let new_target = oplog
         .add(OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
@@ -1928,7 +1891,7 @@ async fn old_settler_cannot_publish_a_grown_target() {
         .set_replay_target(new_target)
         .await
         .expect("failed to grow replay target while settling");
-    let second_target = replay.switch_cursor_to_live().await.unwrap();
+    let second_target = replay.exhaust_cursor_replay_prefix().await.unwrap();
     assert_eq!(second_target, new_target);
     drop(reconstruction);
 
@@ -2202,7 +2165,7 @@ async fn owner_lifecycle_interrupts_scope_resolution_without_crossing_delivery()
                 WorkerExecutorError::Interrupted { kind }
             );
             assert_eq!(replay.last_replayed_index(), OplogIndex::from_u64(4));
-            assert!(!replay.is_live());
+            assert!(!replay.at_replay_tail());
             drop(gate);
         }
     }
@@ -2284,11 +2247,7 @@ async fn owner_failure_during_final_classification_prevents_live_publication() {
     let transition = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = linear_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     drop(reconstruction);
     entered.wait().await;
@@ -2486,9 +2445,9 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
         other => panic!("expected the recorded successful result, got {other:?}"),
     }
 
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(matches!(
-        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+        rs.publish_primary_live(&replay_linear_memory())
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -5746,7 +5705,7 @@ async fn await_natural_tail_end_returns_once_tail_drains() {
     rs.await_resolution(handle).await.unwrap();
 
     rs.await_natural_tail_end(None).await.unwrap();
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -5787,7 +5746,7 @@ async fn await_natural_tail_end_waits_for_positionally_owned_entry() {
     assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
 
     waiter.await.unwrap();
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -7237,11 +7196,11 @@ async fn hints_behind_a_released_retained_start_are_published_at_live_invocation
         rs.pending_card_derivation(derived_card.card_id()).await,
         None
     );
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert_eq!(
         rs.pending_card_derivation(derived_card.card_id()).await,
         None,
-        "switch_to_live keeps retained Starts and their deferred hints"
+        "exhaust_replay_prefix keeps retained Starts and their deferred hints"
     );
 
     rs.release_retained_starts_at_live_invocation_end()
@@ -7539,7 +7498,7 @@ async fn retained_invocation_identity_is_checked_before_live_continuation() {
                 .await
                 .unwrap();
             rs.await_resolution(first).await.unwrap();
-            assert_eq!(rs.is_live(), exhausted);
+            assert_eq!(rs.at_replay_tail(), exhausted);
             let position = rs.last_replayed_index();
 
             for wrong in [
@@ -7953,7 +7912,7 @@ async fn store_already_live_claim_reports_replay_ended_once_the_cursor_reaches_t
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
         other => panic!("expected Completed, got {other:?}"),
     }
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(rs.has_unclaimed_retained_starts());
 
     match rs
@@ -8192,10 +8151,10 @@ async fn closed_retained_starts_are_released_at_live_invocation_end() {
     }
     assert!(rs.has_unclaimed_retained_starts());
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(
         rs.has_unclaimed_retained_starts(),
-        "switch_to_live keeps retained Starts"
+        "exhaust_replay_prefix keeps retained Starts"
     );
 
     rs.release_retained_starts_at_live_invocation_end()
@@ -8242,7 +8201,7 @@ async fn unclosed_retained_starts_are_rejected_at_live_invocation_end() {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
         other => panic!("expected Completed, got {other:?}"),
     }
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(rs.has_unclaimed_retained_starts());
 
     let err = rs
@@ -8290,7 +8249,7 @@ async fn retained_terminals_the_cursor_clamped_past_are_found_at_live_invocation
         other => panic!("expected Completed, got {other:?}"),
     }
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
     assert!(rs.has_unclaimed_retained_starts());
 
@@ -8651,7 +8610,7 @@ async fn await_resolves_across_unclaimed_sibling_start() {
 async fn speculative_read_does_not_publish_live_cursor() {
     // [RecoverySucceeded, RemoveRetryPolicy(2)] — replay_target = 2. A speculative read of the last entry must
     // NOT make the cursor observably reach the replay target while the read is still
-    // rollbackable: the predicate (run after the read) must still see `is_live() == false`. This
+    // rollbackable: the predicate (run after the read) must still see `at_replay_tail() == false`. This
     // is the regression guard for "publish only committed cursor state" — a transient live cursor
     // would let a concurrent awaiter falsely conclude end-of-replay.
     let rs = replay_state_over(vec![
@@ -8661,12 +8620,12 @@ async fn speculative_read_does_not_publish_live_cursor() {
         remove_retry_policy(),
     ])
     .await;
-    assert!(!rs.is_live());
+    assert!(!rs.at_replay_tail());
 
     let observed_live = std::cell::Cell::new(None);
     let probe = rs
         .try_get_oplog_entry(|_entry| {
-            observed_live.set(Some(rs.is_live()));
+            observed_live.set(Some(rs.at_replay_tail()));
             false
         })
         .await
@@ -8683,7 +8642,7 @@ async fn speculative_read_does_not_publish_live_cursor() {
         OplogIndex::from_u64(1),
         "a rolled-back probe must leave the committed cursor unchanged"
     );
-    assert!(!rs.is_live());
+    assert!(!rs.at_replay_tail());
 }
 
 #[test]
@@ -8704,7 +8663,7 @@ async fn probe_past_lone_unclaimed_start_retains_it_and_reaches_the_tail() {
     let observed_live = std::cell::Cell::new(None);
     let probe = rs
         .try_get_oplog_entry(|_entry| {
-            observed_live.set(Some(rs.is_live()));
+            observed_live.set(Some(rs.at_replay_tail()));
             false
         })
         .await
@@ -8713,7 +8672,7 @@ async fn probe_past_lone_unclaimed_start_retains_it_and_reaches_the_tail() {
     assert!(probe.is_none());
     assert_eq!(observed_live.get(), Some(false));
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(rs.has_unclaimed_retained_starts());
 
     let handle = rs
@@ -8862,7 +8821,7 @@ async fn overlap_layout_with_scope_end_behind_awaited_sibling() {
 async fn awaiter_reaching_tail_across_retained_start_is_incomplete() {
     // [RecoverySucceeded, Start(A=2), Start(B=3)] — A is claimed and awaited but B is never claimed. The
     // awaiter retains B and reaches the replay tail without A's End: it resolves Incomplete
-    // (rather than sleeping on the unclaimed Start(B) until switch_to_live) and drops its
+    // (rather than sleeping on the unclaimed Start(B) until exhaust_replay_prefix) and drops its
     // registration; B stays retained for a late owner.
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
@@ -8899,9 +8858,9 @@ async fn awaiter_reaching_tail_across_retained_start_is_incomplete() {
     }
     assert!(rs.has_unclaimed_retained_starts());
 
-    // switch_to_live keeps the retained Start: the late owner still adopts it and, lacking a
+    // exhaust_replay_prefix keeps the retained Start: the late owner still adopts it and, lacking a
     // terminal, is Incomplete as well.
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(rs.has_unclaimed_retained_starts());
     let handle_b = rs
         .claim_concurrent_start(
@@ -8967,7 +8926,7 @@ async fn incomplete_reconstruction_resolution_removes_only_its_fence() {
         .expect("reconstruction guard");
     let claim_state = replay.cursor.reconstruction_claims.clone();
 
-    replay.switch_cursor_to_live().await.unwrap();
+    replay.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(claim_state.active_fences().is_empty());
     assert_eq!(claim_state.active_bodies(), HashSet::from([start_index]));
     assert!(matches!(
@@ -9003,7 +8962,7 @@ async fn consumed_reconstruction_terminal_blocks_until_body_validation() {
         replay.await_resolution_outcome(handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { .. })
     ));
-    replay.switch_cursor_to_live().await.unwrap();
+    replay.exhaust_cursor_replay_prefix().await.unwrap();
     reconstruction.body_settled();
     assert_eq!(claim_state.active_fences(), HashSet::from([start_index]));
     assert!(claim_state.active_bodies().is_empty());
@@ -9058,7 +9017,7 @@ async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
     let mut reconstruction = handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
-    replay.switch_cursor_to_live().await.unwrap();
+    replay.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(
         replay.ensure_reconstruction_claims_empty().is_err(),
         "an incomplete claim's active body must still reject generation replacement"
@@ -9579,7 +9538,7 @@ async fn sequential_replay_reads_each_oplog_entry_once() {
     oplog.reads.lock().unwrap().clear();
 
     let mut read_indices = Vec::new();
-    while rs.is_replay() {
+    while rs.has_replay_remaining() {
         let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
         assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
         read_indices.push(idx);
@@ -9620,7 +9579,7 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
         .await
         .expect("failed to build replay state");
 
-    assert!(!rs.is_live(), "Start at 2 is not yet consumed");
+    assert!(!rs.at_replay_tail(), "Start at 2 is not yet consumed");
     let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
         .claim_start_or_replay_end(StartClaim::unowned(
             &HostFunctionName::MonotonicClockNow,
@@ -9634,11 +9593,11 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
     assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
 
     assert!(
-        rs.is_live(),
+        rs.at_replay_tail(),
         "consuming the Start must jump over the deleted tail to the target"
     );
     assert!(matches!(
-        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+        rs.publish_primary_live(&replay_linear_memory())
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -9679,9 +9638,9 @@ async fn replay_finished_emitted_when_target_entry_consumed() {
         .unwrap();
     rs.await_resolution(handle).await.unwrap();
 
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(matches!(
-        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+        rs.publish_primary_live(&replay_linear_memory())
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -10215,7 +10174,7 @@ async fn concurrent_replay_call_permutation_fuzz() {
         }
 
         assert!(
-            rs.is_live(),
+            rs.at_replay_tail(),
             "seed {seed}: replay did not reach live after all calls resolved"
         );
         let internal = rs.cursor.state.lock().await;
@@ -10473,7 +10432,7 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
         }
 
         assert!(
-            rs.is_live(),
+            rs.at_replay_tail(),
             "seed {seed}: replay did not reach live after the full walk"
         );
         assert!(
@@ -10536,7 +10495,7 @@ async fn orphan_end_with_deleted_start_is_skipped() {
         }
         other => panic!("expected Completed, got {other:?}"),
     }
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 /// A `Cancelled` orphan (its `Start` deleted) is consumed transparently by a positional drain,
@@ -10566,7 +10525,7 @@ async fn orphan_cancelled_with_deleted_start_is_skipped() {
     let result = rs.try_get_oplog_entry(|_| false).await.unwrap();
     assert!(result.is_none());
     assert!(
-        rs.is_live(),
+        rs.at_replay_tail(),
         "the orphan Cancelled must be drained, reaching live"
     );
 }
@@ -10600,7 +10559,7 @@ async fn positional_reader_skips_orphan_terminal() {
     let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(4));
     assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 /// The inverse partial deletion — the `Start` kept, its terminal inside a deleted region —
@@ -10639,7 +10598,7 @@ async fn deleted_terminal_reports_incomplete() {
         ResolutionOutcome::Incomplete => {}
         other => panic!("expected Incomplete, got {other:?}"),
     }
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 /// How a generated call pair interacts with the deleted regions in
@@ -10837,7 +10796,7 @@ async fn replay_skips_deleted_regions_fuzz() {
         );
 
         assert!(
-            rs.is_live(),
+            rs.at_replay_tail(),
             "seed {seed}: replay did not reach live after skipping deleted regions"
         );
     }
@@ -11056,7 +11015,7 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
     }
 
     // The whole sequential oplog is consumed: replay is over and nothing is left pending.
-    assert!(rs.is_live(), "replay must reach live at the end");
+    assert!(rs.at_replay_tail(), "replay must reach live at the end");
     let internal = rs.cursor.state.lock().await;
     assert!(
         !internal
@@ -11434,7 +11393,7 @@ async fn benign_card_suffix_reconstructs_before_wallet_boundary() {
     rs.get_oplog_entry(None).await.unwrap();
     assert!(!rs.is_live_published());
     assert!(matches!(
-        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+        rs.publish_primary_live(&replay_linear_memory())
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -11473,7 +11432,7 @@ async fn wallet_boundary_rechecks_grown_target_and_refuses_growth_after_live_com
     tokio::pin!(acquisition);
     assert!(futures::poll!(acquisition.as_mut()).is_pending());
     rs.try_get_oplog_entry(|_| true).await.unwrap().unwrap();
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(futures::poll!(acquisition.as_mut()).is_pending());
     rs.set_replay_target(OplogIndex::from_u64(3)).await.unwrap();
     drop(contention);
@@ -11614,7 +11573,7 @@ async fn custom_claim_rejects_invocation_id_collision() {
     };
 
     assert!(format!("{error}").contains("no matching Start"));
-    assert!(!rs.is_live());
+    assert!(!rs.at_replay_tail());
 }
 
 #[test]
@@ -14675,7 +14634,7 @@ async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry
         )
         .await
         .unwrap();
-        assert!(replay.is_live());
+        assert!(replay.at_replay_tail());
         drop(replacement.lock_boundary().await.unwrap());
         replacement.validate_current().unwrap();
         assert_eq!(

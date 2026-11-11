@@ -196,7 +196,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         // An invocation retained only through its start has no recorded body.
                         // Publish live before pure guest code or logging runs, without waiting
                         // for a durable host call to observe the exhausted replay cursor.
-                        if store.as_context().data().durable_ctx().state.replay_state.is_live()
+                        if store.as_context().data().durable_ctx().state.replay_state.at_replay_tail()
                             && let Err(error) = store
                                 .as_context_mut()
                                 .data_mut()

@@ -230,6 +230,43 @@ enum ReplayTransitionPhase {
     Live = 2,
 }
 
+#[derive(Debug)]
+struct AtomicReplayTransitionPhase(AtomicU8);
+
+impl AtomicReplayTransitionPhase {
+    fn replaying() -> Self {
+        Self(AtomicU8::new(ReplayTransitionPhase::Replaying as u8))
+    }
+
+    fn load(&self) -> ReplayTransitionPhase {
+        match self.0.load(Ordering::Acquire) {
+            0 => ReplayTransitionPhase::Replaying,
+            1 => ReplayTransitionPhase::Settling,
+            2 => ReplayTransitionPhase::Live,
+            _ => unreachable!("invalid replay transition phase"),
+        }
+    }
+
+    fn begin_settling(&self) {
+        let _ = self.0.compare_exchange(
+            ReplayTransitionPhase::Replaying as u8,
+            ReplayTransitionPhase::Settling as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn publish_live(&self) {
+        self.0
+            .store(ReplayTransitionPhase::Live as u8, Ordering::Release);
+    }
+
+    fn resume_replay(&self) {
+        self.0
+            .store(ReplayTransitionPhase::Replaying as u8, Ordering::Release);
+    }
+}
+
 /// The completion-delivery markers, keyed by the `Start` they refer to, with the positions of the
 /// `CompletionDelivered` markers in oplog order, so a claim can ask whether a delivery boundary
 /// lies in a range without visiting every marker.
@@ -549,7 +586,7 @@ impl ToolAttachmentReconstruction {
 /// [`Self::state`] for a [`cursor::CursorTx`]. Retained claims need only `state`: they use history
 /// already passed by the reader and cannot advance it or publish live.
 ///
-/// Hot, read-only position queries (`is_live`, `last_replayed_index`, …) read [`Self::position`]
+/// Hot, read-only position queries (`at_replay_tail`, `last_replayed_index`, …) read [`Self::position`]
 /// and [`Self::replay_target`] without taking the lock. Physical and claimed-position publication
 /// happens while `state` is held; retained claims can publish `last_replayed_non_hint_index`
 /// without moving the physical reader. `replay_target` is set at phase boundaries
@@ -593,7 +630,7 @@ struct ReplayCursor {
     /// Cursor exhaustion is published before historical reconstruction validation so resolver
     /// incompletes can wake without exposing live owner admission. Only the primary transition
     /// publishes `Live`, after every completed reconstruction fence validates.
-    transition_phase: AtomicU8,
+    transition_phase: AtomicReplayTransitionPhase,
     /// The cursor lock. Guards every piece of state a cursor-advance transaction touches, including
     /// the concurrent-replay resolver. Held across the transaction's internal `await`s (oplog reads,
     /// payload downloads), but never while a call is parked on its resolution / cursor progress — an

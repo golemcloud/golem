@@ -27,7 +27,7 @@ impl ReplayState {
                                 return Ok(true);
                             }
                             tx.try_get_oplog_entry(|_| false).await?;
-                            if wallet.has_recorded_derivation(card) || tx.cursor.is_live() {
+                            if wallet.has_recorded_derivation(card) || tx.cursor.at_replay_tail() {
                                 return Ok(true);
                             }
                             tx.check_parked_positional_read(cursor::PositionalReader::Ordinary)
@@ -131,7 +131,7 @@ impl ReplayState {
         handle: &ReplayCallHandle,
     ) -> Result<bool, WorkerExecutorError> {
         self.drain_awaited_terminals().await?;
-        Ok(handle.resolution_ready() || self.is_live())
+        Ok(handle.resolution_ready() || self.at_replay_tail())
     }
 
     /// Rejects a resolved delivery marker beyond the effective replay target. Debug target
@@ -250,7 +250,7 @@ impl ReplayState {
                 return Ok(barrier);
             }
 
-            if self.is_live() {
+            if self.at_replay_tail() {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     match start_index {
                         Some(start_index) => format!(
@@ -305,7 +305,7 @@ impl ReplayState {
                     .await
             })
             .await?;
-            if self.is_live() {
+            if self.at_replay_tail() {
                 return Ok(());
             }
 
@@ -459,8 +459,8 @@ impl ReplayState {
                 }
             }
 
-            if self.is_live() {
-                // The lock-free `is_live()` snapshot may have observed a sibling transaction that
+            if self.at_replay_tail() {
+                // The lock-free `at_replay_tail()` snapshot may have observed a sibling transaction that
                 // already published `last_replayed_index == replay_target` while committing *this*
                 // call's terminal but had not yet routed it to the resolver (delivery in
                 // `on_committed_replay_entry` happens after the position is published, see

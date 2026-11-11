@@ -58,7 +58,7 @@ use crate::durable_host::durable_session::DroppedDurableInput;
 use crate::durable_host::replay_state::{ReplayState, ReplayToLiveRole};
 use crate::durable_host::{
     BeginReplayToLive, DurableWorkerCtx, FinishReplayToLive, PendingReplayToLive,
-    PublicDurableWorkerState,
+    PublicDurableWorkerState, StoreReplayState,
 };
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
 use crate::services::{HasShutdownToken, HasWorker};
@@ -92,7 +92,7 @@ pub(crate) use context::{
 pub use delivery::*;
 pub(crate) use demand_stream::*;
 #[cfg(test)]
-pub(crate) use drop_events::tests::{cleanup_recorder, cleanup_recorder_for_store};
+pub(super) use drop_events::tests::{cleanup_recorder, cleanup_recorder_for_store};
 pub use drop_events::*;
 pub use replay::*;
 

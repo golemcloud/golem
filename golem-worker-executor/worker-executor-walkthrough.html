@@ -961,7 +961,7 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
 <p>Registry limit requests carry the deployment's existing meter flags. Disabled runtime dimensions skip usage reads and allowance calculations. All-off reads still resolve per-agent limits without creating monthly billing revisions or baselines. Aggregate display does not create runtime billing state.</p>
 <p>Delivery acknowledgement and monthly-policy availability are separate facts. A usage update can commit even when the subsequent Registry policy read fails. The reply acknowledges that delivery and marks enforcement unavailable. The account entry retains its applied policy instead of installing the fallback's mode, period or capacity. Admission, guest checks and the existing monitor report infrastructure failure, not quota exhaustion. Guest-entry, post-instantiation and epoch checks share <code>resource_capacity_error</code>. Only typed resource exhaustion becomes durable suspension; infrastructure errors retain their <code>AgentError</code> and retry-policy classification. The latest observed policy revision remains a floor against stale replies. The next existing batch tick refreshes an unavailable entry; a valid reply restores admission without resending acknowledged usage. All-off entries have no monthly availability gate.</p>
 <p>A live invocation still holds allocated linear memory and filesystem stock while waiting for host I/O. Those live allocations accrue byte-time during permit-held waits even when no Wasm executes. The memory meter measures allocated linear-memory bytes, not the configured maximum. The parked guest itself burns no fuel.</p>
-<p id="live-reconstruction-billing">Reconstruction keeps physical admission, the concurrent-agent permit, allocation observations, per-agent limits and cleanup ownership. Filesystem materialization and replay do not start customer byte-time. <code>GuestResourceUsageGuard</code> covers actual exported calls, native bodies and stream drains. Successful <code>PendingReplayToLive::finish</code> activates usage inside such a body. A primary replay tail outside the body does not bill final filesystem verification. Completed entity replay remains unbillable. An incomplete entity activates its own live memory after local admission, even while the primary is still replaying; this does not bill primary replay memory.</p>
+<p id="live-reconstruction-billing">Reconstruction keeps physical admission, the concurrent-agent permit, allocation observations, per-agent limits and cleanup ownership. Filesystem materialization and replay do not start customer byte-time. <code>GuestResourceUsageGuard</code> covers actual exported calls, native bodies and stream drains. Successful <code>PendingReplayToLive::finish_at</code> activates usage inside such a body. A primary replay tail outside the body does not bill final filesystem verification. Completed entity replay remains unbillable. An incomplete entity activates its own live memory after local admission, even while the primary is still replaying; this does not bill primary replay memory.</p>
 <p>A filesystem-capable live body activates the generation's current storage stock. An incapable entity does not. That live stock remains billable through cleanup and permit release. Separate blob stock accounting is unchanged. Entity activation shares the owner's memory-transition lock with window closure, so a late activation cannot resume a closed or dormant window.</p>
 <p>Production Wasmtime call hooks sample the physical fuel gauge at guest/host boundaries. <code>FuelUsage</code> decreases a separate metered gauge only during live guest execution. Physical instruction consumption remains visible in invocation diagnostics. Core instantiation, completed replay and snapshot loading do not borrow or charge customer fuel. Snapshot saving keeps its existing live accounting. The existing prepaid/refund attribution and overage eligibility remain unchanged.</p>
 <table id="live-usage-accounting">
@@ -1464,7 +1464,7 @@ grant → same-key durable repair
 
 <h3>Four steps, four different facts</h3>
 <div class="grid2">
-  <div class="card"><h4>Execute</h4><p>Perform the live effect. Allowed only when the durable context reports live (<code>store_is_live</code> / <code>is_live()</code>) — <em>never</em> because the cursor happens to be at the end of history.</p></div>
+  <div class="card"><h4>Execute</h4><p>Perform the live effect. Allowed only when the durable context reports live (<code>is_live()</code>, backed by <code>StoreReplayState</code>) — <em>never</em> because the cursor happens to be at the end of history.</p></div>
   <div class="card"><h4>Append</h4><p><code>Start</code> is appended eagerly when the call begins; <code>End</code> or <code>Cancelled</code> when it terminates. A trap leaves <code>Start</code> incomplete (<code>abandon_for_trap</code>); a trap never writes <code>Cancelled</code>.</p></div>
   <div class="card"><h4>Claim</h4><p>On replay, match the host call the guest is making now against a recorded <code>Start</code> by identity (<code>StartClaim</code>: invocation id, function name, kind, owner). A <code>Start</code> that does not exist in history is a divergence error.</p></div>
   <div class="card"><h4>Observe</h4><p>The guest reads the result. For accessor calls this is recorded by <code>CompletionDelivered</code> / <code>CompletionDiscarded</code> as the <em>tail</em> operation of the host function. Host completion time and guest observation time are different facts; only the second is a guest input.</p></div>
@@ -1687,10 +1687,12 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 
 <h3>Three facts that are not the same</h3>
 <ol>
-  <li><strong>Cursor exhaustion</strong> — the recorded history has been consumed. An observation only.</li>
-  <li><strong>Shared primary publication</strong> — <code>transition_phase</code> moves <code>Replaying → Settling → Live</code>. <code>ReplayState::switch_to_live</code> with <code>ReplayToLiveRole::PrimaryAgent</code> runs <code>begin_primary_settling</code>, then <code>finish_settling_to_live</code> loops until every <code>HistoricalReconstruction</code> fence (a tool body still validating its recorded terminal) has validated, and <code>CursorTx::finish_primary_settling</code> publishes Live — or reports <code>ReplayResumed</code> when new history appeared meanwhile.</li>
-  <li><strong>Entity-local liveness</strong> — <code>store_is_live(mode, local_live_tail, shared_live_published)</code>: the primary Store is live iff (2) has published; a <code>ReplayingCompleted</code> entity Store is <em>never</em> live; a <code>ReplayingIncomplete</code> or <code>Live</code> entity Store is live iff its own <code>local_live_tail</code> was set by <code>PendingReplayToLive::finish</code>. For <code>ReplayToLiveRole::NonPrimary</code>, <code>switch_to_live</code> skips (2): the entity Store goes live for its own invocation scope without waiting for the primary.</li>
+  <li><strong>Cursor exhaustion</strong> — <code>ReplayState::at_replay_tail()</code> observes that the recorded history has been consumed; <code>has_replay_remaining()</code> observes the opposite. Neither grants live authority.</li>
+  <li><strong>Shared primary publication</strong> — <code>transition_phase</code> moves <code>Replaying → Settling → Live</code>. <code>ReplayState::publish_primary_live(linear_memory)</code> runs <code>begin_primary_settling</code>, then <code>finish_settling_to_live</code> loops until every <code>HistoricalReconstruction</code> fence (a tool body still validating its recorded terminal) has validated, and <code>CursorTx::finish_primary_settling</code> publishes Live — or reports <code>ReplayResumed</code> when new history appeared meanwhile.</li>
+  <li><strong>Store liveness</strong> — <code>StoreReplayState::is_live(primary_live_published)</code>: <code>Primary</code> reads (2); <code>CompletedEntityReplay</code> is always false; <code>IncompleteEntityReplay</code> reads its shared <code>EntityContinuation</code> gate; <code>LiveEntity</code> is always true. Clones share the incomplete entity's gate. The non-primary path calls <code>exhaust_replay_prefix</code>, not primary publication, and switches its own linear memory to live. An incomplete entity can continue its own invocation scope without waiting for the primary.</li>
 </ol>
+
+<p><code>PendingReplayToLive</code> holds a flat <code>LiveFinalization</code> payload: <code>Primary</code>, <code>IncompleteBody</code>, <code>IncompleteTool</code>, or <code>AlreadyLiveEntity</code>. <code>finish_at</code> consumes the pending value. It publishes an incomplete body's continuation gate directly; for an incomplete tool it publishes only after attachment memory admission returns <code>Admitted</code>. Refusal, cancellation and fencing leave that gate closed. Primary and already-live entity finalization need no local gate publication. Successful finalization activates live usage only inside a guest body.</p>
 
 <div class="phase-track" role="group" aria-label="Replay transition phases">
   <div class="phase on">Replaying<small>consuming recorded entries; live effects refused</small></div>
@@ -1700,27 +1702,28 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 
 <div class="widget" id="liveness-widget">
   <h4>Is this Store live? <span class="pill js-only">interactive</span></h4>
-  <p>The answer comes from <code>store_is_live</code> in <code>durable_host/mod.rs</code> — try to predict it before you look.</p>
+  <p>The answer comes from <code>StoreReplayState::is_live</code> in <code>durable_host/replay_to_live.rs</code> — try to predict it before you look. Only an incomplete entity has a continuation gate.</p>
   <div class="controls js-only">
     <label>Store kind
       <select id="lv-kind">
         <option value="primary">Primary agent Store</option>
-        <option value="completed">Entity Store, ReplayingCompleted</option>
-        <option value="incomplete">Entity Store, ReplayingIncomplete</option>
-        <option value="live">Entity Store, Live</option>
+        <option value="completed">CompletedEntityReplay</option>
+        <option value="incomplete">IncompleteEntityReplay</option>
+        <option value="live">LiveEntity</option>
       </select>
     </label>
     <label class="check"><input type="checkbox" id="lv-exhausted"> cursor exhausted</label>
     <label class="check"><input type="checkbox" id="lv-published"> primary published Live</label>
-    <label class="check"><input type="checkbox" id="lv-tail"> entity <code>local_live_tail</code> set</label>
+    <label class="check"><input type="checkbox" id="lv-tail"> incomplete entity <code>EntityContinuation</code> published</label>
   </div>
   <div class="result js-only" id="lv-result" aria-live="polite"></div>
   <div class="no-js-only">
-    <pre><code>fn store_is_live(mode, local_live_tail, shared_live_published) -> bool {
-    match mode {
-        Some(ReplayingCompleted)            => false,
-        Some(ReplayingIncomplete | Live)    => local_live_tail,
-        None /* primary */                  => shared_live_published,
+    <pre><code>fn is_live(&amp;self, primary_live_published: bool) -> bool {
+    match self {
+        Primary                    => primary_live_published,
+        CompletedEntityReplay      => false,
+        IncompleteEntityReplay(_)  => self.continued_live(),
+        LiveEntity                 => true,
     }
 }</code></pre>
   </div>
@@ -2214,7 +2217,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <tbody>
     <tr><td><code>ReplayingCompleted</code></td><td><code>invoke_tool_sidecar</code> still calls the sidecar's guest export; the body re-executes from recorded inputs. <code>drive_access</code> releases the recorded terminal only after the reconstruction validates against the claim (<code>StartClaim::owned_tool_invocation</code>). Completed replays reuse historical memory charges and bypass current attachment memory pressure.</td><td><span class="pill ok">not repeated</span> — the body's durable host calls replay from the owner oplog</td></tr>
     <tr><td><code>ReplayingCompleted</code>, <code>body_execution = Skipped</code></td><td>Admission was rejected before the body ever ran (e.g. an attachment upgrade hit <code>ResourceExhausted</code>). <code>execute_recorded_skipped_tool_call</code> returns the recorded rejection with no guest call at all.</td><td>none</td></tr>
-    <tr><td><code>ReplayingIncomplete</code></td><td>A <code>Start</code> without terminal: the body switches to live and completes under the <em>original</em> index. It must first be admitted by <code>activate_live_attachment_memory_accounting</code> (<code>Admitted</code> or <code>ResourceExhausted</code>, persisted either way); then <code>PendingReplayToLive::finish</code> with <code>ReplayToLiveRole::NonPrimary</code> sets the entity Store's <code>local_live_tail</code>.</td><td>completed nested effects replay; the incomplete remainder runs live</td></tr>
+    <tr><td><code>ReplayingIncomplete</code></td><td>A <code>Start</code> without terminal: the body switches to live and completes under the <em>original</em> index. <code>PendingReplayToLive::finish_at</code> consumes its <code>LiveFinalization::IncompleteTool</code> payload and calls <code>activate_live_attachment_memory_accounting_at</code>. Only <code>Admitted</code> publishes the shared <code>EntityContinuation</code> gate; rejection, cancellation and fencing leave it closed.</td><td>completed nested effects replay; the admitted incomplete remainder runs live</td></tr>
     <tr><td><code>Live</code></td><td>Ordinary recording.</td><td>performed once</td></tr>
   </tbody>
 </table>
@@ -2998,11 +3001,16 @@ Fork input:   [A, B] ── cut ── [X, Y]
   function liveness() {
     if (!lvKind) return;
     var kind = lvKind.value, live, why;
+    lvTail.disabled = kind !== 'incomplete';
+    if (lvTail.disabled) lvTail.checked = false;
+    if (lvPub.checked) lvEx.checked = true;
+    lvEx.disabled = lvPub.checked;
     if (kind === 'primary') { live = lvPub.checked; why = 'A primary Store is live iff the shared flag was <em>published</em> (Replaying \u2192 Settling \u2192 Live). Cursor exhaustion alone changes nothing.'; }
-    else if (kind === 'completed') { live = false; why = 'An entity Store in <code>ReplayingCompleted</code> mode is never live: the whole invocation was recorded, so every durable call inside it must replay. The guest export re-runs only to rebuild filesystem effects.'; }
-    else { live = lvTail.checked; why = 'An entity Store in <code>ReplayingIncomplete</code> or <code>Live</code> mode is live iff its own <code>local_live_tail</code> was set when its share of the owner\u2019s history ran out. The primary\u2019s published flag is not consulted.'; }
-    var note = lvEx.checked && !live ? ' The cursor being exhausted is an observation, not a permission: live effects wait for the publish.' : '';
-    setResult(lvRes, live ? 'ok' : 'hint', 'store_is_live \u2192 ' + (live ? 'true' : 'false'), '<p>' + why + note + '</p>');
+    else if (kind === 'completed') { live = false; why = '<code>CompletedEntityReplay</code> is never live, even after primary publication. Its durable calls replay; no continuation gate exists.'; }
+    else if (kind === 'incomplete') { live = lvTail.checked; why = '<code>IncompleteEntityReplay</code> reads its shared <code>EntityContinuation</code> gate. <code>PendingReplayToLive::finish_at</code> publishes it; an incomplete tool requires <code>Admitted</code> attachment memory admission first. Primary publication is not consulted.'; }
+    else { live = true; why = '<code>LiveEntity</code> is always live from creation. It has no continuation gate and does not consult primary publication.'; }
+    var note = lvEx.checked && !live ? ' Cursor exhaustion is an observation, not permission to perform live effects.' : '';
+    setResult(lvRes, live ? 'ok' : 'hint', 'StoreReplayState::is_live \u2192 ' + (live ? 'true' : 'false'), '<p>' + why + note + '</p>');
   }
   [lvKind, lvEx, lvPub, lvTail].forEach(function (el) { if (el) el.addEventListener('change', liveness); });
   liveness();
