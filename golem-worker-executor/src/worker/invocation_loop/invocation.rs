@@ -300,19 +300,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         .instrument(span!(Level::INFO, "prepare_invocation_context"))
         .await?;
 
-        let display_name = lowered.display_name.clone();
         let result = invoke_observed_and_traced(
             lowered,
             self.store,
             self.instance,
             InvocationMode::Live(invocation),
+            self.uses_streams.then_some(&idempotency_key),
         )
         .await;
-        let result = if self.uses_streams {
-            materialize_streaming_result(self.store, result, &display_name, &idempotency_key).await
-        } else {
-            result
-        };
 
         // Invocation-owned spans are closed by AgentInvocationFinished in the
         // oplog processor; removing their resident context records no transition.
