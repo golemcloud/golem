@@ -792,3 +792,104 @@ impl NativeToolTask {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::stream_bus::LiveStreamEventPayload;
+    use crate::durable_host::tool::attachment::{AttachmentMemory, attachment_pair};
+    use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn native_output_relay_retains_chunk_charge_and_publishes_typed_failure() {
+        let (producer, consumer, _) = attachment_pair(8, AttachmentMemory::inert());
+        producer.configure_live();
+        producer.write(vec![17, 255, 39]).await.unwrap();
+        producer.fail(ByteStreamFailure::Cancelled).unwrap();
+        let controller = producer.controller();
+        let (publisher, endpoint) = accounted_relay_stream_pair(1, None).unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+        let relay = NativeOutputRelay {
+            source: consumer.into_stream_producer(),
+            publisher,
+            lifecycle: lifecycle.clone(),
+            runtime_source: None,
+            runtime_teardown: Arc::new(|| false),
+            interrupt: Box::pin(std::future::pending()),
+            finished: false,
+        };
+        let run = relay.run();
+        tokio::pin!(run);
+        assert!(futures::poll!(&mut run).is_pending());
+        assert_eq!(controller.metadata().buffered_bytes, 0);
+        assert_eq!(controller.metadata().charged_bytes, 3);
+        for (offset, byte) in [17, 255, 39].into_iter().enumerate() {
+            let event = primary.recv().await.unwrap();
+            assert_eq!(event.offset, offset as u64);
+            assert_eq!(
+                event.payload,
+                LiveStreamEventPayload::Item(SchemaValue::U8(byte))
+            );
+            if offset < 2 {
+                assert!(futures::poll!(&mut run).is_pending());
+                assert_eq!(
+                    controller.metadata().charged_bytes,
+                    if offset == 0 { 3 } else { 0 }
+                );
+            }
+        }
+        run.await.unwrap();
+        assert_eq!(controller.metadata().charged_bytes, 0);
+        let event = primary.recv().await.unwrap();
+        assert_eq!(event.offset, 3);
+        assert_eq!(
+            event.payload,
+            LiveStreamEventPayload::Terminal {
+                authored_by: StreamTerminalAuthor::Host,
+                terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                    "tool output cancelled".into()
+                )),
+            }
+        );
+        assert!(!lifecycle.is_aborted());
+    }
+
+    #[test]
+    #[test_r::timeout("5s")]
+    async fn dropping_backpressured_native_output_relay_does_not_publish_a_terminal() {
+        let (producer, consumer, _) = attachment_pair(8, AttachmentMemory::inert());
+        producer.configure_live();
+        producer.write(vec![17, 255, 39]).await.unwrap();
+        let controller = producer.controller();
+        let (publisher, endpoint) = accounted_relay_stream_pair(1, None).unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+        let relay = NativeOutputRelay {
+            source: consumer.into_stream_producer(),
+            publisher,
+            lifecycle: lifecycle.clone(),
+            runtime_source: None,
+            runtime_teardown: Arc::new(|| false),
+            interrupt: Box::pin(std::future::pending()),
+            finished: false,
+        };
+        let mut run = Box::pin(relay.run());
+        assert!(futures::poll!(&mut run).is_pending());
+        assert_eq!(controller.metadata().charged_bytes, 3);
+        drop(run);
+        assert_eq!(controller.metadata().charged_bytes, 0);
+        assert!(lifecycle.is_aborted());
+        let event = primary.recv().await.unwrap();
+        assert_eq!(event.offset, 0);
+        assert_eq!(
+            event.payload,
+            LiveStreamEventPayload::Item(SchemaValue::U8(17))
+        );
+        let read = primary.recv();
+        tokio::pin!(read);
+        assert!(futures::poll!(&mut read).is_pending());
+    }
+}
