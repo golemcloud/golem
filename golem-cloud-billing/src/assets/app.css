@@ -427,9 +427,10 @@ main {
   overflow-wrap: anywhere;
 }
 
+/* At 0.8rem, a UUID fits on one line of the account card. */
 .mono {
   font-family: var(--font-mono);
-  font-size: 0.9rem;
+  font-size: 0.8rem;
 }
 
 .muted {

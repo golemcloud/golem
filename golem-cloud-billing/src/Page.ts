@@ -39,6 +39,12 @@ export const html = (strings: TemplateStringsArray, ...values: ReadonlyArray<Int
   new SafeHtml(strings.reduce((out, string, i) => out + string + (i < values.length ? render(values[i]) : ""), ""))
 
 /**
+ * An identifier that can wrap after each hyphen. Firefox does not break after a hyphen that a digit
+ * follows, so a UUID such as `01a1c567-0cc6-7d91-…` otherwise wraps between two characters.
+ */
+export const breakAtHyphens = (value: string): SafeHtml => new SafeHtml(escapeHtml(value).replaceAll("-", "-<wbr>"))
+
+/**
  * The URL of an asset with a hash of its content. The assets are cached for an hour, so a new
  * image would otherwise render its page with the stylesheet of the old one.
  */
@@ -439,7 +445,7 @@ export const signedInPage = (options: SignedInPageOptions) =>
                 : html`<div><dt>Name</dt><dd>${options.account.name}</dd></div>
             <div><dt>Email</dt><dd>${options.account.email}</dd></div>`
             }
-            <div><dt>Account ID</dt><dd class="mono">${options.golemAccountId}</dd></div>
+            <div><dt>Account ID</dt><dd class="mono">${breakAtHyphens(options.golemAccountId)}</dd></div>
           </dl>
         </section>
         <section class="card" aria-labelledby="cli-heading">

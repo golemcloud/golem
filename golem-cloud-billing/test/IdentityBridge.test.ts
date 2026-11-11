@@ -2,6 +2,7 @@ import { symmetricDecrypt } from "better-auth/crypto"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
+import { breakAtHyphens } from "../src/Page.ts"
 import {
   authSecret,
   baseUrl,
@@ -199,7 +200,7 @@ describe("GitHub sign-in", () => {
 
     expect(response.status).toBe(200)
     expect(body).toContain("You're on Free")
-    expect(body).toContain(upstreams.registryAccount.accountId)
+    expect(body).toContain(breakAtHyphens(upstreams.registryAccount.accountId).value)
     expect(body).toContain("octocat@example.com")
     expect(body).toContain("golem profile new golem-cloud --url https://release.dev-api.golem.cloud --set-active")
     expect(body).toMatch(/<form method="post" action="\/billing\/checkout">\s*<button type="submit"[^>]*>Upgrade to Paid<\/button>/)
