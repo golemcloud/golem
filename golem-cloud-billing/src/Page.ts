@@ -372,6 +372,13 @@ const overageBilling = (subscription: Subscription | undefined): string => {
     : `Polar bills it on the invoice of ${date}, with the next month of the plan.`
 }
 
+/**
+ * The usage push sends the overage to Polar on a schedule, and Polar prices the events some time
+ * after it receives them, so the customer portal of Polar shows less than this page for a while.
+ */
+const polarDelay =
+  "This page shows the overage as Golem meters it now. The Polar customer portal shows it later, so its amount can be lower for a while."
+
 const usageSection = (limits: AccountLimits, prices: OveragePrices, subscription: Subscription | undefined) => {
   const monthly = limits.monthly
   if (monthly === undefined) {
@@ -381,7 +388,7 @@ const usageSection = (limits: AccountLimits, prices: OveragePrices, subscription
   return html`<p class="muted">This month (UTC), against the monthly allowance of the plan.</p>
         ${
           total > 0
-            ? html`<p class="notice">Paid overage so far this month: about ${money(total)} plus tax, at the prices below. ${overageBilling(subscription)}</p>`
+            ? html`<p class="notice">Paid overage so far this month: about ${money(total)} plus tax, at the prices below. ${overageBilling(subscription)} ${polarDelay}</p>`
             : null
         }
         <dl class="facts usage">

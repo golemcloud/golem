@@ -370,6 +370,7 @@ describe("Polar billing", () => {
       expect(html).toContain("+ 1.5M GCU of paid overage · $0.02")
       expect(html).toContain("Paid overage so far this month: about $0.02 plus tax")
       expect(html).toContain("Polar bills it on the invoice of December 4, 2026, with the next month of the plan.")
+      expect(html).toContain("The Polar customer portal shows it later, so its amount can be lower for a while.")
     })
 
     it("shows a small usage with significant digits, not as 0", async () => {
