@@ -1239,7 +1239,7 @@ impl From<DeploymentError> for ApiError {
             DeploymentError::AgentTypeNotFound(_) => {
                 Self::not_found(api::error_code::AGENT_TYPE_NOT_FOUND, error)
             }
-            DeploymentError::ToolNotFound(_) => {
+            DeploymentError::ToolNotFound(_) | DeploymentError::ToolMiddlewareNotFound(_) => {
                 Self::not_found(api::error_code::TOOL_NOT_FOUND, error)
             }
 
@@ -2041,6 +2041,22 @@ mod tests {
         let (status, code) = status_and_code(
             DeploymentError::ToolNotFound(ToolName::try_from("echo").unwrap()).into(),
         );
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::TOOL_NOT_FOUND);
+    }
+
+    #[test]
+    fn deployment_tool_middleware_not_found_keeps_tool_not_found_code() {
+        use golem_common::model::tool_middleware::ToolMiddlewareName;
+
+        let error = DeploymentError::ToolMiddlewareNotFound(
+            ToolMiddlewareName::try_from("audit-log").unwrap(),
+        );
+        assert_eq!(
+            error.to_safe_string(),
+            "Tool middleware audit-log not found"
+        );
+        let (status, code) = status_and_code(error.into());
         assert_eq!(status, "not_found");
         assert_eq!(code, api::error_code::TOOL_NOT_FOUND);
     }
