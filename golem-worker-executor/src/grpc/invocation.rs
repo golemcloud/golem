@@ -263,40 +263,55 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::<Ctx>::ensure_not_failed(self, owned_agent_id, agent_mode, status).await
     }
 
-    pub(super) async fn get_or_create<Req: CanStartWorker>(
+    /// Resolves an agent that already exists and starts it. This never creates an agent: a
+    /// missing agent gives `AgentNotFound`. A delete that races the lookup gives either
+    /// `AgentNotFound` or a deletion error, and never recreates the agent.
+    pub(super) async fn get_existing_running<Req: CanStartWorker>(
         &self,
         request: &Req,
-    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let target = request.agent_target()?;
-        let AgentTarget::Current(agent_id) = &target;
-        if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
-            self.ensure_worker_belongs_to_this_executor(agent_id)?;
-            let worker = Worker::get_exact_existing_suspended(
-                self,
-                &OwnedAgentId::new(request.environment_id()?, agent_id),
-                request.principal(),
-            )
-            .await?;
-            Worker::start_if_needed(worker.clone()).await?;
-            return Ok(worker);
-        }
-        self.get_or_create_with_freshness(request, InvocationFreshnessDisposition::MayExist)
-            .await
-    }
-
-    pub(super) async fn get_or_create_with_freshness<Req: CanStartWorker>(
-        &self,
-        request: &Req,
-        freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         async {
-            let (worker, _response_lease) = self
-                .get_or_create_pending_with_freshness(request, freshness_disposition)
-                .await?;
+            let target = request.agent_target()?;
+            let AgentTarget::Current(agent_id) = &target;
+            let reserved = golem_common::model::agent::OwnerKind::is_reserved_instance_name(
+                &agent_id.agent_id,
+            );
+            let owned_agent_id = if reserved {
+                OwnedAgentId::new(request.environment_id()?, agent_id)
+            } else {
+                self.canonicalize_agent_target(request.environment_id()?, &target)
+                    .await?
+            };
+            self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+            // The status comes from `get_latest_metadata`, which stays safe when a delete has
+            // already stopped the resident worker's actors, and which rejects a failed agent
+            // without loading it.
+            let pending_startup = match self.active_agents().try_get(&owned_agent_id).await {
+                Some(worker) => worker.pending_startup_attempt().is_some(),
+                None => false,
+            };
+            if !reserved && !pending_startup {
+                let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
+                    .await?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::worker_not_found(owned_agent_id.agent_id())
+                    })?;
+                if metadata.agent_mode != AgentMode::Ephemeral {
+                    self.ensure_not_failed(
+                        &owned_agent_id,
+                        metadata.agent_mode,
+                        &metadata.last_known_status,
+                    )
+                    .await?;
+                }
+            }
+            let worker =
+                Worker::get_exact_existing_suspended(self, &owned_agent_id, request.principal())
+                    .await?;
             Worker::start_if_needed(worker.clone()).await?;
             Ok(worker)
         }
-        .instrument(info_span!("get_or_create_worker"))
+        .instrument(info_span!("get_existing_worker"))
         .await
     }
 

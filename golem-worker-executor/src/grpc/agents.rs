@@ -16,7 +16,7 @@ use super::{
     AccountId, AgentConfigEntryDto, AgentFingerprint, AgentId, AgentMetadata, AuthCtx,
     CancelInvocationRequest, DeleteWorkerRequest, EnvironmentId, Event, ForkWorkerRequest,
     ForkWorkerResponse, HasActiveAgents, HasAll, HasEvents, HasPromiseService, HasWorkerService,
-    HashMap, InvocationContextStack, LookupResult, OplogIndex, OwnedAgentId, RecvError,
+    HashMap, LookupResult, OplogIndex, OwnedAgentId, RecvError,
     ResolveRevertLastInvocationsRequest, ResolvedRevert, RevertWorkerRequest, UpdateMode,
     UpdateWorkerRequest, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
@@ -410,17 +410,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .iter()
             .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
         {
-            let worker = Worker::get_or_create_suspended(
-                self,
-                &owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                principal,
-            )
-            .await?;
+            let worker =
+                Worker::get_exact_existing_suspended(self, &owned_agent_id, principal).await?;
+            worker.ensure_component_agent_ingress("cancel")?;
             worker.cancel_invocation(idempotency_key).await?;
             Ok(true)
         } else if status.invocation_results.contains_key(&idempotency_key) {
@@ -431,17 +423,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             Err(WorkerExecutorError::invalid_request("Invocation not found"))
         } else {
-            let worker = Worker::get_or_create_suspended(
-                self,
-                &owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                principal,
-            )
-            .await?;
+            let worker =
+                Worker::get_exact_existing_suspended(self, &owned_agent_id, principal).await?;
+            worker.ensure_component_agent_ingress("cancel")?;
             match worker.lookup_invocation_result(&idempotency_key).await {
                 LookupResult::Complete(_) | LookupResult::Interrupted => Ok(false),
                 LookupResult::Pending => {

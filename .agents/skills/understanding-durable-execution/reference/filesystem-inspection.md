@@ -32,8 +32,18 @@ reads blob storage without activating an agent. Directory listing remains a sepa
 
 ## Scheduling through production
 
-1. Shared `ActiveAgents` activation survives an individual waiter's cancellation. Existing
-   initialization, replay, failure, update and ephemeral lifecycle rules apply. There is no
+1. Reads and listings never create an agent. `grpc/invocation.rs::get_existing_running`
+   first reads `Worker::get_latest_metadata`, which decides absence and rejects a failed
+   agent without loading it. It then resolves the target through
+   `Worker::get_exact_existing_suspended`, which cannot create an agent and so closes the
+   race with a concurrent delete, and starts it. A missing or deleted agent gives
+   `FileReadHead::Absent` for reads and `GetFileSystemNodeResult::NotFound` for listings, so an
+   HTTP mount answers 404 as for an unknown file. A delete racing the read gives a deletion
+   error or an absent file and cannot recreate the agent. The wallet, cancel and connect paths
+   use the same existing-only lookup and keep `AgentNotFound`; cancel and connect still reject
+   reserved owners. Shared `ActiveAgents` activation survives an individual waiter's
+   cancellation. Existing initialization, replay, failure, update and ephemeral lifecycle rules
+   apply. There is no
    filesystem-read-specific admission limit, semaphore, timeout or error.
 2. Reads and listings enter the existing `QueuedWorkerInvocation` deque. The constructor must
    complete first: creation reserves its idempotency key before ordinary invocation admission,
@@ -87,6 +97,13 @@ loss aborts the external stream; there is no durable read reattachment contract.
   `golem-service-base/tests/fixtures/http-handlers/corpus.json`, with IDs in assertion failures.
   It exercises actual guest initialization, concurrent first reads, replay after unload,
   initializer failure, prior writes, EOF/drop/update ordering and the same exact path across update.
+- `file_reads_and_listings_of_a_missing_or_deleted_agent_are_not_found_and_create_nothing`
+  proves that reads and listings of a missing or deleted agent create nothing.
+  `tests/api/mod.rs::file_reads_racing_each_deletion_stage_never_recreate_the_agent` gates the
+  delete before durable-state removal and before cache removal, and fails cache removal once:
+  a read is refused while the agent is deleting and is absent once its state is removed.
+  `tests/api/mod.rs::wallet_cancel_and_connect_of_a_missing_or_deleted_agent_create_nothing` is
+  a smoke test of absence for the management paths.
 - `services/agent_filesystem/lifecycle/{inspection,inspection_stream}/tests.rs` tests descriptor
   safety, range boundaries, bounded chunks, early EOF, backpressure without expiry and consumer cleanup.
 - `worker/mod.rs` tests transient cancellation pruning and lifecycle failure delivery.

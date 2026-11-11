@@ -15,9 +15,10 @@
 use super::{
     CanonicalFilePath, FileByteSelection, FileReadError, FileReadResponse, GetFileContentsRequest,
     GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetFileSystemNodeResult, HasAll,
-    UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id, golem,
+    UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, golem,
     validate_file_read_path,
 };
+use golem_common::model::filesystem::FileReadHead;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -31,9 +32,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let path = CanonicalFilePath::from_abs_str(&request.path)
             .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid path: {e}")))?;
 
-        let worker = self.get_or_create(&request).await?;
-
-        let result = worker.get_file_system_node(path).await?;
+        let result = match self.get_existing_running(&request).await {
+            Ok(worker) => worker.get_file_system_node(path).await?,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => GetFileSystemNodeResult::NotFound,
+            Err(error) => return Err(error),
+        };
 
         let response = match result {
             GetFileSystemNodeResult::Ok(entries) => GetFileSystemNodeResponse {
@@ -85,11 +88,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return Ok(Err(error));
             }
         };
-        let owned_agent_id =
-            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
-        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
-        let worker = self.get_or_create(&request).await?;
-        Ok(worker.read_file(path, selection).await)
+        match self.get_existing_running(&request).await {
+            Ok(worker) => Ok(worker.read_file(path, selection).await),
+            Err(WorkerExecutorError::AgentNotFound { .. }) => Ok(Ok(FileReadResponse {
+                head: FileReadHead::Absent,
+                body: Box::pin(futures::stream::empty()),
+            })),
+            Err(error) => Err(error),
+        }
     }
 }

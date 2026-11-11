@@ -759,7 +759,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerExecutorError::invalid_request("Invocation has no idempotency key")
         })
     }
-    pub(in crate::worker) fn ensure_component_agent_ingress(
+    pub(crate) fn ensure_component_agent_ingress(
         &self,
         operation: &str,
     ) -> Result<(), WorkerExecutorError> {
