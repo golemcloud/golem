@@ -44,8 +44,13 @@ The misconfigurations described below stop a replica at startup:
 - unbracketed endpoint list → exits 1 with `Error: Failed to load config: invalid type: found string
   "...", expected a sequence for key "PERSISTENCE"`
 
-Each of these exits with status 1, so `restart: on-failure` starts the replica again, and it stops
-again until the configuration is fixed. Read the reason with `docker compose logs <service>`.
+Golem releases that contain this change exit with status 1 on each of these. Then
+`restart: on-failure` starts the replica again, and it stops again until the configuration is fixed.
+
+Earlier releases, such as the pinned `v1.6.0`, exit with status 0 when the configuration does not
+load. With `restart: on-failure`, their container then stays stopped and looks like a clean exit.
+
+Read the reason with `docker compose logs <service>`.
 
 ## What changes, and why
 
