@@ -10469,6 +10469,150 @@ async fn completed_fire_and_forget_rpc_replays_span_before_result(
     Ok(())
 }
 
+const KEPT_RPC_CALLS: [&str; 3] = [
+    "kept_agent_rpc_invoke_and_await_result",
+    "kept_agent_rpc_async_invoke_and_await_result",
+    "kept_agent_rpc_invoke_result",
+];
+
+async fn assert_kept_rpc_call_is_not_found(
+    executor: &TestWorkerExecutor,
+    caller_component: &ComponentDto,
+    caller: &ParsedAgentId,
+    method: &str,
+) -> anyhow::Result<()> {
+    let result = executor
+        .invoke_and_await_agent(caller_component, caller, method, data_value!("increment"))
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert!(
+        matches!(&result, Err(error) if error.starts_with("RpcError::NotFound(")),
+        "{method} through a handle to a deleted incarnation must fail as not found: {result:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn rpc_handle_does_not_reach_a_recreated_child(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let counter_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "kept-handle-recreated-caller");
+    let counter = agent_id!("Counter", "kept-handle-recreated-child");
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+
+    let kept = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "keep_agent_rpc",
+            data_value!("Counter", "kept-handle-recreated-child", "increment"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(kept, Ok(()));
+
+    let counter_worker =
+        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
+    executor.delete_worker(&counter_worker).await?;
+    let recreated = executor
+        .invoke_and_await_agent(&counter_component, &counter, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(recreated, 1);
+
+    for method in KEPT_RPC_CALLS {
+        assert_kept_rpc_call_is_not_found(&executor, &caller_component, &caller, method).await?;
+    }
+
+    let after = executor
+        .invoke_and_await_agent(&counter_component, &counter, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(
+        after, 2,
+        "calls through the old handle must not reach the new incarnation"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn rpc_handle_does_not_recreate_a_deleted_child_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let counter_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "kept-handle-deleted-caller");
+    let counter = agent_id!("Counter", "kept-handle-deleted-child");
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+
+    let kept = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "keep_agent_rpc",
+            data_value!("Counter", "kept-handle-deleted-child", "increment"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(kept, Ok(()));
+
+    let counter_worker =
+        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
+    executor.delete_worker(&counter_worker).await?;
+    let mut executor = executor;
+
+    // Each call kind runs after its own restart, so each one re-activates the recorded target.
+    for method in KEPT_RPC_CALLS {
+        drop(executor);
+        executor = start(deps, &context).await?;
+        assert_kept_rpc_call_is_not_found(&executor, &caller_component, &caller, method).await?;
+        assert!(
+            executor
+                .get_worker_metadata_opt(&counter_worker)
+                .await?
+                .is_none(),
+            "re-activating a recorded RPC target in {method} must not create the deleted child"
+        );
+    }
+
+    Ok(())
+}
+
 #[test]
 #[timeout("6m")]
 #[tracing::instrument]

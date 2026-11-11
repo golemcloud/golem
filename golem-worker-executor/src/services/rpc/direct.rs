@@ -206,6 +206,55 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         )
         .map_err(Into::into)
     }
+
+    /// Resolves the target of a scalar call. With `expected_fingerprint` only that existing
+    /// incarnation is accepted, and a missing or different one fails as not found; without one,
+    /// the target is created when it does not exist.
+    async fn rpc_target_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: Option<AgentFingerprint>,
+        self_env: &[(String, String)],
+        config: Vec<AgentConfigEntryDto>,
+        self_agent_id: &AgentId,
+        self_stack: &InvocationContextStack,
+        principal: Principal,
+        freshness_disposition: InvocationFreshnessDisposition,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+        match expected_fingerprint {
+            Some(expected_fingerprint) => {
+                let worker = self
+                    .active_agents()
+                    .get_existing_with_fingerprint(
+                        self,
+                        owned_agent_id,
+                        principal,
+                        Some(expected_fingerprint),
+                    )
+                    .await?;
+                if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint {
+                    return Err(WorkerExecutorError::worker_not_found(
+                        owned_agent_id.agent_id(),
+                    ));
+                }
+                Ok(worker)
+            }
+            None => {
+                Worker::get_or_create_suspended_with_freshness(
+                    self,
+                    owned_agent_id,
+                    Some(self_env.to_vec()),
+                    config,
+                    None,
+                    Some(self_agent_id.clone()),
+                    self_stack,
+                    principal,
+                    freshness_disposition,
+                )
+                .await
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -445,6 +494,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -509,18 +559,18 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 freshness_disposition,
             )
             .await?;
-            let worker = Worker::get_or_create_suspended_with_freshness(
-                self,
-                owned_agent_id,
-                Some(self_env.to_vec()),
-                config,
-                None,
-                Some(self_agent_id.clone()),
-                &self_stack,
-                principal.clone(),
-                freshness_disposition,
-            )
-            .await?;
+            let worker = self
+                .rpc_target_worker(
+                    owned_agent_id,
+                    expected_callee_fingerprint,
+                    self_env,
+                    config,
+                    self_agent_id,
+                    &self_stack,
+                    principal.clone(),
+                    freshness_disposition,
+                )
+                .await?;
             let metadata = worker.get_initial_worker_metadata();
             let idempotency_key = IdempotencyKey::new(
                 request_key
@@ -555,6 +605,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     owned_agent_id.environment_id,
                     Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
                     freshness_disposition,
+                    expected_callee_fingerprint,
                     method_name,
                     method_parameters,
                     self_created_by,
@@ -639,23 +690,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         )
         .await?;
         let principal = caller_agent_principal(self_agent_id);
-        let (worker, _response_lease) = Worker::get_or_create_suspended_for_response(
+        let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
             self,
             owned_agent_id,
-            Some(self_env.to_vec()),
-            config.clone(),
-            None,
-            Some(self_agent_id.clone()),
-            &self_stack,
             principal.clone(),
-            InvocationFreshnessDisposition::MayExist,
         )
         .await?;
         if worker.get_initial_worker_metadata().fingerprint != expected_callee_fingerprint {
-            return Err(RpcError::ProtocolError {
-                details: "expected callee fingerprint does not match the active agent incarnation"
-                    .to_string(),
-            });
+            return Err(WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()).into());
         }
         let status = worker.get_last_known_status().await;
         let component = self
@@ -957,6 +999,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -1021,18 +1064,18 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 freshness_disposition,
             )
             .await?;
-            let worker = Worker::get_or_create_suspended_with_freshness(
-                self,
-                owned_agent_id,
-                Some(self_env.to_vec()),
-                config,
-                None,
-                Some(self_agent_id.clone()),
-                &self_stack,
-                principal.clone(),
-                freshness_disposition,
-            )
-            .await?;
+            let worker = self
+                .rpc_target_worker(
+                    owned_agent_id,
+                    expected_callee_fingerprint,
+                    self_env,
+                    config,
+                    self_agent_id,
+                    &self_stack,
+                    principal.clone(),
+                    freshness_disposition,
+                )
+                .await?;
             let metadata = worker.get_initial_worker_metadata();
             let idempotency_key = IdempotencyKey::new(
                 request_key
@@ -1062,6 +1105,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     owned_agent_id.environment_id,
                     Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
                     freshness_disposition,
+                    expected_callee_fingerprint,
                     method_name,
                     method_parameters,
                     self_created_by,

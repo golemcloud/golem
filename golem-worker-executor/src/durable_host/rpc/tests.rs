@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::durability::ClassifiedHostError;
-use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::durable_session::StreamSession;
 use crate::durable_host::durable_stream::SessionError;
 use crate::services::oplog::CommitLevel;
@@ -289,18 +287,19 @@ impl RpcDemand for FixedDemand {
     }
 }
 
-struct FingerprintMismatchRpc {
+struct ActivatingRpc {
     live_fingerprint: AgentFingerprint,
+    create_called: AtomicBool,
     invoke_called: AtomicBool,
+    dispatched_fingerprint: Mutex<Option<AgentFingerprint>>,
 }
 
 struct ActivationFailureRpc {
     invoke_called: AtomicBool,
 }
 
-struct RecordingEnvRpc {
+struct RecordingScopeCardRpc {
     fingerprint: AgentFingerprint,
-    activation_env: Mutex<Option<Vec<(String, String)>>>,
     dispatched_scope_card: Mutex<Option<ScopeCard>>,
 }
 
@@ -327,7 +326,7 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 }
 
 #[async_trait]
-impl Rpc for FingerprintMismatchRpc {
+impl Rpc for ActivatingRpc {
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
@@ -369,6 +368,7 @@ impl Rpc for FingerprintMismatchRpc {
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+        self.create_called.store(true, Ordering::SeqCst);
         Ok(Box::new(FixedDemand {
             fingerprint: self.live_fingerprint,
         }))
@@ -380,6 +380,7 @@ impl Rpc for FingerprintMismatchRpc {
         _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         _method_name: String,
         _method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -390,6 +391,7 @@ impl Rpc for FingerprintMismatchRpc {
         _auth_ctx: &AuthCtx,
         _scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, ServiceRpcError> {
+        *self.dispatched_fingerprint.lock().unwrap() = expected_callee_fingerprint;
         self.invoke_called.store(true, Ordering::SeqCst);
         Ok(SchemaValue::Tuple { elements: vec![] })
     }
@@ -400,6 +402,7 @@ impl Rpc for FingerprintMismatchRpc {
         _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         _method_name: String,
         _method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -467,6 +470,7 @@ impl Rpc for ActivationFailureRpc {
         _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         _method_name: String,
         _method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -487,6 +491,7 @@ impl Rpc for ActivationFailureRpc {
         _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         _method_name: String,
         _method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -501,7 +506,7 @@ impl Rpc for ActivationFailureRpc {
 }
 
 #[async_trait]
-impl Rpc for RecordingEnvRpc {
+impl Rpc for RecordingScopeCardRpc {
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
@@ -536,14 +541,13 @@ impl Rpc for RecordingEnvRpc {
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
-        self_env: &[(String, String)],
+        _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
-        *self.activation_env.lock().unwrap() = Some(self_env.to_vec());
         Ok(Box::new(FixedDemand {
             fingerprint: self.fingerprint,
         }))
@@ -555,6 +559,7 @@ impl Rpc for RecordingEnvRpc {
         _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         _method_name: String,
         _method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -575,6 +580,7 @@ impl Rpc for RecordingEnvRpc {
         _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
         _method_name: String,
         _method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -630,19 +636,20 @@ fn scheduled_invocation_non_owner_cannot_cancel_token() {
 }
 
 #[test]
-async fn deferred_activation_fingerprint_mismatch_is_a_host_failure_not_rpc_result() {
+async fn replay_pending_activation_makes_no_create_request() {
     let persisted_fingerprint = AgentFingerprint(Uuid::from_u128(10));
-    let live_fingerprint = AgentFingerprint(Uuid::from_u128(11));
-    let rpc = Arc::new(FingerprintMismatchRpc {
-        live_fingerprint,
+    let rpc = Arc::new(ActivatingRpc {
+        live_fingerprint: AgentFingerprint(Uuid::from_u128(11)),
+        create_called: AtomicBool::new(false),
         invoke_called: AtomicBool::new(false),
+        dispatched_fingerprint: Mutex::new(None),
     });
 
     let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
         None,
         rpc.clone(),
         OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
-        IdempotencyKey::new("deferred-activation-mismatch".to_string()),
+        IdempotencyKey::new("replay-pending-activation".to_string()),
         "run".to_string(),
         SchemaValue::Tuple { elements: vec![] },
         AccountId::new(),
@@ -657,26 +664,32 @@ async fn deferred_activation_fingerprint_mismatch_is_a_host_failure_not_rpc_resu
             env: vec![],
             config: vec![],
         }),
+        None,
         InvocationFreshnessDisposition::MayExist,
         None,
     )
     .await;
 
+    result.unwrap().unwrap();
     assert!(
-        !rpc.invoke_called.load(Ordering::SeqCst),
-        "fingerprint mismatch must stop before dispatching the RPC method"
+        !rpc.create_called.load(Ordering::SeqCst),
+        "a recorded activation must not create its target again"
     );
-    assert!(
-        result.is_err(),
-        "fingerprint mismatch is a replay/activation violation and must be an outer host failure, not a completed RPC result: {result:?}"
+    assert!(rpc.invoke_called.load(Ordering::SeqCst));
+    assert_eq!(
+        *rpc.dispatched_fingerprint.lock().unwrap(),
+        Some(persisted_fingerprint),
+        "the call must be pinned to the recorded incarnation"
     );
 }
 
 #[test]
 async fn first_authorized_call_activates_a_new_durable_target_without_a_prior_fingerprint() {
-    let rpc = Arc::new(FingerprintMismatchRpc {
+    let rpc = Arc::new(ActivatingRpc {
         live_fingerprint: AgentFingerprint(Uuid::from_u128(11)),
+        create_called: AtomicBool::new(false),
         invoke_called: AtomicBool::new(false),
+        dispatched_fingerprint: Mutex::new(None),
     });
 
     let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
@@ -698,13 +711,19 @@ async fn first_authorized_call_activates_a_new_durable_target_without_a_prior_fi
             env: vec![],
             config: vec![],
         }),
+        None,
         InvocationFreshnessDisposition::MayExist,
         None,
     )
     .await;
 
     result.unwrap().unwrap();
-    assert!(rpc.invoke_called.load(Ordering::SeqCst));
+    assert!(rpc.create_called.load(Ordering::SeqCst));
+    assert_eq!(
+        *rpc.dispatched_fingerprint.lock().unwrap(),
+        Some(AgentFingerprint(Uuid::from_u128(11))),
+        "the call must be pinned to the incarnation the activation created"
+    );
 }
 
 #[test]
@@ -728,10 +747,11 @@ async fn deferred_activation_create_demand_failure_is_a_host_failure_not_rpc_res
         None,
         AuthCtx::system(),
         Some(RpcTargetActivation {
-            target_fingerprint: Some(AgentFingerprint(Uuid::from_u128(10))),
+            target_fingerprint: None,
             env: vec![],
             config: vec![],
         }),
+        None,
         InvocationFreshnessDisposition::MayExist,
         None,
     )
@@ -748,96 +768,6 @@ async fn deferred_activation_create_demand_failure_is_a_host_failure_not_rpc_res
 }
 
 #[test]
-async fn deferred_activation_fingerprint_mismatch_is_permanent_host_failure() {
-    let persisted_fingerprint = AgentFingerprint(Uuid::from_u128(10));
-    let live_fingerprint = AgentFingerprint(Uuid::from_u128(11));
-    let rpc = Arc::new(FingerprintMismatchRpc {
-        live_fingerprint,
-        invoke_called: AtomicBool::new(false),
-    });
-
-    let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
-        None,
-        rpc.clone(),
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
-        IdempotencyKey::new("deferred-activation-mismatch-classification".to_string()),
-        "run".to_string(),
-        SchemaValue::Tuple { elements: vec![] },
-        AccountId::new(),
-        agent_id("caller"),
-        vec![],
-        vec![],
-        InvocationContextStack::fresh(),
-        None,
-        AuthCtx::system(),
-        Some(RpcTargetActivation {
-            target_fingerprint: Some(persisted_fingerprint),
-            env: vec![],
-            config: vec![],
-        }),
-        InvocationFreshnessDisposition::MayExist,
-        None,
-    )
-    .await;
-
-    assert!(
-        !rpc.invoke_called.load(Ordering::SeqCst),
-        "fingerprint mismatch must stop before dispatching the RPC method"
-    );
-    let err = result.expect_err("fingerprint mismatch must be an outer host failure");
-    let classified = err.downcast_ref::<ClassifiedHostError>().expect(
-        "fingerprint mismatch must be classified so future get does not retry it as transient",
-    );
-    assert_eq!(classified.kind, HostFailureKind::Permanent);
-}
-
-#[test]
-async fn deferred_replay_activation_uses_new_env_not_async_invocation_env() {
-    let persisted_fingerprint = AgentFingerprint(Uuid::from_u128(10));
-    let env_from_wasm_rpc_new = vec![("SOURCE".to_string(), "wasm-rpc-new".to_string())];
-    let env_from_async_invocation = vec![("SOURCE".to_string(), "async-invoke".to_string())];
-    let rpc = Arc::new(RecordingEnvRpc {
-        fingerprint: persisted_fingerprint,
-        activation_env: Mutex::new(None),
-        dispatched_scope_card: Mutex::new(None),
-    });
-    let replay_pending = WasmRpcTargetActivation::ReplayPending {
-        target_fingerprint: persisted_fingerprint,
-        env: env_from_wasm_rpc_new.clone(),
-        config: vec![],
-    };
-
-    let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
-        None,
-        rpc.clone(),
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
-        IdempotencyKey::new("deferred-activation-env".to_string()),
-        "run".to_string(),
-        SchemaValue::Tuple { elements: vec![] },
-        AccountId::new(),
-        agent_id("caller"),
-        env_from_async_invocation,
-        vec![],
-        InvocationContextStack::fresh(),
-        None,
-        AuthCtx::system(),
-        replay_pending.deferred_activation(),
-        InvocationFreshnessDisposition::MayExist,
-        None,
-    )
-    .await;
-
-    result
-        .expect("activation should succeed")
-        .expect("RPC invocation should succeed");
-    assert_eq!(
-        *rpc.activation_env.lock().unwrap(),
-        Some(env_from_wasm_rpc_new),
-        "deferred replay activation must use the environment captured by wasm-rpc::new, not the later async invocation environment"
-    );
-}
-
-#[test]
 async fn await_dispatch_forwards_the_resolved_scope_card_to_the_rpc_layer() {
     let scope_card = ScopeCard {
         scope_card_id: CardId(Uuid::from_u128(20)),
@@ -848,9 +778,8 @@ async fn await_dispatch_forwards_the_resolved_scope_card_to_the_rpc_layer() {
         upper_negative: vec![],
         expires_at: None,
     };
-    let rpc = Arc::new(RecordingEnvRpc {
+    let rpc = Arc::new(RecordingScopeCardRpc {
         fingerprint: AgentFingerprint(Uuid::from_u128(30)),
-        activation_env: Mutex::new(None),
         dispatched_scope_card: Mutex::new(None),
     });
 
@@ -868,6 +797,7 @@ async fn await_dispatch_forwards_the_resolved_scope_card_to_the_rpc_layer() {
         InvocationContextStack::fresh(),
         None,
         AuthCtx::system(),
+        None,
         None,
         InvocationFreshnessDisposition::MayExist,
         Some(scope_card.clone()),

@@ -207,12 +207,16 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
         }
 
         let auth_ctx = handle.take_agent_auth_ctx();
-        if !prepared.is_ephemeral()
-            && let Err(err) =
-                ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name).await
-        {
-            return Err(handle.trap(err));
-        }
+        let expected_callee_fingerprint = if prepared.is_ephemeral() {
+            None
+        } else {
+            match ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name)
+                .await
+            {
+                Ok(fingerprint) => Some(fingerprint),
+                Err(err) => return Err(handle.trap(err)),
+            }
+        };
 
         let retry_properties =
             RetryContext::rpc("invoke-and-await", &remote_agent_id, &prepared.method_name);
@@ -244,6 +248,7 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
                         remote_agent_id.environment_id,
                         Some(idempotency_key.clone()),
                         dispatch_freshness,
+                        expected_callee_fingerprint,
                         prepared.method_name.clone(),
                         prepared.input_value.clone(),
                         created_by,
@@ -334,12 +339,16 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
         }
 
         let auth_ctx = handle.take_agent_auth_ctx();
-        if !prepared.is_ephemeral()
-            && let Err(err) =
-                ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name).await
-        {
-            return Err(handle.trap(err));
-        }
+        let expected_callee_fingerprint = if prepared.is_ephemeral() {
+            None
+        } else {
+            match ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name)
+                .await
+            {
+                Ok(fingerprint) => Some(fingerprint),
+                Err(err) => return Err(handle.trap(err)),
+            }
+        };
 
         let retry_properties = RetryContext::rpc("invoke", &remote_agent_id, &prepared.method_name);
         let result = loop {
@@ -361,6 +370,7 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
                     remote_agent_id.environment_id,
                     Some(idempotency_key.clone()),
                     dispatch_freshness,
+                    expected_callee_fingerprint,
                     prepared.method_name.clone(),
                     prepared.input_value.clone(),
                     ctx.created_by(),
@@ -463,6 +473,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     retry_params: Option<TaskRetryParams<Ctx>>,
     auth_ctx: AuthCtx,
     target_activation: Option<RpcTargetActivation>,
+    expected_callee_fingerprint: Option<AgentFingerprint>,
     initial_freshness_disposition: InvocationFreshnessDisposition,
     scope_card: Option<ScopeCard>,
 ) -> RpcTask {
@@ -509,31 +520,34 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let remote = remote.clone();
         let freshness_disposition = take_dispatch_freshness(&first_dispatch);
         async move {
-            let _demand = if let Some(target_activation) = target_activation {
-                let demand = activate_rpc_target(
-                    rpc.as_ref(),
-                    &remote_agent_id,
-                    &method_name,
-                    created_by,
-                    &agent_id,
-                    &target_activation.env,
-                    stack.clone(),
-                    target_activation.config,
-                    &auth_ctx,
-                    target_activation.target_fingerprint,
-                )
-                .await
-                .map_err(RpcTaskError::Host)?;
-                Some(demand)
-            } else {
-                None
-            };
+            let (_demand, expected_callee_fingerprint) =
+                if let Some(target_activation) = target_activation {
+                    let demand = activate_rpc_target(
+                        rpc.as_ref(),
+                        &remote_agent_id,
+                        &method_name,
+                        created_by,
+                        &agent_id,
+                        &target_activation.env,
+                        stack.clone(),
+                        target_activation.config,
+                        &auth_ctx,
+                        target_activation.target_fingerprint,
+                    )
+                    .await
+                    .map_err(RpcTaskError::Host)?;
+                    let fingerprint = demand.fingerprint();
+                    (Some(demand), Some(fingerprint))
+                } else {
+                    (None, expected_callee_fingerprint)
+                };
 
             let invocation = rpc.invoke_and_await(
                 AgentTarget::Current(remote_agent_id.agent_id()),
                 remote_agent_id.environment_id,
                 Some(idempotency_key),
                 freshness_disposition,
+                expected_callee_fingerprint,
                 method_name,
                 input,
                 created_by,
@@ -625,6 +639,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
     deferred_activation: Option<RpcTargetActivation>,
+    expected_callee_fingerprint: Option<AgentFingerprint>,
     span_id: &SpanId,
     retry_point: OplogIndex,
     initial_freshness_disposition: InvocationFreshnessDisposition,
@@ -671,6 +686,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
         retry_params,
         auth_ctx,
         deferred_activation,
+        expected_callee_fingerprint,
         initial_freshness_disposition,
         scope_card,
     )

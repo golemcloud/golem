@@ -232,6 +232,9 @@ enum FutureInvokeResultState {
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
         deferred_activation: Option<RpcTargetActivation>,
+        /// The incarnation each scalar dispatch of the call is pinned to. `None` for an ephemeral
+        /// target, and for a streaming call, which carries the fingerprint in `streaming`.
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         span_id: SpanId,
         cancel_token: tokio_util::sync::CancellationToken,
     },

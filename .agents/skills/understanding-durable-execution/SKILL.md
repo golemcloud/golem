@@ -2282,6 +2282,20 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
    identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the request key's
    `owner_key(operation)` — deterministic, never random.
+7. A durable call is pinned to the incarnation its activation recorded. The recorded activation
+   (`golem::rpc::wasm-rpc.activate`, live or repaired) is the only step that may create the
+   target. Re-activating a replayed `ReplayPending` target (`activate_rpc_target` with the
+   recorded fingerprint) builds a `ReplayedDemand` and sends no create request. Every scalar
+   `invoke` / `invoke-and-await` dispatch then carries `expected_callee_fingerprint`; ephemeral
+   targets carry none. Local dispatch (`services/rpc/direct.rs`) resolves the callee only through
+   `get_existing_with_fingerprint`, never get-or-create, and the local streaming path uses the
+   exact-existing lookup too. A deleted or re-created child therefore fails the call with
+   `RpcError::NotFound`, which is permanent and recorded in the call's `End`; the method never
+   runs on another incarnation, and an executor restart does not create a local deleted child
+   again. The worker-service invocation request has no fingerprint field yet, so a call to a target
+   on another executor first prepares it (`RemoteInvocationRpc::ensure_expected_incarnation`): that
+   prepare can create a new incarnation, and the call then fails as `NotFound` without running the
+   method there.
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native

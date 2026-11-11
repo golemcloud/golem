@@ -212,6 +212,7 @@ impl Rpc for RemoteInvocationRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -225,6 +226,17 @@ impl Rpc for RemoteInvocationRpc {
         let AgentTarget::Current(agent_id) = target;
         let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let principal = caller_agent_principal(self_agent_id);
+        self.ensure_expected_incarnation(
+            owned_agent_id,
+            expected_callee_fingerprint,
+            &method_name,
+            self_agent_id,
+            self_env,
+            &self_stack,
+            &config,
+            auth_ctx,
+        )
+        .await?;
 
         let output = self
             .worker_proxy
@@ -527,6 +539,7 @@ impl Rpc for RemoteInvocationRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -539,6 +552,17 @@ impl Rpc for RemoteInvocationRpc {
         let AgentTarget::Current(agent_id) = target;
         let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let principal = caller_agent_principal(self_agent_id);
+        self.ensure_expected_incarnation(
+            owned_agent_id,
+            expected_callee_fingerprint,
+            &method_name,
+            self_agent_id,
+            self_env,
+            &self_stack,
+            &config,
+            auth_ctx,
+        )
+        .await?;
 
         self.worker_proxy
             .invoke_agent(
@@ -561,6 +585,47 @@ impl Rpc for RemoteInvocationRpc {
             .await?;
 
         Ok(())
+    }
+}
+
+impl RemoteInvocationRpc {
+    /// The worker-service invocation request carries no expected fingerprint, so a pinned remote
+    /// call first prepares the target and compares its fingerprint. A different incarnation fails
+    /// the call as not found before the method is dispatched to it.
+    async fn ensure_expected_incarnation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: Option<AgentFingerprint>,
+        method_name: &str,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: &InvocationContextStack,
+        config: &[AgentConfigEntryDto],
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), RpcError> {
+        let Some(expected_fingerprint) = expected_fingerprint else {
+            return Ok(());
+        };
+        let fingerprint = self
+            .worker_proxy
+            .prepare(
+                owned_agent_id,
+                method_name,
+                self_agent_id,
+                HashMap::from_iter(self_env.to_vec()),
+                self_stack.clone(),
+                config.to_vec(),
+                caller_agent_principal(self_agent_id),
+                auth_ctx,
+                None,
+                InvocationFreshnessDisposition::MayExist,
+            )
+            .await?;
+        if fingerprint == expected_fingerprint {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()).into())
+        }
     }
 }
 
