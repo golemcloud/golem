@@ -231,6 +231,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 lower_invocation(init, &metadata, Some(&parsed))?,
                 store,
                 instance,
+                None,
             )
             .await?;
             assert!(
@@ -257,6 +258,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 lower_invocation(method, &metadata, Some(&parsed))?,
                 store,
                 instance,
+                None,
             )
             .await
         })

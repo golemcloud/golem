@@ -212,15 +212,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
+                            uses_streams.then_some(&idempotency_key),
                         )
                         .instrument(span)
                         .await;
-
-                        let invoke_result = if uses_streams {
-                            materialize_streaming_result(store, invoke_result, &full_function_name, &idempotency_key).await
-                        } else {
-                            invoke_result
-                        };
 
                         // Invocation-owned spans are closed by AgentInvocationFinished in the
                         // oplog processor; removing their resident context records no transition.
