@@ -73,9 +73,9 @@ use golem_common::model::component::{
     AgentConfigEntryDto, AgentFilePath, ComponentId, ComponentName, ComponentRevision,
     ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginPriority,
 };
-use golem_common::model::deployment::{DeploymentPlanComponentEntry, DeploymentRevision};
+use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
-use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::environment::EnvironmentName;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plugin_registration::PluginSpecDto;
@@ -2760,28 +2760,6 @@ impl ComponentCommandHandler {
             })
             .await
             .map_err(|err| anyhow!(err))
-    }
-
-    /// Reads the component of a name as the deployment has it. The read does not depend on the
-    /// staging area, which can have deleted the component since.
-    pub async fn get_component_in_deployment(
-        &self,
-        environment_id: &EnvironmentId,
-        deployment_revision: DeploymentRevision,
-        component_name: &ComponentName,
-    ) -> anyhow::Result<ComponentDto> {
-        Ok(self
-            .ctx
-            .golem_clients()
-            .await?
-            .component
-            .get_deployment_component(
-                &environment_id.0,
-                deployment_revision.get(),
-                component_name.0.as_str(),
-            )
-            .await
-            .map_service_error()?)
     }
 }
 
