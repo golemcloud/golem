@@ -1581,7 +1581,7 @@ guarded replay-tail transition and refresh authority capture. Snapshot calls rem
 resolving one as `Live` does not publish Store liveness or lift snapshot restrictions.
 
 Accessor and direct (Store-holding) calls build the same `BegunCall` (`DurableCallSession::new_begun`)
-and resolve it through the one `BegunCall::resolve_against_history` (`concurrent/call/claims.rs`).
+and resolve it through the one `BegunCall::resolve_against_history` (`concurrent/call/claims/mod.rs`).
 It claims the recorded `Start`, or continues live at the replay tail. When the replay target grew
 while the transition was settling (`BeginReplayToLive::ReplayResumed`), it claims again, so the
 call replays the `Start` the grown target covers instead of failing. Both paths append the live

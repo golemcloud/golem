@@ -176,6 +176,82 @@ async fn cancelling_pending_repair_releases_permit_without_cancelling_the_call()
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn failed_parent_replay_resolution_does_not_warn_on_drop() {
+    use super::*;
+    use crate::durable_host::concurrent::tests::InMemoryOplog;
+    use tracing::instrument::WithSubscriber;
+    use tracing_subscriber::prelude::*;
+
+    struct Warnings(Arc<AtomicUsize>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Warnings {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    let oplog = Arc::new(InMemoryOplog::new());
+    oplog
+        .add(OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        })
+        .await
+        .unwrap();
+    let replay_state = ReplayState::new_for_owner(
+        golem_common::model::OwnedAgentId {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "parent-replay-failure-test".to_string(),
+            },
+        },
+        oplog.clone(),
+        golem_common::model::regions::DeletedRegions::default(),
+        None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        oplog.current_oplog_index().await,
+        None,
+    )
+    .await
+    .unwrap();
+    let warnings = Arc::new(AtomicUsize::new(0));
+    let subscriber = tracing_subscriber::registry().with(Warnings(warnings.clone()));
+    async {
+        // Check that the subscriber sees an actually abandoned replay handle.
+        let mut unfinished = replaying_call(ScopeReplayRecovery::Default, None);
+        let (_, pending) = unfinished.take_replay_call().unwrap().begin_resolution();
+        drop(pending);
+        drop(unfinished);
+        assert_eq!(warnings.swap(0, Ordering::Relaxed), 1);
+
+        // The fixture's resolver sender is closed, so resolution must return its error.
+        let mut call = replaying_call(ScopeReplayRecovery::Default, None);
+        let error = match call.resolve_incomplete_scope(&replay_state).await {
+            Err(error) => error,
+            Ok(_) => panic!("a closed replay resolver must fail"),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("resolver channel closed for Start at 5")
+        );
+        call.abandon_for_trap();
+        drop(call);
+        assert_eq!(warnings.load(Ordering::Relaxed), 0);
+        assert_eq!(oplog.current_oplog_index().await, OplogIndex::INITIAL);
+    }
+    .with_subscriber(subscriber)
+    .await;
+}
+
+#[test]
 async fn demand_children_share_the_parent_readiness_decision() {
     use super::*;
     use golem_common::model::oplog::host_functions::MonotonicClockNow;

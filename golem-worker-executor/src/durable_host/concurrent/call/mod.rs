@@ -470,9 +470,6 @@ pub(crate) enum ScopeReplayRecovery {
 }
 
 #[cfg(test)]
-mod scope_replay_recovery_tests;
-
-#[cfg(test)]
 pub use tests::{live_unfinished_handle, live_unfinished_handle_with_counter};
 
 struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {

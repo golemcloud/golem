@@ -734,19 +734,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     {
         let replay_state =
             store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
-        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
+        let pending_call = self.resolve_incomplete_scope(&replay_state).await?;
         let result = async {
-            let outcome = replay_state.await_resolution_outcome(replay).await?;
-            if !matches!(
-                classify_replay_resolution(outcome),
-                ReplayedResolution::Incomplete
-            ) {
-                self.state = pending_call.accept_terminal().into_session();
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "an incomplete parent for a live demand-stream child",
-                    format!("completed scope at {}", self.start_idx),
-                ));
-            }
             self.prepare_incomplete_live_repair_at(
                 &mut AccessorContext::new(store, get_ctx),
                 pending_call,
@@ -767,6 +756,31 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             self.abandon_for_trap();
         }
         result
+    }
+
+    async fn resolve_incomplete_scope(
+        &mut self,
+        replay_state: &ReplayState,
+    ) -> Result<ResolvingReplay<P>, WorkerExecutorError> {
+        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
+        let outcome = match replay_state.await_resolution_outcome(replay).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.state = pending_call.accept_terminal().into_session();
+                return Err(error);
+            }
+        };
+        if !matches!(
+            classify_replay_resolution(outcome),
+            ReplayedResolution::Incomplete
+        ) {
+            self.state = pending_call.accept_terminal().into_session();
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "an incomplete parent for a live demand-stream child",
+                format!("completed scope at {}", self.start_idx),
+            ));
+        }
+        Ok(pending_call)
     }
 
     pub(super) async fn prepare_incomplete_live_repair_at<Ctx: WorkerCtx>(
@@ -829,3 +843,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
