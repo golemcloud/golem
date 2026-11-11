@@ -236,22 +236,22 @@ pub impl ConfigField for Bool with fn load(path) {
 }
 
 ///|
-pub impl ConfigField for Int with fn collect_entries(path) {
-  local_entry((@schema.TypeTag::{ } : @schema.TypeTag[Int]), path)
+pub impl ConfigField for Int32 with fn collect_entries(path) {
+  local_entry((@schema.TypeTag::{ } : @schema.TypeTag[Int32]), path)
 }
 
 ///|
-pub impl ConfigField for Int with fn load(path) {
+pub impl ConfigField for Int32 with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for UInt with fn collect_entries(path) {
-  local_entry((@schema.TypeTag::{ } : @schema.TypeTag[UInt]), path)
+pub impl ConfigField for UInt32 with fn collect_entries(path) {
+  local_entry((@schema.TypeTag::{ } : @schema.TypeTag[UInt32]), path)
 }
 
 ///|
-pub impl ConfigField for UInt with fn load(path) {
+pub impl ConfigField for UInt32 with fn load(path) {
   load_config_value(path)
 }
 

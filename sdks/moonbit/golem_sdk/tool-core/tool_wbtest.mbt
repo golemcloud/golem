@@ -11,7 +11,7 @@ fn test_resource_drops() -> @model.SchemaValueResourceDrops {
 ///|
 fn decode_canonical_input_for_test(
   def : ToolDef,
-  command_index : Int,
+  command_index : Int32,
   input : @types.TypedSchemaValue,
   context : String,
 ) -> Array[CanonicalInputValue] raise @types.ToolError {
@@ -27,7 +27,7 @@ fn decode_canonical_input_for_test(
 ///|
 fn decode_invocation_input_for_test(
   input : @types.TypedSchemaValue,
-  arity : Int,
+  arity : Int32,
   context : String,
 ) -> Array[@model.SchemaValue] raise @types.ToolError {
   decode_invocation_input_with_resource_drops(
@@ -55,7 +55,7 @@ fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field_for_test(
 ///|
 fn[T : @schema.FromSchema] decode_param_for_test(
   fields : Array[@model.SchemaValue],
-  index : Int,
+  index : Int32,
   context : String,
 ) -> T raise @types.ToolError {
   decode_param_with_resource_drops(
@@ -1017,7 +1017,7 @@ test "decode invocation input rejects value that does not match typed schema fie
   let wire = @model.typed_schema_value_to_wit(typed)
   try {
     let fields = decode_invocation_input_for_test(wire, 1, "tool command")
-    let _decoded : Int = decode_param_for_test(fields, 0, "tool command")
+    let _decoded : Int32 = decode_param_for_test(fields, 0, "tool command")
   } catch {
     @types.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
@@ -1392,7 +1392,7 @@ test "normalization does not resolve value-is literals by short form" {
 fn canonical_test_def() -> ToolDef raise {
   let string = string_graph()
   let map = @schema.schema_graph_of_tag(
-    (@schema.type_tag() : @schema.TypeTag[Map[String, UInt]]),
+    (@schema.type_tag() : @schema.TypeTag[Map[String, UInt32]]),
   )
   let scalar = fn(long, aliases) -> OptionSpecDef {
     {

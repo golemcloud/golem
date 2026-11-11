@@ -522,9 +522,6 @@ fn Option::drop_sync(self : @asyncCore.Stream[Byte]?) -> Unit {{
     None => ()
   }}
 }}
-
-///|
-fn main {{}}
 "#
     )
 }
@@ -636,8 +633,8 @@ final class MetadataCapabilityImpl extends MetadataCapability {
     .unwrap();
 }
 
-async fn extracted_tool(ctx: &TestContext, component_name: &str, wasm_path: &str) -> Tool {
-    let wasm_path = ctx.cwd_path_join(wasm_path);
+async fn extracted_tool(ctx: &TestContext, component_name: &str) -> Tool {
+    let wasm_path = ctx.component_wasm(component_name, None).await;
     let metadata: ExtractedComponentMetadata =
         golem_cli::model::agent::extraction::extract_component_metadata(&wasm_path, false)
             .await
@@ -695,37 +692,14 @@ async fn rich_tool_metadata_matches_across_sdks() {
     .unwrap();
     let expected = &contract["tool"];
 
-    for (language, component_name, wasm_path) in [
-        (
-            "Rust",
-            "rich-tool-metadata:rust-fixture",
-            "golem-temp/agents/rich_tool_metadata_rust_fixture_debug.wasm",
-        ),
-        (
-            "TypeScript",
-            "rich-tool-metadata:typescript-fixture",
-            "golem-temp/agents/rich_tool_metadata_typescript_fixture.wasm",
-        ),
-        (
-            "Scala",
-            "rich-tool-metadata:scala-fixture",
-            "golem-temp/agents/rich_tool_metadata_scala_fixture.wasm",
-        ),
-        (
-            "MoonBit",
-            "rich-tool-metadata:moonbit-fixture",
-            "_build/wasm/debug/rich_tool_metadata_moonbit_fixture.agent.wasm",
-        ),
-        (
-            "Go",
-            "rich-tool-metadata:go-fixture",
-            "golem-temp/agents/rich_tool_metadata_go_fixture.wasm",
-        ),
+    for (language, component_name) in [
+        ("Rust", "rich-tool-metadata:rust-fixture"),
+        ("TypeScript", "rich-tool-metadata:typescript-fixture"),
+        ("Scala", "rich-tool-metadata:scala-fixture"),
+        ("MoonBit", "rich-tool-metadata:moonbit-fixture"),
+        ("Go", "rich-tool-metadata:go-fixture"),
     ] {
-        let mut actual = canonical_tool_json(
-            &extracted_tool(&ctx, component_name, wasm_path).await,
-            expected,
-        );
+        let mut actual = canonical_tool_json(&extracted_tool(&ctx, component_name).await, expected);
         canonicalize_inlined_definitions(expected, &mut actual);
         assert_matches_contract(language, expected, &actual);
     }

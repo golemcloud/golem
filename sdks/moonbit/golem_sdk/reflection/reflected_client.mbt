@@ -140,7 +140,7 @@ pub(all) struct ReflectedAgentClient {
 ///|
 fn decode_root_type(
   decoded : @model.DecodedSchemaGraph,
-  root : Int,
+  root : Int32,
 ) -> @model.SchemaType raise ReflectError {
   guard decoded.roots.get(root) is Some(selected) else {
     raise Schema("reflected schema root index \{root} is out of range")
@@ -267,7 +267,7 @@ pub fn AgentType::find_method(self : AgentType, name : String) -> AgentMethod? {
 pub fn AgentType::agent_id_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id? : @schema.Uuid? = None,
+  phantom_id~ : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   self.constructor_input.validate_value(constructor_value)
   ParsedAgentId::create(self.name, constructor_value, phantom_id~)
@@ -277,7 +277,7 @@ pub fn AgentType::agent_id_value(
 pub fn AgentType::agent_id_json(
   self : AgentType,
   constructor_json : Json,
-  phantom_id? : @schema.Uuid? = None,
+  phantom_id~ : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   self.agent_id_value(
     self.constructor_input.pack_json(constructor_json),
@@ -418,7 +418,7 @@ pub fn AgentType::new_phantom_value_with_config(
   if self.mode == Ephemeral {
     self.client_value_with_config(constructor_value, None, None, overrides)
   } else {
-    let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+    let phantom_id = @identity.new_phantom_id()
     let identity = self.agent_id_value(
       constructor_value,
       phantom_id=Some(phantom_id),
@@ -443,7 +443,7 @@ pub fn AgentType::new_phantom_json_with_config(
   if self.mode == Ephemeral {
     self.client_value_with_config(packed_constructor, None, None, overrides)
   } else {
-    let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+    let phantom_id = @identity.new_phantom_id()
     let identity = self.agent_id_value(
       packed_constructor,
       phantom_id=Some(phantom_id),
@@ -549,7 +549,7 @@ pub fn AgentType::new_phantom_value(
   guard self.mode == Durable else {
     raise Identity("phantom identities are unavailable for ephemeral agents")
   }
-  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+  let phantom_id = @identity.new_phantom_id()
   self.resume_phantom_value(constructor_value, phantom_id)
 }
 

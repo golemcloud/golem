@@ -37,8 +37,9 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
-    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    BlobMetadata, BlobMissingError, BlobRangeStream, BlobRefusal, BlobRefusedError, BlobStorage,
+    BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
+    PutIfAbsent,
 };
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::filesystem_snapshot_testing::{
@@ -1490,7 +1491,12 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
             (&component.metadata, AgentConfigSource::Local),
             (&target.metadata, AgentConfigSource::Secret),
         ] {
-            let agent_type = metadata.find_agent_type_by_name(&agent.agent_type).unwrap();
+            let agent_type = metadata
+                .agent_types
+                .iter()
+                .find(|agent_type| agent_type.declaration.type_name == agent.agent_type)
+                .map(|agent_type| agent_type.declaration.clone())
+                .unwrap();
             assert_eq!(
                 agent_type
                     .config
@@ -5298,8 +5304,6 @@ impl ComponentService for FlakyComponentService {
                 golem_common::model::component_metadata::ComponentMetadata::from_parts(
                     metadata.known_exports().clone(),
                     memories.clone(),
-                    metadata.root_package_name().clone(),
-                    metadata.root_package_version().clone(),
                     metadata.agent_types().to_vec(),
                     metadata.agent_type_provision_configs().clone(),
                 )
@@ -6056,6 +6060,480 @@ async fn a_transient_initial_file_download_at_a_host_call_update_point_retries_a
     Ok(())
 }
 
+/// A cold start keeps its caller pending through an unavailable initial file or component, but a
+/// refused source fails the caller and agent instead of retrying until the caller's deadline.
+#[test]
+#[timeout("120s")]
+async fn cold_initial_file_starts_wait_for_an_outage_but_fail_for_a_refusal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for (permanent, component_unavailable) in [(false, false), (true, false), (false, true)] {
+        let context = TestContext::new(last_unique_id);
+        let outage = Arc::new(InitialFileOutage::default());
+        let wrapper_outage = outage.clone();
+        let component_outage = Arc::new(Outage::default());
+        let wrapper_component_outage = component_outage.clone();
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                wrap_blob_storage: Some(Arc::new(move |inner| {
+                    Arc::new(FlakyInitialFileStorage {
+                        inner,
+                        outage: wrapper_outage.clone(),
+                    })
+                })),
+                wrap_component_service: Some(Arc::new(move |inner| {
+                    Arc::new(FlakyComponentService {
+                        inner,
+                        outage: wrapper_component_outage.clone(),
+                    })
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_update_v1)
+            .with_files(
+                "RevisionEnvAgent",
+                &[IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/source.txt")
+                        .map_err(anyhow::Error::msg)?,
+                    permissions: AgentFilePermissions::ReadOnly,
+                }],
+            )
+            .store()
+            .await?;
+        let id = agent_id!("RevisionEnvAgent");
+        let worker = executor.start_agent(&component.id, id.clone()).await?;
+        executor
+            .invoke_and_await_agent(&component, &id, "get_revision_from_env_var", data_value!())
+            .await?;
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !executor.stop_worker_if_idle(&owned).await? {
+                tokio::task::yield_now().await;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+        if component_unavailable {
+            *component_outage.get_failure.lock().unwrap() = Some((
+                component.revision,
+                WorkerExecutorError::ComponentServiceUnavailable {
+                    component_id: component.id,
+                    component_revision: Some(component.revision),
+                    reason: "injected startup outage".to_string(),
+                },
+            ));
+        } else if permanent {
+            outage.refuse(None);
+        } else {
+            outage.begin();
+        }
+
+        let key = golem_common::model::IdempotencyKey::fresh();
+        let mut call = Box::pin(executor.invoke_and_await_agent_with_key(
+            &component,
+            &id,
+            &key,
+            "get_revision_from_env_var",
+            data_value!(),
+        ));
+        if component_unavailable {
+            let result = tokio::time::timeout(Duration::from_secs(20), call).await??;
+            assert_eq!(result.into_typed::<String>()?, "0");
+            assert_eq!(component_outage.refused(), 1);
+            assert_ne!(
+                executor.get_worker_metadata(&worker).await?.status,
+                AgentStatus::Failed
+            );
+        } else if permanent {
+            let error = tokio::time::timeout(Duration::from_secs(20), call)
+                .await?
+                .unwrap_err();
+            assert!(format!("{error:?}").contains("access denied"), "{error:?}");
+            let metadata = executor.get_worker_metadata(&worker).await?;
+            assert_eq!(metadata.status, AgentStatus::Failed);
+            assert!(
+                metadata
+                    .last_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("access denied")),
+                "{metadata:?}"
+            );
+            assert_eq!(outage.refused(), 1);
+        } else {
+            tokio::select! {
+                result = &mut call => panic!("the caller completed during the outage: {result:?}"),
+                observed = tokio::time::timeout(Duration::from_secs(20), async {
+                    loop {
+                        let metadata = executor.get_worker_metadata(&worker).await?;
+                        if outage.refused() >= 2 && metadata.last_error_kind == Some(OplogErrorKind::Recovery) {
+                            break anyhow::Ok(());
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                }) => { observed??; }
+            }
+            // A second caller can reach its own deadline without ending the first caller's wait.
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_millis(50),
+                    executor.invoke_and_await_agent_with_key(
+                        &component,
+                        &id,
+                        &key,
+                        "get_revision_from_env_var",
+                        data_value!()
+                    )
+                )
+                .await
+                .is_err()
+            );
+            outage.end();
+            let result = tokio::time::timeout(Duration::from_secs(20), call).await??;
+            assert_eq!(result.into_typed::<String>()?, "0");
+            let metadata = executor.get_worker_metadata(&worker).await?;
+            assert_ne!(metadata.status, AgentStatus::Failed);
+        }
+    }
+    Ok(())
+}
+
+/// The target's refused initial files fail the update first. The next start reads the source's
+/// different content and fails permanently with the refusal, releasing the waiting invocation.
+#[test]
+#[timeout("120s")]
+async fn refusing_initial_files_of_both_revisions_fails_the_update_then_the_source_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(InitialFileOutage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_blob_storage: Some(Arc::new(move |inner| {
+                Arc::new(FlakyInitialFileStorage {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let mut http_server = TestHttpServer::start().await;
+    let env = HashMap::from([("PORT".to_string(), http_server.port().to_string())]);
+    let source_file = IFSEntry {
+        source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+        target_path: CanonicalFilePath::from_abs_str("/version.txt").map_err(anyhow::Error::msg)?,
+        permissions: AgentFilePermissions::ReadOnly,
+    };
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .with_files("UpdateTest", std::slice::from_ref(&source_file))
+        .store()
+        .await?;
+    let id = agent_id!("UpdateTest");
+    let worker = executor
+        .start_agent_with(&component.id, id.clone(), env, Vec::new())
+        .await?;
+    let mut control = http_server.f1_control(100).await;
+    let mut call =
+        Box::pin(executor.invoke_and_await_agent(&component, &id, "f1", data_value!(50u64)));
+    tokio::select! {
+        result = &mut call => panic!("the invocation did not reach its gate: {result:?}"),
+        () = control.await_reached() => {}
+    }
+    let source_path = outage.reads.lock().unwrap()[0].clone();
+    let reads_before = outage.reads.lock().unwrap().len();
+    let target = executor
+        .update_component_with_files(
+            &component.id,
+            "UpdateTest",
+            "it_agent_update_v2_release",
+            vec![IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/bar.txt"),
+                ..source_file
+            }],
+        )
+        .await?;
+    outage.refuse(Some(source_path.clone()));
+    executor
+        .auto_update_worker(&worker, target.revision, false)
+        .await?;
+    let error = tokio::time::timeout(Duration::from_secs(20), call)
+        .await?
+        .unwrap_err();
+    assert!(format!("{error:?}").contains("access denied"), "{error:?}");
+    let metadata = executor.get_worker_metadata(&worker).await?;
+    assert_eq!(metadata.status, AgentStatus::Failed);
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
+    assert!(metadata.updates.iter().any(|update| matches!(update,
+        UpdateRecord::FailedUpdate(update) if update.details.as_deref().is_some_and(|details| details.starts_with("UPDATE_BLOB_STORAGE_REFUSED:"))
+    )), "{metadata:?}");
+    assert!(
+        metadata
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("access denied")),
+        "{metadata:?}"
+    );
+    let reads = outage.reads.lock().unwrap()[reads_before..].to_vec();
+    assert!(reads.len() >= 2, "{reads:?}");
+    assert_ne!(
+        reads[reads.len() - 2],
+        source_path,
+        "the target content must be read before the refused source: {reads:?}"
+    );
+    assert_eq!(reads.last(), Some(&source_path));
+    assert_eq!(
+        outage.refused(),
+        2,
+        "the permanent source refusal must not retry"
+    );
+    http_server.abort();
+    Ok(())
+}
+
+/// A pending manual update starts on its target revision, so that start loads the initial files
+/// of the target. A target file that the blob storage refuses, or does not have, fails only the
+/// update: the agent starts again on its source revision, which has no initial files, and keeps
+/// its state.
+#[test]
+#[timeout("120s")]
+async fn a_manual_update_whose_target_initial_file_does_not_load_fails_only_the_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for missing in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let outage = Arc::new(InitialFileOutage::default());
+        let wrapper_outage = outage.clone();
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                wrap_blob_storage: Some(Arc::new(move |inner| {
+                    Arc::new(FlakyInitialFileStorage {
+                        inner,
+                        outage: wrapper_outage.clone(),
+                    })
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let http_server = TestHttpServer::start().await;
+        let env = HashMap::from([("PORT".to_string(), http_server.port().to_string())]);
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_update_v2)
+            .store()
+            .await?;
+        let agent_id = agent_id!("UpdateTest");
+        let worker_id = executor
+            .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "f1", data_value!(0u64))
+            .await?;
+        let before_update = executor
+            .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
+            .await?;
+        let target = executor
+            .update_component_with_files(
+                &component.id,
+                "UpdateTest",
+                "it_agent_update_v3_release",
+                vec![IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/target.txt")
+                        .map_err(anyhow::Error::msg)?,
+                    permissions: AgentFilePermissions::ReadOnly,
+                }],
+            )
+            .await?;
+        if missing {
+            outage.lose();
+        } else {
+            outage.refuse(None);
+        }
+
+        executor
+            .manual_update_worker(&worker_id, target.revision, false)
+            .await?;
+        let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+        let after_update = executor
+            .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
+            .await?;
+        let metadata = executor.get_worker_metadata(&worker_id).await?;
+        executor.check_oplog_is_queryable(&worker_id).await?;
+        drop(executor);
+        http_server.abort();
+
+        let details = failed
+            .updates
+            .iter()
+            .find_map(|record| match record {
+                UpdateRecord::FailedUpdate(update) => update.details.clone(),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if missing {
+            assert!(
+                !details.starts_with("UPDATE_") && details.contains("File not found"),
+                "{details}"
+            );
+        } else {
+            assert!(
+                details.starts_with("UPDATE_BLOB_STORAGE_REFUSED:")
+                    && details.contains("access denied"),
+                "{details}"
+            );
+        }
+        assert_eq!(before_update, after_update);
+        assert_eq!(metadata.component_revision, component.revision);
+        assert_ne!(metadata.status, AgentStatus::Failed);
+        assert_eq!(update_counts(&metadata), (0, 0, 1));
+        assert_eq!(outage.refused(), 1, "only the target start reads the file");
+    }
+    Ok(())
+}
+
+/// Two initial files where the second is under the first, `/a` and `/a/b`. They can never
+/// install: the file at `/a` leaves no directory for `/a/b`.
+fn nested_initial_files() -> anyhow::Result<Vec<IFSEntry>> {
+    [("foo.txt", "/a"), ("bar.txt", "/a/b")]
+        .into_iter()
+        .map(|(source, target)| {
+            Ok(IFSEntry {
+                source_path: PathBuf::from(format!("initial-file-system/files/{source}")),
+                target_path: CanonicalFilePath::from_abs_str(target).map_err(anyhow::Error::msg)?,
+                permissions: AgentFilePermissions::ReadOnly,
+            })
+        })
+        .collect()
+}
+
+/// A start whose initial files nest fails before any change. The caller gets the failure
+/// promptly, and the start does not run again.
+#[test]
+#[timeout("120s")]
+async fn a_start_with_an_initial_file_under_another_declared_file_fails_once_and_promptly(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .with_files("RevisionEnvAgent", &nested_initial_files()?)
+        .store()
+        .await?;
+    let id = agent_id!("RevisionEnvAgent");
+    let worker = AgentId {
+        component_id: component.id,
+        agent_id: id.to_string(),
+    };
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(20),
+        executor.invoke_and_await_agent(
+            &component,
+            &id,
+            "get_revision_from_env_var",
+            data_value!(),
+        ),
+    )
+    .await?
+    .unwrap_err();
+    let metadata = executor.get_worker_metadata(&worker).await?;
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    drop(executor);
+
+    let recovery_errors = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Error(params) if params.kind == OplogErrorKind::Recovery)
+        })
+        .count();
+    assert!(format!("{error:?}").contains("a/b"), "{error:?}");
+    assert_eq!(metadata.status, AgentStatus::Failed);
+    assert_eq!(recovery_errors, 1, "the start must not run again");
+    Ok(())
+}
+
+/// An automatic update whose target initial files nest fails at the update point before any
+/// change. The update does not stay pending, and the agent keeps running on its source revision.
+#[test]
+#[timeout("120s")]
+async fn an_update_to_an_initial_file_under_another_declared_file_fails_only_the_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let id = agent_id!("RevisionEnvAgent");
+    let worker = executor.start_agent(&component.id, id.clone()).await?;
+    let before = executor
+        .invoke_and_await_agent(&component, &id, "get_revision_from_env_var", data_value!())
+        .await?;
+    let target = executor
+        .update_component_with_files(
+            &component.id,
+            "RevisionEnvAgent",
+            "it_agent_update_v2_release",
+            nested_initial_files()?,
+        )
+        .await?;
+
+    executor
+        .auto_update_worker(&worker, target.revision, false)
+        .await?;
+    let failed = wait_for_update_counts(&executor, &worker, (0, 0, 1)).await?;
+    let after = executor
+        .invoke_and_await_agent(&component, &id, "get_revision_from_env_var", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker).await?;
+    drop(executor);
+
+    let details = failed
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(details.contains("a/b"), "{details}");
+    assert_eq!(before, after);
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_ne!(metadata.status, AgentStatus::Failed);
+    Ok(())
+}
+
 /// A blob storage that cannot give the content of an initial file while it is down, as a blob
 /// storage whose outage outlived the retry budget of its backend cannot. Every other operation
 /// goes to the storage that it wraps.
@@ -6065,39 +6543,87 @@ struct FlakyInitialFileStorage {
     outage: Arc<InitialFileOutage>,
 }
 
-/// Whether a [`FlakyInitialFileStorage`] is down, and how many reads of an initial file it
-/// refused.
+#[derive(Debug)]
+enum InitialFileFailure {
+    Unavailable,
+    Refused {
+        source_before_target: Option<PathBuf>,
+    },
+    /// The storage has no content for any initial file.
+    Missing,
+}
+
+/// The failure of a [`FlakyInitialFileStorage`] and the initial-file reads it observed.
 #[derive(Debug, Default)]
 struct InitialFileOutage {
-    down: std::sync::atomic::AtomicBool,
+    failure: std::sync::Mutex<Option<InitialFileFailure>>,
     refused: std::sync::atomic::AtomicUsize,
+    reads: std::sync::Mutex<Vec<PathBuf>>,
 }
 
 impl InitialFileOutage {
     fn begin(&self) {
-        self.down.store(true, std::sync::atomic::Ordering::SeqCst);
+        *self.failure.lock().unwrap() = Some(InitialFileFailure::Unavailable);
+    }
+
+    fn refuse(&self, source_before_target: Option<PathBuf>) {
+        *self.failure.lock().unwrap() = Some(InitialFileFailure::Refused {
+            source_before_target,
+        });
+    }
+
+    fn lose(&self) {
+        *self.failure.lock().unwrap() = Some(InitialFileFailure::Missing);
     }
 
     fn end(&self) {
-        self.down.store(false, std::sync::atomic::Ordering::SeqCst);
+        *self.failure.lock().unwrap() = None;
     }
 
+    /// The number of initial-file reads that failed or found no content.
     fn refused(&self) -> usize {
         self.refused.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Fails a read in `namespace` while the storage is down, when the namespace holds the
-    /// initial files. The error is of the backend, so it is transient.
-    fn check(&self, namespace: &BlobStorageNamespace) -> anyhow::Result<()> {
-        if matches!(namespace, BlobStorageNamespace::InitialAgentFiles { .. })
-            && self.down.load(std::sync::atomic::Ordering::SeqCst)
-        {
-            self.refused
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Err(anyhow::anyhow!("injected 503: the blob storage is down"))
-        } else {
-            Ok(())
+    /// Records a read of `path`. `Ok(true)` lets the read go to the wrapped storage, `Ok(false)`
+    /// answers that the storage has no content at `path`, and `Err` fails the read.
+    fn check(
+        &self,
+        namespace: &BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        if !matches!(namespace, BlobStorageNamespace::InitialAgentFiles { .. }) {
+            return Ok(true);
         }
+        let path = path.to_path_buf();
+        self.reads.lock().unwrap().push(path.clone());
+        let mut failure = self.failure.lock().unwrap();
+        let error = match failure.as_mut() {
+            None => return Ok(true),
+            Some(InitialFileFailure::Missing) => {
+                self.refused
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Ok(false);
+            }
+            Some(InitialFileFailure::Unavailable) => {
+                anyhow::anyhow!("injected 503: the blob storage is down")
+            }
+            Some(InitialFileFailure::Refused {
+                source_before_target,
+            }) => {
+                if source_before_target.as_ref() == Some(&path) {
+                    return Ok(true);
+                }
+                // Once the target is refused, the restarted source is refused too.
+                *source_before_target = None;
+                anyhow::anyhow!(BlobRefusedError {
+                    refusal: BlobRefusal::AccessDenied
+                })
+            }
+        };
+        self.refused
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(error)
     }
 }
 
@@ -6110,7 +6636,9 @@ impl BlobStorageBackend for FlakyInitialFileStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.outage.check(&namespace)?;
+        if !self.outage.check(&namespace, path)? {
+            return Ok(None);
+        }
         self.inner
             .get_raw(target_label, op_label, namespace, path)
             .await
@@ -6123,7 +6651,9 @@ impl BlobStorageBackend for FlakyInitialFileStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<Bytes>>>> {
-        self.outage.check(&namespace)?;
+        if !self.outage.check(&namespace, path)? {
+            return Ok(None);
+        }
         self.inner
             .get_stream(target_label, op_label, namespace, path)
             .await

@@ -144,6 +144,7 @@ pub fn generate_commons_by_template<T: TemplateGeneratorTargetFs>(
 
 pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
     template: &AppTemplate,
+    application_name: &ApplicationName,
     application_dir: &Path,
     target_path: &Path,
     mut target: T,
@@ -159,9 +160,15 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
         .content_hash
         .as_deref()
         .map(|content_hash| {
+            let content_hash =
+                blake3::hash(format!("{content_hash}\0{}", application_name.0).as_bytes())
+                    .to_hex()
+                    .to_string();
             TaskResultMarker::new(
                 &target_path.join(".golem-task-results"),
-                OnDemandCommonTemplateMarkerHash { content_hash },
+                OnDemandCommonTemplateMarkerHash {
+                    content_hash: &content_hash,
+                },
             )
         })
         .transpose()?;
@@ -175,7 +182,7 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
         &mut target,
         &GeneratorContext {
             template,
-            application_name: None,
+            application_name: Some(application_name),
             application_dir,
             component_name: None,
             component_dir: None,
@@ -313,7 +320,7 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                     (true, "build.sbt") => vec![Transform::ScalaSdk, Transform::ApplicationName],
                     (true, "plugins.sbt") => vec![Transform::ScalaSdk],
                     (true, "build.properties") => vec![Transform::ScalaSdk],
-                    (true, "moon.mod.json") => {
+                    (true, "moon.mod" | "moon.work") => {
                         vec![Transform::MoonBitSdk, Transform::ApplicationName]
                     }
                     (true, _) => vec![],
@@ -469,10 +476,7 @@ fn transform(
                     "GOLEM_MOONBIT_DEP_SDK_VERSION",
                     versions::sdk::MOONBIT.to_string(),
                 );
-                replacements.insert(
-                    "GOLEM_MOONBIT_DEP_TOOLS_BIN_DEPS",
-                    sdk_overrides.moonbit_sdk_tools_bin_deps(),
-                );
+                replacements.insert("GOLEM_MOONBIT_WORKSPACE", sdk_overrides.moonbit_workspace());
                 replacements.insert(
                     "GOLEM_MOONBIT_BUILD_TOOLS_CMD",
                     sdk_overrides.moonbit_sdk_tools_cmd(),
@@ -727,6 +731,45 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn moonbit_common_template_generates_module_and_workspace() {
+        use crate::app::template::AppTemplateRepo;
+        use crate::model::language::GuestLanguage;
+
+        let template = AppTemplateRepo::get(false)
+            .unwrap()
+            .common_template(GuestLanguage::MoonBit)
+            .unwrap()
+            .as_ref()
+            .unwrap();
+        let target = Path::new("generated-app");
+        let generated = super::generate_commons_by_template(
+            &template.0,
+            &golem_common::base_model::application::ApplicationName("generated-app".into()),
+            target,
+            super::InMemoryFs::new(),
+        )
+        .unwrap();
+        let manifest = generated.get(&target.join("moon.mod")).unwrap();
+        assert!(manifest.contains("name = \"generated-app\""));
+        assert!(manifest.contains("preferred_target = \"wasm\""));
+        assert!(manifest.contains("\"golemcloud/golem_sdk@"));
+        assert!(!manifest.contains("GOLEM_MOONBIT"));
+        assert!(generated.get(&target.join("moon.mod.json")).is_none());
+        let workspace = generated.get(&target.join("moon.work")).unwrap();
+        assert!(workspace.starts_with("members = ["));
+        assert!(workspace.contains("\".\""));
+        assert!(!workspace.contains("GOLEM_MOONBIT"));
+        let guide = generated.get(&target.join("AGENTS.md")).unwrap();
+        assert!(guide.contains("moon.work"));
+        assert!(!guide.contains("moon.mod.json"));
+        let dependency_skill = generated
+            .get(&target.join(".agents/skills/golem-add-moonbit-package/SKILL.md"))
+            .unwrap();
+        assert!(dependency_skill.contains("moonx golemcloud/golem_sdk_tools/cmd@"));
+        assert!(dependency_skill.contains("moon tree --package --target wasm"));
+    }
+
+    #[test]
     fn on_demand_common_templates_regenerate_after_cli_version_changes() {
         use crate::app::build::task_result_marker::TaskResult;
         use crate::app::template::AppTemplateRepo;
@@ -736,24 +779,26 @@ mod tests {
         let target = dir.path().join("common");
         let template = AppTemplateRepo::get(false)
             .unwrap()
-            .common_on_demand_template(GuestLanguage::TypeScript)
+            .common_on_demand_template(GuestLanguage::MoonBit)
             .unwrap()
             .as_ref()
             .unwrap();
-        let generate = || {
+        let generate = |name: &str| {
             super::generate_on_demand_commons_by_template(
                 &template.0,
+                &golem_common::base_model::application::ApplicationName(name.into()),
                 dir.path(),
                 &target,
                 super::StdFs,
             )
             .unwrap()
         };
-        generate();
+        generate("generated-app");
         let manifest = target.join("golem.yaml");
         let generated = std::fs::read_to_string(&manifest).unwrap();
+        assert!(generated.contains("/build/generated-app/"));
         std::fs::write(&manifest, "cached output").unwrap();
-        generate();
+        generate("generated-app");
         assert_eq!(std::fs::read_to_string(&manifest).unwrap(), "cached output");
 
         let marker_path = std::fs::read_dir(target.join(".golem-task-results"))
@@ -766,8 +811,12 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
         marker.cli_version = format!("{}-other", crate::version());
         std::fs::write(marker_path, serde_json::to_string(&marker).unwrap()).unwrap();
-        generate();
+        generate("generated-app");
         assert_eq!(std::fs::read_to_string(&manifest).unwrap(), generated);
+        generate("renamed-app");
+        let renamed = std::fs::read_to_string(&manifest).unwrap();
+        assert!(renamed.contains("/build/renamed-app/"));
+        assert!(!renamed.contains("/build/generated-app/"));
     }
 
     #[test]

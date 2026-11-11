@@ -99,10 +99,13 @@ Module._load = function (request) {
   if (request === "golem:agent/host@2.0.0") {
     return {
       getConfigValue: missingHostImport("getConfigValue"),
+      getAgentType: missingHostImport("getAgentType"),
+      makeAgentId: missingHostImport("makeAgentId"),
       parseAgentId: missingHostImport("parseAgentId"),
       WasmRpc: class {
         constructor(...args) {
           this.args = args;
+          globalThis.__golemScalaTestHost?.constructWasmRpc?.(...args);
         }
         static create(...args) {
           return new this(...args);

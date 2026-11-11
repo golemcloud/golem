@@ -10,7 +10,7 @@ cat >"$tmp_dir/wit-bindgen" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
   # A Git build from upstream has the same version shape as the Golem fork.
-  echo 'wit-bindgen-cli 0.59.0 (abcdef123 2026-09-30)'
+  echo 'wit-bindgen-cli 0.63.0 (abcdef123 2026-09-30)'
   exit 0
 fi
 touch "$WIT_BINDGEN_WAS_INVOKED"

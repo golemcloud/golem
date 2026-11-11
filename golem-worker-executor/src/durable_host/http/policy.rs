@@ -214,6 +214,7 @@ pub(crate) fn golem_managed_http_headers<Ctx: WorkerCtx>(
 /// injection.
 pub(crate) fn apply_managed_http_headers(
     headers: &mut FieldMap,
+    hooks: &mut dyn wasmtime_wasi_http::WasiHttpHooks,
     field_size_limit: usize,
     managed: &[(String, String)],
 ) -> Result<(), String> {
@@ -237,8 +238,12 @@ pub(crate) fn apply_managed_http_headers(
                 break;
             }
         };
-        let _ = headers.remove_all(header_name.clone());
-        if let Err(err) = headers.append(header_name, header_value) {
+        let _ = headers.remove_all(hooks, header_name.to_string());
+        if let Err(err) = headers.append(
+            hooks,
+            header_name.to_string(),
+            header_value.as_bytes().to_vec(),
+        ) {
             result = Err(format!(
                 "failed to inject header {name} into outgoing HTTP request: {err:?}"
             ));

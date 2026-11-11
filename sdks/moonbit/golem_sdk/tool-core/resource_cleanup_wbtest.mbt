@@ -32,7 +32,7 @@ test "parameter failure rolls back an earlier decoded stream" {
     drop_stream: fn(_) { dropped[0] += 1 },
     drop_native_stream: fn(_) {  },
   }
-  let first : @schema.AgentStream[Int] = decode_param_with_resource_drops(
+  let first : @schema.AgentStream[Int32] = decode_param_with_resource_drops(
     fields, 0, "partial transfer", drops,
   )
   guard @schema.to_value_as(first) is @model.SchemaValue::Stream(first_owned) else {
@@ -40,7 +40,7 @@ test "parameter failure rolls back an earlier decoded stream" {
   }
   assert_true(first_source.is_present())
   assert_true(first_owned.is_present())
-  let result : Result[Int, _] = try
+  let result : Result[Int32, _] = try
     decode_param_with_resource_drops(fields, 1, "partial transfer", drops) |> Ok
   catch {
     e => Err(e)
@@ -70,7 +70,7 @@ test "canonical field rejection releases undecoded streams" {
       value: @model.SchemaValue::Stream(source),
     },
   ]
-  let result : Result[Int, _] = try
+  let result : Result[Int32, _] = try
     decode_canonical_field_with_resource_drops(
       fields,
       "missing",

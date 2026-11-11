@@ -25,6 +25,12 @@ pub(all) enum GolemServer {
 } derive(Debug, Eq)
 
 ///|
+pub extend GolemServer with Debug::{to_repr}
+
+///|
+pub extend GolemServer with Eq::{equal, not_equal}
+
+///|
 let local_well_known_token : String = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 
 ///|
@@ -60,6 +66,12 @@ pub(all) enum ReconnectPolicy {
 } derive(Debug, Eq)
 
 ///|
+pub extend ReconnectPolicy with Debug::{to_repr}
+
+///|
+pub extend ReconnectPolicy with Eq::{equal, not_equal}
+
+///|
 /// The reconnect policy of a configuration that does not set one: 5 minutes.
 pub let default_reconnect_policy : ReconnectPolicy = Within(5 * 60 * 1000)
 
@@ -75,7 +87,13 @@ pub(all) struct Configuration {
 } derive(Debug, Eq)
 
 ///|
-let config_cell : Ref[Configuration?] = { val: None }
+pub extend Configuration with Debug::{to_repr}
+
+///|
+pub extend Configuration with Eq::{equal, not_equal}
+
+///|
+let config_cell : Ref[Configuration?] = { val: None, }
 
 ///|
 /// Configure all bridge clients in this project. Can be called repeatedly to

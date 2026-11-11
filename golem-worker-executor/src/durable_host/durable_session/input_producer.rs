@@ -287,8 +287,8 @@ impl DroppedDurableInput {
     }
 }
 
-impl<Ctx: WorkerCtx> AccessorTask<Ctx> for DurableInputDropTask {
-    async fn run(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+impl DurableInputDropTask {
+    async fn run<Ctx: WorkerCtx>(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
         let result = cancel_dropped_durable_input_access(
             accessor,
             DurableWorkerCtxView::durable_ctx_mut,
@@ -599,7 +599,9 @@ impl DurableInputProducer {
                 live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
             };
             self.pending_guest_value = Some(item);
-            store.as_context_mut().spawn(task);
+            store
+                .as_context_mut()
+                .spawn(async move |store| task.run(store).await)?;
             self.guest_delivery = Some(receiver);
         }
         let result = std::task::ready!(Pin::new(self.guest_delivery.as_mut().unwrap()).poll(cx));
@@ -653,7 +655,7 @@ impl DurableInputProducer {
                     | SessionStreamRole::ToolStderr => unreachable!(),
                 };
                 let (result, receiver) = oneshot::channel();
-                store.as_context_mut().spawn(DurableInputDropTask {
+                let task = DurableInputDropTask {
                     cancellation: DroppedDurableInput {
                         streams: self.input.streams.clone(),
                         transport_stream_id: self.input.transport_stream_id,
@@ -661,7 +663,10 @@ impl DurableInputProducer {
                         role,
                     },
                     result,
-                });
+                };
+                store
+                    .as_context_mut()
+                    .spawn(async move |store| task.run(store).await)?;
                 self.pending_drop = Some(Box::pin(async move {
                     receiver
                         .await
@@ -714,7 +719,9 @@ impl DurableInputProducer {
                         result,
                         _ctx: PhantomData,
                     };
-                    store.as_context_mut().spawn(task);
+                    store
+                        .as_context_mut()
+                        .spawn(async move |store| task.run(store).await)?;
                     self.live_admission = Some(receiver);
                 }
             }

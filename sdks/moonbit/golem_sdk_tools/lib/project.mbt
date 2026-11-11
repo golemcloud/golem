@@ -31,7 +31,7 @@ let generated_files : Array[String] = [
 ///
 /// Package `rel_path`s are computed relative to the **MoonBit module root**
 /// (the nearest ancestor — including `project_root` itself — that contains a
-/// `moon.mod.json`), NOT relative to the CLI argument. This keeps a package's
+/// `moon.mod`), NOT relative to the CLI argument. This keeps a package's
 /// identity (and therefore the default `type_id()` prefix derived from it)
 /// stable whether the tool is invoked at the module root (`agents <module>`)
 /// or at a single package dir (`agents <module>/pkg`).
@@ -61,12 +61,12 @@ fn parent_dir(dir : String) -> String {
 
 ///|
 /// Finds the MoonBit module root for `start`: the nearest ancestor directory
-/// (including `start`) that contains a `moon.mod.json`. Falls back to `start`
+/// (including `start`) that contains a `moon.mod`. Falls back to `start`
 /// when no module file is found up to the filesystem root.
 fn find_module_root(start : String) -> String {
   let mut dir = start
   for ;; {
-    if @fs.path_exists("\{dir}/moon.mod.json") {
+    if @fs.path_exists("\{dir}/moon.mod") {
       return dir
     }
     let parent = parent_dir(dir)

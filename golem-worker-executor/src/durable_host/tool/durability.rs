@@ -35,7 +35,7 @@ use golem_common::model::oplog::{
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::future::Future;
 use std::pin::Pin;
-use wasmtime::component::{Accessor, AccessorTask, HasData, HasSelf};
+use wasmtime::component::{Accessor, HasData, HasSelf};
 
 pub(super) fn is_entity_cancellation(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
@@ -261,8 +261,7 @@ where
     }
 }
 
-impl<Pair, U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
-    for HistoricalAttachmentWriteJob<Pair, Ctx>
+impl<Pair, Ctx: WorkerCtx> HistoricalAttachmentWriteJob<Pair, Ctx>
 where
     Pair: golem_common::model::oplog::HostPayloadPair<
             Req = HostRequestToolAttachmentWrite,
@@ -270,7 +269,7 @@ where
         > + Send
         + 'static,
 {
-    async fn run(
+    async fn run<U: Send + 'static>(
         self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
@@ -398,7 +397,7 @@ where
             bytes,
             descriptor,
         )?;
-        accessor.spawn(job);
+        accessor.spawn(async move |accessor| job.run(accessor).await)?;
         let delivery = restored.await??;
         if delivery.is_replay_discarded() {
             std::future::pending::<()>().await;

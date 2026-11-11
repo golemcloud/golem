@@ -538,8 +538,9 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
     // `polymorphic: false`.
     let target_type = component
         .metadata
-        .agent_types()
+        .agent_types
         .iter()
+        .map(|agent_type| &agent_type.declaration)
         .find(|agent_type| agent_type.type_name.0 == "ScalaPermissionCardTarget")
         .ok_or_else(|| anyhow::anyhow!("missing ScalaPermissionCardTarget agent type"))?;
     let card_parameter_polymorphism = |method_name: &str| {
@@ -559,7 +560,9 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
     let caller = agent_id!("ScalaPermissionCardAgent", "scenario");
     let root = component
         .metadata
-        .agent_type_initial_permission_card(&caller.agent_type)
+        .agent_type_provision_configs
+        .get(&caller.agent_type)
+        .map(|config| &config.initial_permissions)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("missing initial card for ScalaPermissionCardAgent"))?;
     store.add(StoredCard::Polymorphic(root));

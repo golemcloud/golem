@@ -541,27 +541,26 @@ fn ephemeral_replay_is_only_for_typed_owner_initialization() {
     )));
     assert!(should_replay_invocation(AgentMode::Ephemeral, &agent, 0));
     assert!(!should_replay_invocation(AgentMode::Ephemeral, &agent, 1));
-    for owner in [
-        ResolvedOwnerContext::ComponentWorker,
-        ResolvedOwnerContext::ComponentBaseline,
-    ] {
-        for replayed in [0, 1, 3] {
-            assert!(!should_replay_invocation(
-                AgentMode::Ephemeral,
-                &owner,
-                replayed
-            ));
-        }
+    for replayed in [0, 1, 3] {
+        assert!(!should_replay_invocation(
+            AgentMode::Ephemeral,
+            &ResolvedOwnerContext::ComponentBaseline,
+            replayed
+        ));
     }
-    for owner in [agent, ResolvedOwnerContext::ComponentWorker] {
-        for replayed in [0, 1, 3] {
-            assert!(should_replay_invocation(
-                AgentMode::Durable,
-                &owner,
-                replayed
-            ));
-        }
+    for replayed in [0, 1, 3] {
+        assert!(should_replay_invocation(
+            AgentMode::Durable,
+            &agent,
+            replayed
+        ));
+        assert!(should_replay_invocation(
+            AgentMode::Durable,
+            &ResolvedOwnerContext::OplogProcessor,
+            replayed
+        ));
     }
+    assert!(ResolvedOwnerContext::OplogProcessor.agent().is_none());
 }
 
 #[test]
@@ -2435,7 +2434,7 @@ struct PendingRequestBody;
 
 impl http_body::Body for PendingRequestBody {
     type Data = Bytes;
-    type Error = ErrorCode;
+    type Error = wasmtime_wasi_http::Error;
 
     fn poll_frame(
         self: Pin<&mut Self>,
@@ -2451,7 +2450,7 @@ impl http_body::Body for PendingRequestBody {
 
 async fn poll_p3_send_request_io_with_open_body(
     connection_pool: Option<HttpConnectionPool>,
-) -> Poll<Result<(), ErrorCode>> {
+) -> Poll<Result<(), wasmtime_wasi_http::Error>> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel::<()>();
@@ -2482,7 +2481,7 @@ async fn poll_p3_send_request_io_with_open_body(
         .body(PendingRequestBody.boxed_unsync())
         .unwrap();
 
-    let send = wasmtime_wasi_http::p3::WasiHttpHooks::send_request(
+    let send = wasmtime_wasi_http::WasiHttpHooks::send_request(
         &mut hooks,
         request,
         None,
@@ -2516,7 +2515,7 @@ async fn p3_pooled_send_request_io_future_waits_for_open_request_body_transmissi
         "the default p3 request transmission future should remain pending while the request body is still open"
     );
 
-    let pool = HttpConnectionPool::new(wasmtime_wasi_http::p2::HttpConnectionPoolConfig {
+    let pool = HttpConnectionPool::new(wasmtime_wasi_http::HttpConnectionPoolConfig {
         max_idle_per_host: 1,
         idle_timeout: Duration::from_secs(30),
         connect_timeout: Duration::from_secs(5),

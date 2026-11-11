@@ -161,6 +161,9 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
             stage_id,
             AgentMetadata {
                 agent_id: target.agent_id.clone(),
+                component_id: target.agent_id.component_id,
+                agent_type_name: None,
+                canonical_key: None,
                 owner_kind: OwnerKind::ComponentAgent,
                 env: vec![],
                 environment_id: target.environment_id,
@@ -181,6 +184,9 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
         .add(OplogEntry::create(Box::new(
             golem_common::model::oplog::CreateParameters {
                 agent_id: target.agent_id.clone(),
+                component_id: target.agent_id.component_id,
+                agent_type_name: None,
+                canonical_key: None,
                 owner_kind: OwnerKind::ComponentAgent,
                 agent_mode: AgentMode::Durable,
                 component_revision: ComponentRevision::INITIAL,

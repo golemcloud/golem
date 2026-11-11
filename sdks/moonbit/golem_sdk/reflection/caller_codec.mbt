@@ -98,7 +98,7 @@ pub fn[C : @schema.IntoSchema] FullAgentClient::new_phantom(
   type_name : String,
   constructor_input : C,
 ) -> FullAgentClient raise ReflectError {
-  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+  let phantom_id = @identity.new_phantom_id()
   FullAgentClient::get_phantom(type_name, constructor_input, phantom_id)
 }
 
@@ -108,7 +108,7 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClie
   constructor_input : C,
   config : Config,
 ) -> FullAgentClient raise ReflectError {
-  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+  let phantom_id = @identity.new_phantom_id()
   FullAgentClient::get_phantom_with_config(
     type_name, constructor_input, phantom_id, config,
   )
@@ -119,7 +119,7 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClie
 pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(
   type_name : String,
   constructor_input : C,
-  phantom_id? : @schema.Uuid? = None,
+  phantom_id~ : @schema.Uuid? = None,
 ) -> ParsedAgentId raise ReflectError {
   ParsedAgentId::create(
     type_name,

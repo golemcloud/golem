@@ -1060,7 +1060,8 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
                 let agent_type = ctx.parsed_agent_id().unwrap().agent_type;
                 let expected_changed = ctx.component_metadata()
                     .metadata.agent_type_initial_permission_card(&agent_type)
-                    != target.metadata.agent_type_initial_permission_card(&agent_type);
+                    != target.metadata.agent_type_provision_configs.get(&agent_type)
+                        .map(|config| &config.initial_permissions);
                 let (_, historical_before, canonical_before, _) = ctx.test_replay_application_state();
                 let fetches_before = outage.metadata_fetches().len();
                 if refuse_admission {
@@ -1184,7 +1185,7 @@ async fn initialize_entity(
     };
     let lowered = lower_invocation(init.clone(), &metadata, Some(parsed_agent_id))?;
     let result =
-        invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await?;
+        invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay, None).await?;
     match result {
         InvokeResult::Succeeded { result, .. }
             if matches!(*result, AgentInvocationResult::AgentInitialization) =>
@@ -1222,7 +1223,7 @@ async fn invoke_sleep_p3(
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
     let result =
-        invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await?;
+        invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay, None).await?;
     assert!(matches!(
         result,
         InvokeResult::Succeeded { result, .. }
@@ -1255,7 +1256,8 @@ async fn invoke_entity_method(
         scope_card: None,
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
-    match invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await? {
+    match invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay, None).await?
+    {
         InvokeResult::Succeeded { result, .. } => Ok(*result),
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(

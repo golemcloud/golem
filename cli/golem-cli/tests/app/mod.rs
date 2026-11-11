@@ -71,6 +71,29 @@ mod typescript_http_router;
 mod typescript_native_source;
 mod uuid_interop;
 
+fn add_moonbit_local_dependency(ctx: &TestContext, module: &str, path: &str) {
+    let manifest_path = ctx.cwd_path_join("moon.mod");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(
+        manifest_path,
+        manifest.replacen("import {", &format!("import {{\n  \"{module}@0.0.1\","), 1),
+    )
+    .unwrap();
+    let workspace_path = ctx.cwd_path_join("moon.work");
+    let workspace = std::fs::read_to_string(&workspace_path).unwrap();
+    let mut members: Vec<String> =
+        serde_json::from_str(workspace.trim().strip_prefix("members = ").unwrap()).unwrap();
+    members.push(path.to_string());
+    std::fs::write(
+        workspace_path,
+        format!(
+            "members = {}\n",
+            serde_json::to_string_pretty(&members).unwrap()
+        ),
+    )
+    .unwrap();
+}
+
 inherit_test_dep!(Tracing);
 
 // Tags for the it-cli CI shards. They must live in the `app` module so the tag's module-path
@@ -1472,6 +1495,25 @@ impl TestContext {
         self.working_dir.join(path)
     }
 
+    async fn component_wasm(&self, component_name: &str, preset: Option<&str>) -> PathBuf {
+        let mut args = vec!["component", "manifest-trace", "-F", "json"];
+        if let Some(preset) = preset {
+            args.extend(["-P", preset]);
+        }
+        let output = self.cli(args).await;
+        assert!(output.success_or_dump());
+        let trace = output
+            .stdout_json::<serde_json::Value>()
+            .into_iter()
+            .find(|trace| trace["componentName"] == component_name)
+            .unwrap_or_else(|| panic!("missing manifest trace for {component_name}"));
+        self.cwd_path_join(
+            trace["properties"]["componentWasm"]["value"]
+                .as_str()
+                .unwrap(),
+        )
+    }
+
     fn test_data_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         crate_path().join("test-data").join(path)
     }
@@ -1484,11 +1526,12 @@ impl TestContext {
 /// consistency check should update this helper and all callers together.
 ///
 /// The file's modification time is backdated so that metadata files seeded afterwards are
-/// strictly newer than any wasm copied from the placeholder (copies must preserve the
-/// timestamp: use [`copy_placeholder_wasm`] or `cp -p`). The extraction up-to-date check
-/// compares timestamps strictly, so equal timestamps (possible on filesystems with coarse
-/// timestamp granularity) would re-run extraction against the placeholder, which fails
-/// because it exports no agent guest interface.
+/// strictly newer than prebuilt copies made with [`copy_placeholder_wasm`]. Build commands
+/// that refresh the metadata must backdate the component wasm to 2000 before refreshing
+/// the metadata, so that the metadata stays newer than the component wasm, as required
+/// by the strict timestamp-based up-to-date checks.
+/// Otherwise extraction would run against the placeholder, which exports no agent guest
+/// interface.
 fn placeholder_component_wasm(ctx: &TestContext) -> PathBuf {
     let path = ctx.cwd_path_join("placeholder-component.wasm");
     if !path.exists() {
@@ -1594,6 +1637,14 @@ fn seed_extracted_metadata(
     )
 }
 
+fn seed_empty_component(ctx: &TestContext, component_name: &str, wasm: impl AsRef<Path>) {
+    let wasm = ctx.cwd_path_join(wasm);
+    fs::create_dir_all(wasm.parent().unwrap()).unwrap();
+    copy_placeholder_wasm(placeholder_component_wasm(ctx), &wasm);
+    seed_extracted_metadata(ctx, component_name, &wasm, "[]");
+    seed_extraction_marker(ctx, component_name);
+}
+
 fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {
     let marker_dir = ctx.cwd_path_join("golem-temp/task-results");
     fs::create_dir_all(&marker_dir).unwrap();
@@ -1607,22 +1658,6 @@ fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {
     .unwrap()
     .success()
     .unwrap();
-}
-
-fn check_component_metadata(
-    wasm: &Path,
-    expected_package_name: String,
-    expected_version: Option<String>,
-) {
-    let wasm = std::fs::read(wasm).unwrap();
-    let payload = wasm_metadata::Payload::from_binary(&wasm).unwrap();
-    let metadata = payload.metadata();
-
-    assert_eq!(metadata.name, Some(expected_package_name));
-    assert_eq!(
-        metadata.version.as_ref().map(|v| v.to_string()),
-        expected_version
-    );
 }
 
 #[must_use]

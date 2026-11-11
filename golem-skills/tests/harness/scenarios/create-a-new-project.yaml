@@ -12,7 +12,7 @@ steps:
         effect: ["test-app/src/main.ts", "test-app/package.json"]
         rust: ["test-app/src/lib.rs", "test-app/Cargo.toml"]
         scala: ["test-app/build.sbt", "test-app/src/main/scala/test_app_scala_main/CounterAgent.scala"]
-        moonbit: ["test-app/moon.mod.json"]
+        moonbit: ["test-app/moon.mod", "test-app/moon.work"]
         go: ["test-app/module/go.mod", "test-app/module/main.go"]
 
   - id: "invoke-increment"

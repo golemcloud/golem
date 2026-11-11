@@ -370,7 +370,7 @@ test "generate_config_override_walkers - flat config" {
   assert_true(
     output.contains("impl @rpc.AgentConfigOverrides for MyConfigOverride"),
   )
-  assert_true(output.contains("typed_values(self)"))
+  assert_true(output.contains("with fn typed_values("))
   // Secret fields should not appear
   assert_false(output.contains("api_key"))
 }

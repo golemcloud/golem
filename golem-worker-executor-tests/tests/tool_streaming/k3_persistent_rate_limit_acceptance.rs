@@ -473,7 +473,7 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
     // Fresh calls select the new configuration, but the in-flight occurrence remains pinned.
     deployment.deployment_revision = DeploymentRevision::try_from(2u64).unwrap();
     for tool in deployment.registered_tools.values_mut() {
-        tool.deployment_revision = deployment.deployment_revision;
+        tool.registration.deployment_revision = deployment.deployment_revision;
     }
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {

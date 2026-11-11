@@ -423,7 +423,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             for agent_type in &metadata.agent_types {
                 if !previous_component
                     .metadata
-                    .agent_type_provision_configs()
+                    .agent_type_provision_configs
                     .contains_key(&agent_type.type_name)
                 {
                     let update = updates.entry(agent_type.type_name.clone()).or_default();

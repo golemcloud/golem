@@ -131,7 +131,7 @@ pub(all) struct ToolInfo {
   description : String
   examples : Array[ToolExample]
   commands : Array[ToolCommandInfo]
-  mut root_command : Int?
+  mut root_command : Int32?
 } derive(Debug, Eq)
 
 ///|
@@ -557,7 +557,7 @@ fn[T] set_once(
 }
 
 ///|
-fn hex_digit_value(ch : Char) -> Int? {
+fn hex_digit_value(ch : Char) -> Int32? {
   if ch >= '0' && ch <= '9' {
     Some(ch.to_int() - '0'.to_int())
   } else if ch >= 'a' && ch <= 'f' {
@@ -1491,7 +1491,7 @@ pub fn parse_tools(
     validate_unsupported_tool_annotations(impl_)
   }
   let result : Array[ToolInfo] = []
-  let by_source : Map[String, Int] = Map([])
+  let by_source : Map[String, Int32] = Map([])
   let by_wire : Map[String, String] = Map([])
   for item in impls {
     match item {

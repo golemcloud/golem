@@ -42,6 +42,21 @@ pub struct Uuid {
 } derive(Eq, Compare, Hash)
 
 ///|
+pub extend Uuid with Eq::{equal, not_equal}
+
+///|
+pub extend Uuid with Compare::{compare, op_lt, op_le, op_gt, op_ge}
+
+///|
+pub extend Uuid with Hash::{hash, hash_combine}
+
+///|
+pub extend Uuid with Show::{to_string, output}
+
+///|
+pub extend Uuid with Debug::{to_repr}
+
+///|
 pub fn Uuid::from_bits(high_bits : UInt64, low_bits : UInt64) -> Uuid {
   { high_bits, low_bits, }
 }

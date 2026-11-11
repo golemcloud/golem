@@ -82,7 +82,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.owned_agent_id,
                 agent_id,
             ),
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 component_baseline_monomorphization_context(
                     self.authority_component_metadata(),
                     &self.owned_agent_id,
@@ -604,7 +604,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.owned_agent_id,
                 agent_id,
             ),
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 component_baseline_monomorphization_context(
                     self.authority_component_metadata(),
                     &self.owned_agent_id,
@@ -984,7 +984,7 @@ pub(crate) fn owner_effective_surface_from_component_metadata(
         ResolvedOwnerContext::Agent(agent_id) => {
             agent_effective_surface_from_component_metadata(component, owned_agent_id, agent_id)
         }
-        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+        ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
             let card = StoredCard::Polymorphic(
                 component
                     .metadata
@@ -1042,7 +1042,7 @@ pub(crate) fn owner_monomorphization_context(
         ResolvedOwnerContext::Agent(agent_id) => {
             agent_monomorphization_context(component, owned_agent_id, agent_id)
         }
-        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+        ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
             component_baseline_monomorphization_context(component, owned_agent_id)
         }
     }

@@ -39,8 +39,8 @@ use std::task::Poll;
 use tokio::sync::{Notify, oneshot};
 use tracing::warn;
 use wasmtime::AsContextMut;
-use wasmtime::component::{Accessor, AccessorTask, Resource};
-use wasmtime_wasi_http::p3::WasiHttp;
+use wasmtime::component::{Accessor, Resource};
+use wasmtime_wasi_http::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::types::{ErrorCode, Request, Response};
 
 /// Identity of a replayed send's recorded request-body frame stream.
@@ -134,6 +134,11 @@ pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
     let (recording_finished_tx, recording_finished_rx) = oneshot::channel();
     let progress = Arc::new(ReplayedRequestBodyDrainProgress::default());
     let (drain_result_tx, drain_result_rx) = oneshot::channel::<Result<(), ErrorCode>>();
+    let mut hooks = store.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .http_hooks
+            .clone()
+    });
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
     let body = http_store.with(
         |mut access| -> HttpResult<UnsyncBoxBody<Bytes, ErrorCode>> {
@@ -149,10 +154,13 @@ pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
                 // Resolve the transmission future with the drain's result. If
                 // the drain task is dropped before sending (e.g. worker
                 // teardown), fall back to `Ok(())`.
-                async move { drain_result_rx.await.unwrap_or(Ok(())) },
+                async move { drain_result_rx.await.unwrap_or(Ok(())).map_err(Into::into) },
                 wasi_http_view::<Ctx, U>,
             )?;
-            Ok(http_request.into_body())
+            Ok(http_request
+                .into_body()
+                .map_err(move |error| hooks.transport_error_to_p3(&error))
+                .boxed_unsync())
         },
     )?;
     let activity = store.with(|mut access| {
@@ -160,14 +168,17 @@ pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
             .tail_work_tracker()
             .activity()
     });
-    store.spawn(ReplayRequestBodyDrain::<Ctx>::new(
+    let task = ReplayRequestBodyDrain::<Ctx>::new(
         body,
         recorded_body,
         drain_result_tx,
         recording_finished_tx,
         progress.clone(),
         activity,
-    ));
+    );
+    store
+        .spawn(async move |store| task.run(store).await)
+        .map_err(HttpError::trap)?;
     Ok(
         await_recording.then_some(ReplayedRequestBodyDrainReadiness {
             proof: recording_finished_rx,
@@ -182,18 +193,20 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
     store: &Accessor<U, DurableP3<Ctx>>,
     request_rep: u32,
     disarm_rx: oneshot::Receiver<()>,
-) {
+) -> wasmtime::Result<()> {
     let activity = store.with(|mut access| {
         durable_worker_ctx::<Ctx, U>(access.data_mut())
             .tail_work_tracker()
             .activity()
     });
-    store.spawn(ReplayedRequestLeakGuard::<Ctx> {
+    let task = ReplayedRequestLeakGuard::<Ctx> {
         request_rep,
         disarm_rx,
         activity,
         _phantom: PhantomData,
-    });
+    };
+    store.spawn(async move |store| task.run(store).await)?;
+    Ok(())
 }
 
 /// Fallback consumer of a replayed send's request resource.
@@ -223,12 +236,14 @@ struct ReplayedRequestLeakGuard<Ctx> {
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for ReplayedRequestLeakGuard<Ctx>
+impl<Ctx> ReplayedRequestLeakGuard<Ctx>
 where
     Ctx: WorkerCtx,
-    U: Send + 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: Send + 'static>(
+        self,
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         let Self {
             request_rep,
             disarm_rx,
@@ -323,12 +338,11 @@ impl<Ctx> ReplayRequestBodyDrain<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for ReplayRequestBodyDrain<Ctx>
+impl<Ctx> ReplayRequestBodyDrain<Ctx>
 where
     Ctx: WorkerCtx,
-    U: 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: 'static>(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
         let Self {
             body,
             recorded_body,
@@ -731,12 +745,11 @@ pub(super) fn response_from_recorded_headers<Ctx: WorkerCtx, U: Send>(
     let mut response = http::Response::new(Empty::<Bytes>::new());
     *response.status_mut() = status;
     *response.headers_mut() = headers;
-    let (response, _io) = wasmtime_wasi_http::p3::Response::from_http(response);
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
     http_store.with(|mut access| {
-        access
-            .get()
-            .table
+        let view = access.get();
+        let (response, _io) = wasmtime_wasi_http::p3::Response::from_http(view.hooks, response);
+        view.table
             .push(response)
             .context("failed to push replayed p3 HTTP response to table")
             .map_err(wasmtime::Error::from_anyhow)
@@ -756,7 +769,7 @@ mod tests {
     use wasmtime::component::Access;
     use wasmtime::{AsContextMut, Engine, Store};
     use wasmtime_wasi_http::p3::bindings::http::types;
-    use wasmtime_wasi_http::p3::{WasiHttp, WasiHttpView};
+    use wasmtime_wasi_http::{WasiHttp, WasiHttpView};
 
     fn test_activity() -> TailActivity {
         crate::durable_host::tail_work::TailWorkTracker::new().activity()
@@ -917,7 +930,7 @@ mod tests {
         assert!(
             matches!(
                 replay_transmission_result,
-                Err(ErrorCode::HttpRequestBodySize(_))
+                Err(wasmtime_wasi_http::Error::HttpRequestBodySize(_))
             ),
             "replay consume must preserve the live request body transmission error, got {replay_transmission_result:?}"
         );
@@ -966,7 +979,10 @@ mod tests {
         let _ = drained_http_request.into_body().collect().await;
         let drained_result = drained_transmission.await;
         assert!(
-            matches!(drained_result, Err(ErrorCode::HttpRequestBodySize(_))),
+            matches!(
+                drained_result,
+                Err(wasmtime_wasi_http::Error::HttpRequestBodySize(_))
+            ),
             "draining the short body should surface content-length validation, got {drained_result:?}"
         );
     }
@@ -990,7 +1006,8 @@ mod tests {
         // Mirror the fixed `consume_replayed_request`: wire the transmission
         // future to the drain result via a oneshot, drain the body, then report
         // the drain result.
-        let (drain_result_tx, drain_result_rx) = oneshot::channel::<Result<(), ErrorCode>>();
+        let (drain_result_tx, drain_result_rx) =
+            oneshot::channel::<Result<(), wasmtime_wasi_http::Error>>();
         let (replay_http_request, _) = request
             .into_http(&mut replay_store, async move {
                 drain_result_rx.await.unwrap_or(Ok(()))
@@ -998,7 +1015,10 @@ mod tests {
             .expect("request should convert to an HTTP request");
         let drain_result = replay_http_request.into_body().collect().await.map(|_| ());
         assert!(
-            matches!(drain_result, Err(ErrorCode::HttpProtocolError)),
+            matches!(
+                drain_result,
+                Err(wasmtime_wasi_http::Error::HttpProtocolError)
+            ),
             "body drain should observe the deterministic error, got {drain_result:?}"
         );
         let _ = drain_result_tx.send(drain_result);
@@ -1007,7 +1027,7 @@ mod tests {
         assert!(
             matches!(
                 replay_transmission_result,
-                Err(ErrorCode::HttpProtocolError)
+                Err(wasmtime_wasi_http::Error::HttpProtocolError)
             ),
             "replay consume must propagate deterministic body errors to the request body transmission future, got {replay_transmission_result:?}"
         );

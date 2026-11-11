@@ -4,6 +4,34 @@ pub(all) struct Path {
 } derive(Debug, Eq, Hash)
 
 ///|
+pub extend Path with Debug::{to_repr}
+
+///|
+pub extend Path with Eq::{equal, not_equal}
+
+///|
+pub extend Path with Hash::{hash, hash_combine}
+
+///|
+pub extend Path with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Path with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend Path with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Path with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Path with WireSchema::{append_wire_type, append_result_type}
+
+///|
 pub fn Path::new(value : String) -> Path {
   { value, }
 }
@@ -14,6 +42,30 @@ pub(all) struct Url {
 } derive(Debug, Eq, Hash)
 
 ///|
+pub extend Url with Debug::{to_repr}
+
+///|
+pub extend Url with Eq::{equal, not_equal}
+
+///|
+pub extend Url with Hash::{hash, hash_combine}
+
+///|
+pub extend Url with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Url with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend Url with IntoWire::{append_wire, append_result_payload, release_wire}
+
+///|
+pub extend Url with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Url with WireSchema::{append_wire_type, append_result_type}
+
+///|
 pub fn Url::new(value : String) -> Url {
   { value, }
 }
@@ -22,8 +74,8 @@ pub fn Url::new(value : String) -> Url {
 pub(open) trait TextSpec {
   fn type_id() -> String
   fn languages() -> Array[String]
-  fn min_length() -> UInt?
-  fn max_length() -> UInt?
+  fn min_length() -> UInt32?
+  fn max_length() -> UInt32?
   fn regex() -> String?
 }
 
@@ -33,6 +85,31 @@ pub struct Text[S] {
   value : String
   language : String?
 } derive(Debug, Eq)
+
+///|
+pub extend Text with Debug::{to_repr}
+
+///|
+pub extend Text with Eq::{equal, not_equal}
+
+///|
+pub extend Text with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Text with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend Text with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Text with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Text with WireSchema::{append_wire_type, append_result_type}
 
 ///|
 pub fn[S] Text::new(value : String, language? : String) -> Text[S] {
@@ -55,6 +132,34 @@ pub(all) struct Duration {
 } derive(Debug, Eq, Hash)
 
 ///|
+pub extend Duration with Debug::{to_repr}
+
+///|
+pub extend Duration with Eq::{equal, not_equal}
+
+///|
+pub extend Duration with Hash::{hash, hash_combine}
+
+///|
+pub extend Duration with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Duration with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend Duration with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Duration with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Duration with WireSchema::{append_wire_type, append_result_type}
+
+///|
 pub fn Duration::new(nanoseconds : Int64) -> Duration {
   { nanoseconds, }
 }
@@ -68,9 +173,49 @@ pub struct Uuid {
 } derive(Eq, Compare, Hash)
 
 ///|
+pub extend Uuid with Eq::{equal, not_equal}
+
+///|
+pub extend Uuid with Compare::{compare, op_lt, op_le, op_gt, op_ge}
+
+///|
+pub extend Uuid with Hash::{hash, hash_combine}
+
+///|
+pub extend Uuid with Show::{to_string, output}
+
+///|
+pub extend Uuid with Debug::{to_repr}
+
+///|
+pub extend Uuid with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Uuid with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend Uuid with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Uuid with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Uuid with WireSchema::{append_wire_type, append_result_type}
+
+///|
 pub suberror UuidParseError {
   UuidParseError(String)
 } derive(Debug, Eq)
+
+///|
+pub extend UuidParseError with Debug::{to_repr}
+
+///|
+pub extend UuidParseError with Eq::{equal, not_equal}
 
 ///|
 pub fn Uuid::from_bits(high_bits : UInt64, low_bits : UInt64) -> Uuid {
@@ -155,7 +300,7 @@ pub fn Uuid::parse(value : String) -> Uuid raise UuidParseError {
 }
 
 ///|
-fn uuid_write_hex(logger : &Logger, value : UInt64, digits : Int) -> Unit {
+fn uuid_write_hex(logger : &Logger, value : UInt64, digits : Int32) -> Unit {
   for i = digits - 1; i >= 0; i = i - 1 {
     let nibble = ((value >> (i * 4)) & 0xFUL).to_int()
     logger.write_char("0123456789abcdef".unsafe_get(nibble).unsafe_to_char())
@@ -191,9 +336,34 @@ pub(open) trait QuantityUnit {
 #warnings("-unused_type_variable")
 pub struct Quantity[U] {
   mantissa : Int64
-  scale : Int
+  scale : Int32
   unit : String
 } derive(Debug, Eq)
+
+///|
+pub extend Quantity with Debug::{to_repr}
+
+///|
+pub extend Quantity with Eq::{equal, not_equal}
+
+///|
+pub extend Quantity with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend Quantity with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend Quantity with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend Quantity with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend Quantity with WireSchema::{append_wire_type, append_result_type}
 
 ///|
 pub fn[U : QuantityUnit] unit_allowed(_tag : TypeTag[U], unit : String) -> Bool {
@@ -208,7 +378,7 @@ pub fn[U : QuantityUnit] unit_allowed(_tag : TypeTag[U], unit : String) -> Bool 
 ///|
 pub fn[U : QuantityUnit] Quantity::new(
   mantissa : Int64,
-  scale : Int,
+  scale : Int32,
   unit : String,
 ) -> Quantity[U] raise FromSchemaError {
   let tag : TypeTag[U] = type_tag()
@@ -526,6 +696,31 @@ pub(all) struct AgentBinary {
   bytes : Bytes
   mime_type : String?
 } derive(Debug, Eq)
+
+///|
+pub extend AgentBinary with Debug::{to_repr}
+
+///|
+pub extend AgentBinary with Eq::{equal, not_equal}
+
+///|
+pub extend AgentBinary with IntoSchema::{type_id, register_in, to_value}
+
+///|
+pub extend AgentBinary with FromSchema::{from_value, from_result_payload}
+
+///|
+pub extend AgentBinary with IntoWire::{
+  append_wire,
+  append_result_payload,
+  release_wire,
+}
+
+///|
+pub extend AgentBinary with FromWire::{read_wire, read_result_payload}
+
+///|
+pub extend AgentBinary with WireSchema::{append_wire_type, append_result_type}
 
 ///|
 pub impl IntoSchema for AgentBinary with fn type_id() {

@@ -127,15 +127,31 @@ pub fn remove_map_entry(source: &str, path: &[&str], key: &str) -> anyhow::Resul
     let root = root_mapping(&tree, source)?;
     let mapping =
         find_mapping_by_path(source, root, path)?.ok_or_else(|| anyhow!("Missing map at path"))?;
-    for pair in mapping_pairs(mapping, source)? {
+    let pairs = mapping_pairs(mapping, source)?;
+    let empty_after_removal = pairs.len() == 1;
+    for pair in pairs {
         if pair.key == key {
+            if empty_after_removal {
+                return apply_edits(
+                    source,
+                    vec![TextEdit::new(
+                        mapping.start_byte(),
+                        mapping.end_byte(),
+                        "{}\n",
+                    )],
+                );
+            }
             let mut end = pair.pair_node.end_byte();
             if source[end..].starts_with('\n') {
                 end += 1;
             }
             return apply_edits(
                 source,
-                vec![TextEdit::new(pair.pair_node.start_byte(), end, "")],
+                vec![TextEdit::new(
+                    line_start_at(source, pair.pair_node.start_byte()),
+                    end,
+                    "",
+                )],
             );
         }
     }

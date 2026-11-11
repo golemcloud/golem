@@ -34,8 +34,8 @@ fn[T : IntoSchema + FromSchema] rt(v : T) -> T raise {
 
 ///|
 struct Point {
-  x : Int
-  y : Int
+  x : Int32
+  y : Int32
 } derive(Eq, Debug)
 
 ///|
@@ -50,8 +50,14 @@ pub impl IntoSchema for Point with fn register_in(b) {
     () => {
       @model.schema_type(
         Record([
-          @model.field("x", register_in_with(b, (TypeTag::{ } : TypeTag[Int]))),
-          @model.field("y", register_in_with(b, (TypeTag::{ } : TypeTag[Int]))),
+          @model.field(
+            "x",
+            register_in_with(b, (TypeTag::{ } : TypeTag[Int32])),
+          ),
+          @model.field(
+            "y",
+            register_in_with(b, (TypeTag::{ } : TypeTag[Int32])),
+          ),
         ]),
       )
     },
@@ -67,8 +73,8 @@ pub impl IntoSchema for Point with fn to_value(self) {
 ///|
 pub impl FromSchema for Point with fn from_value(v) {
   let fields = expect_record(v, "Point")
-  let x : Int = from_value_as(record_field(fields, 0, "Point"))
-  let y : Int = from_value_as(record_field(fields, 1, "Point"))
+  let x : Int32 = from_value_as(record_field(fields, 0, "Point"))
+  let y : Int32 = from_value_as(record_field(fields, 1, "Point"))
   { x, y, }
 }
 
@@ -158,7 +164,7 @@ test "enum out-of-range decode raises OutOfRange" {
 enum Shape {
   Empty
   Circle(Double)
-  Rect(Int, String)
+  Rect(Int32, String)
 } derive(Eq, Debug)
 
 ///|
@@ -180,7 +186,10 @@ pub impl IntoSchema for Shape with fn register_in(b) {
           ),
           @model.variant_case(
             "Rect",
-            payload=register_in_with(b, (TypeTag::{ } : TypeTag[(Int, String)])),
+            payload=register_in_with(
+              b,
+              (TypeTag::{ } : TypeTag[(Int32, String)]),
+            ),
           ),
         ]),
       )
@@ -209,7 +218,7 @@ pub impl FromSchema for Shape with fn from_value(v) {
     }
     1 => Circle(from_value_as(expect_variant_payload(payload, "Shape.Circle")))
     2 => {
-      let (w, h) : (Int, String) = from_value_as(
+      let (w, h) : (Int32, String) = from_value_as(
         expect_variant_payload(payload, "Shape.Rect"),
       )
       Rect(w, h)
@@ -281,12 +290,12 @@ pub impl[T : FromSchema] FromSchema for Boxed[T] with fn from_value(v) {
 
 ///|
 test "generic nominal record round-trip + per-instantiation def id" {
-  let bi : Boxed[Int] = { inner: 42, }
+  let bi : Boxed[Int32] = { inner: 42, }
   assert_eq(rt(bi), bi)
   let bs : Boxed[String] = { inner: "hi", }
   assert_eq(rt(bs), bs)
   // Each instantiation gets its own definition keyed by the resolved args.
-  let ti : TypeTag[Boxed[Int]] = type_tag()
+  let ti : TypeTag[Boxed[Int32]] = type_tag()
   let gi = into_schema_graph(ti)
   assert_eq(gi.defs.length(), 1)
   assert_eq(gi.defs[0].id, "test.Boxed<i32>")
@@ -301,7 +310,7 @@ test "generic nominal record round-trip + per-instantiation def id" {
 
 ///|
 struct Tree {
-  value : Int
+  value : Int32
   children : Array[Tree]
 } derive(Eq, Debug)
 
@@ -319,7 +328,7 @@ pub impl IntoSchema for Tree with fn register_in(b) {
         Record([
           @model.field(
             "value",
-            register_in_with(b, (TypeTag::{ } : TypeTag[Int])),
+            register_in_with(b, (TypeTag::{ } : TypeTag[Int32])),
           ),
           @model.field(
             "children",
@@ -340,7 +349,7 @@ pub impl IntoSchema for Tree with fn to_value(self) {
 ///|
 pub impl FromSchema for Tree with fn from_value(v) {
   let fields = expect_record(v, "Tree")
-  let value : Int = from_value_as(record_field(fields, 0, "Tree"))
+  let value : Int32 = from_value_as(record_field(fields, 0, "Tree"))
   let children : Array[Tree] = from_value_as(record_field(fields, 1, "Tree"))
   { value, children, }
 }

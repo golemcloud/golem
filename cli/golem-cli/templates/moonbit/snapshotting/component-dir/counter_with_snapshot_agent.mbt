@@ -59,8 +59,3 @@ pub fn CounterWithSnapshotAgent::load_snapshot(
   }
   Ok({ name, value: v, })
 }
-
-///|
-fn main {
-
-}

@@ -56,7 +56,7 @@ use golem_common::model::plan::PlanId;
 use golem_common::model::tool::{
     CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
     TOOL_METADATA_WIT_VERSION, ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata,
-    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolRegistration, ToolSource,
 };
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
@@ -119,7 +119,7 @@ use golem_registry_service::repo::model::deployment::{
     CurrentDeploymentExtRevisionRecord, CurrentDeploymentRevisionRecord, DeployRepoError,
     DeploymentAgentToolBindingRecord, DeploymentComponentRevisionRecord,
     DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredToolRecord,
-    DeploymentRevisionCreationRecord,
+    DeploymentRevisionCreationRecord, PreparedAgentType,
 };
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
 use golem_registry_service::repo::model::environment_tool_grant::EnvironmentToolGrantRecord;
@@ -929,8 +929,6 @@ pub async fn test_component_deletion_racing_runtime_derivation(deps: &Deps) {
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -1100,8 +1098,6 @@ pub async fn test_component_deletion_racing_multi_parent_runtime_derivation(deps
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([
             (high_agent_type.clone(), provision_config(high_card.clone())),
@@ -1263,8 +1259,6 @@ pub async fn test_component_deletion_racing_runtime_derivation_from_descendant(d
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -2778,8 +2772,6 @@ pub async fn test_environment_deletion_revokes_component_card_runtime_descendant
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3257,8 +3249,6 @@ pub async fn test_component_stage(deps: &Deps) {
         metadata: Blob::new(ComponentMetadata::from_parts_with_tools(
             KnownExports::default(),
             vec![],
-            Some("test".to_string()),
-            Some("1.0".to_string()),
             vec![],
             std::collections::BTreeMap::new(),
             BTreeMap::from([(
@@ -3480,8 +3470,6 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3576,8 +3564,6 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
     let metadata_with_agent = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3781,8 +3767,6 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3873,8 +3857,6 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -3986,8 +3968,6 @@ pub async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -4101,8 +4081,6 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         vec![],
-        None,
-        None,
         vec![],
         BTreeMap::from([(
             agent_type.clone(),
@@ -7405,8 +7383,6 @@ pub async fn test_account_usage(deps: &Deps) {
                     metadata: Blob::new(ComponentMetadata::from_parts(
                         KnownExports::default(),
                         vec![],
-                        None,
-                        None,
                         vec![],
                         BTreeMap::new(),
                     )),
@@ -9908,8 +9884,6 @@ pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     vec![],
-                    Some("ordinary-metadata".to_string()),
-                    Some("1.0.0".to_string()),
                     expected.clone(),
                     BTreeMap::new(),
                 )),
@@ -9936,20 +9910,12 @@ pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
             .agent_types(),
         expected
     );
-    assert_eq!(
-        stored_component
-            .component
-            .revision
-            .metadata
-            .value()
-            .root_package_name(),
-        &Some("ordinary-metadata".to_string())
-    );
 
     let deployment_revision_id = 1;
     let records = expected
         .iter()
         .map(|agent_type| DeploymentRegisteredAgentTypeRecord {
+            type_id: None,
             environment_id: env.revision.environment_id,
             deployment_revision_id,
             agent_type_name: agent_type.type_name.0.clone(),
@@ -10061,8 +10027,6 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     Vec::new(),
-                    None,
-                    None,
                     Vec::new(),
                     BTreeMap::new(),
                 )),
@@ -10083,7 +10047,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
     deps.tool_release_repo
         .create(
             ToolReleaseRecord::from_registered_tool(
-                &RegisteredTool {
+                &ToolRegistration {
                     deployment_revision: DeploymentRevision::INITIAL,
                     release_id: None,
                     metadata_digest: golem_common::model::tool_release::tool_metadata_digest(
@@ -10280,8 +10244,6 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     Vec::new(),
-                    None,
-                    None,
                     Vec::new(),
                     BTreeMap::new(),
                 )),
@@ -10299,7 +10261,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         component_revision: ComponentRevision::try_from(component.revision.revision_id).unwrap(),
         component_name: golem_common::model::component::ComponentName(component_name.clone()),
     };
-    let registered = RegisteredTool {
+    let registered = ToolRegistration {
         deployment_revision: DeploymentRevision::INITIAL,
         release_id: None,
         definition: definition.clone(),
@@ -10406,8 +10368,6 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     Vec::new(),
-                    None,
-                    None,
                     Vec::new(),
                     BTreeMap::new(),
                 )),
@@ -10987,8 +10947,6 @@ pub async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     Vec::new(),
-                    None,
-                    None,
                     Vec::new(),
                     BTreeMap::new(),
                 )),
@@ -11391,8 +11349,6 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         metadata: Blob::new(ComponentMetadata::from_parts(
             KnownExports::default(),
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
         )),
@@ -11451,7 +11407,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         };
         let mut registered_tools = tools
             .into_iter()
-            .map(|definition| RegisteredTool {
+            .map(|definition| ToolRegistration {
                 deployment_revision,
                 release_id: None,
                 metadata_digest: golem_common::model::tool_release::tool_metadata_digest(
@@ -11769,6 +11725,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             compiled_routes: Vec::new(),
             compiled_mcp: Vec::new(),
             registered_agent_types: vec![DeploymentRegisteredAgentTypeRecord {
+                type_id: None,
                 environment_id,
                 deployment_revision_id,
                 agent_type_name: agent_type_name.clone(),
@@ -12005,9 +11962,12 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .unwrap()
         .try_into()
         .unwrap();
-    assert_eq!(exact_alpha.deployment_revision.get(), 1);
-    assert_eq!(exact_alpha.definition.version, "1.0.0");
-    assert_eq!(exact_alpha.metadata_version, TOOL_METADATA_WIT_VERSION);
+    assert_eq!(exact_alpha.registration.deployment_revision.get(), 1);
+    assert_eq!(exact_alpha.registration.definition.version, "1.0.0");
+    assert_eq!(
+        exact_alpha.registration.metadata_version,
+        TOOL_METADATA_WIT_VERSION
+    );
     let published_zeta = deps
         .tool_release_repo
         .get_by_coordinates(owner_account_id, "zeta", "1.0.0")
@@ -12023,7 +11983,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(
-        exact_zeta.release_id,
+        exact_zeta.registration.release_id,
         Some(ToolReleaseId(published_zeta.release.tool_release_id))
     );
     let first_summary: DeploymentSummary = deps
@@ -12178,6 +12138,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(current.mcp_imports, exact_second_state.mcp_imports);
     assert_eq!(
         current.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .registration
             .definition
             .version,
         "2.0.0"
@@ -12231,6 +12192,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(rolled_back.deployment_revision.get(), 1);
     assert_eq!(
         rolled_back.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .registration
             .definition
             .version,
         "1.0.0"
@@ -12312,11 +12274,11 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let republished_zeta =
         &latest_for_updated_component.registered_tools[&ToolName::try_from("zeta").unwrap()];
     assert_eq!(
-        republished_zeta.release_id,
+        republished_zeta.registration.release_id,
         Some(ToolReleaseId(published_zeta.release.tool_release_id))
     );
     assert!(matches!(
-        &republished_zeta.source,
+        &republished_zeta.registration.source,
         ToolSource::Component {
             component_revision,
             ..
@@ -12328,7 +12290,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         component_revision: ComponentRevision::try_from(component_revision_id).unwrap(),
         component_name: golem_common::model::component::ComponentName(component_name.clone()),
     };
-    let mut remote_registered_tool = RegisteredTool {
+    let mut remote_registered_tool = ToolRegistration {
         deployment_revision: DeploymentRevision::try_from(4_i64).unwrap(),
         release_id: None,
         definition: remote_definition.clone(),
@@ -12427,9 +12389,19 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(
-        remote_state.registered_tools[&ToolName::try_from("remote-search").unwrap()],
+        remote_state.registered_tools[&ToolName::try_from("remote-search").unwrap()].registration,
         remote_registered_tool
     );
+    let remote_id =
+        remote_state.registered_tools[&ToolName::try_from("remote-search").unwrap()].type_id;
+    let remote_allocation = deps
+        .full_deployment_repo
+        .get_environment_type_id(environment_id, i64::from(remote_id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(remote_allocation.kind, "tool");
+    assert_eq!(remote_allocation.name, "remote-search");
     let remote_summary: DeploymentSummary = deps
         .full_deployment_repo
         .get_deployment_identity(environment_id, 4)
@@ -12898,6 +12870,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(rolled_back.deployment_revision.get(), 1);
     assert_eq!(
         rolled_back.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .registration
             .definition
             .version,
         "1.0.0"
@@ -12978,6 +12951,444 @@ struct ResolveTestEnv {
     agent_type_name: String,
 }
 
+async fn type_id_deployment(
+    deps: &Deps,
+    env: &ResolveTestEnv,
+    revision: i64,
+    name: &str,
+) -> DeploymentRevisionCreationRecord {
+    let source_agent = deps
+        .full_deployment_repo
+        .list_deployment_agent_types(env.environment_id, 1)
+        .await
+        .unwrap()
+        .remove(0);
+    let owner = deps
+        .account_repo
+        .get_by_id(env.owner_account_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let agent = DeploymentRegisteredAgentTypeRecord::from_model(
+        EnvironmentId(env.environment_id),
+        DeploymentRevision::try_from(revision).unwrap(),
+        PreparedAgentType {
+            agent_type: make_test_agent_type(name),
+            implemented_by: golem_common::model::agent::RegisteredAgentTypeImplementer {
+                component_id: ComponentId(source_agent.component_id),
+                component_revision: ComponentRevision::try_from(source_agent.component_revision_id)
+                    .unwrap(),
+                component_name: source_agent.component_name,
+                account_id: AccountId(env.owner_account_id),
+                account_email: AccountEmail::new(owner.revision.email),
+            },
+            webhook_prefix_authority_and_path: None,
+        },
+    );
+    let tool = ToolRegistration {
+        deployment_revision: DeploymentRevision::try_from(revision).unwrap(),
+        release_id: None,
+        definition: make_test_tool(name, "1.0.0"),
+        provision: ToolProvisionConfig::default(),
+        component_bindings: BTreeMap::new(),
+        source: ToolSource::Component {
+            component_id: ComponentId(agent.component_id),
+            component_revision: ComponentRevision::try_from(agent.component_revision_id).unwrap(),
+            component_name: golem_common::model::component::ComponentName(
+                agent.component_name.clone(),
+            ),
+        },
+        owner_account_id: AccountId(agent.owner_account_id),
+        owner_account_email: golem_common::model::account::AccountEmail::new(
+            agent.owner_account_email.clone(),
+        ),
+        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+        metadata_digest: golem_common::model::tool_release::tool_metadata_digest(
+            TOOL_METADATA_WIT_VERSION,
+            &make_test_tool(name, "1.0.0"),
+        )
+        .unwrap(),
+    };
+    let mut creation = empty_deployment_creation(
+        env.environment_id,
+        revision,
+        &revision.to_string(),
+        env.owner_account_id,
+    );
+    creation.registered_agent_types = vec![agent];
+    creation.registered_tools = vec![DeploymentRegisteredToolRecord::from_model(
+        EnvironmentId(env.environment_id),
+        tool,
+        false,
+        None,
+    )];
+    creation
+}
+
+pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Deps) {
+    use golem_common::model::type_id::TypeIdKind;
+    let env = setup_resolve_env(deps).await;
+    let initial = deps
+        .full_deployment_repo
+        .list_environment_type_ids(env.environment_id)
+        .await
+        .unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].kind, "agent-type");
+    assert_eq!(initial[0].type_id, 1);
+
+    let creation = type_id_deployment(deps, &env, 2, "shared-name").await;
+    let expected_agent = creation.registered_agent_types[0].clone();
+    let expected_tool = creation.registered_tools[0].clone();
+    deps.full_deployment_repo
+        .deploy_current(creation, false)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let allocations = deps
+        .full_deployment_repo
+        .list_environment_type_ids(env.environment_id)
+        .await
+        .unwrap();
+    assert_eq!(allocations.len(), 3);
+    assert_eq!(
+        allocations
+            .iter()
+            .map(|r| r.type_id)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([1, 2, 3])
+    );
+    let agent_id = allocations
+        .iter()
+        .find(|r| r.kind == "agent-type" && r.name == "shared-name")
+        .unwrap()
+        .type_id;
+    let tool_id = allocations
+        .iter()
+        .find(|r| r.kind == "tool" && r.name == "shared-name")
+        .unwrap()
+        .type_id;
+    assert_ne!(agent_id, tool_id);
+    for row in &allocations {
+        let reverse = deps
+            .full_deployment_repo
+            .get_environment_type_id(env.environment_id, row.type_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&reverse, row);
+        let (kind, name, id) = reverse.into_model().unwrap();
+        assert_eq!(
+            kind,
+            if row.kind == "tool" {
+                TypeIdKind::Tool
+            } else {
+                TypeIdKind::AgentType
+            }
+        );
+        assert_eq!(name, row.name);
+        assert_eq!(i64::from(id), row.type_id);
+    }
+    assert!(
+        deps.full_deployment_repo
+            .get_environment_type_id(env.environment_id, 999)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.full_deployment_repo
+            .get_environment_type_id(new_repo_uuid(), agent_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    for revision in [2, 4] {
+        if revision == 4 {
+            deps.full_deployment_repo
+                .deploy_current(
+                    type_id_deployment(deps, &env, revision, "shared-name").await,
+                    false,
+                )
+                .await
+                .unwrap()
+                .signal_new_events_available(&deps.test_registry_change_notifier());
+        }
+        let agent = deps
+            .full_deployment_repo
+            .list_deployment_agent_types(env.environment_id, revision)
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(agent.type_id, agent_id);
+        assert_eq!(agent.environment_id, expected_agent.environment_id);
+        assert_eq!(agent.deployment_revision_id, revision);
+        assert_eq!(agent.agent_type_name, expected_agent.agent_type_name);
+        assert_eq!(
+            agent.canonical_agent_type_name,
+            expected_agent.canonical_agent_type_name
+        );
+        assert_eq!(agent.component_id, expected_agent.component_id);
+        assert_eq!(
+            agent.component_revision_id,
+            expected_agent.component_revision_id
+        );
+        assert_eq!(agent.component_name, expected_agent.component_name);
+        assert_eq!(
+            agent.webhook_prefix_authority_and_path,
+            expected_agent.webhook_prefix_authority_and_path
+        );
+        assert_eq!(agent.agent_type, expected_agent.agent_type);
+        let mut tool = deps
+            .full_deployment_repo
+            .get_deployment_registered_tool(env.environment_id, revision, "shared-name")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(tool.type_id, Some(tool_id));
+        let allocated: RegisteredTool = tool.clone().try_into().unwrap();
+        assert_eq!(i64::from(allocated.type_id), tool_id);
+        tool.type_id = None;
+        tool.deployment_revision_id = 2;
+        assert_eq!(tool, expected_tool);
+        let resolved = deps
+            .full_deployment_repo
+            .resolve_agent_type_by_names(
+                env.owner_account_id,
+                &env.app_name,
+                &env.env_name,
+                "shared-name",
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.type_id, agent_id);
+        if revision == 2 {
+            deps.full_deployment_repo
+                .deploy_current(
+                    empty_deployment_creation(
+                        env.environment_id,
+                        3,
+                        "removed",
+                        env.owner_account_id,
+                    ),
+                    false,
+                )
+                .await
+                .unwrap()
+                .signal_new_events_available(&deps.test_registry_change_notifier());
+            assert!(
+                deps.full_deployment_repo
+                    .list_deployment_agent_types(env.environment_id, 3)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                deps.full_deployment_repo
+                    .list_deployment_registered_tools(env.environment_id, 3)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let retained = deps
+            .full_deployment_repo
+            .list_environment_type_ids(env.environment_id)
+            .await
+            .unwrap();
+        assert_eq!(retained.len(), allocations.len());
+        for row in &allocations {
+            assert!(retained.contains(row));
+        }
+    }
+}
+
+pub async fn test_environment_type_ids_rollback_and_environment_isolation(deps: &Deps) {
+    let first = setup_resolve_env(deps).await;
+    let second = setup_resolve_env(deps).await;
+    let before = deps
+        .full_deployment_repo
+        .list_environment_type_ids(first.environment_id)
+        .await
+        .unwrap();
+    let epoch = deps
+        .full_deployment_repo
+        .get_http_routing_epoch(first.environment_id)
+        .await
+        .unwrap();
+    let mut failed = type_id_deployment(deps, &first, 2, "rolled-back").await;
+    // The component FK is checked after the new names have been allocated.
+    failed.registered_agent_types[0].component_id = new_repo_uuid();
+    assert!(
+        deps.full_deployment_repo
+            .deploy(failed, false, epoch)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        deps.full_deployment_repo
+            .list_environment_type_ids(first.environment_id)
+            .await
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        deps.full_deployment_repo
+            .get_http_routing_epoch(first.environment_id)
+            .await
+            .unwrap(),
+        epoch
+    );
+    assert!(
+        deps.full_deployment_repo
+            .list_deployment_agent_types(first.environment_id, 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        deps.full_deployment_repo
+            .list_deployment_registered_tools(first.environment_id, 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    for env in [&first, &second] {
+        deps.full_deployment_repo
+            .deploy_current(type_id_deployment(deps, env, 2, "same-name").await, false)
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+    }
+    let first_rows = deps
+        .full_deployment_repo
+        .list_environment_type_ids(first.environment_id)
+        .await
+        .unwrap();
+    let second_rows = deps
+        .full_deployment_repo
+        .list_environment_type_ids(second.environment_id)
+        .await
+        .unwrap();
+    assert_eq!(first_rows.len(), 3);
+    assert_eq!(second_rows.len(), 3);
+    for row in first_rows.iter().filter(|r| r.name == "same-name") {
+        assert!(second_rows.contains(row));
+    }
+    deps.full_deployment_repo
+        .deploy_current(
+            type_id_deployment(deps, &first, 3, "first-only").await,
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let expanded = deps
+        .full_deployment_repo
+        .list_environment_type_ids(first.environment_id)
+        .await
+        .unwrap();
+    assert_eq!(expanded.len(), 5);
+    assert_eq!(
+        expanded
+            .iter()
+            .filter(|r| r.name == "first-only")
+            .map(|r| r.type_id)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([4, 5])
+    );
+    assert_eq!(
+        deps.full_deployment_repo
+            .list_environment_type_ids(second.environment_id)
+            .await
+            .unwrap(),
+        second_rows
+    );
+    for id in [4, 5] {
+        assert!(
+            deps.full_deployment_repo
+                .get_environment_type_id(second.environment_id, id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+pub async fn test_environment_type_ids_concurrent_deployments(deps: &Deps) {
+    let env = setup_resolve_env(deps).await;
+    let first = type_id_deployment(deps, &env, 2, "first-contender").await;
+    let second = type_id_deployment(deps, &env, 2, "second-contender").await;
+    let epoch = deps
+        .full_deployment_repo
+        .get_http_routing_epoch(env.environment_id)
+        .await
+        .unwrap();
+    let (first, second) = tokio::join!(
+        deps.full_deployment_repo.deploy(first, false, epoch),
+        deps.full_deployment_repo.deploy(second, false, epoch),
+    );
+    let winner = match (first, second) {
+        (Ok(result), Err(DeployRepoError::ConcurrentModification)) => {
+            result.signal_new_events_available(&deps.test_registry_change_notifier());
+            "first-contender"
+        }
+        (Err(DeployRepoError::ConcurrentModification), Ok(result)) => {
+            result.signal_new_events_available(&deps.test_registry_change_notifier());
+            "second-contender"
+        }
+        _ => panic!(
+            "expected one committed deployment and one ConcurrentModification, not a SQL uniqueness error"
+        ),
+    };
+    let rows = deps
+        .full_deployment_repo
+        .list_environment_type_ids(env.environment_id)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.iter().map(|r| r.type_id).collect::<BTreeSet<_>>(),
+        BTreeSet::from([1, 2, 3])
+    );
+    assert_eq!(rows.iter().filter(|r| r.name == winner).count(), 2);
+    let agents = deps
+        .full_deployment_repo
+        .list_deployment_agent_types(env.environment_id, 2)
+        .await
+        .unwrap();
+    let tools = deps
+        .full_deployment_repo
+        .list_deployment_registered_tools(env.environment_id, 2)
+        .await
+        .unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(tools.len(), 1);
+    assert_eq!(agents[0].agent_type_name, winner);
+    assert_eq!(tools[0].tool_name, winner);
+    assert_eq!(
+        agents[0].type_id,
+        rows.iter()
+            .find(|r| r.name == winner && r.kind == "agent-type")
+            .unwrap()
+            .type_id
+    );
+    assert_eq!(
+        tools[0].type_id,
+        Some(
+            rows.iter()
+                .find(|r| r.name == winner && r.kind == "tool")
+                .unwrap()
+                .type_id
+        )
+    );
+}
+
 /// Sets up: owner account → application → environment → deployment with one agent type.
 /// Returns the environment context for use in resolve_agent_type_by_names tests.
 async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
@@ -13040,8 +13451,6 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                 metadata: Blob::new(ComponentMetadata::from_parts(
                     KnownExports::default(),
                     vec![],
-                    None,
-                    None,
                     vec![],
                     BTreeMap::new(),
                 )),
@@ -13061,6 +13470,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
     let deployment_revision_id: i64 = 1;
 
     let agent_type_record = DeploymentRegisteredAgentTypeRecord {
+        type_id: None,
         environment_id,
         deployment_revision_id,
         agent_type_name: agent_type_name.clone(),

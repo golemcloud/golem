@@ -22,6 +22,12 @@ pub(all) enum UnstructuredText {
 } derive(Debug, Eq)
 
 ///|
+pub extend UnstructuredText with Debug::{to_repr}
+
+///|
+pub extend UnstructuredText with Eq::{equal, not_equal}
+
+///|
 /// Ergonomic wrapper for the role-marked unstructured-binary schema type
 /// (`variant { inline: binary<restrictions>, url: url }`). A value is either
 /// inline bytes (with an optional MIME type) or a URL reference.
@@ -30,13 +36,22 @@ pub(all) enum UnstructuredBinary {
   BinaryUrl(String)
 } derive(Debug, Eq)
 
+///|
+pub extend UnstructuredBinary with Debug::{to_repr}
+
+///|
+pub extend UnstructuredBinary with Eq::{equal, not_equal}
+
 // Variant case indices of the canonical role-marked unstructured wrappers:
 // `variant { inline, url }`.
 
 ///|
-pub fn unstructured_text_to_schema_value(input : UnstructuredText) -> SchemaValue {
+pub fn unstructured_text_to_schema_value(
+  input : UnstructuredText,
+) -> SchemaValue {
   match input {
-    TextInline(value, language) => VariantValue(0, Some(TextValue(value, language)))
+    TextInline(value, language) =>
+      VariantValue(0, Some(TextValue(value, language)))
     TextUrl(url) => VariantValue(1, Some(UrlValue(url)))
   }
 }
@@ -69,7 +84,9 @@ pub fn unstructured_text_from_schema_value(
 }
 
 ///|
-pub fn unstructured_binary_to_schema_value(input : UnstructuredBinary) -> SchemaValue {
+pub fn unstructured_binary_to_schema_value(
+  input : UnstructuredBinary,
+) -> SchemaValue {
   match input {
     BinaryInline(bytes, mime_type) =>
       VariantValue(0, Some(BinaryValue(bytes, mime_type)))

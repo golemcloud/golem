@@ -2,7 +2,7 @@
 /// A type index in the shared pool used by a generated tool descriptor.
 pub(all) struct WireToolType {
   encoder : @schema.WireTypeEncoder
-  index : Int
+  index : Int32
 }
 
 ///|
@@ -50,8 +50,8 @@ fn WireToolType::with_body(
 pub fn wire_refine_text(
   type_ : WireToolType,
   regex : String?,
-  min_length : UInt?,
-  max_length : UInt?,
+  min_length : UInt32?,
+  max_length : UInt32?,
 ) -> WireToolType raise ToolBuildError {
   let current : @types.TextRestrictions = match type_.resolved().body {
     @types.StringType =>
@@ -80,7 +80,7 @@ pub fn wire_refine_path(
   direction : @types.PathDirection?,
   kind : @types.PathKind?,
   mime_types : Array[String]?,
-  extensions? : Array[String]? = None,
+  extensions~ : Array[String]? = None,
 ) -> WireToolType raise ToolBuildError {
   guard type_.resolved().body is @types.PathType(spec) else {
     raise RefinementTypeMismatch("path", "non-path wire type")
@@ -268,8 +268,8 @@ fn append_tool_literal(
   type_ : WireToolType,
   literal : ToolLiteral,
   encoder : @schema.WireEncoder,
-  remaining : Int,
-) -> Int raise ToolBuildError {
+  remaining : Int32,
+) -> Int32 raise ToolBuildError {
   guard remaining > 0 else {
     raise InvalidLiteral("recursive metadata literal")
   }
@@ -305,14 +305,14 @@ fn append_tool_literal(
     (@types.BoolType, Scalar(token)) =>
       @types.BoolValue(parse_authored(token, "bool"))
     (@types.S8Type(_), Scalar(token)) => {
-      let value : Int = parse_authored(token, "s8")
+      let value : Int32 = parse_authored(token, "s8")
       guard value >= -128 && value <= 127 else {
         raise InvalidLiteral("s8 out of range")
       }
       @types.S8Value(value)
     }
     (@types.S16Type(_), Scalar(token)) => {
-      let value : Int = parse_authored(token, "s16")
+      let value : Int32 = parse_authored(token, "s16")
       guard value >= -32768 && value <= 32767 else {
         raise InvalidLiteral("s16 out of range")
       }
@@ -323,12 +323,12 @@ fn append_tool_literal(
     (@types.S64Type(_), Scalar(token)) =>
       @types.S64Value(parse_authored(token, "s64"))
     (@types.U8Type(_), Scalar(token)) => {
-      let value : UInt = parse_authored(token, "u8")
+      let value : UInt32 = parse_authored(token, "u8")
       guard value <= 255 else { raise InvalidLiteral("u8 out of range") }
       @types.U8Value(value.to_byte())
     }
     (@types.U16Type(_), Scalar(token)) => {
-      let value : UInt = parse_authored(token, "u16")
+      let value : UInt32 = parse_authored(token, "u16")
       guard value <= 65535 else { raise InvalidLiteral("u16 out of range") }
       @types.U16Value(value)
     }

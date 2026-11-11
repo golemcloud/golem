@@ -10,7 +10,7 @@
 extern "wasm" fn reset_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
 
 ///|
-extern "wasm" fn resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+extern "wasm" fn resource_drop_count(kind : Int32) -> Int32 = "golem:test" "resource-drop-count"
 
 ///|
 test "opaque secret capability is borrowed and dropped without reveal" {
@@ -78,7 +78,7 @@ test "collect_entries_of - Secret is a SECRET declaration over the inner type" {
 ///|
 test "collect_entries_of - Option field is a LOCAL declaration" {
   let entries = collect_entries_of(
-    (@schema.TypeTag::{ } : @schema.TypeTag[Int?]),
+    (@schema.TypeTag::{ } : @schema.TypeTag[Int32?]),
     ["timeout"],
   )
   debug_inspect(entries.length(), content="1")

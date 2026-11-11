@@ -97,7 +97,7 @@ test "reflected output rejection releases stale and unexpected streams" {
     }),
     output: Some(string),
   }
-  let invocation = fn(id : Int) -> Invocation[@model.SchemaValue?] {
+  let invocation = fn(id : Int32) -> Invocation[@model.SchemaValue?] {
     {
       metadata: {
         agent_id: { value: "agent", },
@@ -147,7 +147,7 @@ test "awaited input encoding transfers a locally produced schema stream" {
 
 ///|
 test "caller-defined output rejection releases resources" {
-  let stream_value = fn(id : Int) -> @model.SchemaValue {
+  let stream_value = fn(id : Int32) -> @model.SchemaValue {
     @model.SchemaValue::Stream(
       @model.GuestSchemaValueStreamHandle::from_wrapped(
         @types.SchemaValueStream::SchemaValueStream(id),
