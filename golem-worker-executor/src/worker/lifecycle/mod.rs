@@ -1112,6 +1112,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_oplog_index,
                 &last_known_status.deleted_regions,
             )
+            .and_then(|()| {
+                cut_point::validate_restore_point_ranges(
+                    entries.iter().filter_map(|(index, entry)| {
+                        cut_point::bootstrap_range_named_by(entry).map(|range| (*index, range))
+                    }),
+                    last_oplog_index,
+                    &last_known_status.deleted_regions,
+                )
+            })
             .map_err(|error| {
                 WorkerExecutorError::invalid_request(format!(
                     "Cannot revert worker to oplog index {last_oplog_index}: {error}"

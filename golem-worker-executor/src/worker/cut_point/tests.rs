@@ -387,6 +387,63 @@ fn a_failure_whose_attempt_index_names_an_update_behind_the_head_ends_nothing() 
     );
 }
 
+/// A cut that retains a restore point must retain its whole bootstrap range; a cut that drops
+/// the restore point, or a revert that deleted it, does not constrain its range.
+#[test]
+fn a_cut_that_retains_a_restore_point_retains_its_bootstrap_range() {
+    let range = |from: u64, to: u64| OplogRegion::from_range(from..=to);
+    let successful = OplogEntry::successful_update(
+        ComponentRevision::new(2).unwrap(),
+        100,
+        None,
+        Default::default(),
+        None,
+        Some(range(4, 6)),
+    );
+    let mut description = snapshot_assisted_update(2);
+    if let UpdateDescription::SnapshotAssistedAutomatic {
+        snapshot_bootstrap, ..
+    } = &mut description
+    {
+        *snapshot_bootstrap = Some(range(2, 3));
+    }
+    let strategy = OplogEntry::pending_update(description, None);
+    assert_eq!(bootstrap_range_named_by(&successful), Some(&range(4, 6)));
+    assert_eq!(bootstrap_range_named_by(&strategy), Some(&range(2, 3)));
+    assert_eq!(
+        bootstrap_range_named_by(&OplogEntry::pending_update(snapshot_update(2), None)),
+        None
+    );
+
+    let named = range(4, 6);
+    let check = |point: u64, named: &OplogRegion, cut: u64, deleted: &DeletedRegions| {
+        validate_restore_point_ranges([(idx(point), named)], idx(cut), deleted)
+    };
+    let dropped = |point: u64, named: &OplogRegion| {
+        Err(RevertUpdateBoundaryError::DroppedBootstrapRange {
+            restore_point_index: idx(point),
+            bootstrap: named.clone(),
+        })
+    };
+    let none = DeletedRegions::new();
+
+    assert_eq!(check(10, &named, 10, &none), Ok(()));
+    assert_eq!(check(10, &named, 9, &none), Ok(()));
+    assert_eq!(
+        check(10, &range(4, 12), 10, &none),
+        dropped(10, &range(4, 12))
+    );
+    assert_eq!(check(10, &range(4, 11), 11, &none), Ok(()));
+    // A range that contains a deleted region is replayed around it.
+    assert_eq!(check(10, &named, 12, &deleted(vec![(5, 5)])), Ok(()));
+    assert_eq!(check(10, &named, 12, &deleted(vec![(2, 4)])), Ok(()));
+    // A deleted restore point does not constrain the cut.
+    assert_eq!(
+        check(10, &range(4, 12), 11, &deleted(vec![(9, 10)])),
+        Ok(())
+    );
+}
+
 #[test]
 async fn stream_history_is_found_in_the_raw_requested_range() {
     let entries = HashMap::from([(3, stream_entry()), (7, stream_entry())]);
