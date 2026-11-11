@@ -210,6 +210,26 @@ shared source snapshot and registry provenance checks still apply.
 `cli/golem-cli/src/versions.rs` records the six SDK versions that the CLI uses.
 Go module requirements must contain their release versions before you tag them.
 
+### Prerelease images for testing
+
+To test a prerelease tag in a deployment without a release, publish only its
+Docker images. Push the tag, then dispatch the workflow from `main`:
+
+```shell
+git tag v1.6.4-rc1 <commit>
+git push origin v1.6.4-rc1
+gh workflow run publish-prerelease-images.yaml --repo golemcloud/golem -f tag=v1.6.4-rc1 -f builtins-from=v1.6.3
+```
+
+`.github/workflows/publish-prerelease-images.yaml` builds the six service images
+(executor, shard manager, xfs-quotad, registry, worker service and component
+compilation service) for amd64 and arm64, and pushes them with the tag as the
+image tag. It does not create a GitHub release and does not change `:latest`.
+The registry image uses the built-ins of the published release in
+`builtins-from`. The workflow refuses a tag that is not a prerelease, a tag whose
+built-in sources differ from that release, and a tag that already has images.
+A tag with changed built-ins needs the full release process below.
+
 ### Complete release order
 
 At release start, select `main` or the matching `<major>.<minor>.x` maintenance
