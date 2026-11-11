@@ -6628,6 +6628,10 @@
       "required": ["wasmChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "agentTypeChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/AgentTypeDiffMapValue" }
+        },
         "componentConfigChanged": { "type": "boolean" },
         "agentTypeProvisionConfigChanges": {
           "type": "object",
@@ -6639,6 +6643,13 @@
         }
       },
       "additionalProperties": false
+    },
+    "AgentTypeDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentType" }
+      ]
     },
     "AgentTypeProvisionConfigDiffMapValue": {
       "oneOf": [

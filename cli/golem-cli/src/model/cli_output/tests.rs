@@ -1371,6 +1371,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
                 HashOf::form_value(sample_diff_provision_config(
@@ -1387,6 +1388,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
                 HashOf::form_value(sample_diff_provision_config(
@@ -5955,6 +5957,12 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: current_component_hash,
+                    agent_types: BTreeMap::from_iter([(
+                        "agent".to_string(),
+                        golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
+                            golem_common::model::agent::AgentTypeName("agent".to_string()),
+                        )),
+                    )]),
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(
@@ -5994,6 +6002,25 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: new_component_hash,
+                    agent_types: BTreeMap::from_iter([
+                        (
+                            "agent".to_string(),
+                            golem_common::model::diff::HashOf::form_value(
+                                golem_common::schema::agent::AgentTypeSchema {
+                                    description: "changed".to_string(),
+                                    ..sample_agent_type_schema(
+                                        golem_common::model::agent::AgentTypeName("agent".to_string()),
+                                    )
+                                },
+                            ),
+                        ),
+                        (
+                            "added".to_string(),
+                            golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
+                                golem_common::model::agent::AgentTypeName("added".to_string()),
+                            )),
+                        ),
+                    ]),
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(

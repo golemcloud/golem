@@ -2242,10 +2242,8 @@ fn empty_deployment_creation(
 }
 
 /// Deploys the `it_agent_counters_release` component again with its agent type declarations
-/// changed by `change`; the component's WASM stays the same. The deployment hash does not
-/// cover agent type declarations, so each revision also sets `DECLARATION_REVISION` in the
-/// env of the `Repository` agent type to make the deployment differ from the current one.
-/// Agent types that `change` adds get initial permissions for `account_email`.
+/// changed by `change`; the component's WASM stays the same. Agent types that `change` adds
+/// get initial permissions for `account_email`.
 async fn deploy_counters_with_declarations(
     client: &golem_client::api::RegistryServiceClientLive,
     env_id: &golem_common::model::environment::EnvironmentId,
@@ -2265,16 +2263,7 @@ async fn deploy_counters_with_declarations(
         .map(|agent_type| agent_type.declaration.clone())
         .collect();
     change(&mut agent_types);
-    let mut provision_config_updates = BTreeMap::from([(
-        AgentTypeName("Repository".to_string()),
-        AgentTypeProvisionConfigUpdate {
-            env: Some(BTreeMap::from([(
-                "DECLARATION_REVISION".to_string(),
-                version.to_string(),
-            )])),
-            ..Default::default()
-        },
-    )]);
+    let mut provision_config_updates = BTreeMap::new();
     for agent_type in &agent_types {
         if !component
             .metadata
