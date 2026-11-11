@@ -299,6 +299,8 @@ args = [
     "--release",
     "--exclude",
     "integration-tests",
+    "--exclude",
+    "golem-worker-executor-test-utils",
     "--features",
     "golem-shard-manager/kubernetes",
 ]
@@ -331,6 +333,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--exclude",
+    "golem-worker-executor-test-utils",
     "--features",
     "golem-shard-manager/kubernetes",
 ]
@@ -349,6 +353,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--exclude",
+    "golem-worker-executor-test-utils",
     "--features",
     "golem-shard-manager/kubernetes",
 ]
@@ -368,6 +374,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--exclude",
+    "golem-worker-executor-test-utils",
     "--features",
     "golem-shard-manager/kubernetes",
 ]
@@ -716,6 +724,8 @@ args = [
     "test",
     "--package",
     "golem-worker-executor",
+    "--package",
+    "golem-worker-executor-tests",
     "--test",
     "*",
     "--",
