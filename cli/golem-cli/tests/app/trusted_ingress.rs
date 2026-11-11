@@ -96,3 +96,27 @@ async fn trusted_ingress_range_gives_agents_the_forwarded_origin() {
         .unwrap();
     assert_eq!(proto_only.status(), 400);
 }
+
+#[test]
+#[timeout("10 minutes")]
+async fn peer_outside_the_trusted_range_cannot_set_the_origin() {
+    let mut ctx = TestContext::new();
+    // TEST-NET-1 (RFC 5737) is never the address of a local client.
+    ctx.add_env_var(TRUSTED_INGRESS_ADDRESSES, r#"["192.0.2.0/24"]"#);
+    ctx.start_server().await;
+    deploy_origin_probe(&mut ctx).await;
+    let port = ctx.custom_request_port();
+
+    let response = reqwest::Client::new()
+        .get(format!("http://localhost:{port}/probe/check?x=1"))
+        .header("x-forwarded-proto", "https")
+        .header("x-forwarded-host", "evil.test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.text().await.unwrap(),
+        format!("http://localhost:{port}/probe/check?x=1")
+    );
+}

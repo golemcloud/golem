@@ -4331,6 +4331,184 @@ async fn test_go_agent_guest_bridge_e2e() {
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
+#[timeout("15 minutes")]
+async fn test_moonbit_tool_guest_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "moonbit-tool-bridge";
+
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    for (template, component_name) in [
+        ("rust", "moonbit-tool-bridge:provider"),
+        ("moonbit", "moonbit-tool-bridge:consumer"),
+    ] {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                template,
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    fs::write_str(
+        ctx.cwd_path_join("provider/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{tool_definition, tool_implementation};
+
+            #[tool_definition(version = "1.0.0")]
+            pub trait Echo {
+                fn echo(&self, message: String) -> String;
+            }
+
+            struct EchoImpl;
+
+            #[tool_implementation]
+            impl Echo for EchoImpl {
+                fn echo(&self, message: String) -> String {
+                    format!("echo:{message}")
+                }
+            }
+        "#},
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: moonbit-tool-bridge
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              moonbit-tool-bridge:provider:
+                dir: provider
+                templates: rust
+              moonbit-tool-bridge:consumer:
+                dir: consumer
+                templates: moonbit
+                dependencies:
+                  tools:
+                    - moonbit-tool-bridge:provider/echo
+
+            tools:
+              echo: {{}}
+
+            agents:
+              EchoConsumerAgent:
+                tools:
+                  echo: {{}}
+
+            bridge:
+              moonbit:
+                internal:
+                  tools:
+                    - echo
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    super::add_moonbit_local_dependency(
+        &ctx,
+        "echo-tool-guest-client",
+        "golem-temp/bridge-sdk/moonbit/internal/echo-tool-guest-client",
+    );
+
+    let consumer_pkg_path = ctx.cwd_path_join("consumer/moon.pkg");
+    let consumer_pkg = fs::read_to_string(&consumer_pkg_path).unwrap();
+    fs::write_str(
+        &consumer_pkg_path,
+        consumer_pkg.replace(
+            "import {",
+            "import {\n  \"echo-tool-guest-client/client\" @echoClient,\n  \"golemcloud/golem_sdk/tool\" @tool,",
+        ),
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("consumer/counter.mbt"),
+        indoc! {r#"
+            #derive.agent
+            struct EchoConsumerAgent {
+              name : String
+            }
+
+            fn EchoConsumerAgent::new(name : String) -> EchoConsumerAgent {
+              { name, }
+            }
+
+            pub async fn EchoConsumerAgent::call_echo(self : Self, message : String) -> String {
+              let client = @echoClient.EchoClient::new()
+              let result = client.echo(message)
+              client.drop()
+              match result {
+                Ok(value) => "ok:" + value
+                Err(@tool.ToolError::Rpc(@tool.RpcError::RemoteInternal(message))) => message
+                Err(_) => "unexpected tool error"
+              }
+            }
+        "#},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/moonbit/internal/echo-tool-guest-client/moon.mod")
+            .exists()
+    );
+    let consumer_component =
+        ctx.cwd_path_join("_build/wasm/debug/moonbit_tool_bridge_consumer.agent.wasm");
+    let wit = std::process::Command::new("wasm-tools")
+        .arg("component")
+        .arg("wit")
+        .arg(&consumer_component)
+        .output()
+        .expect("failed to inspect the MoonBit consumer component with wasm-tools");
+    assert!(
+        wit.status.success(),
+        "wasm-tools component wit failed for {}:\nstdout:\n{}\nstderr:\n{}",
+        consumer_component.display(),
+        String::from_utf8_lossy(&wit.stdout),
+        String::from_utf8_lossy(&wit.stderr)
+    );
+    let wit = String::from_utf8_lossy(&wit.stdout);
+    assert!(wit.contains("golem:agent/host@2.0.0"), "{wit}");
+    assert!(wit.contains("golem:tool/host@0.1.0"), "{wit}");
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let consumer_name = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("EchoConsumerAgent(\"{consumer_name}\")"),
+            "call_echo",
+            "\"hello\"",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("ok:echo:hello"),
+        "expected the MoonBit consumer to return the provider's echo result"
+    );
+}
+
+#[test]
 async fn test_ts_counter() {
     let mut ctx = TestContext::new();
     let app_name = "counter";

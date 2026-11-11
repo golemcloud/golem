@@ -781,6 +781,21 @@ async fn ssh_reports_denied_operations() {
     );
 }
 
+// A failing sibling's whole stderr reaches the session ahead of the declared error, and the
+// session goes on to the next command.
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_presents_a_siblings_stderr() {
+    let ctx = context().await;
+    let output = ssh(&ctx, &[OWNER], "fixture interleave fail\necho next\n").await;
+    assert_output(
+        &output,
+        0,
+        "out-1\nout-2\nnext\n",
+        "err-1\nerr-2\ntool error: selected: \"interleave failure\"\n",
+    );
+}
+
 // The prompt edits like a shell: unfinished input continues on a new line, Tab completes from
 // the agent, and a later session recalls what an earlier one ran.
 #[test]
