@@ -6841,20 +6841,33 @@ fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::Cu
         arb_hash(),
         arb_small_u64(),
         proptest::collection::vec(
-            (
-                proptest::option::of(any::<u32>()),
-                proptest::option::of(arb_small_string()),
-                arb_small_string(),
-            )
-                .prop_map(|(import_index, upstream_tool_name, reason)| {
-                    golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
-                        golem_common::model::deployment::McpImportDiscovery {
-                            import_index,
-                            upstream_tool_name,
-                            reason,
-                        },
-                    )
-                }),
+            prop_oneof![
+                (
+                    proptest::option::of(any::<u32>()),
+                    proptest::option::of(arb_small_string()),
+                    arb_small_string(),
+                )
+                    .prop_map(|(import_index, upstream_tool_name, reason)| {
+                        golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
+                            golem_common::model::deployment::McpImportDiscovery {
+                                import_index,
+                                upstream_tool_name,
+                                reason,
+                            },
+                        )
+                    }),
+                (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
+                    |(agent_type, path, reason)| {
+                        golem_common::model::deployment::DeployValidationWarning::IncompatibleConstructorChange(
+                            golem_common::model::deployment::IncompatibleConstructorChange {
+                                agent_type: golem_common::model::agent::AgentTypeName(agent_type),
+                                path,
+                                reason,
+                            },
+                        )
+                    }
+                ),
+            ],
             0..4,
         ),
     )

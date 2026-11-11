@@ -22,9 +22,11 @@ use golem_common::model::AgentId;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
+use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
-    AgentTypeProvisionConfigUpdate, ComponentCreation, ComponentName, ComponentUpdate,
-    ToolDeploymentConfigCreation, ToolDeploymentConfigUpdate, ToolProvisionConfigCreation,
+    AgentTypeInitialPermissions, AgentTypeProvisionConfigUpdate, ComponentCreation, ComponentName,
+    ComponentUpdate, ToolDeploymentConfigCreation, ToolDeploymentConfigUpdate,
+    ToolProvisionConfigCreation,
 };
 use golem_common::model::deployment::{
     DeploymentAgentSecretDefault, DeploymentPlan, DeploymentRollback, DeploymentVersion,
@@ -2210,6 +2212,307 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
             "path-policy"
         ),
         1
+    );
+
+    Ok(())
+}
+
+fn empty_deployment_creation(
+    current_revision: Option<golem_common::model::deployment::CurrentDeploymentRevision>,
+    expected_deployment_hash: Hash,
+    version: &str,
+) -> DeploymentCreation {
+    DeploymentCreation {
+        current_revision,
+        expected_deployment_hash,
+        version: DeploymentVersion(version.to_string()),
+        agent_secret_defaults: Vec::new(),
+        quota_resource_defaults: Vec::new(),
+        retry_policy_defaults: Vec::new(),
+        publish_tools: Vec::new(),
+        remote_tools: Vec::new(),
+        mcp_imports: Vec::new(),
+        publish_tool_middlewares: Vec::new(),
+        remote_tool_middlewares: Vec::new(),
+        universal_tool_middlewares: Vec::new(),
+        environment_tool_middleware_bindings: Default::default(),
+        agent_tool_middleware_bindings: Default::default(),
+        replace_incompatible_agent_secrets: false,
+    }
+}
+
+/// Deploys the `it_agent_counters_release` component again with its agent type declarations
+/// changed by `change`; the component's WASM stays the same. The deployment hash does not
+/// cover agent type declarations, so each revision also sets `DECLARATION_REVISION` in the
+/// env of the `Repository` agent type to make the deployment differ from the current one.
+/// Agent types that `change` adds get initial permissions for `account_email`.
+async fn deploy_counters_with_declarations(
+    client: &golem_client::api::RegistryServiceClientLive,
+    env_id: &golem_common::model::environment::EnvironmentId,
+    account_email: &AccountEmail,
+    component: &mut golem_common::model::component::ComponentDto,
+    current_revision: &mut Option<golem_common::model::deployment::CurrentDeploymentRevision>,
+    version: &str,
+    change: impl FnOnce(&mut Vec<golem_common::schema::AgentTypeSchema>),
+) -> Result<
+    golem_common::model::deployment::CurrentDeployment,
+    golem_client::Error<RegistryServiceDeployEnvironmentError>,
+> {
+    let mut agent_types: Vec<_> = component
+        .metadata
+        .agent_types
+        .iter()
+        .map(|agent_type| agent_type.declaration.clone())
+        .collect();
+    change(&mut agent_types);
+    let mut provision_config_updates = BTreeMap::from([(
+        AgentTypeName("Repository".to_string()),
+        AgentTypeProvisionConfigUpdate {
+            env: Some(BTreeMap::from([(
+                "DECLARATION_REVISION".to_string(),
+                version.to_string(),
+            )])),
+            ..Default::default()
+        },
+    )]);
+    for agent_type in &agent_types {
+        if !component
+            .metadata
+            .agent_type_provision_configs
+            .contains_key(&agent_type.type_name)
+        {
+            provision_config_updates.insert(
+                agent_type.type_name.clone(),
+                AgentTypeProvisionConfigUpdate {
+                    initial_permissions: Some(AgentTypeInitialPermissions::default_for_recipient(
+                        RecipientPattern::Account {
+                            account: account_email.clone(),
+                        },
+                    )),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    *component = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
+                agent_types: Some(agent_types),
+                agent_type_provision_config_updates: Some(provision_config_updates),
+                tools: None,
+                tool_middlewares: None,
+                tool_middleware_provision_config_updates: None,
+                tool_deployment_config_updates: None,
+                allow_incompatible_config: false,
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await
+        .expect("component update");
+    let plan = client
+        .get_environment_deployment_plan(&env_id.0)
+        .await
+        .expect("deployment plan");
+    let deployment = client
+        .deploy_environment(
+            &env_id.0,
+            &empty_deployment_creation(*current_revision, plan.deployment_hash, version),
+        )
+        .await?;
+    *current_revision = Some(deployment.current_revision);
+    Ok(deployment)
+}
+
+fn counter_constructor(
+    agent_types: &mut [golem_common::schema::AgentTypeSchema],
+) -> &mut Vec<golem_common::schema::NamedField> {
+    let counter = agent_types
+        .iter_mut()
+        .find(|agent_type| agent_type.type_name.0 == "Counter")
+        .expect("Counter agent type");
+    let golem_common::schema::InputSchema::Parameters(fields) =
+        &mut counter.constructor.input_schema;
+    fields
+}
+
+fn retype_counter_id(agent_types: &mut [golem_common::schema::AgentTypeSchema]) {
+    counter_constructor(agent_types)[0].schema = SchemaType::u64();
+}
+
+fn assert_incompatible_constructor_change(
+    result: Result<
+        golem_common::model::deployment::CurrentDeployment,
+        golem_client::Error<RegistryServiceDeployEnvironmentError>,
+    >,
+) {
+    let Err(golem_client::Error::Item(RegistryServiceDeployEnvironmentError::Error400(body))) =
+        result
+    else {
+        panic!("expected a deployment validation error, got {result:?}");
+    };
+    assert!(
+        body.errors
+            .iter()
+            .any(|error| error.starts_with("INCOMPATIBLE_CONSTRUCTOR_CHANGE: Agent type Counter ")),
+        "{:?}",
+        body.errors
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn deploy_checks_constructor_changes_against_the_last_deployed_constructor(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+    let env = client
+        .update_environment(
+            &env.id.0,
+            &EnvironmentUpdate {
+                current_revision: env.revision,
+                name: None,
+                compatibility_check: Some(true),
+                tool_compatibility_mode: None,
+                version_check: None,
+                security_overrides: None,
+            },
+        )
+        .await?;
+
+    let mut component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let original_counter = component
+        .metadata
+        .agent_types
+        .iter()
+        .find(|agent_type| agent_type.declaration.type_name.0 == "Counter")
+        .expect("Counter agent type")
+        .declaration
+        .clone();
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+    let mut current_revision = Some(
+        client
+            .deploy_environment(
+                &env.id.0,
+                &empty_deployment_creation(None, plan.deployment_hash, "0.0.1"),
+            )
+            .await?
+            .current_revision,
+    );
+
+    assert_incompatible_constructor_change(
+        deploy_counters_with_declarations(
+            &client,
+            &env.id,
+            &user.account_email,
+            &mut component,
+            &mut current_revision,
+            "0.0.2",
+            |agent_types| retype_counter_id(agent_types),
+        )
+        .await,
+    );
+
+    deploy_counters_with_declarations(
+        &client,
+        &env.id,
+        &user.account_email,
+        &mut component,
+        &mut current_revision,
+        "0.0.3",
+        |agent_types| {
+            agent_types.retain(|agent_type| agent_type.type_name.0 != "Counter");
+            agent_types.push(original_counter.clone());
+            let mut appended = counter_constructor(agent_types)[0].clone();
+            appended.name = "label".to_string();
+            appended.schema = SchemaType::option(SchemaType::string());
+            counter_constructor(agent_types).push(appended);
+        },
+    )
+    .await?;
+
+    deploy_counters_with_declarations(
+        &client,
+        &env.id,
+        &user.account_email,
+        &mut component,
+        &mut current_revision,
+        "0.0.4",
+        |agent_types| agent_types.retain(|agent_type| agent_type.type_name.0 != "Counter"),
+    )
+    .await?;
+
+    assert_incompatible_constructor_change(
+        deploy_counters_with_declarations(
+            &client,
+            &env.id,
+            &user.account_email,
+            &mut component,
+            &mut current_revision,
+            "0.0.5",
+            |agent_types| {
+                let mut counter = original_counter.clone();
+                let golem_common::schema::InputSchema::Parameters(fields) =
+                    &mut counter.constructor.input_schema;
+                fields[0].schema = SchemaType::u64();
+                agent_types.push(counter);
+            },
+        )
+        .await,
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deploy_warns_about_constructor_changes_when_compatibility_check_disabled(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let mut component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+    let mut current_revision = Some(
+        client
+            .deploy_environment(
+                &env.id.0,
+                &empty_deployment_creation(None, plan.deployment_hash, "0.0.1"),
+            )
+            .await?
+            .current_revision,
+    );
+
+    let deployment = deploy_counters_with_declarations(
+        &client,
+        &env.id,
+        &user.account_email,
+        &mut component,
+        &mut current_revision,
+        "0.0.2",
+        |agent_types| retype_counter_id(agent_types),
+    )
+    .await?;
+    assert_matches!(
+        &deployment.validation_warnings[..],
+        [golem_common::model::deploy_validation_warning::DeployValidationWarning::IncompatibleConstructorChange(warning)]
+            if warning.agent_type.0 == "Counter" && warning.path == "constructor.fields[0]"
     );
 
     Ok(())

@@ -15,7 +15,9 @@
 use super::*;
 use crate::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use crate::model::Empty;
-use crate::schema::agent::{AgentConstructorSchema, NamedField};
+use crate::schema::agent::{
+    AgentConstructorSchema, AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField,
+};
 use crate::schema::graph::SchemaGraph;
 use crate::schema::schema_type::{ResultSpec, SchemaType, VariantCaseType};
 use test_r::test;
@@ -96,24 +98,37 @@ fn make_agent_type(name: &str, fields: Vec<(&str, SchemaType)>) -> AgentTypeSche
     }
 }
 
+/// Compares the constructors of the agent types present in both lists, as the
+/// registry does for each deployed type that has a stored baseline.
+fn validate_schema_evolution(
+    old: &[AgentTypeSchema],
+    new: &[AgentTypeSchema],
+) -> Vec<SchemaEvolutionError> {
+    old.iter()
+        .filter_map(|o| {
+            new.iter()
+                .find(|n| n.type_name == o.type_name)
+                .map(|n| (o, n))
+        })
+        .flat_map(|(o, n)| {
+            validate_constructor_evolution(
+                &o.type_name,
+                &constructor_key_schema(o),
+                &constructor_key_schema(n),
+            )
+        })
+        .collect()
+}
+
 #[test]
-fn no_changes_no_warnings() {
+fn no_changes_no_errors() {
     let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
     let new = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
     assert!(validate_schema_evolution(&old, &new).is_empty());
 }
 
 #[test]
-fn agent_type_removed() {
-    let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
-    let new = vec![];
-    let w = validate_schema_evolution(&old, &new);
-    assert_eq!(w.len(), 1);
-    assert!(w[0].description.contains("removed"));
-}
-
-#[test]
-fn agent_type_added_no_warning() {
+fn agent_type_added_no_error() {
     let old = vec![];
     let new = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
     assert!(validate_schema_evolution(&old, &new).is_empty());
@@ -193,7 +208,7 @@ fn record_append_option_field_compatible() {
 }
 
 #[test]
-fn record_append_non_option_field_warns() {
+fn record_append_non_option_field_changes_keys() {
     let old = vec![make_agent_type(
         "A",
         vec![("x", rec(vec![("a", SchemaType::u32())]))],
@@ -379,7 +394,7 @@ fn tuple_item_removed() {
 }
 
 #[test]
-fn tuple_append_option_compatible() {
+fn tuple_append_option_changes_keys() {
     let old = vec![make_agent_type(
         "A",
         vec![("x", SchemaType::tuple(vec![SchemaType::u32()]))],
@@ -394,11 +409,115 @@ fn tuple_append_option_compatible() {
             ]),
         )],
     )];
+    let w = validate_schema_evolution(&old, &new);
+    assert_eq!(w.len(), 1);
+    assert!(w[0].description.contains("items added"));
+}
+
+#[test]
+fn root_append_option_parameter_compatible() {
+    let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
+    let new = vec![make_agent_type(
+        "A",
+        vec![
+            ("x", SchemaType::u32()),
+            ("y", SchemaType::option(SchemaType::string())),
+        ],
+    )];
     assert!(validate_schema_evolution(&old, &new).is_empty());
 }
 
 #[test]
-fn tuple_append_non_option_warns() {
+fn root_append_non_option_parameter_changes_keys() {
+    let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
+    let new = vec![make_agent_type(
+        "A",
+        vec![("x", SchemaType::u32()), ("y", SchemaType::string())],
+    )];
+    let w = validate_schema_evolution(&old, &new);
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].path, "constructor.fields[1]");
+    assert!(w[0].description.contains("non-Option"));
+}
+
+#[test]
+fn auto_injected_parameters_are_not_part_of_the_key() {
+    let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
+    let mut new_type = make_agent_type(
+        "A",
+        vec![
+            ("principal", SchemaType::string()),
+            ("x", SchemaType::u32()),
+        ],
+    );
+    let InputSchema::Parameters(fields) = &mut new_type.constructor.input_schema;
+    fields[0].source = FieldSource::AutoInjected(AutoInjectedKind::Principal);
+    assert!(validate_schema_evolution(&old, &[new_type]).is_empty());
+}
+
+fn union_of(bodies: Vec<SchemaType>) -> SchemaType {
+    use crate::schema::schema_type::{DiscriminatorRule, UnionBranch, UnionSpec};
+    SchemaType::union(UnionSpec {
+        branches: bodies
+            .into_iter()
+            .enumerate()
+            .map(|(i, body)| UnionBranch {
+                tag: format!("b{i}"),
+                body,
+                discriminator: DiscriminatorRule::FieldAbsent {
+                    field_name: format!("b{i}"),
+                },
+                metadata: Default::default(),
+            })
+            .collect(),
+    })
+}
+
+#[test]
+fn union_branch_removed_changes_keys() {
+    let old = vec![make_agent_type(
+        "A",
+        vec![("x", union_of(vec![SchemaType::u32(), SchemaType::string()]))],
+    )];
+    let new = vec![make_agent_type(
+        "A",
+        vec![("x", union_of(vec![SchemaType::u32()]))],
+    )];
+    let w = validate_schema_evolution(&old, &new);
+    assert_eq!(w.len(), 1);
+    assert!(w[0].description.contains("Union branches removed"));
+}
+
+#[test]
+fn union_branch_body_changed_changes_keys() {
+    let old = vec![make_agent_type(
+        "A",
+        vec![("x", union_of(vec![SchemaType::u32()]))],
+    )];
+    let new = vec![make_agent_type(
+        "A",
+        vec![("x", union_of(vec![SchemaType::string()]))],
+    )];
+    let w = validate_schema_evolution(&old, &new);
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].path, "constructor.fields[0].branches[0]");
+}
+
+#[test]
+fn union_branch_appended_compatible() {
+    let old = vec![make_agent_type(
+        "A",
+        vec![("x", union_of(vec![SchemaType::u32()]))],
+    )];
+    let new = vec![make_agent_type(
+        "A",
+        vec![("x", union_of(vec![SchemaType::u32(), SchemaType::string()]))],
+    )];
+    assert!(validate_schema_evolution(&old, &new).is_empty());
+}
+
+#[test]
+fn tuple_append_non_option_changes_keys() {
     let old = vec![make_agent_type(
         "A",
         vec![("x", SchemaType::tuple(vec![SchemaType::u32()]))],
@@ -412,7 +531,7 @@ fn tuple_append_non_option_warns() {
     )];
     let w = validate_schema_evolution(&old, &new);
     assert_eq!(w.len(), 1);
-    assert!(w[0].description.contains("non-Option"));
+    assert!(w[0].description.contains("items added"));
 }
 
 #[test]

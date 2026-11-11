@@ -5453,6 +5453,17 @@
             "reason": { "type": "string" }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "agentType", "path", "reason"],
+          "properties": {
+            "type": { "const": "IncompatibleConstructorChange" },
+            "agentType": { "type": "string" },
+            "path": { "type": "string" },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": false
         }
       ]
     },
