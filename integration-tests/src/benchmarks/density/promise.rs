@@ -9,7 +9,7 @@ use super::prep::PrepManifest;
 use super::{PromiseRuntime, PromiseTopology, PromiseWaiterPresence};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use golem_common::base_model::{AgentId, PromiseId};
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentStatus, RoutingTable};
 use golem_common::schema::{FromSchema, SchemaValue};
@@ -68,8 +68,8 @@ impl CellConfig {
 
 struct PromiseWork {
     agent: AgentId,
-    parsed_agent: ParsedAgentId,
-    completer: Option<ParsedAgentId>,
+    parsed_agent: ParsedAgentKey,
+    completer: Option<ParsedAgentKey>,
     promise: PromiseId,
     promise_value: SchemaValue,
     wait: bool,
@@ -268,8 +268,8 @@ async fn stage_work(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
     agent: AgentId,
-    parsed_agent: ParsedAgentId,
-    completer: Option<ParsedAgentId>,
+    parsed_agent: ParsedAgentKey,
+    completer: Option<ParsedAgentKey>,
     wait: bool,
     runtime: PromiseRuntime,
 ) -> anyhow::Result<(PromiseWork, StageTimings)> {
@@ -492,11 +492,11 @@ async fn complete_promise(
 
 fn select_remote_completer(
     component_id: golem_common::model::component::ComponentId,
-    waiter: &ParsedAgentId,
+    waiter: &ParsedAgentKey,
     routing_table: &RoutingTable,
     cell_name: String,
     index: usize,
-) -> anyhow::Result<ParsedAgentId> {
+) -> anyhow::Result<ParsedAgentKey> {
     let waiter = AgentId::from_agent_id(component_id, waiter)
         .map_err(|error| anyhow::anyhow!("invalid promise waiter agent id: {error}"))?;
     let waiter_pod = routing_table

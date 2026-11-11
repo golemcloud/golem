@@ -61,7 +61,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
     AgentError as ModelAgentError, AgentInvocationMode, AgentPrincipal, AgentTarget,
-    InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;

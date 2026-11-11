@@ -195,7 +195,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             .await?;
         let parsed_agent_id = match &existing_metadata {
             Some(metadata) => metadata.parse_agent_id(&component.metadata),
-            None => ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata),
+            None => ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata),
         }
         .map_err(|details| RpcError::ProtocolError { details })?;
         validate_agent_method_invocation(

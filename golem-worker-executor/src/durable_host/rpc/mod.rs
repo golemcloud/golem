@@ -29,7 +29,7 @@ use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::RetryProperties;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::component::ComponentRevision;
@@ -94,7 +94,7 @@ enum RpcTargetAdmission {
 #[derive(Clone)]
 struct PreparedRpcInvocation {
     logical_remote_agent_id: OwnedAgentId,
-    ephemeral_logical_agent_id: Option<ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<ParsedAgentKey>,
     connection_span_id: SpanId,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
@@ -148,7 +148,7 @@ struct DurableStreamingTaskParams {
 
 pub struct WasmRpcEntryPayload {
     pub remote_agent_id: OwnedAgentId,
-    pub ephemeral_logical_agent_id: Option<ParsedAgentId>,
+    pub ephemeral_logical_agent_id: Option<ParsedAgentKey>,
     pub span_id: SpanId,
     /// Absent for snapshot-created resources whose span opening was not persisted.
     pub creation_index: Option<OplogIndex>,

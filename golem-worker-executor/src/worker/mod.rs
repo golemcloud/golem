@@ -185,7 +185,7 @@ use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal,
+    AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal,
     ResolvedOwnerContext, Snapshotting, SnapshottingConfig, ephemeral_invocation_phantom_id,
 };
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
@@ -466,7 +466,7 @@ pub struct Worker<Ctx: WorkerCtx> {
 #[doc(hidden)]
 pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     owner_context: ResolvedOwnerContext,
-    parsed_agent_id: Option<ParsedAgentId>,
+    parsed_agent_id: Option<ParsedAgentKey>,
 
     oplog: Arc<dyn Oplog>,
     pub(crate) tasks: tasks::WorkerTasks,

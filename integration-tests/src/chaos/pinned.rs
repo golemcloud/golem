@@ -62,7 +62,7 @@ use crate::chaos::PinnedConfig;
 use crate::chaos::history::Stream;
 use crate::chaos::workload::{self, WorkloadContext};
 use anyhow::Context;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, RoutingTable};
 use golem_common::{agent_id, data_value};
@@ -135,7 +135,7 @@ pub fn routing_agent_id(ctx: &WorkloadContext, agent_type: &str, agent: &str) ->
 /// `counters`. Looking one up against the wrong component would silently aim a
 /// kill at whichever executor happened to own a name nothing uses.
 pub fn routing_agent_id_in(component: &ComponentDto, agent_type: &str, agent: &str) -> AgentId {
-    let parsed: ParsedAgentId = agent_id!(agent_type, agent.to_string());
+    let parsed: ParsedAgentKey = agent_id!(agent_type, agent.to_string());
     AgentId {
         component_id: component.id,
         agent_id: parsed.to_string(),
@@ -386,7 +386,7 @@ pub fn start(
 /// Submits one pinned operation and waits for it to resolve.
 async fn submit_one(ctx: &WorkloadContext, agent: &str, seq: u64, millis: u32) {
     let key = ctx.idempotency_key(agent, seq);
-    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    let parsed: ParsedAgentKey = agent_id!(COUNTER_AGENT, agent.to_string());
     let ctx2 = ctx.clone();
 
     workload::run_operation(

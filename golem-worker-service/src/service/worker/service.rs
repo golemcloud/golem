@@ -48,7 +48,7 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::{
     AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal,
-    InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal,
+    InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal,
     ephemeral_invocation_phantom_id,
 };
 use golem_common::model::agent::{
@@ -104,7 +104,7 @@ fn build_public_agent_id(
     phantom_id: Option<uuid::Uuid>,
     agent_mode: AgentMode,
 ) -> WorkerResult<AgentId> {
-    let agent_id = ParsedAgentId::new_auto_phantom(
+    let agent_id = ParsedAgentKey::new_auto_phantom(
         agent_type_name,
         constructor_parameters,
         phantom_id,
@@ -124,7 +124,7 @@ fn build_public_invocation_agent_id(
     constructor_parameters: TypedSchemaValue,
     phantom_id: Option<uuid::Uuid>,
 ) -> WorkerResult<AgentId> {
-    let agent_id = ParsedAgentId::try_new(agent_type_name, constructor_parameters, phantom_id)
+    let agent_id = ParsedAgentKey::try_new(agent_type_name, constructor_parameters, phantom_id)
         .map_err(|err| {
             WorkerServiceError::TypeChecker(format!("Agent ID formatting error: {err}"))
         })?;
@@ -244,7 +244,7 @@ fn validate_one_shot_invocation_is_stream_free(
     method_name: &str,
     input: &SchemaValue,
 ) -> WorkerResult<()> {
-    let parsed_agent_id = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
+    let parsed_agent_id = ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata)
         .map_err(WorkerServiceError::TypeChecker)?;
     let agent_type = component
         .metadata
@@ -295,7 +295,7 @@ fn invocation_method_uses_streams(
     agent_id: &AgentId,
     method_name: &str,
 ) -> WorkerResult<bool> {
-    let parsed_agent_id = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
+    let parsed_agent_id = ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata)
         .map_err(WorkerServiceError::TypeChecker)?;
     let agent_type = component
         .metadata
@@ -467,7 +467,7 @@ fn normalize_agent_invocation_identity(
     let key_was_supplied = idempotency_key.is_some();
     let idempotency_key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
 
-    let Ok(parsed_agent_id) = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata) else {
+    let Ok(parsed_agent_id) = ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata) else {
         return Ok((agent_id.clone(), idempotency_key, freshness_disposition));
     };
     let Some(agent_type) = component
@@ -510,7 +510,7 @@ fn normalize_agent_invocation_identity(
     }
 
     let parsed_agent_id =
-        ParsedAgentId::try_new(parsed_agent_id.agent_type, parsed_agent_id.parameters, None)
+        ParsedAgentKey::try_new(parsed_agent_id.agent_type, parsed_agent_id.parameters, None)
             .and_then(|logical_agent_id| {
                 logical_agent_id.with_ephemeral_invocation_phantom(&idempotency_key)
             })
@@ -1440,7 +1440,7 @@ impl WorkerService {
             .component_service
             .get_revision(agent_id.component_id, metadata.component_revision)
             .await?;
-        let agent_type = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id)
+        let agent_type = ParsedAgentKey::parse_agent_type_name(&agent_id.agent_id)
             .map_err(|err| WorkerServiceError::TypeChecker(err.to_string()))?;
 
         component_revision
@@ -3309,7 +3309,7 @@ impl WorkerService {
                 .component_service
                 .get_revision(component_id, metadata.component_revision)
                 .await?;
-            let parsed = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
+            let parsed = ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata)
                 .map_err(WorkerServiceError::TypeChecker)?;
             (
                 component,
@@ -3666,7 +3666,7 @@ mod tests {
     };
     use golem_common::model::agent::{
         AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal, HttpEndpointDetails,
-        InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal, RegisteredAgentType,
+        InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal, RegisteredAgentType,
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
         ephemeral_invocation_phantom_id,
     };
@@ -3815,7 +3815,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
+            ParsedAgentKey::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
                 .unwrap()
                 .phantom_id
                 .is_some()
@@ -3834,7 +3834,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
+            ParsedAgentKey::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
                 .unwrap()
                 .phantom_id
                 .is_none()
@@ -3854,7 +3854,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
+            ParsedAgentKey::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
                 .unwrap()
                 .phantom_id,
             Some(phantom)
@@ -3874,7 +3874,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
+            ParsedAgentKey::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
                 .unwrap()
                 .phantom_id,
             Some(phantom)

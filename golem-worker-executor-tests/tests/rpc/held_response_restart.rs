@@ -214,7 +214,7 @@ async fn held_response_restart_case(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     fixture: &PrecompiledComponent,
-    caller_id: ParsedAgentId,
+    caller_id: ParsedAgentKey,
     method: &str,
     input: TypedSchemaValue,
     held: usize,

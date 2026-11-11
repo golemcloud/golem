@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{
-    AgentInvocationMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentInvocationMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::{
     CardId, CardManagedByRuntimeDerived, ScopeCard, StoredCard, parse_polymorphic_permission,
@@ -470,7 +470,7 @@ fn connect_local_card_transfer_delivery(
 struct Scenario {
     executor: TestWorkerExecutor,
     component: ComponentDto,
-    caller: ParsedAgentId,
+    caller: ParsedAgentKey,
 }
 
 async fn start_scenario(

@@ -17,7 +17,7 @@ use test_r::test;
 use super::*;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::schema::SchemaType;
-use golem_common::schema::agent::{InputSchema, NamedField, ParsedAgentId};
+use golem_common::schema::agent::{InputSchema, NamedField, ParsedAgentKey};
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use golem_common::schema::metadata::TypeId;
 use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, VariantCaseType};
@@ -196,7 +196,7 @@ fn build_parsed_agent_id(
     agent_type: &str,
     params_value: SchemaValue,
     schema_ty: SchemaType,
-) -> ParsedAgentId {
+) -> ParsedAgentKey {
     let typed = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
             name: "p".to_string(),
@@ -207,7 +207,7 @@ fn build_parsed_agent_id(
             fields: vec![params_value],
         },
     );
-    ParsedAgentId::new(AgentTypeName(agent_type.to_string()), typed, None)
+    ParsedAgentKey::new(AgentTypeName(agent_type.to_string()), typed, None)
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn render_agent_id_with_phantom() {
         },
     );
     let uuid = uuid::Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    let parsed = ParsedAgentId::new(AgentTypeName("my-agent".to_string()), typed, Some(uuid));
+    let parsed = ParsedAgentKey::new(AgentTypeName("my-agent".to_string()), typed, Some(uuid));
     assert_eq!(
         render_agent_id(&parsed, &SourceLanguage::Rust),
         "my-agent(42)[12345678-1234-1234-1234-123456789012]"

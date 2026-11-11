@@ -63,7 +63,7 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::AccountUsagePeriod;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -1259,7 +1259,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.durable_ctx.parsed_agent_id()
     }
 

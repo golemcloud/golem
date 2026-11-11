@@ -62,7 +62,7 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::{AgentFingerprint, AgentId, PromiseId, Timestamp};
 use crate::schema::AgentTypeSchema;
-pub use crate::schema::agent::ParsedAgentId;
+pub use crate::schema::agent::ParsedAgentKey;
 use crate::schema::graph::TypedSchemaValue;
 use crate::schema::render::cli_text::value_to_cli_text;
 use crate::schema::schema_type::SchemaType;
@@ -79,7 +79,7 @@ pub enum AgentTarget {
 /// instead of treating failure to parse an agent id as component-wide access.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedOwnerContext {
-    Agent(Box<ParsedAgentId>),
+    Agent(Box<ParsedAgentKey>),
     /// An ephemeral external-tool owner using component-level policy without constructing an agent.
     ComponentBaseline,
     OplogProcessor,
@@ -94,7 +94,7 @@ impl ResolvedOwnerContext {
         kind.validate_instance_name(raw_agent_id)?;
         match kind {
             OwnerKind::ComponentAgent if metadata.is_agent() => {
-                ParsedAgentId::parse(raw_agent_id, metadata)
+                ParsedAgentKey::parse(raw_agent_id, metadata)
                     .map(Box::new)
                     .map(Self::Agent)
                     .map_err(|error| error.to_string())
@@ -108,7 +108,7 @@ impl ResolvedOwnerContext {
         }
     }
 
-    pub fn agent(&self) -> Option<&ParsedAgentId> {
+    pub fn agent(&self) -> Option<&ParsedAgentKey> {
         match self {
             Self::Agent(agent) => Some(agent),
             Self::ComponentBaseline | Self::OplogProcessor => None,
@@ -264,7 +264,7 @@ impl AgentTypeSchemaResolver for &AgentTypeSchema {
     }
 }
 
-impl ParsedAgentId {
+impl ParsedAgentKey {
     pub fn try_new(
         agent_type: AgentTypeName,
         parameters: TypedSchemaValue,
@@ -365,7 +365,7 @@ impl ParsedAgentId {
     }
 }
 
-impl Display for ParsedAgentId {
+impl Display for ParsedAgentKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use crate::model::agent::structural_format::format_structural_typed;
         let rendered = format_structural_typed(&self.parameters).map_err(|_| std::fmt::Error)?;
@@ -438,7 +438,7 @@ impl AgentId {
 
     pub fn from_agent_id(
         component_id: ComponentId,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
     ) -> Result<AgentId, String> {
         let agent_id = agent_id.to_string();
         Self::validate_length(&agent_id)?;
@@ -453,7 +453,7 @@ impl AgentId {
         agent_id: S,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<AgentId, String> {
-        Self::from_agent_id(component_id, &ParsedAgentId::parse(agent_id, resolver)?)
+        Self::from_agent_id(component_id, &ParsedAgentKey::parse(agent_id, resolver)?)
     }
 
     pub fn from_component_metadata_and_agent_id<S: AsRef<str>>(
@@ -493,7 +493,7 @@ impl AgentId {
     ) -> Result<AgentId, String> {
         let id = id.as_ref();
 
-        match ParsedAgentId::normalize_text(id) {
+        match ParsedAgentKey::normalize_text(id) {
             Ok(normalized) => {
                 if normalized.len() > Self::AGENT_ID_MAX_LENGTH {
                     return Err(format!(

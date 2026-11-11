@@ -410,7 +410,7 @@ async fn start_moonbit_permission_executor(
 async fn invoke(
     executor: &TestWorkerExecutor,
     component: &golem_common::model::component::ComponentDto,
-    agent: &golem_common::model::agent::ParsedAgentId,
+    agent: &golem_common::model::agent::ParsedAgentKey,
     method: &str,
     params: golem_common::schema::TypedSchemaValue,
 ) -> anyhow::Result<golem_test_framework::dsl::AgentResult> {

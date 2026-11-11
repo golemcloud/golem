@@ -15,7 +15,7 @@
 use super::{RetirementReason, Worker};
 use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, Principal};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
@@ -345,7 +345,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && let Some(target_agent_type) = target_component_metadata
                 .metadata
                 .find_agent_type_by_name_ref(agent_type_name)
-            && ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, target_agent_type).is_ok()
+            && ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, target_agent_type).is_ok()
         {
             let persisted_mode = metadata.agent_mode;
             if target_agent_type.mode != persisted_mode {

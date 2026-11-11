@@ -349,7 +349,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_metadata(owned_agent_id.component_id(), None)
             .await?;
         let parsed_agent_id =
-            match ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata) {
+            match ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata) {
                 Ok(parsed_agent_id) => parsed_agent_id,
                 Err(_) if freshness_disposition == InvocationFreshnessDisposition::MayExist => {
                     return Ok(());
@@ -1097,7 +1097,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         debug_assert_eq!(component_id, owned_agent_id.component_id());
         if let Some(agent_type_name) = &initial_worker_metadata.agent_type_name {
             debug_assert_eq!(
-                ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).as_ref(),
+                ParsedAgentKey::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).as_ref(),
                 Ok(agent_type_name),
             );
         }
