@@ -6491,6 +6491,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -6551,6 +6552,7 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          MemorySizeReconciled: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -7024,6 +7026,18 @@ components:
             - Log
             example: Log
       - $ref: '#/components/schemas/r#LogParams'
+    PublicOplogEntry_r#MemorySizeReconciledParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - MemorySizeReconciled
+            example: MemorySizeReconciled
+      - $ref: '#/components/schemas/r#MemorySizeReconciledParams'
     PublicOplogEntry_r#OplogProcessorCheckpointParams:
       allOf:
       - type: object
@@ -10731,6 +10745,19 @@ components:
           type: string
         traceContext:
           $ref: '#/components/schemas/LogTraceContext'
+    r#MemorySizeReconciledParams:
+      type: object
+      title: r#MemorySizeReconciledParams
+      required:
+      - timestamp
+      - bytes
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        bytes:
+          type: integer
+          format: uint64
     r#OplogProcessorCheckpointParams:
       type: object
       title: r#OplogProcessorCheckpointParams

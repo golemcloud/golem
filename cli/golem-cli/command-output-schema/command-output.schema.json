@@ -5736,6 +5736,7 @@
         { "$ref": "#/definitions/PublicOplogEntrySuccessfulUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryFailedUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryGrowMemory" },
+        { "$ref": "#/definitions/PublicOplogEntryMemorySizeReconciled" },
         { "$ref": "#/definitions/PublicOplogEntryCreateResource" },
         { "$ref": "#/definitions/PublicOplogEntryDropResource" },
         { "$ref": "#/definitions/PublicOplogEntryLog" },
@@ -5958,6 +5959,12 @@
       "type": "object",
       "required": ["type", "timestamp", "delta"],
       "properties": { "type": { "const": "GrowMemory" }, "timestamp": { "type": "string" }, "delta": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryMemorySizeReconciled": {
+      "type": "object",
+      "required": ["type", "timestamp", "bytes"],
+      "properties": { "type": { "const": "MemorySizeReconciled" }, "timestamp": { "type": "string" }, "bytes": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCreateResource": {

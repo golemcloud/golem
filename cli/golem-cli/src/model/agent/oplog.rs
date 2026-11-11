@@ -565,6 +565,17 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&format_binary_size(&params.delta)),
                 ));
             }
+            PublicOplogEntry::MemorySizeReconciled(params) => {
+                logln(format_message_highlight("MEMORY SIZE RECONCILED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}allocation:        {}",
+                    format_id(&format_binary_size(&params.bytes))
+                ));
+            }
             PublicOplogEntry::CreateResource(params) => {
                 logln(format_message_highlight("CREATE RESOURCE"));
                 logln(format!(

@@ -384,10 +384,12 @@ filesystem creation. A live limit update uses the same resolver and the existing
 on failure. Unlimited policy remains available on unmanaged storage; Registry's finite policy is a
 deployment requirement, not permission for an unsupported backend to omit enforcement.
 
-A live invocation still holds its allocated linear memory and filesystem stock while waiting for
+A live invocation still holds its allocated linear memory, GC heap capacity and filesystem stock while waiting for
 host I/O. Its live allocations accrue byte-time during these permit-held waits even when no Wasm
-executes. The memory meter measures allocated linear-memory bytes, not the configured maximum.
+executes. The memory meter measures allocated linear-memory bytes plus GC heap capacity, not the configured maximum.
 The parked guest itself burns no fuel.
+
+Primary reconstruction consumes its saved memory reservation across all linear-memory and GC heap allocations, including repeated growth during core initialization. Growth beyond the reservation needs physical admission before allocation. At the replay tail, `MemorySizeReconciled { bytes }` replaces the persisted reload requirement with the actual reconstructed allocation before live publication; unused reservation is released. Later `GrowMemory` hints add to that baseline. Both entries are replay-skippable accounting hints, not assertions that GC capacity must match on replay. Completed entity replay retains historical admission; an incomplete entity acquires its own live reservation before continuation.
 
 Reconstruction keeps physical admission, the concurrent-agent permit, allocation observations,
 per-agent limits and cleanup ownership. Materialization and replay do not start customer byte-time.

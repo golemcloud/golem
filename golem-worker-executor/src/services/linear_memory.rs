@@ -42,8 +42,7 @@ struct Inner {
     protected_bytes: AtomicU64,
     persisted_startup_bytes: u64,
     initially_reserved_bytes: u64,
-    startup_bytes_remaining: AtomicU64,
-    pending_growth_prepaid: AtomicU64,
+    pending_initial_bytes: AtomicU64,
     pending_growth_protected_total: AtomicU64,
     growth_has_pending_grant: AtomicBool,
     pending_growth_grants: Mutex<Vec<PendingGrowthGrant>>,
@@ -157,8 +156,7 @@ impl LinearMemoryTracker {
             protected_bytes: AtomicU64::new(initially_reserved_bytes),
             persisted_startup_bytes: bytes,
             initially_reserved_bytes,
-            startup_bytes_remaining: AtomicU64::new(initially_reserved_bytes),
-            pending_growth_prepaid: AtomicU64::new(0),
+            pending_initial_bytes: AtomicU64::new(0),
             pending_growth_protected_total: AtomicU64::new(0),
             growth_has_pending_grant: AtomicBool::new(false),
             pending_growth_grants: Mutex::new(Vec::new()),
@@ -190,6 +188,21 @@ impl LinearMemoryTracker {
 
     pub fn current_bytes(&self) -> u64 {
         self.inner.bytes.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn begin_instantiation(&self, historical_admission: bool) {
+        let _transition = self.inner.transitions.lock().unwrap();
+        self.inner.bytes.store(0, Ordering::Release);
+        self.inner
+            .historical_admission
+            .store(historical_admission, Ordering::Release);
+        if let Some(meter) = &self.inner.meter {
+            meter.set_bytes(0, Instant::now());
+        }
+    }
+
+    pub(crate) fn persisted_startup_bytes(&self) -> u64 {
+        self.inner.persisted_startup_bytes
     }
 
     pub(crate) fn usage_is_live(&self) -> bool {
@@ -279,6 +292,14 @@ impl LinearMemoryTracker {
 
     pub fn switch_to_live(&self) {
         let _transition = self.inner.transitions.lock().unwrap();
+        if !self.inner.reconciling.load(Ordering::Acquire) {
+            self.inner
+                .retained_growth_grant
+                .lock()
+                .unwrap()
+                .shrink_to(self.current_bytes());
+            self.set_protected_bytes_and_enforce_limit(self.current_bytes());
+        }
         self.inner
             .historical_admission
             .store(false, Ordering::Release);
@@ -295,6 +316,18 @@ impl LinearMemoryTracker {
 
     pub(crate) fn retained_growth_grant(&self) -> Arc<Mutex<MemoryGrant>> {
         self.inner.retained_growth_grant.clone()
+    }
+
+    pub(crate) fn reserved_bytes(&self) -> u64 {
+        self.inner.retained_growth_grant.lock().unwrap().bytes()
+            + self
+                .inner
+                .pending_growth_grants
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|pending| pending.grant.bytes())
+                .sum::<u64>()
     }
 
     pub(crate) async fn activate_live_reservation<F, Fut>(&self, mut acquire: F)
@@ -367,17 +400,7 @@ impl LinearMemoryTracker {
         }
         self.inner.bytes.store(bytes, Ordering::Release);
         self.set_protected_bytes_and_enforce_limit(self.reconciliation_grant_bytes(bytes));
-        let startup_bytes_remaining = if self.inner.replaying.load(Ordering::Acquire) {
-            self.inner.initially_reserved_bytes.saturating_sub(bytes)
-        } else {
-            0
-        };
-        self.inner
-            .startup_bytes_remaining
-            .store(startup_bytes_remaining, Ordering::Release);
-        self.inner
-            .pending_growth_prepaid
-            .store(0, Ordering::Release);
+        self.inner.pending_initial_bytes.store(0, Ordering::Release);
         self.inner
             .pending_growth_protected_total
             .store(0, Ordering::Release);
@@ -436,13 +459,11 @@ impl LinearMemoryTracker {
             }
         }
         let reconciling = self.inner.reconciling.load(Ordering::Acquire);
-        let prepaid = self
-            .inner
-            .pending_growth_prepaid
-            .swap(0, Ordering::AcqRel)
-            .min(delta);
-        let tracked_delta = if reconciling { delta - prepaid } else { delta };
-        let bytes = self.current_bytes().saturating_add(tracked_delta);
+        let initial = self.inner.pending_initial_bytes.swap(0, Ordering::AcqRel);
+        let bytes = self
+            .current_bytes()
+            .saturating_sub(initial)
+            .saturating_add(delta);
         if let (Some(meter), Some(now)) = (&self.inner.meter, now) {
             meter.set_bytes(bytes, now);
         }
@@ -453,6 +474,8 @@ impl LinearMemoryTracker {
 
     pub fn memory_grow_failed(&self) {
         let _transition = self.inner.transitions.lock().unwrap();
+        let initial = self.inner.pending_initial_bytes.swap(0, Ordering::AcqRel);
+        self.inner.bytes.fetch_sub(initial, Ordering::AcqRel);
         self.inner
             .pending_growth_protected_total
             .store(0, Ordering::Release);
@@ -463,13 +486,6 @@ impl LinearMemoryTracker {
         {
             self.inner.pending_growth_grants.lock().unwrap().pop();
         }
-        let prepaid = self.inner.pending_growth_prepaid.swap(0, Ordering::AcqRel);
-        self.inner
-            .startup_bytes_remaining
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                Some(remaining.saturating_add(prepaid))
-            })
-            .ok();
         if self
             .inner
             .live_reservation_activated
@@ -489,39 +505,28 @@ impl LinearMemoryTracker {
         desired_memory: usize,
     ) -> Option<UnsharedMemoryGrowth> {
         let _transition = self.inner.transitions.lock().unwrap();
+        self.inner.pending_initial_bytes.store(0, Ordering::Release);
         self.inner
             .growth_has_pending_grant
             .store(false, Ordering::Release);
         let delta = desired_memory.saturating_sub(current_memory) as u64;
-        let reconciling = self.inner.reconciling.load(Ordering::Acquire);
         let historical_admission = self.inner.historical_admission.load(Ordering::Acquire);
-        let startup_prepaid = if reconciling && current_memory == 0 {
-            let remaining = self.inner.startup_bytes_remaining.load(Ordering::Acquire);
-            let prepaid = delta.min(remaining);
-            self.inner
-                .startup_bytes_remaining
-                .store(remaining - prepaid, Ordering::Release);
-            prepaid
-        } else {
-            0
-        };
-        self.inner
-            .pending_growth_prepaid
-            .store(startup_prepaid, Ordering::Release);
+        let protected_total = self.current_bytes().checked_add(delta)?;
+        let reserved_bytes = self.reserved_bytes();
         let admission_delta = if historical_admission {
             0
         } else {
-            delta - startup_prepaid
+            protected_total.saturating_sub(reserved_bytes)
         };
-        let tracked_delta = if reconciling {
-            delta - startup_prepaid
-        } else {
-            delta
-        };
-        let protected_total = self
-            .current_bytes()
-            .checked_add(tracked_delta)?
-            .max(self.inner.initially_reserved_bytes);
+        // Wasmtime calls memory_growing for initial allocations but not memory_grown.
+        // Include them provisionally until enumeration. Growth from a zero-sized memory
+        // does receive memory_grown, which replaces this provisional contribution.
+        if self.inner.reconciling.load(Ordering::Acquire) && current_memory == 0 {
+            self.inner.bytes.store(protected_total, Ordering::Release);
+            self.inner
+                .pending_initial_bytes
+                .store(delta, Ordering::Release);
+        }
         self.inner
             .pending_growth_protected_total
             .store(protected_total, Ordering::Release);
@@ -637,7 +642,7 @@ mod tests {
             AgentMode::Durable,
             false,
             Arc::new(AtomicResourceEntry::new(0, 42, 0, 0, 0)),
-            grant(),
+            Arc::new(Mutex::new(MemoryGrant::inert(30))),
             now,
         );
         tracker.reconcile_at(30, now);
@@ -649,6 +654,7 @@ mod tests {
                 protected_total: 40,
             })
         );
+        tracker.retain_growth_grant(MemoryGrant::inert(10));
         assert_eq!(tracker.grow_at(10, now), (40, false));
         assert_eq!(
             tracker.prepare_unshared_growth(20, 25),
@@ -693,15 +699,16 @@ mod tests {
             AgentMode::Durable,
             false,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
-            grant(),
+            Arc::new(Mutex::new(MemoryGrant::inert(40))),
             now,
         );
+        tracker.begin_instantiation(false);
 
         assert_eq!(
             tracker.prepare_unshared_growth(0, 15),
             Some(UnsharedMemoryGrowth {
                 admission_delta: 0,
-                protected_total: 40,
+                protected_total: 15,
             })
         );
         assert_eq!(
@@ -732,6 +739,8 @@ mod tests {
             grant(),
             now,
         );
+        *tracker.retained_growth_grant().lock().unwrap() = MemoryGrant::inert(40);
+        tracker.begin_instantiation(false);
         tracker.switch_to_live();
 
         assert_eq!(
@@ -762,6 +771,7 @@ mod tests {
             Arc::new(Mutex::new(retained_grant)),
             now,
         );
+        tracker.begin_instantiation(false);
         let headroom_before_instantiation = controller.headroom_bytes();
 
         let growth = tracker.prepare_unshared_growth(0, 40).unwrap();
@@ -944,6 +954,7 @@ mod tests {
             grant(),
             now,
         );
+        tracker.begin_instantiation(false);
         tracker.switch_to_live();
 
         tracker.prepare_unshared_growth(0, 40).unwrap();
@@ -966,12 +977,13 @@ mod tests {
             grant(),
             now,
         );
+        tracker.begin_instantiation(true);
 
         assert_eq!(
             tracker.prepare_unshared_growth(0, 40),
             Some(UnsharedMemoryGrowth {
                 admission_delta: 0,
-                protected_total: 50,
+                protected_total: 40,
             })
         );
         assert_eq!(tracker.reconcile_at(40, now), 0);

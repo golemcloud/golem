@@ -722,6 +722,9 @@ pub(super) fn calculate_total_linear_memory_size(
             OplogEntry::GrowMemory { delta, .. } => {
                 result = result.saturating_add(*delta);
             }
+            OplogEntry::MemorySizeReconciled { bytes, .. } => {
+                result = *bytes;
+            }
             OplogEntry::SuccessfulUpdate {
                 new_total_linear_memory_size: Some(new_total),
                 ..

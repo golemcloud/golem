@@ -365,7 +365,7 @@ oplog_entry! {
             update_attempt_index: Option<OplogIndex>,
         }
     },
-    /// Increased total linear memory size
+    /// Increased allocated linear memory and GC heap capacity
     GrowMemory {
         hint: true
         wit_raw_type: "grow-memory-parameters"
@@ -375,6 +375,18 @@ oplog_entry! {
         }
         public {
             delta: u64
+        }
+    },
+    /// Replaced the reload requirement with the allocation reconstructed by the primary Store
+    MemorySizeReconciled {
+        hint: true
+        wit_raw_type: "memory-size-reconciled-parameters"
+        wit_public_type: "memory-size-reconciled-parameters"
+        raw {
+            bytes: u64
+        }
+        public {
+            bytes: u64
         }
     },
     /// Created a resource instance

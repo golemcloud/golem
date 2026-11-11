@@ -911,22 +911,14 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         }
 
         let retained_grant = tracker.retained_growth_grant();
-        let (grant_is_tracked, granted_bytes) = {
-            let grant = retained_grant.lock().unwrap();
-            (grant.is_tracked(), grant.bytes())
-        };
+        let grant_is_tracked = retained_grant.lock().unwrap().is_tracked();
+        let granted_bytes = tracker.reserved_bytes();
         if grant_is_tracked && required_grant_bytes > granted_bytes {
             let additional_grant = owner
                 .active_agents()
                 .acquire_memory(required_grant_bytes - granted_bytes)
                 .await;
             retained_grant.lock().unwrap().merge(additional_grant);
-        }
-        if grant_is_tracked {
-            retained_grant
-                .lock()
-                .unwrap()
-                .shrink_to(required_grant_bytes);
         }
 
         if self.runtime == OwnerRuntime::Agent {
@@ -937,6 +929,12 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
 
         let live_instantiation_growth =
             tracker.reconcile(allocated_bytes, std::time::Instant::now());
+        if grant_is_tracked {
+            retained_grant
+                .lock()
+                .unwrap()
+                .shrink_to(required_grant_bytes);
+        }
         crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
         if self.runtime == OwnerRuntime::Agent && live_instantiation_growth > 0 {
             // Commit the growth oplog entry before publishing the primary instance. Otherwise a

@@ -56,8 +56,10 @@ const (
 	SuccessfulUpdate = oplogwit.PublicOplogEntrySuccessfulUpdate
 	// An update failed to be applied
 	FailedUpdate = oplogwit.PublicOplogEntryFailedUpdate
-	// Increased total linear memory size
+	// Increased allocated linear memory and GC heap capacity
 	GrowMemory = oplogwit.PublicOplogEntryGrowMemory
+	// Replaced the reload requirement with the reconstructed allocation
+	MemorySizeReconciled = oplogwit.PublicOplogEntryMemorySizeReconciled
 	// Created a resource instance
 	CreateResource = oplogwit.PublicOplogEntryCreateResource
 	// Dropped a resource instance

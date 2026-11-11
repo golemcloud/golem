@@ -75,6 +75,7 @@ export type PendingUpdateParameters = OplogTypes.PendingUpdateParameters;
 export type SuccessfulUpdateParameters = OplogTypes.SuccessfulUpdateParameters;
 export type FailedUpdateParameters = OplogTypes.FailedUpdateParameters;
 export type GrowMemoryParameters = OplogTypes.GrowMemoryParameters;
+export type MemorySizeReconciledParameters = OplogTypes.MemorySizeReconciledParameters;
 export type AgentResourceId = OplogTypes.AgentResourceId;
 export type CreateResourceParameters = OplogTypes.CreateResourceParameters;
 export type DropResourceParameters = OplogTypes.DropResourceParameters;
@@ -179,6 +180,7 @@ export type PublicOplogEntry =
   | { tag: 'successful-update'; val: SuccessfulUpdateParameters }
   | { tag: 'failed-update'; val: FailedUpdateParameters }
   | { tag: 'grow-memory'; val: GrowMemoryParameters }
+  | { tag: 'memory-size-reconciled'; val: MemorySizeReconciledParameters }
   | { tag: 'create-resource'; val: CreateResourceParameters }
   | { tag: 'drop-resource'; val: DropResourceParameters }
   | { tag: 'log'; val: LogParameters }

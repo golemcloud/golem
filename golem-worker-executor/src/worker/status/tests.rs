@@ -383,6 +383,24 @@ fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_
 }
 
 #[test]
+fn memory_reconciliation_replaces_the_baseline_before_subsequent_growth() {
+    for reconciled in [24, 97] {
+        let entries = BTreeMap::from([
+            (OplogIndex::from_u64(2), OplogEntry::grow_memory(13)),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::memory_size_reconciled(reconciled),
+            ),
+            (OplogIndex::from_u64(4), OplogEntry::grow_memory(9)),
+        ]);
+        assert_eq!(
+            calculate_total_linear_memory_size(64, &DeletedRegions::new(), &entries),
+            reconciled + 9
+        );
+    }
+}
+
+#[test]
 fn successful_update_resets_total_linear_memory_size() {
     let entries = BTreeMap::from([
         (

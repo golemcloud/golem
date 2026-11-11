@@ -1,12 +1,12 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 
 app: gc-heap
 
@@ -32,6 +32,9 @@ componentTemplates:
           targets:
           - "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm"
+        customCommands:
+          copy:
+          - command: cp "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}_composed.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_debug.wasm"
       release:
         build:
         - command: wasm-tools parse gc-probe/gc_probe.wat -o "{{ cargoTarget }}/gc-probe.wasm"
@@ -46,11 +49,14 @@ componentTemplates:
           targets:
           - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm"
+        customCommands:
+          copy:
+          - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}_composed.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
 
 components:
   golem-it:gc-heap:
     dir: "."
-    templates: rust, rust-gc-probe, rust-test-component
+    templates: rust, rust-test-component, rust-gc-probe
 
 environments:
   local:

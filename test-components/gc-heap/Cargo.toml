@@ -16,4 +16,4 @@ path = "src/lib.rs"
 [dependencies]
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 # Must be the exact wit-bindgen version golem-rust generates the export glue with.
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "67b83d42c135db8c5c42bf26c53ec162bbdca5ea", version = "=0.63.0" }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "6f161c1bce440d7b0506950ee38338ce36742957", version = "=0.63.0" }

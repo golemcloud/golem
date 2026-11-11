@@ -398,6 +398,19 @@ pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
         linear_memory,
     )
     .await?;
+    if role == ReplayToLiveRole::PrimaryAgent
+        && linear_memory.current_bytes() != linear_memory.persisted_startup_bytes()
+    {
+        // The primary Store is paused at its replay tail. Persist its measured allocation
+        // before live publication, so fresh growth starts from the reconstructed baseline.
+        // Entity reconstruction has separate trackers and does not change this total.
+        public_state
+            .worker()
+            .add_and_commit_oplog(OplogEntry::memory_size_reconciled(
+                linear_memory.current_bytes(),
+            ))
+            .await?;
+    }
     match replay_state.switch_to_live(linear_memory, role).await? {
         ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
         ReplayToLiveOutcome::Live { replay_target } => {

@@ -177,6 +177,7 @@ impl OplogEntry {
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
             | OplogEntry::Log { .. }
+            | OplogEntry::MemorySizeReconciled { .. }
             | OplogEntry::Restart { .. }
             | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
@@ -253,6 +254,7 @@ impl OplogEntry {
             | OplogEntry::PendingUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
+            | OplogEntry::MemorySizeReconciled { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
@@ -389,6 +391,7 @@ impl OplogScopeProjection {
             | OplogEntry::SuccessfulUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
+            | OplogEntry::MemorySizeReconciled { .. }
             | OplogEntry::Log {
                 parent_start_index: None,
                 ..

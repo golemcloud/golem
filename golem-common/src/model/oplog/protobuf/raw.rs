@@ -602,6 +602,9 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::GrowMemory { delta, .. } => {
                 Entry::GrowMemory(RawGrowMemoryParameters { delta })
             }
+            OplogEntry::MemorySizeReconciled { bytes, .. } => Entry::MemorySizeReconciled(
+                golem_api_grpc::proto::golem::worker::RawMemorySizeReconciledParameters { bytes },
+            ),
             OplogEntry::CreateResource {
                 id,
                 resource_type_id,
@@ -1272,6 +1275,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
                 timestamp,
                 delta: p.delta,
+            }),
+            Entry::MemorySizeReconciled(p) => Ok(OplogEntry::MemorySizeReconciled {
+                timestamp,
+                bytes: p.bytes,
             }),
             Entry::CreateResource(p) => {
                 let rt = p.resource_type_id.ok_or("Missing resource_type_id")?;

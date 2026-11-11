@@ -366,6 +366,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     delta: grow_memory.delta,
                 }))
             }
+            oplog_entry::Entry::MemorySizeReconciled(p) => {
+                Ok(PublicOplogEntry::MemorySizeReconciled(
+                    crate::model::oplog::public_oplog_entry::MemorySizeReconciledParams {
+                        timestamp: p.timestamp.ok_or("Missing timestamp field")?.into(),
+                        bytes: p.bytes,
+                    },
+                ))
+            }
             oplog_entry::Entry::CreateResource(create_resource) => {
                 Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
                     timestamp: create_resource
@@ -1026,6 +1034,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::GrowMemoryParameters {
                             timestamp: Some(grow_memory.timestamp.into()),
                             delta: grow_memory.delta,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::MemorySizeReconciled(p) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::MemorySizeReconciled(
+                        golem_api_grpc::proto::golem::worker::MemorySizeReconciledParameters {
+                            timestamp: Some(p.timestamp.into()),
+                            bytes: p.bytes,
                         },
                     )),
                 }
@@ -2044,6 +2062,10 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
             PublicOplogEntry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
                 timestamp: p.timestamp,
                 delta: p.delta,
+            }),
+            PublicOplogEntry::MemorySizeReconciled(p) => Ok(OplogEntry::MemorySizeReconciled {
+                timestamp: p.timestamp,
+                bytes: p.bytes,
             }),
             PublicOplogEntry::CreateResource(p) => Ok(OplogEntry::CreateResource {
                 timestamp: p.timestamp,

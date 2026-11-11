@@ -18,14 +18,16 @@
 
 use crate::Tracing;
 use golem_common::model::account::AccountId;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
-use golem_common::model::{AgentId, AgentStatus};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+};
+use golem_common::model::{AgentId, AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start_with_resource_limits,
+    WorkerExecutorTestDependencies, start_with_resource_limits_and_configure,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -70,7 +72,16 @@ async fn start_with_memory_limit(
         u64::MAX,
         AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
     ));
-    start_with_resource_limits(deps, context, Arc::new(FixedLimits(entry))).await
+    start_with_resource_limits_and_configure(
+        deps,
+        context,
+        Arc::new(FixedLimits(entry)),
+        Arc::new(|config| {
+            config.memory.system_memory_override = Some(1024 * MIB);
+            config.memory.worker_memory_ratio = 1.0;
+        }),
+    )
+    .await
 }
 
 fn total_memory_growth(entries: &[PublicOplogEntryWithIndex]) -> u64 {
@@ -233,26 +244,151 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
         assert_eq!(retained.into_typed::<u32>()?, expected);
     }
 
-    // The reload reserves the folded `total_linear_memory_size` of the agent status.
-    let control_reserved = executor
+    // Metadata folds the measured allocation, including GC capacity, after reconstruction.
+    let control_memory = executor
         .get_worker_metadata(&control_id)
         .await?
         .total_linear_memory_size;
-    let grown_reserved = executor
+    let grown_memory = executor
         .get_worker_metadata(&grown_id)
         .await?
         .total_linear_memory_size;
     assert!(
-        grown_reserved >= control_reserved + 32 * MIB,
-        "the reload must reserve the GC heap growth: control={control_reserved}, grown={grown_reserved}"
+        grown_memory >= control_memory + 32 * MIB,
+        "the reconstructed allocation must include GC capacity: control={control_memory}, grown={grown_memory}"
     );
 
-    // Replaying the growth writes no further hints, so the hinted totals are unchanged.
+    // Replay may reconcile capacity, but it must not append additive growth for old work.
     let oplog = executor.get_oplog(&grown_id, OplogIndex::INITIAL).await?;
     assert_eq!(total_memory_growth(&oplog), grown_growth);
     let oplog = executor.get_oplog(&control_id, OplogIndex::INITIAL).await?;
     assert_eq!(total_memory_growth(&oplog), control_growth);
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("gc_heap")] gc_heap: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start_with_memory_limit(deps, &context, usize::MAX).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, gc_heap)
+        .store()
+        .await?;
+    let agent = agent_id!("GcHeapAgent", "reconciled");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "retain", data_value!(32u32 * 1024))
+        .await?;
+    wait_for_memory_growth(&executor, &worker_id, 32 * MIB).await?;
+
+    // Commit explicit saved requirements through the production status owner. This varies
+    // the prepaid baseline without changing guest code or relying on a collector heuristic.
+    for saved in [8 * MIB, 256 * MIB] {
+        let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        executor
+            .production_active_agent(&owner_id)
+            .await
+            .unwrap()
+            .primary()
+            .add_and_commit_oplog(OplogEntry::memory_size_reconciled(saved))
+            .await?;
+        drop(executor);
+        executor = start_with_memory_limit(deps, &context, usize::MAX).await?;
+        let retained = executor
+            .invoke_and_await_agent(&component, &agent, "retained_kib", data_value!())
+            .await?;
+        assert_eq!(retained.into_typed::<u32>()?, 32 * 1024);
+        let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let actual = entries
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::MemorySizeReconciled(params) => Some(params.bytes),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            actual > 8 * MIB && actual < 256 * MIB,
+            "actual={actual}, saved={saved}"
+        );
+        assert_eq!(
+            executor
+                .get_worker_metadata(&worker_id)
+                .await?
+                .total_linear_memory_size,
+            actual
+        );
+    }
+
+    let entries_before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let growth_before = total_memory_growth(&entries_before);
+    let baseline = executor
+        .get_worker_metadata(&worker_id)
+        .await?
+        .total_linear_memory_size;
+    let retained = executor
+        .invoke_and_await_agent(&component, &agent, "retain", data_value!(64u32 * 1024))
+        .await?;
+    assert_eq!(retained.into_typed::<u32>()?, 96 * 1024);
+    let growth_after =
+        wait_for_memory_growth(&executor, &worker_id, growth_before + 64 * MIB).await?;
+    assert_eq!(
+        executor
+            .get_worker_metadata(&worker_id)
+            .await?
+            .total_linear_memory_size,
+        baseline + growth_after - growth_before
+    );
+    drop(executor);
+    let executor = start_with_memory_limit(deps, &context, usize::MAX).await?;
+    let retained = executor
+        .invoke_and_await_agent(&component, &agent, "retained_kib", data_value!())
+        .await?;
+    assert_eq!(retained.into_typed::<u32>()?, 96 * 1024);
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let mut keys = std::collections::HashSet::new();
+    let mut started = 0;
+    let mut finished = 0;
+    let mut pending_calls = std::collections::HashSet::new();
+    for entry in &entries {
+        match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => {
+                started += 1;
+                if let PublicAgentInvocation::AgentMethodInvocation(invocation) = &params.invocation
+                {
+                    assert!(
+                        keys.insert(invocation.idempotency_key.clone()),
+                        "duplicate invocation identity"
+                    );
+                }
+            }
+            PublicOplogEntry::AgentInvocationFinished(_) => {
+                finished += 1;
+            }
+            PublicOplogEntry::Start(_) => {
+                pending_calls.insert(entry.oplog_index);
+            }
+            PublicOplogEntry::End(params) => {
+                assert!(pending_calls.remove(&params.start_index));
+            }
+            PublicOplogEntry::Cancelled(params) => {
+                assert!(pending_calls.remove(&params.start_index));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(started, 6); // Constructor, two retains and three reads.
+    assert_eq!(finished, started);
+    assert!(pending_calls.is_empty());
+    assert!(errors(&entries).is_empty());
     Ok(())
 }
 

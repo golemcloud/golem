@@ -18718,6 +18718,7 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          MemorySizeReconciled: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -18777,6 +18778,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -19250,6 +19252,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#LogParams'
+    PublicOplogEntry_r#MemorySizeReconciledParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: MemorySizeReconciled
+            type: string
+            enum:
+            - MemorySizeReconciled
+        required:
+        - type
+      - $ref: '#/components/schemas/r#MemorySizeReconciledParams'
     PublicOplogEntry_r#OplogProcessorCheckpointParams:
       allOf:
       - type: object
@@ -22957,6 +22971,19 @@ components:
       - level
       - context
       - message
+    r#MemorySizeReconciledParams:
+      title: r#MemorySizeReconciledParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        bytes:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - bytes
     r#OplogProcessorCheckpointParams:
       title: r#OplogProcessorCheckpointParams
       type: object

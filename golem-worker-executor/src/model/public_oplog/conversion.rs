@@ -477,6 +477,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     delta,
                 }))
             }
+            OplogEntry::MemorySizeReconciled { timestamp, bytes } => {
+                Ok(PublicOplogEntry::MemorySizeReconciled(
+                    golem_common::model::oplog::public_oplog_entry::MemorySizeReconciledParams {
+                        timestamp,
+                        bytes,
+                    },
+                ))
+            }
             OplogEntry::CreateResource {
                 timestamp,
                 id,

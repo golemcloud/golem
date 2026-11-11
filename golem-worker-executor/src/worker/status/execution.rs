@@ -134,6 +134,7 @@ pub(super) fn calculate_latest_worker_status(
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
             OplogEntry::GrowMemory { .. } => {}
+            OplogEntry::MemorySizeReconciled { .. } => {}
             OplogEntry::CreateResource { .. } => {}
             OplogEntry::DropResource { .. } => {}
             OplogEntry::Log { .. } => {

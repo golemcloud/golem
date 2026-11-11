@@ -89,32 +89,49 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         desired: usize,
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        let tracker = &self.linear_memory;
-        let growth = tracker.prepare_unshared_growth(current, desired);
-        let Some(growth) = validate_unshared_memory_growth(
-            growth,
+        admit_memory_growth(
+            &self.linear_memory,
             self.max_linear_memory_size(),
+            current,
             desired,
             maximum,
-        ) else {
-            tracker.memory_grow_failed();
-            return Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into());
-        };
-
-        if growth.admission_delta > 0 {
-            let Some(grant) = self.try_acquire_linear_memory(growth.admission_delta).await else {
-                tracker.memory_grow_failed();
-                crate::metrics::workers::record_worker_memory_grow_rejected();
-                return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
-            };
-            tracker.retain_growth_grant(grant);
-        }
-        Ok(true)
+            |delta| self.try_acquire_linear_memory(delta),
+        )
+        .await
     }
 
     pub fn unshared_memory_growth_failed(&self) {
         self.linear_memory.memory_grow_failed();
     }
+}
+
+pub(crate) async fn admit_memory_growth<F, Fut>(
+    tracker: &LinearMemoryTracker,
+    worker_limit: u64,
+    current: usize,
+    desired: usize,
+    maximum: Option<usize>,
+    acquire: F,
+) -> wasmtime::Result<bool>
+where
+    F: FnOnce(u64) -> Fut,
+    Fut: Future<Output = Option<MemoryGrant>>,
+{
+    let growth = tracker.prepare_unshared_growth(current, desired);
+    let Some(growth) = validate_unshared_memory_growth(growth, worker_limit, desired, maximum)
+    else {
+        tracker.memory_grow_failed();
+        return Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into());
+    };
+    if growth.admission_delta > 0 {
+        let Some(grant) = acquire(growth.admission_delta).await else {
+            tracker.memory_grow_failed();
+            crate::metrics::workers::record_worker_memory_grow_rejected();
+            return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
+        };
+        tracker.retain_growth_grant(grant);
+    }
+    Ok(true)
 }
 
 #[async_trait]
@@ -249,4 +266,205 @@ pub(in crate::durable_host) fn validate_unshared_memory_growth(
         growth.protected_total <= worker_limit
             && memory_maximum.is_none_or(|maximum| desired <= maximum)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::active_agents::admission::{
+        AdmissionController, AdmissionPolicy, NoEvictionSource,
+    };
+    use crate::services::active_agents::memory_probe::FixedProbe;
+    use crate::services::resource_limits::AtomicResourceEntry;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
+    use std::sync::Mutex;
+    use test_r::test;
+    use wasmtime::{Engine, Instance, MemoryKind, Module, ResourceLimiterAsync, Store};
+
+    struct LimitedMemory {
+        tracker: LinearMemoryTracker,
+        controller: Arc<AdmissionController>,
+        limit: u64,
+        gc_growths: usize,
+    }
+
+    #[async_trait]
+    impl ResourceLimiterAsync for LimitedMemory {
+        async fn memory_growing(
+            &mut self,
+            current: usize,
+            desired: usize,
+            maximum: Option<usize>,
+            _kind: MemoryKind,
+        ) -> wasmtime::Result<bool> {
+            admit_memory_growth(
+                &self.tracker,
+                self.limit,
+                current,
+                desired,
+                maximum,
+                |bytes| self.controller.admit(bytes, &NoEvictionSource),
+            )
+            .await
+        }
+
+        fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
+            if matches!(kind, MemoryKind::GcHeap) {
+                self.gc_growths += 1;
+            }
+            self.tracker
+                .grow((desired - current) as u64, Instant::now());
+        }
+
+        fn memory_grow_failed(
+            &mut self,
+            _error: wasmtime::Error,
+            _kind: MemoryKind,
+        ) -> wasmtime::Result<()> {
+            self.tracker.memory_grow_failed();
+            Ok(())
+        }
+
+        async fn table_growing(
+            &mut self,
+            _current: usize,
+            _desired: usize,
+            _maximum: Option<usize>,
+        ) -> wasmtime::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    #[test]
+    async fn gc_initializers_reuse_prepaid_capacity_across_multiple_growths() -> anyhow::Result<()>
+    {
+        const CAPACITY: u64 = 256 * 1024 * 1024;
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+        let module = Module::new(
+            &engine,
+            r#"
+            (module
+              (memory (export "memory") 256)
+              (type $bytes (array (mut i8)))
+              (global $first (mut (ref null $bytes)) (ref.null $bytes))
+              (global $second (mut (ref null $bytes)) (ref.null $bytes))
+              (func $init
+                (global.set $first (array.new_default $bytes (i32.const 8388608)))
+                (global.set $second (array.new_default $bytes (i32.const 25165824))))
+              (start $init))
+        "#,
+        )?;
+        let mut actual = 0;
+        for replaying in [false, true] {
+            let controller = Arc::new(AdmissionController::new(
+                Box::new(FixedProbe::new(CAPACITY, 0)),
+                AdmissionPolicy { usable_ratio: 1.0 },
+            ));
+            let reservation = controller.admit(actual, &NoEvictionSource).await.unwrap();
+            let tracker = LinearMemoryTracker::new(
+                actual,
+                actual,
+                AgentMode::Durable,
+                replaying,
+                Arc::new(AtomicResourceEntry::new(0, CAPACITY as usize, 0, 0, 0)),
+                Arc::new(Mutex::new(reservation)),
+                Instant::now(),
+            );
+            tracker.begin_instantiation(false);
+            let mut store = Store::new(
+                &engine,
+                LimitedMemory {
+                    tracker: tracker.clone(),
+                    controller: controller.clone(),
+                    limit: if replaying { actual } else { CAPACITY },
+                    gc_growths: 0,
+                },
+            );
+            store.limiter_async(|state| state);
+            store.set_fuel(u64::MAX)?;
+            store.set_epoch_deadline(u64::MAX);
+            let instance = Instance::new_async(&mut store, &module, &[]).await?;
+            let linear = instance
+                .get_memory(&mut store, "memory")
+                .unwrap()
+                .data_size(&store) as u64;
+            let measured = linear + store.gc_heap_capacity() as u64;
+            assert!(
+                store.data().gc_growths >= 2,
+                "fixture must grow the GC heap repeatedly during initialization"
+            );
+            tracker.reconcile(measured, Instant::now());
+            tracker.switch_to_live();
+            tracker.meter().resume(measured, Instant::now());
+            tracker.activate_live_usage();
+            assert_eq!(tracker.current_bytes(), measured);
+            assert_eq!(tracker.billable_bytes(), measured);
+            assert_eq!(controller.headroom_bytes(), CAPACITY - measured);
+            if replaying {
+                assert_eq!(measured, actual);
+            }
+            actual = measured;
+        }
+        Ok(())
+    }
+
+    #[test]
+    async fn reconstructed_capacity_is_admitted_and_released_before_live_growth()
+    -> anyhow::Result<()> {
+        for reconstructed in [24, 57] {
+            let controller = Arc::new(AdmissionController::new(
+                Box::new(FixedProbe::new(100, 0)),
+                AdmissionPolicy { usable_ratio: 1.0 },
+            ));
+            let reservation = controller.admit(40, &NoEvictionSource).await.unwrap();
+            let tracker = LinearMemoryTracker::new(
+                40,
+                40,
+                AgentMode::Durable,
+                true,
+                Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
+                Arc::new(Mutex::new(reservation)),
+                Instant::now(),
+            );
+            tracker.begin_instantiation(false);
+            admit_memory_growth(&tracker, 100, 0, reconstructed, None, |bytes| {
+                controller.admit(bytes, &NoEvictionSource)
+            })
+            .await?;
+            tracker.grow(reconstructed as u64, Instant::now());
+            assert_eq!(
+                controller.headroom_bytes(),
+                100 - (reconstructed as u64).max(40)
+            );
+            tracker.reconcile(reconstructed as u64, Instant::now());
+            tracker.switch_to_live();
+            assert_eq!(controller.headroom_bytes(), 100 - reconstructed as u64);
+            admit_memory_growth(
+                &tracker,
+                100,
+                reconstructed,
+                reconstructed + 9,
+                None,
+                |bytes| controller.admit(bytes, &NoEvictionSource),
+            )
+            .await?;
+            tracker.grow(9, Instant::now());
+            assert_eq!(tracker.current_bytes(), reconstructed as u64 + 9);
+            assert_eq!(controller.headroom_bytes(), 91 - reconstructed as u64);
+            let before = controller.headroom_bytes();
+            let denied =
+                admit_memory_growth(&tracker, 200, reconstructed + 9, 101, None, |bytes| {
+                    controller.admit(bytes, &NoEvictionSource)
+                })
+                .await;
+            assert!(matches!(
+                denied.unwrap_err().downcast_ref::<GolemSpecificWasmTrap>(),
+                Some(GolemSpecificWasmTrap::WorkerOutOfMemory)
+            ));
+            assert_eq!(controller.headroom_bytes(), before);
+            assert_eq!(tracker.current_bytes(), reconstructed as u64 + 9);
+        }
+        Ok(())
+    }
 }

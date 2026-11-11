@@ -565,6 +565,11 @@ interface oplog {
         delta: u64
     }
 
+    record memory-size-reconciled-parameters {
+        timestamp: datetime,
+        bytes: u64
+    }
+
     type agent-resource-id = u64;
 
     record create-resource-parameters {
@@ -1009,6 +1014,7 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
+        memory-size-reconciled(memory-size-reconciled-parameters),
         /// Created a resource instance
         create-resource(raw-create-resource-parameters),
         /// Dropped a resource instance
@@ -1123,6 +1129,7 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
+        memory-size-reconciled(memory-size-reconciled-parameters),
         /// Created a resource instance
         create-resource(create-resource-parameters),
         /// Dropped a resource instance
