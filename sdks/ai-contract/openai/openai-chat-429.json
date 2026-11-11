@@ -1,0 +1,33 @@
+{
+  "id": "openai-chat-429",
+  "provider": "openai",
+  "operation": "chat",
+  "provenance": "fault-injection",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "authorization": "<credential>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "max_completion_tokens": 64,
+      "messages": [
+        {
+          "content": "Say hello in one short sentence.",
+          "role": "user"
+        }
+      ],
+      "model": "gpt-4.1-mini"
+    }
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "content-type": "application/json",
+      "retry-after": "17"
+    },
+    "body": "openai-chat-429.body",
+    "format": "json"
+  }
+}

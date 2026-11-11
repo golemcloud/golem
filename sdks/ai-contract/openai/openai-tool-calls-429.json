@@ -1,0 +1,61 @@
+{
+  "id": "openai-tool-calls-429",
+  "provider": "openai",
+  "operation": "tool-calls",
+  "provenance": "fault-injection",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "authorization": "<credential>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "max_completion_tokens": 128,
+      "messages": [
+        {
+          "content": "Look up the weather in Budapest.",
+          "role": "user"
+        }
+      ],
+      "model": "gpt-4.1-mini",
+      "tool_choice": {
+        "function": {
+          "name": "weather"
+        },
+        "type": "function"
+      },
+      "tools": [
+        {
+          "function": {
+            "description": "Look up weather in a city",
+            "name": "weather",
+            "parameters": {
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "type": "object"
+            },
+            "strict": true
+          },
+          "type": "function"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "content-type": "application/json",
+      "retry-after": "17"
+    },
+    "body": "openai-tool-calls-429.body",
+    "format": "json"
+  }
+}

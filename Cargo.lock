@@ -3876,6 +3876,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-ai-contract"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "test-r",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "golem-api-grpc"
 version = "0.0.0"
 dependencies = [

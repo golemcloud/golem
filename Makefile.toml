@@ -1149,7 +1149,7 @@ dependencies = ["merge-openapi", "diff-openapi", "check-docs-openapi"]
 
 [tasks.unit-tests-and-checks]
 description = "Runs unit tests and source drift checks in one cargo-make invocation"
-dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-builtin-artifacts", "check-wit", "test-javascript-tool-process-backend", "unit-tests"]
+dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-ai-contract", "check-builtin-artifacts", "check-wit", "test-javascript-tool-process-backend", "unit-tests"]
 
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
@@ -1454,6 +1454,13 @@ description = "Fails if Scala or MoonBit reflection conformance embeds are stale
 extend = "sync-reflection-conformance"
 private = false
 env = { "REFLECTION_CONFORMANCE_CHECK" = "true" }
+
+[tasks.check-ai-contract]
+description = "Checks the shared AI corpus integrity without generating SDK copies"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo run --locked -p golem-ai-contract -- check-contract sdks/ai-contract
+'''
 
 ## ** PUBLISH **
 [tasks.publish-shared-crates]

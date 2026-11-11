@@ -1,0 +1,61 @@
+{
+  "id": "openai-structured-output-stream",
+  "provider": "openai",
+  "operation": "structured-output",
+  "provenance": "live",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "authorization": "<credential>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "max_completion_tokens": 128,
+      "messages": [
+        {
+          "content": "Return the city Paris and the country France.",
+          "role": "user"
+        }
+      ],
+      "model": "gpt-4.1-mini",
+      "response_format": {
+        "json_schema": {
+          "name": "place",
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "city": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city",
+              "country"
+            ],
+            "type": "object"
+          },
+          "strict": true
+        },
+        "type": "json_schema"
+      },
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream; charset=utf-8",
+      "date": "<date>",
+      "x-request-id": "<id>"
+    },
+    "body": "openai-structured-output-stream.body",
+    "format": "sse"
+  }
+}

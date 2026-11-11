@@ -1,0 +1,38 @@
+{
+  "id": "openai-chat-stream",
+  "provider": "openai",
+  "operation": "chat",
+  "provenance": "live",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "authorization": "<credential>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "max_completion_tokens": 64,
+      "messages": [
+        {
+          "content": "Say hello in one short sentence.",
+          "role": "user"
+        }
+      ],
+      "model": "gpt-4.1-mini",
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream; charset=utf-8",
+      "date": "<date>",
+      "x-request-id": "<id>"
+    },
+    "body": "openai-chat-stream.body",
+    "format": "sse"
+  }
+}
