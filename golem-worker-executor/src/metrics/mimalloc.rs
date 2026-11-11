@@ -80,14 +80,14 @@ pub fn sample() {
     // and skips the null ones.
     unsafe {
         mi_process_info(
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            std::ptr::null_mut(), // elapsed_msecs
+            std::ptr::null_mut(), // user_msecs
+            std::ptr::null_mut(), // system_msecs
+            std::ptr::null_mut(), // current_rss
             &mut peak_rss,
             &mut current_commit,
             &mut peak_commit,
-            std::ptr::null_mut(),
+            std::ptr::null_mut(), // page_faults
         );
     }
 
